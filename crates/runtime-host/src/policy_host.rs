@@ -12,7 +12,10 @@ use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
     is_availability_denial,
 };
-use crate::{PerformanceControlWorkload, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
+use crate::{
+    InstanceArbitrationRank, PerformanceControlWorkload, ProcedureManifest, RuntimeHostError,
+    RuntimeHostResult,
+};
 use actingcommand_contract::{
     CatalogPayload, CorrelationId, EventPayload, EventQuery, EventType, InstanceId,
     IssuedCorrelationId, IssuedRunId, IssuedTaskId, LeaseId, LeaseToken, OwnerEpoch,
@@ -725,6 +728,36 @@ impl EligibilityAges {
     }
 }
 
+/// Per instance, the highest `effective_milli` and the longest `aging_ms` over the ranked
+/// Eligible or Selected decisions of one evaluation; an instance without one is absent.
+fn instance_arbitration_ranks(
+    evaluation: &PolicyEvaluation,
+) -> BTreeMap<String, InstanceArbitrationRank> {
+    let mut ranks = BTreeMap::<String, InstanceArbitrationRank>::new();
+    for decision in &evaluation.decisions {
+        if !matches!(
+            decision.state,
+            SchedulingDecisionState::Eligible | SchedulingDecisionState::Selected
+        ) {
+            continue;
+        }
+        let (Some(instance_id), Some(rank)) = (&decision.instance_id, &decision.rank) else {
+            continue;
+        };
+        ranks
+            .entry(instance_id.clone())
+            .and_modify(|entry| {
+                entry.utility_milli = entry.utility_milli.max(rank.effective_milli);
+                entry.aging_ms = entry.aging_ms.max(rank.aging_ms);
+            })
+            .or_insert(InstanceArbitrationRank {
+                utility_milli: rank.effective_milli,
+                aging_ms: rank.aging_ms,
+            });
+    }
+    ranks
+}
+
 pub(crate) struct PolicyHost {
     store: CatalogStore,
     active: Option<LoadedCatalog>,
@@ -735,6 +768,9 @@ pub(crate) struct PolicyHost {
     detection_quota: DetectionQuotaState,
     control: PolicyControlState,
     eligibility: EligibilityAges,
+    /// Memory-only arbitration input per instance (Workflow #308 slice 5c): the latest cycle
+    /// that had an Eligible or Selected decision for the instance sets its entry.
+    arbitration: BTreeMap<String, InstanceArbitrationRank>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -764,6 +800,7 @@ impl PolicyHost {
             detection_quota: DetectionQuotaState::default(),
             control: PolicyControlState::default(),
             eligibility: EligibilityAges::default(),
+            arbitration: BTreeMap::new(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -1223,6 +1260,8 @@ impl PolicyHost {
             .collect::<BTreeSet<_>>();
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
+        self.arbitration
+            .extend(instance_arbitration_ranks(&evaluation));
         let requested_recompute = directive.kind;
         Ok(PolicyCycle {
             directive,
@@ -1645,6 +1684,7 @@ impl PolicyHost {
             let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
             let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
             let workload = PerformanceControlWorkload {
+                arbitration: self.arbitration.get(&intent.instance_id).copied(),
                 instance_id: intent.instance_id.clone(),
                 load_profile: intent.load_profile,
             };

@@ -481,6 +481,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
                 third_party_pressure_basis_points: Some(3_000),
                 recovery: false,
                 deadline_disposition: None,
+                arbitration: None,
             },
             input(),
         )
@@ -2043,6 +2044,7 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
                 third_party_pressure_basis_points: None,
                 recovery: false,
                 deadline_disposition: Some(PerformanceDeadlineDisposition::CapacityFailure),
+                arbitration: None,
             },
             AuditInput::new(),
         )
@@ -2098,6 +2100,7 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
             third_party_pressure_basis_points: Some(0),
             recovery: true,
             deadline_disposition: Some(PerformanceDeadlineDisposition::Throttled),
+            arbitration: None,
         },
         AuditInput::new(),
     )

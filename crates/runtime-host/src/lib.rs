@@ -52,8 +52,8 @@ pub use error::*;
 pub use host::*;
 pub use performance::{PerformanceMonitorConfig, PipelinePerformanceSignal};
 pub use performance_control::{
-    PerformanceControlConfig, PerformanceControlDirective, PerformanceControlObservation,
-    PerformanceControlWorkload,
+    InstanceArbitrationRank, PerformanceControlConfig, PerformanceControlDirective,
+    PerformanceControlObservation, PerformanceControlWorkload,
 };
 pub use planning::MaintenanceLedgerQuery;
 pub use policy_control::PolicyExecutionInput;
