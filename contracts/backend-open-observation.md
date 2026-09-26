@@ -83,7 +83,10 @@ its diagnostics, cleanup and vendor stdio keep their original paths.
 
 Readonly observations, capture sequences and Lab capture share the observation
 consumer. Contained tasks and monitor captures consume the same report before
-material processing. Formal input, including contained-task and Lab input,
+material processing. The explicit opens of an instance resume
+(`ExecutionKernel::open_instance_backends`, `scheduling-pause.md`) go through the same
+provider opens and are recorded the same way, under the resume request's links.
+Formal input, including contained-task and Lab input,
 uses the shared Host input consumer. Failed results are recorded under those
 same request links before the existing cleanup path; lifecycle error propagation
 retains the report as well. A shared occurrence receipt prevents a cleanup or

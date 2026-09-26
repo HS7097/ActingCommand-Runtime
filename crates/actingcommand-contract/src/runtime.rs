@@ -1561,19 +1561,90 @@ pub struct SchedulingDrainSummary {
     pub cancelled: u32,
 }
 
-/// The connection self-check a resumed instance reports. Slice ps2 defines and fills it; this
-/// slice never produces one, so `SchedulingResumed.selfcheck` is always absent.
+/// The connection self-check an instance resume reports (Workflow #191 ps2), projected from the
+/// backend open reports of the resume's own reconnect. A side is `ok` only when that open
+/// verified it: its open status and its check (`capture_check`, `input_check`) passed. A side
+/// the session still held is reused without an open and reports `ok: false` with no values.
+/// `failure_code` is the device code of a failed reconnect verbatim (for example
+/// `capture_backend_open_failed`); a failed self-check never rolls the resume back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct SchedulingResumeSelfCheck {}
+pub struct SchedulingResumeSelfCheck {
+    pub capture: SchedulingResumeCaptureCheck,
+    pub touch: SchedulingResumeTouchCheck,
+    pub failure_code: Option<String>,
+}
 
-/// Where a per-instance pause stands: its in-flight runs are still draining, or none is left.
+/// The capture side of [`SchedulingResumeSelfCheck`]: the opened frame size and the capture
+/// backend the open selected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingResumeCaptureCheck {
+    pub ok: bool,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub capture_backend: Option<String>,
+}
+
+/// The touch side of [`SchedulingResumeSelfCheck`]: the touch backend the open selected and the
+/// bounds its connection reported (the input geometry, else the handshake limits). The check is
+/// read back from the connection; it sends no touch, so `invasive` is always `false`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingResumeTouchCheck {
+    pub ok: bool,
+    pub backend: Option<String>,
+    pub max_x: Option<i32>,
+    pub max_y: Option<i32>,
+    pub invasive: bool,
+}
+
+impl SchedulingResumeSelfCheck {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        let backend_name = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        };
+        let (capture, touch) = (&self.capture, &self.touch);
+        if capture.width.is_some() != capture.height.is_some()
+            || capture.width == Some(0)
+            || capture.height == Some(0)
+            || capture
+                .capture_backend
+                .as_deref()
+                .is_some_and(|value| !backend_name(value))
+            || touch.max_x.is_some() != touch.max_y.is_some()
+            || touch.max_x.is_some_and(|value| value <= 0)
+            || touch.max_y.is_some_and(|value| value <= 0)
+            || touch
+                .backend
+                .as_deref()
+                .is_some_and(|value| !backend_name(value))
+            || touch.invasive
+            || self
+                .failure_code
+                .as_deref()
+                .is_some_and(|code| validate_scheduling_pause_reason(code).is_err())
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_scheduling_resume_selfcheck",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Where a per-instance pause stands: its in-flight runs are still draining (a), none is left
+/// (b), or its device session is closed and the device handed back (c, Workflow #191 ps2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstancePauseStage {
     Draining,
     Paused,
+    Released,
 }
 
 /// The global scheduling pause as `Status` reports it.
@@ -4103,14 +4174,16 @@ pub enum RuntimeResult {
         discovery: RuntimeInstanceDiscovery,
     },
     /// The scheduling pause is in effect (`PauseScheduling`); an instance pause answers once
-    /// its in-flight runs drained and carries what they did.
+    /// its in-flight runs drained and its device session was closed, and carries what the runs
+    /// did.
     SchedulingPaused {
         scope: SchedulingPauseScope,
         revision: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         drained: Option<SchedulingDrainSummary>,
     },
-    /// The scheduling pause is lifted (`ResumeScheduling`).
+    /// The scheduling pause is lifted (`ResumeScheduling`); an instance resume reconnects the
+    /// device at once and carries its self-check.
     SchedulingResumed {
         scope: SchedulingPauseScope,
         revision: u64,
@@ -4518,13 +4591,21 @@ impl RuntimeReceipt {
                 }
             }
             Some(RuntimeResult::SchedulingResumed {
-                scope, revision, ..
+                scope,
+                revision,
+                selfcheck,
             }) => {
                 scope.validate()?;
-                if self.state != RuntimeReceiptState::Completed || *revision == 0 {
+                if self.state != RuntimeReceiptState::Completed
+                    || *revision == 0
+                    || selfcheck.is_some() != matches!(scope, SchedulingPauseScope::Instance { .. })
+                {
                     return Err(RuntimeContractError::new(
                         "invalid_scheduling_pause_receipt",
                     ));
+                }
+                if let Some(selfcheck) = selfcheck {
+                    selfcheck.validate()?;
                 }
             }
             Some(RuntimeResult::ProjectInterface { response }) => response

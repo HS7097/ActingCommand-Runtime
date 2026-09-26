@@ -188,6 +188,11 @@ enum SessionCommand {
         memory: Option<actingcommand_device::FrameMemoryBudget>,
         response: SyncSender<ExecutionKernelResult<Frame>>,
     },
+    OpenBackends {
+        memory: actingcommand_device::FrameMemoryBudget,
+        response:
+            SyncSender<ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>>>,
+    },
     CommitFrame {
         reference: InputFrameReference,
         response: SyncSender<ExecutionKernelResult<InputFrameContext>>,
@@ -414,6 +419,37 @@ impl ExecutionSession {
                 memory,
                 response,
             })
+            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+        if let Err(error) = send_result {
+            return finish_after_result(&mut state, Err(error));
+        }
+        match receiver.recv() {
+            Ok(result) => result,
+            Err(_) => finish_after_result(
+                &mut state,
+                Err(ExecutionKernelError::fatal(
+                    "execution_session_response_lost",
+                )),
+            ),
+        }
+    }
+
+    /// Workflow #191 ps2: opens every backend this session does not hold yet, now instead of at
+    /// the first input or capture, through the same provider opens as the lazy paths. A held
+    /// backend is reused; a Nemu pair opens once. Returns the reports of the opens it made. A
+    /// failure keeps the session for the Host's close, as a retained capture failure does.
+    pub(crate) fn open_backends(
+        &self,
+        memory: actingcommand_device::FrameMemoryBudget,
+    ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
+        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        ensure_open(&state)?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let send_result = state
+            .sender
+            .as_ref()
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .send(SessionCommand::OpenBackends { memory, response })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
@@ -832,6 +868,53 @@ fn run_session(
                 }
                 match result {
                     Ok(frame) => response.send(Ok(frame)).map_err(|_| {
+                        close_after_failure(
+                            backends.take(),
+                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ResourceCloseOrder::CaptureFirst,
+                            DeviceCloseAuthority::LocalOnly,
+                        )
+                    })?,
+                    Err(error) => {
+                        if response.send(Err(error.clone())).is_err() {
+                            return Err(close_after_failure(
+                                backends.take(),
+                                ExecutionKernelError::merge(
+                                    error,
+                                    ExecutionKernelError::fatal("execution_session_response_lost"),
+                                ),
+                                ResourceCloseOrder::CaptureFirst,
+                                DeviceCloseAuthority::LocalOnly,
+                            ));
+                        }
+                        return close_retained_after_failure(
+                            &receiver,
+                            backends,
+                            error,
+                            ResourceCloseOrder::CaptureFirst,
+                        );
+                    }
+                }
+            }
+            SessionCommand::OpenBackends { memory, response } => {
+                let capture_opens = matches!(
+                    backends,
+                    SessionBackends::Pending | SessionBackends::Independent { capture: None, .. }
+                );
+                if capture_opens {
+                    pending_frame = None;
+                    committed_frame = None;
+                }
+                let result = open_backends(provider.as_ref(), &instance_alias, backends, &memory)
+                    .map(|mut observations| {
+                        for observation in &mut observations {
+                            observation.report.session_generation = generation;
+                        }
+                        observations
+                    })
+                    .map_err(|error| error.with_backend_session_generation(generation));
+                match result {
+                    Ok(observations) => response.send(Ok(observations)).map_err(|_| {
                         close_after_failure(
                             backends.take(),
                             ExecutionKernelError::fatal("execution_session_response_lost"),
@@ -1345,6 +1428,49 @@ fn execute_capture(
         }
         Err(error) => Err(error.with_backend_open_observations(&observations)),
     }
+}
+
+/// Workflow #191 ps2: the explicit open behind [`ExecutionSession::open_backends`]. It opens what
+/// the lazy paths open, each only when absent: the Nemu pair, else the input and then the capture
+/// backend. A capture opened here gives its first frame at once, exactly as the first lazy
+/// capture does, so its report carries that frame's check and size and no primed frame outlives
+/// this command; the frame itself is dropped.
+fn open_backends(
+    provider: &dyn ExecutionBackendProvider,
+    instance_alias: &str,
+    backends: &mut SessionBackends,
+    memory: &actingcommand_device::FrameMemoryBudget,
+) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
+    let capture_opens = matches!(
+        backends,
+        SessionBackends::Pending | SessionBackends::Independent { capture: None, .. }
+    );
+    let mut observations = backends.prepare(provider, instance_alias, Some(memory))?;
+    if let SessionBackends::Independent { input, .. } = backends
+        && input.is_none()
+    {
+        match provider.open_input(instance_alias) {
+            Ok(opened) => {
+                observations.push(opened.observation);
+                *input = Some(opened.backend);
+            }
+            Err(error) => {
+                return Err(observed_open_error(
+                    "input_backend_open_failed",
+                    actingcommand_contract::BackendOpenEntry::Input,
+                    error,
+                )
+                .with_backend_open_observations(&observations));
+            }
+        }
+    }
+    if capture_opens {
+        match execute_capture(provider, instance_alias, backends, Some(memory)) {
+            Ok(mut frame) => observations.append(&mut frame.backend_open_observations),
+            Err(error) => return Err(error.with_backend_open_observations(&observations)),
+        }
+    }
+    Ok(observations)
 }
 
 fn execute_action(
