@@ -5,9 +5,37 @@ the host responsiveness and third-party pressure samples of each performance
 tick. Escalation, recovery, hysteresis, the transition cooldown and clock-jump
 handling belong to the controller and are not changed by the consumers below.
 Every instance with an active policy workload carries its own level: an
-escalation raises every instance to the new level, a recovery releases one
-instance per transition. The levels in rank order are Normal, DispatchPaused,
-Throttled, YieldRequested, QosReduced, Suspended and ShutdownRequested.
+escalation below Suspended raises every instance to the new level, a recovery
+releases one instance per transition. The levels in rank order are Normal,
+DispatchPaused, Throttled, YieldRequested, QosReduced, Suspended and
+ShutdownRequested.
+
+## Host arbitration
+
+Each workload carries the host's arbitration input for its instance (Workflow
+#308 slice 5c): `utility_milli`, the highest `effective_milli`, and `aging_ms`,
+the longest `aging_ms`, over the instance's ranked Eligible or Selected
+decisions in the latest policy cycle that had any. The input is memory-only;
+an instance no cycle has ranked yet has none.
+
+- An escalation step into Suspended or ShutdownRequested raises exactly one
+  instance per transition that passes hysteresis and cooldown: among the
+  instances below that level, the one with the lowest `utility_milli` (ties:
+  the shortest `aging_ms`, then the instance id). The global level stays one
+  level below until no instance is below the step; the transition that raises
+  the last one also moves the global level. Without instances the global level
+  moves at once.
+- A recovery releases, among the instances above the global level, the one
+  with the longest `aging_ms` (ties: the highest `utility_milli`, then the
+  instance id), still one per transition and one level at a time.
+- When any candidate lacks an arbitration input, the instance id order decides
+  (the order before slice 5c).
+
+Every per-instance suspend or recovery `PerformanceBalanceChanged` event
+carries `arbitration: {utility_milli, aging_ms, candidates, basis}`: the chosen
+instance's input (0 for a value it lacks), the number of candidates, and
+`basis` `utility` or `lexical_fallback`. The field is absent on every other
+event; a reader that denies unknown fields must accept it.
 
 ## Directive
 

@@ -1749,6 +1749,7 @@ fn performance_pages_preserve_typed_facts_and_read_only_boundaries() {
         third_party_pressure_basis_points: None,
         recovery: false,
         deadline_disposition: None,
+        arbitration: None,
     };
     let stutter = PerformanceStutterEventData {
         instance_id: "instance:fixture-a".to_owned(),

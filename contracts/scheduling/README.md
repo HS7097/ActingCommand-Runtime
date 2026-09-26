@@ -136,7 +136,8 @@ ranking, the evaluator runs an optional score stage:
   errors. Offsets apply with or without a selection document.
 - `effective_milli = score_milli (0 when absent) + offset_milli` is added to the
   candidate's `total_score` as `effective_milli * 1000`, the same unit as the
-  urgency and strategic terms.
+  urgency and strategic terms. The decision's `rank.effective_milli` carries it
+  (with the slice 5a utility term; 0 for a candidate the stage did not score).
 - The tasks document may declare a catalog-level `priority_selection` block
   `{defer_below_milli, defer_for_ms (1..=86,400,000), promote_above_milli}` with
   `defer_below_milli < promote_above_milli`; it is only allowed next to a

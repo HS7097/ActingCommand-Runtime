@@ -27,9 +27,9 @@ use super::{
 use crate::{
     AgentAttentionState, AgentSessionEventData, AgentSessionId, AgentWakeData, AgentWakeId,
     AgentWakeKind, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
-    ArtifactKind, CatalogPromotionAuthorization, ClientActionKind, ClientActionRecord,
-    CorrelationId, EventId, FactInvalidationEventData, FactRecord, FactScope, HolderId,
-    InputAction, InstanceId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
+    ArbitrationBasis, ArtifactKind, CatalogPromotionAuthorization, ClientActionKind,
+    ClientActionRecord, CorrelationId, EventId, FactInvalidationEventData, FactRecord, FactScope,
+    HolderId, InputAction, InstanceId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
     MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
     OwnerEpoch, PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
     PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
@@ -2032,6 +2032,8 @@ pub struct PerformanceControlPayload {
     recovery: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     deadline_disposition: Option<PerformanceDeadlineDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    arbitration: Option<ArbitrationBasis>,
     audit: SanitizedAudit,
 }
 
@@ -5885,6 +5887,7 @@ impl PerformanceControlDraft {
             third_party_pressure_basis_points: self.data.third_party_pressure_basis_points,
             recovery: self.data.recovery,
             deadline_disposition: self.data.deadline_disposition,
+            arbitration: self.data.arbitration,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6515,6 +6518,7 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                 third_party_pressure_basis_points: value.third_party_pressure_basis_points,
                 recovery: value.recovery,
                 deadline_disposition: value.deadline_disposition,
+                arbitration: value.arbitration,
             })
         }
         _ => Err(SanitizationError::new(

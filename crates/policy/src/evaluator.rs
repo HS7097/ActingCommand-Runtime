@@ -326,6 +326,9 @@ pub struct TaskRank {
     pub load_cost_milli: u16,
     pub contention_penalty: i64,
     pub total_score: i64,
+    /// The score stage's effective value (score + utility + offset); 0 when no score applies.
+    #[serde(default)]
+    pub effective_milli: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1643,6 +1646,7 @@ fn apply_priority_selection(
             .rank
             .total_score
             .saturating_add(effective_milli.saturating_mul(1_000));
+        candidate.rank.effective_milli = effective_milli;
         // An unknown verdict or cost never defers or promotes; only a scored one meets the
         // thresholds.
         let disposition = match (&thresholds, score_milli) {
@@ -2121,6 +2125,7 @@ fn rank_task(
         load_cost_milli: load.cost_milli,
         contention_penalty,
         total_score,
+        effective_milli: 0,
     })
 }
 

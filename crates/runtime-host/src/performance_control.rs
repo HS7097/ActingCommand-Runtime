@@ -4,8 +4,8 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
-    PerformanceDeadlineDisposition, RuntimeErrorCode,
+    ArbitrationBasis, ArbitrationBasisKind, PerformanceControlEventData, PerformanceControlLevel,
+    PerformanceControlReason, PerformanceDeadlineDisposition, RuntimeErrorCode,
 };
 use actingcommand_policy::{HostResourceSnapshot, LoadProfile};
 use std::collections::{BTreeMap, BTreeSet};
@@ -133,6 +133,16 @@ impl PerformanceControlObservation {
 pub struct PerformanceControlWorkload {
     pub instance_id: String,
     pub load_profile: LoadProfile,
+    /// The latest policy cycle's arbitration input for this instance; `None` without one.
+    pub arbitration: Option<InstanceArbitrationRank>,
+}
+
+/// One instance's highest effective utility and longest eligibility age over its Eligible or
+/// Selected decisions in the latest policy cycle that had any (Workflow #308 slice 5c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceArbitrationRank {
+    pub utility_milli: i64,
+    pub aging_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +180,8 @@ pub(crate) struct PerformanceBalanceController {
     config: PerformanceControlConfig,
     level: PerformanceControlLevel,
     instance_levels: BTreeMap<String, PerformanceControlLevel>,
+    /// The arbitration input of the latest workloads; an instance without one has no entry.
+    instance_arbitration: BTreeMap<String, InstanceArbitrationRank>,
     throttle_windows: BTreeMap<String, ThrottleWindow>,
     last_observed_at_unix_ms: Option<u64>,
     cooldown_until_unix_ms: u64,
@@ -185,6 +197,7 @@ impl PerformanceBalanceController {
             config,
             level: PerformanceControlLevel::Normal,
             instance_levels: BTreeMap::new(),
+            instance_arbitration: BTreeMap::new(),
             throttle_windows: BTreeMap::new(),
             last_observed_at_unix_ms: None,
             cooldown_until_unix_ms: 0,
@@ -281,36 +294,47 @@ impl PerformanceBalanceController {
                 )
             })?;
         let previous = self.level;
-        let recovery = target.rank() < previous.rank();
-        self.level = if recovery {
-            previous_level(previous)
+        if target.rank() < previous.rank() {
+            self.level = previous_level(previous);
+            let mut events = vec![self.event(
+                None,
+                previous,
+                self.level,
+                PerformanceControlReason::Recovery,
+                true,
+                None,
+                &observation,
+            )];
+            if let Some(event) = self.recover_one_instance(&observation)? {
+                events.push(event);
+            }
+            return Ok(events);
+        }
+        let step = next_level(previous);
+        let reason = control_reason(&observation);
+        let mut events = Vec::new();
+        if step.rank() >= PerformanceControlLevel::Suspended.rank() {
+            // Suspension and shutdown reach one instance per transition; the global level
+            // follows only once every instance has been raised on its own.
+            if let Some(event) = self.suspend_one_instance(step, reason, &observation)? {
+                events.push(event);
+            }
+            if self
+                .instance_levels
+                .values()
+                .any(|level| level.rank() < step.rank())
+            {
+                return Ok(events);
+            }
         } else {
-            next_level(previous)
-        };
-        if !recovery {
             for level in self.instance_levels.values_mut() {
-                if level.rank() < self.level.rank() {
-                    *level = self.level;
+                if level.rank() < step.rank() {
+                    *level = step;
                 }
             }
         }
-        let reason = if recovery {
-            PerformanceControlReason::Recovery
-        } else {
-            control_reason(&observation)
-        };
-        let mut events = vec![self.event(
-            None,
-            previous,
-            self.level,
-            reason,
-            recovery,
-            None,
-            &observation,
-        )];
-        if recovery && let Some(event) = self.recover_one_instance(&observation) {
-            events.push(event);
-        }
+        self.level = step;
+        events.push(self.event(None, previous, step, reason, false, None, &observation));
         Ok(events)
     }
 
@@ -519,8 +543,19 @@ impl PerformanceBalanceController {
             self.instance_levels
                 .entry(workload.instance_id.clone())
                 .or_insert(self.level);
+            match workload.arbitration {
+                Some(rank) => {
+                    self.instance_arbitration
+                        .insert(workload.instance_id.clone(), rank);
+                }
+                None => {
+                    self.instance_arbitration.remove(&workload.instance_id);
+                }
+            }
         }
         self.instance_levels
+            .retain(|instance_id, _| active.contains(instance_id));
+        self.instance_arbitration
             .retain(|instance_id, _| active.contains(instance_id));
         Ok(())
     }
@@ -555,22 +590,43 @@ impl PerformanceBalanceController {
                     "recover_performance_instance",
                 )
             })?;
-        Ok(self.recover_one_instance(observation).into_iter().collect())
+        Ok(self
+            .recover_one_instance(observation)?
+            .into_iter()
+            .collect())
     }
 
+    /// Lowers the instance above the global level with the longest aging by one level (ties:
+    /// highest utility, then instance id).
     fn recover_one_instance(
         &mut self,
         observation: &PerformanceControlObservation,
-    ) -> Option<PerformanceControlEventData> {
-        let instance_id = self
+    ) -> RuntimeHostResult<Option<PerformanceControlEventData>> {
+        let global = self.level;
+        let candidates = self
             .instance_levels
             .iter()
-            .find(|(_, level)| level.rank() > self.level.rank())
-            .map(|(instance_id, _)| instance_id.clone())?;
-        let previous = *self.instance_levels.get(&instance_id)?;
-        let level = previous_level(previous).max(self.level);
+            .filter(|(_, level)| level.rank() > global.rank())
+            .map(|(instance_id, _)| instance_id.as_str())
+            .collect::<Vec<_>>();
+        let Some((instance_id, arbitration)) = self.arbitrate(&candidates, |left, right| {
+            right
+                .aging_ms
+                .cmp(&left.aging_ms)
+                .then_with(|| right.utility_milli.cmp(&left.utility_milli))
+        })?
+        else {
+            return Ok(None);
+        };
+        let previous = *self.instance_levels.get(&instance_id).ok_or_else(|| {
+            control_fatal(
+                "performance_control_instance_missing",
+                "recover_performance_instance",
+            )
+        })?;
+        let level = previous_level(previous).max(global);
         self.instance_levels.insert(instance_id.clone(), level);
-        Some(self.event(
+        let mut event = self.event(
             Some(instance_id),
             previous,
             level,
@@ -578,7 +634,106 @@ impl PerformanceBalanceController {
             true,
             None,
             observation,
-        ))
+        );
+        event.arbitration = Some(arbitration);
+        Ok(Some(event))
+    }
+
+    /// Raises the instance below `step` with the lowest utility to `step` (ties: shortest
+    /// aging, then instance id).
+    fn suspend_one_instance(
+        &mut self,
+        step: PerformanceControlLevel,
+        reason: PerformanceControlReason,
+        observation: &PerformanceControlObservation,
+    ) -> RuntimeHostResult<Option<PerformanceControlEventData>> {
+        let candidates = self
+            .instance_levels
+            .iter()
+            .filter(|(_, level)| level.rank() < step.rank())
+            .map(|(instance_id, _)| instance_id.as_str())
+            .collect::<Vec<_>>();
+        let Some((instance_id, arbitration)) = self.arbitrate(&candidates, |left, right| {
+            left.utility_milli
+                .cmp(&right.utility_milli)
+                .then_with(|| left.aging_ms.cmp(&right.aging_ms))
+        })?
+        else {
+            return Ok(None);
+        };
+        let previous = self
+            .instance_levels
+            .insert(instance_id.clone(), step)
+            .ok_or_else(|| {
+                control_fatal(
+                    "performance_control_instance_missing",
+                    "suspend_performance_instance",
+                )
+            })?;
+        let mut event = self.event(
+            Some(instance_id),
+            previous,
+            step,
+            reason,
+            false,
+            None,
+            observation,
+        );
+        event.arbitration = Some(arbitration);
+        Ok(Some(event))
+    }
+
+    /// Picks the first candidate under `order` (then instance id) when every candidate has an
+    /// arbitration input, otherwise the first candidate in instance id order.
+    fn arbitrate(
+        &self,
+        candidates: &[&str],
+        order: impl Fn(&InstanceArbitrationRank, &InstanceArbitrationRank) -> std::cmp::Ordering,
+    ) -> RuntimeHostResult<Option<(String, ArbitrationBasis)>> {
+        let count = u16::try_from(candidates.len()).map_err(|_| {
+            control_fatal(
+                "performance_control_candidates_overflow",
+                "arbitrate_performance_instances",
+            )
+        })?;
+        let ranked = candidates
+            .iter()
+            .map(|instance_id| {
+                self.instance_arbitration
+                    .get(*instance_id)
+                    .map(|rank| (*instance_id, rank))
+            })
+            .collect::<Option<Vec<_>>>();
+        let (instance_id, rank, basis) = match ranked {
+            Some(ranked) => {
+                let Some((instance_id, rank)) = ranked
+                    .into_iter()
+                    .min_by(|left, right| order(left.1, right.1).then_with(|| left.0.cmp(right.0)))
+                else {
+                    return Ok(None);
+                };
+                (instance_id, Some(*rank), ArbitrationBasisKind::Utility)
+            }
+            None => {
+                let Some(instance_id) = candidates.iter().min() else {
+                    return Ok(None);
+                };
+                (
+                    *instance_id,
+                    self.instance_arbitration.get(*instance_id).copied(),
+                    ArbitrationBasisKind::LexicalFallback,
+                )
+            }
+        };
+        Ok(Some((
+            instance_id.to_owned(),
+            ArbitrationBasis {
+                utility_milli: rank.map_or(0, |rank| rank.utility_milli),
+                aging_ms: rank.map_or(0, |rank| rank.aging_ms),
+                candidates: count,
+                basis,
+            },
+        )))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -602,6 +757,7 @@ impl PerformanceBalanceController {
             third_party_pressure_basis_points: observation.third_party_pressure_basis_points,
             recovery,
             deadline_disposition,
+            arbitration: None,
         }
     }
 }
@@ -774,6 +930,7 @@ mod tests {
         PerformanceControlWorkload {
             instance_id: instance_id.to_owned(),
             load_profile,
+            arbitration: None,
         }
     }
 

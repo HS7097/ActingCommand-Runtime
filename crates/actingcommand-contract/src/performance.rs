@@ -488,6 +488,30 @@ pub struct PerformanceControlEventData {
     pub third_party_pressure_basis_points: Option<u16>,
     pub recovery: bool,
     pub deadline_disposition: Option<PerformanceDeadlineDisposition>,
+    /// Why this instance was the one suspended or recovered; present on every per-instance
+    /// suspend or recovery transition (Workflow #308 slice 5c).
+    pub arbitration: Option<ArbitrationBasis>,
+}
+
+/// How the host chose between instances for one suspend or recovery transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArbitrationBasisKind {
+    /// Every candidate carried a policy utility and aging.
+    Utility,
+    /// At least one candidate had no policy evaluation; instance id order decided.
+    LexicalFallback,
+}
+
+/// The chosen instance's arbitration values (0 when it had none) and the number of
+/// instances it was chosen from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArbitrationBasis {
+    pub utility_milli: i64,
+    pub aging_ms: u64,
+    pub candidates: u16,
+    pub basis: ArbitrationBasisKind,
 }
 
 pub(crate) fn validate_performance_summary(
@@ -552,6 +576,9 @@ pub(crate) fn validate_performance_control(
         || data
             .third_party_pressure_basis_points
             .is_some_and(|value| value > 10_000)
+        || data
+            .arbitration
+            .is_some_and(|arbitration| arbitration.candidates == 0 || data.instance_id.is_none())
     {
         return Err(SanitizationError::new(
             "invalid_performance_control",

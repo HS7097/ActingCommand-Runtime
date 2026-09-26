@@ -1236,6 +1236,7 @@ fn performance_export_is_explicit_bounded_and_preserves_ordinary_export() {
                 third_party_pressure_basis_points: None,
                 recovery: false,
                 deadline_disposition: None,
+                arbitration: None,
             },
             AuditInput::new(),
         )
