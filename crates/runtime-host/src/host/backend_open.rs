@@ -93,8 +93,9 @@ impl HostShared {
         if recorded.is_empty() {
             return Ok(());
         }
-        // Workflow #317 sc1: every recorded open becomes its instance's self-check facts; a
-        // `failed` one withdraws the instance's policy availability (sc2).
+        // Workflow #317 sc1: every recorded open becomes its instance's self-check facts and,
+        // for a device self-checked instance, one `device.self_check` status hint (sc3); such a
+        // physical policy instance is available only while its self-check passes (sc3).
         let instance_id = *links.instance_id().ok_or_else(|| {
             RuntimeHostError::fatal(
                 "backend_selfcheck_instance_missing",
@@ -103,7 +104,7 @@ impl HostShared {
             )
         })?;
         for report in recorded {
-            self.record_backend_selfcheck_facts(instance_id, report)?;
+            self.record_backend_selfcheck_facts(instance_id, &links, report)?;
         }
         Ok(())
     }

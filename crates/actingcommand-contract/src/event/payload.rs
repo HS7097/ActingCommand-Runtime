@@ -17,6 +17,8 @@ mod governance_identity;
 pub use governance_identity::*;
 mod recovery_ladder;
 pub use recovery_ladder::*;
+mod device_self_check;
+pub use device_self_check::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -7444,6 +7446,7 @@ enum RuntimeDraftKind {
     FactRecorded(RuntimeFactRecordedDraft),
     FactInvalidated(RuntimeFactInvalidatedDraft),
     FactSnapshot(RuntimeFactSnapshotDraft),
+    DeviceSelfCheck(DeviceSelfCheckDraft),
 }
 
 struct RuntimeFactRecordedDraft {
@@ -9303,6 +9306,8 @@ pub enum RuntimePayload {
     FactRecorded(RuntimeFactRecordedPayload),
     FactInvalidated(RuntimeFactInvalidatedPayload),
     FactSnapshot(RuntimeFactSnapshotPayload),
+    /// `device.self_check` (Workflow #317 sc3), a status hint under the lifecycle event type.
+    DeviceSelfCheck(DeviceSelfCheckPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9642,6 +9647,7 @@ family_payload!(RuntimePayload, {
     FactRecorded => EventType::RuntimeFactRecorded,
     FactInvalidated => EventType::RuntimeFactInvalidated,
     FactSnapshot => EventType::RuntimeFactSnapshot,
+    DeviceSelfCheck => EventType::RuntimeLifecycleObserved,
 });
 family_payload!(MonitorPayload, {
     Requested => EventType::MonitorProbeRequested,
@@ -9893,6 +9899,9 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::FactSnapshot(detail) => {
                     RuntimePayload::FactSnapshot(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::DeviceSelfCheck(detail) => {
+                    RuntimePayload::DeviceSelfCheck(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Monitor(value) => EventPayload::Monitor(match value.0 {
@@ -10350,6 +10359,7 @@ impl EventPayload {
                         | RuntimePayload::FactRecorded(_)
                         | RuntimePayload::FactInvalidated(_)
                         | RuntimePayload::FactSnapshot(_)
+                        | RuntimePayload::DeviceSelfCheck(_)
                 )
                 | Self::Ledger(LedgerPayload::Signature(_))
         ) {
@@ -10493,6 +10503,9 @@ impl EventPayload {
         }
         if let Self::Ledger(LedgerPayload::Signature(payload)) = self {
             payload.record().validate()?;
+        }
+        if let Self::Runtime(RuntimePayload::DeviceSelfCheck(payload)) = self {
+            payload.validate()?;
         }
         if detail.touch_response_us().is_some()
             && !matches!(self, Self::Input(InputPayload::Committed(_)))

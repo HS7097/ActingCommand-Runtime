@@ -58,7 +58,9 @@ impl HostShared {
     /// instance alias, the key and the configured value: a key whose stored record already
     /// carries that id is already published and appends nothing (its content is verified
     /// against the configured value); otherwise the seed is a new observation at the host
-    /// clock. Any refusal is returned to the caller, which fails startup.
+    /// clock. Any refusal is returned to the caller, which fails startup. The
+    /// `session.instance.available` seed of a device self-checked instance is left to its
+    /// connection preparation phase (Workflow #317 sc3).
     pub(super) fn seed_policy_instance_facts(&self) -> RuntimeHostResult<()> {
         let Some(inputs) = lock(&self.policy_inputs, "seed_policy_instance_facts")?.clone() else {
             return Ok(());
@@ -87,7 +89,19 @@ impl HostShared {
                     ),
                 ),
             ];
+            // Workflow #317 sc3: a device self-checked instance's availability is its seed and
+            // its self-check; its startup preparation phase publishes it, so seeding it here too
+            // would only add a record the preparation withdraws at once.
+            let self_checked = lock(&self.registered_instances, "seed_policy_instance_facts")?
+                .values()
+                .any(|registered| {
+                    registered.instance_alias == instance.instance_id
+                        && registered.device_self_checked()
+                });
             for (key, value) in seeds {
+                if self_checked && key == POLICY_INSTANCE_AVAILABLE_KEY {
+                    continue;
+                }
                 let digest = policy_instance_seed_digest(&instance.instance_id, key, &value)?;
                 let source_snapshot_id = format!("snapshot:policy-config:{digest}");
                 let content = FactContent::Inline { value };
@@ -261,22 +275,21 @@ impl HostShared {
     }
 
     /// Workflow #317 sc2: publishes `session.instance.available = false` for one configured
-    /// policy instance because its `<entry>` self-check of session `<generation>` failed, through
-    /// the seed's publisher ([`Self::publish_fact`]) and scope. The record differs from the seed
-    /// only in `source_detector` `runtime.backend-selfcheck` and `source_snapshot_id`
-    /// `backend_selfcheck:<entry>:<generation>`; `resource_bundle_hash` is the seed digest of the
-    /// value `false`.
+    /// policy instance because its self-check does not pass, through the seed's publisher
+    /// ([`Self::publish_fact`]) and scope. The record differs from the seed only in
+    /// `source_detector` `runtime.backend-selfcheck` and `source_snapshot_id`
+    /// `backend_selfcheck:<cause>`, `<cause>` being `<entry>:<generation>` of the recorded open
+    /// or `unchecked` (sc3); `resource_bundle_hash` is the seed digest of the value `false`.
     pub(super) fn publish_backend_selfcheck_unavailable(
         &self,
         instance_alias: &str,
-        entry: &str,
-        generation: u64,
+        cause: &str,
     ) -> RuntimeHostResult<()> {
         self.publish_policy_instance_availability(
             instance_alias,
             false,
             BACKEND_SELFCHECK_AVAILABILITY_DETECTOR,
-            |_| format!("{BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX}{entry}:{generation}"),
+            |_| format!("{BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX}{cause}"),
         )
     }
 

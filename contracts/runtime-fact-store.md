@@ -349,17 +349,23 @@ the backend self-check facts (source `device-proxy` or `capture`).
   A report whose event links carry no instance fails with
   `backend_selfcheck_instance_missing` (fatal); every refusal of a record is
   returned to the open's observation consumer, whose existing failure path
-  poisons the Runtime exactly as a failed event append does. A lease release, a task end
+  poisons the Runtime exactly as a failed event append does. For a device
+  self-checked instance (`instance-fact-store.md`, "Backend self-check
+  availability") one `device.self_check` status hint follows the four facts
+  under the same gate hold (`backend-open-observation.md`, "Device self-check
+  event", Workflow #317 sc3). A lease release, a task end
   or a retained-session close leaves them in place: they describe the last
   open. Invalidated with `device_closed` by emulator control after `stop`,
   `start` and `restart`, once the endpoint was rebound (or returned to
   pending) and still under the instance admission guard, so a session opened
   on the new binding never loses its facts; and with `runtime_takeover` as
   part of the `backend.` family. An ADB failure leaves them in place. The
-  policy layer does not read them; a `failed` status instead withdraws a
-  policy instance's `session.instance.available` until a later `passed` or
-  their invalidation (Workflow #317 sc2, `instance-fact-store.md`, "Backend
-  self-check availability"). `actingctl facts --program` lists them.
+  policy layer does not read them; a device self-checked policy instance is
+  available only while they pass (Workflow #317 sc3, which replaced sc2's
+  bounded reading; `instance-fact-store.md`, "Backend self-check
+  availability"). The connection preparation phase below writes them at
+  startup, after emulator `start` / `restart`, on an instance resume and on
+  `SelfCheckInstance`. `actingctl facts --program` lists them.
 - `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
   configuration manifest (`RuntimeConfigManifest` in contract module
@@ -411,6 +417,68 @@ the backend self-check facts (source `device-proxy` or `capture`).
 `actingd` reports; `actingctl facts --program` returns both records as part of
 the snapshot and `actingctl status --config` returns just the two (see "Read
 operation").
+
+## Connection preparation phase
+
+Workflow #317 sc3: opens happen inside leases (lazily, inside contained
+tasks), so the host connects and self-checks a device outside any client
+lease in a controlled preparation phase (`prepare_instance_connection`, host
+internal). For one physical instance, under its admission guard:
+
+1. **Preparation lease.** The host grants itself a dedicated lease following
+   the resource-close lease precedent: `prepare_resource_close` (a
+   resource-close-only lease, so no input can be sent under it; a waiting
+   lease queue is `lease_transfer_not_safe`) for the fixed Runtime connection
+   of the preparation phase, granted through `grant_prepared_lease_with_links`
+   with `CapacityUse::Drain` (`lease.granted`, synthetic links). A refusal (an
+   active lease `lease_busy`, the takeover cooldown `lease_cooldown`, a queue)
+   skips the instance: one `runtime.failed` record with lifecycle stage
+   `runtime.lifecycle.connection_preparation` names the instance and the code,
+   and its availability is withdrawn.
+2. **Opens.** `ExecutionKernel::open_instance_backends` opens the input and
+   capture backends through the provider opens the lazy paths use (a Nemu pair
+   once) and takes the first frame of a capture it opened, which is dropped
+   inside the open (no frame artifact is written). The opens are recorded like
+   every open: `runtime.lifecycle_observed` `backend_open_observed`, the four
+   `backend.selfcheck.<entry>.*` facts, one `device.self_check` per entry and
+   the availability they decide. A failed open is recorded the same way with
+   its failure report.
+3. **Close and release.** The session is closed through the fenced close path
+   and, once the close is confirmed, the preparation lease is released
+   (`lease.released`); the self-check facts stay. A failed close is recorded by
+   the close path and withdraws availability; an unconfirmed one is fatal, as
+   on every close path.
+
+Nothing is sent to the device and nothing is retried. The phase answers the
+self-check projected from its own opens in the shape of an instance resume's
+(`scheduling-pause.md`, "Resume"), with the code of the failing step as
+`failure_code`. Only a fatal failure (a ledger append, an unconfirmed close)
+is returned as an error; every other failure leaves the instance unavailable.
+
+**Triggers.**
+
+- **Daemon start** — after the registry, the fact seeds, the configuration
+  manifest, the settlement facts and the agent session expiry, before any
+  thread is spawned and so before `actingd ready`: every registered device
+  self-checked instance, in registry order, is first withdrawn
+  (`backend_selfcheck:unchecked`) and then prepared. A failed preparation does
+  not stop the start; a fatal one does.
+- **Emulator control** — after a successful `start` / `restart` of a device
+  self-checked instance (its `command.validated`, `runtime.instance_bound` and
+  `device.connected` recorded, before its startup package is scheduled); the
+  invalidation of the control already withdrew availability. A failed
+  preparation does not fail the completed control action. The stuck-recovery
+  emulator-restart rung drives the same path.
+- **Instance resume** — `ResumeScheduling { Instance }` reconnects through the
+  preparation phase (`scheduling-pause.md`, "Resume").
+- **`SelfCheckInstance { instance_alias }`** — the operator's manual reconnect
+  and self-check of one physical instance (`actingctl selfcheck <alias>`,
+  origin gate User+Ui or Cli+Cli, `invalid_emulator_control_origin` otherwise),
+  answered with `RuntimeResult::InstanceSelfChecked { instance_alias,
+  selfcheck }`.
+
+Fixture instances and providers without a device endpoint are not prepared by
+the automatic triggers.
 
 ## Typed codes
 

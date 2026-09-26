@@ -187,17 +187,29 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
     assert!(events.iter().any(
         |event| *event.event_id() == terminal.event_id && event.sequence() == terminal.sequence
     ));
+    // Workflow #317 sc3: the physical instance's startup preparation phase holds the only lease
+    // the daemon grants; it sends no input and nothing fails.
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::LeaseGranted)
+            .count(),
+        1
+    );
     assert!(!events.iter().any(|event| matches!(
         event.event_type(),
-        EventType::LeaseGranted | EventType::InputCommitted | EventType::RuntimeFailed
+        EventType::InputCommitted | EventType::RuntimeFailed
     )));
     assert!(
         matches!(events.last().expect("final close summary").payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload)) if payload.phase() == actingcommand_contract::RuntimeLifecyclePhase::DeviceDiagnosticSummary)
     );
 }
 
+/// Workflow #317 sc3: the legacy physical policy instance's startup preparation cannot connect
+/// (its ADB tool does not exist), so its self-check fails and the policy never dispatches to it:
+/// the intent / admission / lease path of a physical instance needs a passing self-check first.
 #[test]
-fn actingd_preserves_legacy_physical_policy_intent_admission_and_lease() {
+fn actingd_withholds_legacy_physical_policy_dispatch_until_a_self_check_passes() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     write_legacy_physical_policy_config(&config_path, root.path(), instance_id());
@@ -206,41 +218,50 @@ fn actingd_preserves_legacy_physical_policy_intent_admission_and_lease() {
     let mut child = ChildGuard(child);
     wait_for_runtime_info(&mut child.0, root.path());
     let client = wait_for_agent_client(&mut child.0, root.path());
+    let failed_self_check = |events: &[actingcommand_contract::ProjectedEvent]| {
+        events.iter().any(|event| {
+            matches!(
+                &event.payload,
+                ProjectionPayload::Full(payload) if matches!(
+                    payload.as_ref(),
+                    EventPayload::Runtime(actingcommand_contract::RuntimePayload::DeviceSelfCheck(check))
+                        if check.status() == actingcommand_contract::DeviceSelfCheckStatus::Failed
+                )
+            )
+        })
+    };
     let started = Instant::now();
-    let events = loop {
+    loop {
         let events = client
             .query_events(EventQuery::default(), ProjectionProfile::Forensic)
             .expect("query legacy policy startup events");
-        if events
-            .iter()
-            .any(|event| event.event_type == EventType::PolicyDispatchAdmitted)
-        {
-            break events;
+        if failed_self_check(&events) {
+            break;
         }
         if let Some(status) = child.0.try_wait().expect("process state") {
-            panic!("actingd exited before legacy policy lease with {status}");
+            panic!("actingd exited before its startup self-check with {status}");
         }
         assert!(
             started.elapsed() < Duration::from_secs(5),
-            "legacy policy startup timed out"
+            "legacy policy startup self-check timed out"
         );
         thread::sleep(Duration::from_millis(20));
-    };
+    }
+    thread::sleep(Duration::from_millis(200));
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("query legacy policy events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::LeaseGranted)
+            .count(),
+        1,
+        "only the startup preparation lease"
+    );
     for event_type in [
         EventType::PolicyDispatchIntent,
         EventType::PolicyDispatchAdmitted,
-        EventType::LeaseGranted,
-    ] {
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| event.event_type == event_type)
-                .count(),
-            1,
-            "legacy {event_type:?}"
-        );
-    }
-    for event_type in [
         EventType::LabRequest,
         EventType::TaskRequested,
         EventType::TaskCompleted,
@@ -253,25 +274,9 @@ fn actingd_preserves_legacy_physical_policy_intent_admission_and_lease() {
                 .filter(|event| event.event_type == event_type)
                 .count(),
             0,
-            "legacy policy must not enter fixture execution: {event_type:?}"
+            "no dispatch to an instance whose self-check failed: {event_type:?}"
         );
     }
-    let admitted = events
-        .iter()
-        .find(|event| event.event_type == EventType::PolicyDispatchAdmitted)
-        .expect("legacy policy admission event");
-    let ProjectionPayload::Full(payload) = &admitted.payload else {
-        panic!("legacy forensic policy admission payload")
-    };
-    let EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) = payload.as_ref() else {
-        panic!("legacy policy dispatch admission")
-    };
-    assert_eq!(payload.operation_id(), "operation.observe");
-    assert_eq!(
-        payload.package_digest(),
-        &format!("sha256:{}", "c".repeat(64)).into()
-    );
-    assert!(!payload.procedure_binding_digest().is_empty());
     assert!(child.0.try_wait().expect("process state").is_none());
 
     drop(client);

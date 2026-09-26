@@ -161,6 +161,7 @@ closed_code!(EventAction {
     SignatureMatch => "signature.match",
     SignatureRetire => "signature.retire",
     OwnerUnlock => "owner.unlock",
+    DeviceSelfCheck => "device.self_check",
 });
 
 closed_code!(DiagnosticCode {
@@ -197,6 +198,29 @@ closed_code!(GovernanceIdentityRefusal {
     ClientNotAllowed => "governance_client_not_allowed",
     InstanceUnknown => "governance_instance_unknown",
     AlreadyDeclared => "governance_identity_already_declared",
+});
+
+// Workflow #317 sc3: one `device.self_check` status hint per recorded backend open.
+closed_code!(DeviceSelfCheckEntry {
+    Input => "input",
+    Capture => "capture",
+    Nemu => "nemu",
+});
+
+closed_code!(DeviceSelfCheckStatus {
+    Passed => "passed",
+    Failed => "failed",
+    Unknown => "unknown",
+});
+
+// Why a `device.self_check` failed: the entry's open (its status or connection) or, the open
+// having passed, the entry's own check.
+closed_code!(DeviceSelfCheckFailure {
+    InputBackendOpenFailed => "input_backend_open_failed",
+    CaptureBackendOpenFailed => "capture_backend_open_failed",
+    PairedBackendOpenFailed => "paired_backend_open_failed",
+    InputCheckFailed => "input_check_failed",
+    CaptureCheckFailed => "capture_check_failed",
 });
 
 closed_code!(RecognitionVerdict {

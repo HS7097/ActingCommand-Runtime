@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::*;
+use actingcommand_contract::SchedulingResumeSelfCheck;
 
 impl HostShared {
     pub(super) fn cleanup_composite_failure(
@@ -137,7 +139,7 @@ impl HostShared {
             })
     }
 
-    fn close_instance_resources_result(
+    pub(super) fn close_instance_resources_result(
         &self,
         token: &LeaseToken,
         connection_id: ConnectionId,
@@ -232,6 +234,63 @@ impl HostShared {
         }
     }
 
+    /// Grants a dedicated lease on `instance_id` to the Runtime-owned connection
+    /// `connection_value`: a resource-close-only lease (`prepare_resource_close`, a waiting lease
+    /// queue is `TransferNotSafe`), granted with `CapacityUse::Drain`. The caller holds the
+    /// instance admission guard. Returns the token, its connection and the grant's request id.
+    pub(super) fn grant_dedicated_instance_lease(
+        &self,
+        instance_id: InstanceId,
+        connection_value: u64,
+    ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
+        let resolved = lock(&self.registered_instances, "read_resource_close_instance")?
+            .get(&instance_id)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "resource_close_instance_missing",
+                    "acquire_resource_close_lease",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        let request_id = self
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let holder_id = self
+            .events
+            .issuer()
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let connection_id = ConnectionId::new(connection_value).map_err(|error| {
+            RuntimeHostError::scheduler("build_resource_close_connection", &error)
+        })?;
+        let preparation = lock(&self.scheduler, "prepare_resource_close_lease")?
+            .prepare_resource_close(
+                *request_id.transport(),
+                instance_id,
+                *holder_id.transport(),
+                connection_id,
+                self.monotonic_ms()?,
+            )
+            .map_err(|error| RuntimeHostError::scheduler("prepare_resource_close_lease", &error))?;
+        let token = preparation.token().clone();
+        let grant_request_id = *request_id.transport();
+        let grant_links = self
+            .events
+            .synthetic_links(&token, self.events.action_id()?)?
+            .with_request_id(request_id);
+        self.grant_prepared_lease_with_links(
+            &resolved,
+            preparation,
+            grant_links,
+            CapacityUse::Drain,
+        )
+        .map_err(|failure| *failure.error)?;
+        Ok((token, connection_id, grant_request_id))
+    }
+
     /// The instance admission guard excludes capture registration and business native calls.
     /// A dedicated close lease is released with `release_reason` once the close is confirmed.
     pub(super) fn close_retained_instance_while_guarded(
@@ -271,53 +330,8 @@ impl HostShared {
                 })?;
             (token, connection_id, false)
         } else {
-            let resolved = lock(&self.registered_instances, "read_resource_close_instance")?
-                .get(&instance_id)
-                .cloned()
-                .ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        "resource_close_instance_missing",
-                        "acquire_resource_close_lease",
-                        RuntimeErrorCode::RuntimeFatal,
-                    )
-                })?;
-            let request_id = self
-                .events
-                .issuer()
-                .mint_request_id()
-                .map_err(|_| runtime_identifier_error())?;
-            let holder_id = self
-                .events
-                .issuer()
-                .mint_holder_id()
-                .map_err(|_| runtime_identifier_error())?;
-            let connection_id =
-                ConnectionId::new(RESOURCE_CLOSE_CONNECTION_VALUE).map_err(|error| {
-                    RuntimeHostError::scheduler("build_resource_close_connection", &error)
-                })?;
-            let preparation = lock(&self.scheduler, "prepare_resource_close_lease")?
-                .prepare_resource_close(
-                    *request_id.transport(),
-                    instance_id,
-                    *holder_id.transport(),
-                    connection_id,
-                    self.monotonic_ms()?,
-                )
-                .map_err(|error| {
-                    RuntimeHostError::scheduler("prepare_resource_close_lease", &error)
-                })?;
-            let token = preparation.token().clone();
-            let grant_links = self
-                .events
-                .synthetic_links(&token, self.events.action_id()?)?
-                .with_request_id(request_id);
-            self.grant_prepared_lease_with_links(
-                &resolved,
-                preparation,
-                grant_links,
-                CapacityUse::Drain,
-            )
-            .map_err(|failure| *failure.error)?;
+            let (token, connection_id, _) =
+                self.grant_dedicated_instance_lease(instance_id, RESOURCE_CLOSE_CONNECTION_VALUE)?;
             (token, connection_id, true)
         };
         let result = self
@@ -420,5 +434,197 @@ impl HostShared {
                 Err(cleanup)
             }
         }
+    }
+
+    // The controlled preparation phase of a physical instance's device connection (Workflow #317
+    // sc3, the strict reading of #316 goal 5).
+    //
+    // `prepare_instance_connection` connects and self-checks one physical instance outside any
+    // client lease: under the instance admission guard it takes a dedicated preparation lease (the
+    // close-lease precedent: a resource-close-only lease of a fixed Runtime connection, granted
+    // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`), opens the instance's
+    // input and capture backends through `ExecutionKernel::open_instance_backends` (a Nemu pair
+    // once), records the opens exactly as every open is recorded (`backend.open_observed`, the
+    // `backend.selfcheck.*` facts, one `device.self_check` status hint per entry and the policy
+    // availability they gate), then closes the session and releases the lease. It sends no input
+    // and keeps no frame. A failing step is recorded and leaves the instance unavailable; nothing
+    // is retried. Only a fatal failure (a ledger append, an unconfirmed close) is returned.
+    //
+    // Triggers: daemon start (every registered physical instance in order, before the host
+    // answers), emulator control `start` / `restart`, an instance `ResumeScheduling` and the
+    // explicit `SelfCheckInstance` request. The automatic triggers and the availability gate
+    // concern device self-checked instances only (`RegisteredInstance::device_self_checked`):
+    // fixtures and providers without a device endpoint are exempt.
+
+    /// Trigger (a): at daemon start, after the registry and the fact seeds and before any
+    /// thread is spawned, withdraws the policy availability of every registered physical
+    /// instance and runs its preparation phase, in registry order. A failed preparation leaves
+    /// its instance unavailable and does not stop the start; only a fatal failure does.
+    pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
+        let instances = lock(&self.registered_instances, "list_physical_instances")?
+            .values()
+            .filter(|instance| instance.device_self_checked())
+            .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+            .collect::<Vec<_>>();
+        for (instance_alias, instance_id) in instances {
+            self.withhold_policy_instance_availability(instance_id)?;
+            let links = self
+                .events
+                .system_links()?
+                .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+            let instance_guard = self
+                .instance_guard(instance_id)
+                .map_err(|failure| *failure.error)?;
+            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            self.prepare_instance_connection(&instance_alias, instance_id, links, &admission)?;
+        }
+        Ok(())
+    }
+
+    /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
+    /// physical instance; the receipt carries the self-check in the resume receipt's shape.
+    pub(super) fn self_check_instance(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let links = self
+            .events
+            .request_links(request, Some(instance_id), None, None);
+        let selfcheck = self
+            .prepare_instance_connection(instance_alias, instance_id, links, &admission)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::InstanceSelfChecked {
+                instance_alias: instance_alias.to_owned(),
+                selfcheck,
+            },
+        })
+    }
+
+    /// The preparation phase of one physical instance; the caller holds its admission guard.
+    /// The opens are recorded under `links` (which name the instance). Returns the self-check
+    /// projected from the opens it made, with the code of the failing step, if any.
+    pub(super) fn prepare_instance_connection(
+        &self,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<SchedulingResumeSelfCheck> {
+        let frame_owner = self
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        // The frame memory owner of every capture path: the first frame of a capture opened here
+        // is charged to it and dropped inside the open.
+        let frame_store = actingcommand_artifact_store::FrameStore::new(
+            frame_retention::spill_root(self.artifacts.root(), frame_owner.transport())
+                .map_err(RuntimeHostError::artifact)?,
+            frame_retention::capture_frame_store_config(),
+        )
+        .map_err(RuntimeHostError::artifact)?;
+        let (token, connection_id, _) = match self
+            .grant_dedicated_instance_lease(instance_id, CONNECTION_PREPARATION_CONNECTION_VALUE)
+        {
+            Ok(granted) => granted,
+            Err(error) if error.is_fatal() => return Err(error),
+            Err(error) => {
+                let failure_code = error.code();
+                self.record_connection_preparation_failure(instance_id, links, error)?;
+                return Ok(scheduling_resume_selfcheck(&[], Some(failure_code)));
+            }
+        };
+        let registration = self.mark_resources_in_use()?;
+        let (observations, mut failure_code) = match self.execution.open_instance_backends(
+            instance_alias,
+            registration,
+            frame_store.memory_budget(),
+        ) {
+            Ok(observations) => {
+                self.append_backend_open_observations(
+                    &observations,
+                    links.clone(),
+                    EventSource::Device,
+                    OriginModule::DeviceProxy,
+                )?;
+                (observations, None)
+            }
+            Err(error) => {
+                self.append_backend_open_failure_observations(
+                    &error,
+                    links.clone(),
+                    EventSource::Device,
+                    OriginModule::DeviceProxy,
+                )?;
+                (
+                    error.failure_context().backend_open_observations().to_vec(),
+                    Some(error.code()),
+                )
+            }
+        };
+        // Releasing the preparation lease closes the session; the self-check facts stay. The
+        // lease is released only once the close is confirmed, as for every dedicated close
+        // lease; its queue is empty (checked at the grant, and the admission guard is held).
+        let closed = self
+            .close_instance_resources_result(&token, connection_id, links.clone())
+            .map_err(|failure| *failure.error)?;
+        let confirmed = closed
+            .as_ref()
+            .err()
+            .is_none_or(|error| error.resource_quiescence() == Some(ResourceQuiescence::Confirmed));
+        if confirmed {
+            self.cleanup_token_inner(
+                &token,
+                connection_id,
+                LeaseReleaseReason::HostShutdown,
+                None,
+                Some(admission),
+            )?;
+        }
+        if let Err(close_error) = closed {
+            // The close path recorded the failure; an unconfirmed close retained the owner and
+            // marked the Runtime fatal, as on every close path.
+            if close_error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+                return Err(RuntimeHostError::execution(
+                    "close_prepared_instance_session",
+                    &close_error,
+                )
+                .into_fatal());
+            }
+            failure_code = failure_code.or(Some(close_error.code()));
+        }
+        // An open failure is already a `failed` self-check; any other failing step (a failed
+        // open without reports, a failed close) still leaves the instance unavailable.
+        if failure_code.is_some() {
+            self.withhold_policy_instance_availability(instance_id)?;
+        }
+        Ok(scheduling_resume_selfcheck(&observations, failure_code))
+    }
+
+    /// A preparation step other than an open failed without being fatal (the preparation lease
+    /// was refused): one `runtime.failed` record with stage
+    /// `runtime.lifecycle.connection_preparation` names the instance and the code, and the
+    /// instance stays or becomes unavailable.
+    fn record_connection_preparation_failure(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        mut error: RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
+        error.lifecycle.instance_id = Some(instance_id);
+        self.append_lifecycle_failure(
+            RuntimeLifecycleFailureStage::ConnectionPreparation,
+            RuntimeLifecycleFailure::Host(&error),
+            links,
+            None,
+        )?;
+        self.withhold_policy_instance_availability(instance_id)
     }
 }

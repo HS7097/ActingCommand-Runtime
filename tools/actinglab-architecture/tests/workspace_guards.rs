@@ -2965,7 +2965,11 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
         &["EventActor::User", "EventSource::Ui"],
     ),
     (
-        &["ControlEmulatorInstance", "DiscoverInstances"],
+        &[
+            "ControlEmulatorInstance",
+            "DiscoverInstances",
+            "SelfCheckInstance",
+        ],
         &["invalid_emulator_control_origin"],
         &[
             "EventActor::Cli",

@@ -336,6 +336,11 @@ impl HostShared {
                 }
                 self.resume_scheduling(validated, scope)
             }
+            // Workflow #317 sc3 (d): a manual reconnect and self-check of a physical instance.
+            RuntimeOperation::SelfCheckInstance { instance_alias } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.self_check_instance(validated, instance_alias)
+            }
             RuntimeOperation::RunContainedTask {
                 instance_alias,
                 holder_id,
