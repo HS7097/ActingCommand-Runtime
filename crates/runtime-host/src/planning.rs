@@ -145,7 +145,9 @@ pub(crate) fn collect_maintenance_evidence(
         })
         .map_err(|_| fatal("maintenance_ledger_query_failed"))?;
     let mut durations = Vec::new();
-    let mut confidences = Vec::new();
+    // Each confidence sample keeps the source snapshot it was published under, so that a
+    // persisted invalidation of that snapshot removes it (Workflow #317 item G).
+    let mut confidences = Vec::<(String, ConfidenceEvidence)>::new();
     for event in events {
         match event.payload() {
             EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
@@ -178,14 +180,28 @@ pub(crate) fn collect_maintenance_evidence(
                         && record.observed_at_unix_ms >= window_start
                         && record.observed_at_unix_ms <= query.as_of_unix_ms
                 }) {
-                    confidences.push(ConfidenceEvidence {
-                        ledger_sequence: event.sequence(),
-                        observed_at_unix_ms: record.observed_at_unix_ms,
-                        confidence_milli: record.confidence_milli,
-                    });
+                    confidences.push((
+                        record.source_snapshot_id.clone(),
+                        ConfidenceEvidence {
+                            ledger_sequence: event.sequence(),
+                            observed_at_unix_ms: record.observed_at_unix_ms,
+                            confidence_milli: record.confidence_milli,
+                        },
+                    ));
                     if confidences.len() > MAX_MAINTENANCE_SAMPLES {
                         return Err(request("maintenance_evidence_capacity_exceeded"));
                     }
+                }
+            }
+            // The fact store's rule: an invalidated (scope, key, source snapshot) is no
+            // longer active, so its samples leave the trend.
+            EventPayload::Fact(FactPayload::Invalidated(payload)) => {
+                let invalidation = payload.invalidation();
+                if &invalidation.scope == query.fact_scope() && invalidation.key == query.fact_key()
+                {
+                    confidences.retain(|(source_snapshot_id, _)| {
+                        *source_snapshot_id != invalidation.source_snapshot_id
+                    });
                 }
             }
             _ => {}
@@ -196,7 +212,10 @@ pub(crate) fn collect_maintenance_evidence(
         as_of_ledger_position: query.as_of_ledger_position,
         as_of_unix_ms: query.as_of_unix_ms,
         durations,
-        confidences,
+        confidences: confidences
+            .into_iter()
+            .map(|(_, confidence)| confidence)
+            .collect(),
     })
 }
 

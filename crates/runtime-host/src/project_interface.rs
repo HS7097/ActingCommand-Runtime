@@ -18,7 +18,7 @@ use actingcommand_contract::{
 };
 use actingcommand_policy::{MetricRef, ScopeSelector};
 
-const MAX_PROJECT_DIAGNOSTICS: usize = 256;
+pub(crate) const MAX_PROJECT_DIAGNOSTICS: usize = 256;
 
 pub(crate) struct ProjectDiagnosticProjection {
     pub(crate) sequence: u64,
