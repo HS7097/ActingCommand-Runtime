@@ -75,8 +75,11 @@ fn backend_selfcheck_status(report: &BackendOpenReport) -> &'static str {
 }
 
 /// Refuses a catalog with a task whose settlement fact keys would exceed the 128-byte runtime
-/// fact key bound (`task_id_too_long_for_facts`): a task id may be at most 102 bytes, checked
-/// when a catalog becomes active, before any run of it.
+/// fact key bound (`task_id_too_long_for_facts`): a task id may be at most 102 bytes. Refuses
+/// one whose settlement outcome records would exceed the evaluator's 128-byte key bound
+/// (`outcome_key_too_long_for_settlement`, Workflow #313 f5): every outcome key the catalog
+/// references for a task may be at most 107 bytes. Both are checked when a catalog becomes
+/// active, before any run of it.
 pub(super) fn validate_settlement_fact_keys(
     catalog: &actingcommand_policy::CompiledCatalog,
 ) -> RuntimeHostResult<()> {
@@ -97,8 +100,29 @@ pub(super) fn validate_settlement_fact_keys(
                     - task_settlement_fact_key("", TASK_COMPLETED_AT_SUFFIX).len()
             )));
         }
+        let outcome_keys = catalog.referenced_outcome_keys(&task.id);
+        if let Some(outcome_key) = outcome_keys.iter().find(|outcome_key| {
+            settlement_outcome_key(outcome_key).len() > actingcommand_policy::MAX_ID_BYTES
+        }) {
+            return Err(RuntimeHostError::request(
+                "outcome_key_too_long_for_settlement",
+                "activate_policy_catalog",
+                RuntimeErrorCode::InvalidRequest,
+            )
+            .with_native_detail(format!(
+                "outcome key '{outcome_key}' of task '{}' is {} bytes; its settlement outcome keys allow at most {} bytes",
+                task.id,
+                outcome_key.len(),
+                actingcommand_policy::MAX_ID_BYTES - settlement_outcome_key("").len()
+            )));
+        }
     }
     Ok(())
+}
+
+/// The longest settlement outcome key a run of `outcome_key` projects (Workflow #313 f5).
+fn settlement_outcome_key(outcome_key: &str) -> String {
+    format!("{outcome_key}.completed_at_unix_ms")
 }
 
 impl HostShared {
@@ -119,25 +143,28 @@ impl HostShared {
     }
 
     /// Records the four `backend.selfcheck.<entry>.*` facts of one recorded backend open
-    /// (Workflow #317 slice sc1), ledger-first through [`Self::record_runtime_fact`]: instance
-    /// scope, source `device-proxy` (input, nemu) or `capture`, no lifetime, one clock sample as
-    /// the observation time of all four. A newer open of the same entry replaces them and an
-    /// identical record appends nothing; every refusal (including `runtime_fact_stale`) is
-    /// returned. `checked_at_unix_ms` saturates at `i64::MAX` for a wall clock beyond it; the
-    /// records' `observed_at_unix_ms` stays exact.
+    /// (Workflow #317 slice sc1), ledger-first like [`Self::record_runtime_fact`]: instance
+    /// scope, source `device-proxy` (input, nemu) or `capture`, no lifetime. One clock sample is
+    /// the `checked_at_unix_ms` value and each record's observation time, raised to one
+    /// millisecond after the stored record of the same key when it is not later (an open in the
+    /// same millisecond or after a wall-clock step back), read and written under one
+    /// `fact_write_gate` hold. A newer open of the same entry therefore always replaces them;
+    /// every refusal is returned. `checked_at_unix_ms` saturates at `i64::MAX` for a wall clock
+    /// beyond it; the records' `observed_at_unix_ms` stays exact.
     pub(super) fn record_backend_selfcheck_facts(
         &self,
         instance_id: InstanceId,
         report: &BackendOpenReport,
     ) -> RuntimeHostResult<()> {
-        let observed_at_unix_ms = self.clock.sample()?.unix_ms;
-        let generation = i64::try_from(report.session_generation).map_err(|_| {
+        let checked_at_unix_ms = self.clock.sample()?.unix_ms;
+        let overflow = || {
             RuntimeHostError::fatal(
                 "backend_selfcheck_fact_overflow",
                 "record_backend_selfcheck_facts",
                 RuntimeErrorCode::RuntimeFatal,
             )
-        })?;
+        };
+        let generation = i64::try_from(report.session_generation).map_err(|_| overflow())?;
         let (entry, source) = match report.entry {
             BackendOpenEntry::Input => ("input", OriginModule::DeviceProxy),
             BackendOpenEntry::Capture => ("capture", OriginModule::Capture),
@@ -158,20 +185,41 @@ impl HostShared {
             ),
             (
                 BACKEND_SELFCHECK_CHECKED_AT_SUFFIX,
-                FactValue::Integer(i64::try_from(observed_at_unix_ms).unwrap_or(i64::MAX)),
+                FactValue::Integer(i64::try_from(checked_at_unix_ms).unwrap_or(i64::MAX)),
             ),
         ];
-        for (suffix, value) in values {
-            self.record_runtime_fact(RuntimeFactRecord {
-                scope: RuntimeFactScope::Instance { instance_id },
-                key: format!("{BACKEND_SELFCHECK_PREFIX}{entry}.{suffix}"),
-                value,
-                observed_at_unix_ms,
-                source,
-                ttl_ms: None,
-            })?;
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let result: RuntimeHostResult<()> = (|| {
+            let _gate = lock(&self.fact_write_gate, "record_backend_selfcheck_facts")?;
+            for (suffix, value) in values {
+                let key = format!("{BACKEND_SELFCHECK_PREFIX}{entry}.{suffix}");
+                let stored_at_unix_ms = lock(&self.runtime_facts, "read_backend_selfcheck_fact")?
+                    .get(&scope, &key)
+                    .map(|record| record.observed_at_unix_ms);
+                let observed_at_unix_ms = match stored_at_unix_ms {
+                    Some(stored) => stored
+                        .checked_add(1)
+                        .ok_or_else(overflow)?
+                        .max(checked_at_unix_ms),
+                    None => checked_at_unix_ms,
+                };
+                self.record_runtime_fact_under_gate(RuntimeFactRecord {
+                    scope: scope.clone(),
+                    key,
+                    value,
+                    observed_at_unix_ms,
+                    source,
+                    ttl_ms: None,
+                })?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
         }
-        Ok(())
+        result
     }
 
     /// Drops every `backend.selfcheck.*` fact the store holds for one instance with
@@ -210,28 +258,7 @@ impl HostShared {
     ) -> RuntimeHostResult<RuntimeFactChange> {
         let result: RuntimeHostResult<RuntimeFactChange> = (|| {
             let _gate = lock(&self.fact_write_gate, "record_runtime_fact")?;
-            let precheck = {
-                let store = lock(&self.runtime_facts, "record_runtime_fact")?;
-                precheck_runtime_fact(&store, &record)?
-            };
-            if let Some(unchanged) = precheck {
-                return Ok(unchanged);
-            }
-            let links = self.runtime_fact_links(&record.scope)?;
-            self.append_event_under_fact_gate(
-                EventSeverity::Info,
-                EventSource::Runtime,
-                OriginModule::RuntimeFacts,
-                EventActor::Runtime,
-                links,
-                RuntimePayloadDraft::fact_recorded(record.clone(), AuditInput::new()),
-            )?;
-            let change = lock(&self.runtime_facts, "record_runtime_fact")?
-                .record(record)
-                .map_err(|error| runtime_fact_desync(&error, "record_runtime_fact"))?;
-            self.runtime_facts_dirty.store(true, Ordering::Release);
-            self.synchronize_fact_store_under_gate()?;
-            Ok(change)
+            self.record_runtime_fact_under_gate(record)
         })();
         if let Err(error) = &result
             && error.is_fatal()
@@ -239,6 +266,36 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    /// [`Self::record_runtime_fact`] for a caller that already holds `fact_write_gate`; the
+    /// caller marks a fatal error.
+    fn record_runtime_fact_under_gate(
+        &self,
+        record: RuntimeFactRecord,
+    ) -> RuntimeHostResult<RuntimeFactChange> {
+        let precheck = {
+            let store = lock(&self.runtime_facts, "record_runtime_fact")?;
+            precheck_runtime_fact(&store, &record)?
+        };
+        if let Some(unchanged) = precheck {
+            return Ok(unchanged);
+        }
+        let links = self.runtime_fact_links(&record.scope)?;
+        self.append_event_under_fact_gate(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::RuntimeFacts,
+            EventActor::Runtime,
+            links,
+            RuntimePayloadDraft::fact_recorded(record.clone(), AuditInput::new()),
+        )?;
+        let change = lock(&self.runtime_facts, "record_runtime_fact")?
+            .record(record)
+            .map_err(|error| runtime_fact_desync(&error, "record_runtime_fact"))?;
+        self.runtime_facts_dirty.store(true, Ordering::Release);
+        self.synchronize_fact_store_under_gate()?;
+        Ok(change)
     }
 
     /// Records an instance-scope string fact only when it differs from the stored value;

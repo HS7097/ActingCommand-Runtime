@@ -246,9 +246,13 @@ The three share `observed_at_unix_ms` (the terminal timestamp),
 range fails with the fatal `policy_settlement_outcome_overflow`. Because the
 three share observation, window and expiry, the window-result and feedback-stop
 checks reach the same result as with the mapped record alone. The derived keys
-obey the evaluator's input bounds: 128 bytes per key (a mapped key longer than
-107 bytes makes the evaluation input invalid once its run settles) and 16,384
-outcome records per evaluation, now three per settled pair. `fact_snapshot_id` hashes the projected
+obey the evaluator's input bounds: 128 bytes per key and 16,384 outcome
+records per evaluation, now three per settled pair. An outcome key may
+therefore be at most 107 bytes (`<outcome_key>.completed_at_unix_ms` within
+128): catalog activation, rollback and promotion refuse a catalog that
+references a longer outcome key for any of its tasks with
+`outcome_key_too_long_for_settlement` (request class) before anything is
+appended, next to the task id check `task_id_too_long_for_facts`. `fact_snapshot_id` hashes the projected
 outcomes, so it differs from before for any input with a settled run, and the
 decision identities derived from it follow; this is not a wire change. The
 policy input structures, the ledger event set and the decision identity rules
