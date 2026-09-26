@@ -7,17 +7,20 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use actingcommand_actinglab_architecture::{
-    LedgerOwnerModule, RefusalBranch, contract_dependency_violations, discover_ledger_owners,
-    extract_command_inventory, inspect_contract_fact_matching, inspect_disallowed_lint_escapes,
-    inspect_dispatch_arm_calls, inspect_enum_variants, inspect_field_accesses,
-    inspect_function_origin_terms, inspect_generic_authoring_identity,
+    DeclaredVisibility, LedgerOwnerModule, RefusalBranch, SourceFacts,
+    contract_dependency_violations, discover_ledger_owners, extract_command_inventory,
+    function_source, inspect_admission_handle_uses, inspect_artifact_byte_writes,
+    inspect_call_sites, inspect_contract_fact_matching, inspect_disallowed_lint_escapes,
+    inspect_dispatch_arm_calls, inspect_enum_variants, inspect_envelope_sites,
+    inspect_field_accesses, inspect_function_origin_terms, inspect_generic_authoring_identity,
     inspect_generic_runtime_identity, inspect_lab_source, inspect_ledger_append_ingress,
     inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_persisted_event_ownership,
     inspect_producer_event_capabilities, inspect_provider_symbol_literals, inspect_public_api,
-    inspect_pure_decision_source, inspect_refusal_branches, inspect_stderr_writes,
-    inspect_store_write_api, inspect_store_writes, lab_removability_violations,
-    ledger_owns_query_matching, resource_tooling_removability_violations,
-    workspace_dependency_allow_list_violations, workspace_dependency_violations,
+    inspect_pure_decision_source, inspect_refusal_branches, inspect_source_facts,
+    inspect_stderr_writes, inspect_store_write_api, inspect_store_writes,
+    inspect_type_constructions, lab_removability_violations, ledger_owns_query_matching,
+    resource_tooling_removability_violations, workspace_dependency_allow_list_violations,
+    workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
 
@@ -1507,14 +1510,12 @@ fn c5_runtime_status_registry_is_owned_by_the_resident_control_plane() {
         .expect("read Runtime contract");
     let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
         .expect("read Runtime host");
-    let read_events = fs::read_to_string(root.join("crates/runtime-host/src/host/read_events.rs"))
-        .expect("read Runtime host read events");
     let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
         .expect("read Runtime client");
     let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
 
+    // The host-split owner of control_plane_status is a HOST_SPLIT entry (read_events).
     assert!(contract.contains("RuntimeControlPlaneStatus"));
-    assert!(read_events.contains("fn control_plane_status"));
     assert!(host.contains("initial_registered_instances"));
     assert!(client.contains("pub fn status"));
     assert!(!lab.contains("RuntimeControlPlaneStatus"));
@@ -1554,9 +1555,9 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
         .expect("read Runtime monitor registry");
     let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
         .expect("read Runtime host");
-    let monitor_control =
-        fs::read_to_string(root.join("crates/runtime-host/src/host/monitor_control.rs"))
-            .expect("read Runtime host monitor control");
+    let monitor_control_path = "crates/runtime-host/src/host/monitor_control.rs";
+    let monitor_control = fs::read_to_string(root.join(monitor_control_path))
+        .expect("read Runtime host monitor control");
     let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
         .expect("read Runtime client");
     let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
@@ -1569,24 +1570,17 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(registry.contains("prepare_failure"));
     assert!(registry.contains("MONITOR_FILE_NAME"));
     assert!(host.contains("monitor_registry: Mutex<MonitorRegistry>"));
-    assert!(monitor_control.contains("fn monitor_probe_loop"));
-    assert!(monitor_control.contains("fn run_monitor_probe"));
-    assert!(monitor_control.contains("MonitorPayloadDraft::completed"));
-    let monitor_probe = monitor_control
-        .split("fn run_monitor_probe(")
-        .nth(1)
-        .expect("monitor probe body")
-        .split("\n    fn ")
-        .next()
-        .expect("monitor probe boundary");
-    assert!(monitor_probe.contains("self.artifacts"));
-    assert!(monitor_probe.contains("CapturePipeline::open_with_frame_store"));
-    assert!(monitor_probe.contains("pipeline.persist_frame"));
+    // The monitor_control definitions, their visibility, callers and delegation (the probe's
+    // artifact store, capture pipeline and frame persistence; the completed / recovery
+    // payloads) are HOST_SPLIT entries; the probe's error mapping stays here.
+    let monitor_probe = function_source(
+        monitor_control_path,
+        &monitor_control,
+        Some("HostShared"),
+        "run_monitor_probe",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     assert!(monitor_probe.contains("let error = RuntimeHostError::artifact(error)"));
-    assert!(monitor_control.contains("fn record_monitor_recovery_coordination"));
-    assert!(monitor_control.contains("fn monitor_recovery_admission"));
-    assert!(monitor_control.contains("MonitorPayloadDraft::recovery_admitted"));
-    assert!(monitor_control.contains("MonitorPayloadDraft::recovery_deferred"));
     let coordination_start = monitor_control
         .find("    fn record_monitor_recovery_coordination(")
         .expect("monitor recovery coordination start");
@@ -1879,8 +1873,8 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
     let root = workspace_root();
     let contract = fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
         .expect("read Runtime contract");
-    let host = fs::read_to_string(root.join("crates/runtime-host/src/host/observation.rs"))
-        .expect("read Runtime observation adapter");
+    let host_path = "crates/runtime-host/src/host/observation.rs";
+    let host = fs::read_to_string(root.join(host_path)).expect("read Runtime observation adapter");
     let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
         .expect("read Runtime client");
 
@@ -1909,23 +1903,11 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
     }
     assert!(contract.contains("Self::Input {\n                token,\n                action,\n                frame,\n            }"));
 
-    let host_sequence = host
-        .split_once("    pub(super) fn capture_sequence(")
-        .and_then(|(_, tail)| {
-            tail.split_once("    pub(super) fn capture_readonly_observation(")
-                .map(|(value, _)| value)
-        })
-        .expect("Runtime capture sequence implementation");
-    for required in [
-        "capture_readonly_observation",
-        "thread::sleep",
-        "CaptureSequence::new",
-    ] {
-        assert!(
-            host_sequence.contains(required),
-            "Runtime capture sequence lost {required}"
-        );
-    }
+    // The owner, visibility, callers and delegation of capture_sequence (to
+    // capture_readonly_observation, thread::sleep and CaptureSequence::new) are HOST_SPLIT
+    // entries; its read-only seam stays here.
+    let host_sequence = function_source(host_path, &host, Some("HostShared"), "capture_sequence")
+        .unwrap_or_else(|error| panic!("{error}"));
     for forbidden in [
         "InputAction",
         "RuntimeOperation::Input",
@@ -3327,6 +3309,1257 @@ fn bplus_vision_provider_check_takes_provider_symbols_from_vision_ffi() {
     );
 }
 
+// Workflow #310 work package B, second half (slice gB2, frozen model: the #310 coordinator
+// comment "gB2 冻模型"): the capacity admission structure (B2), the planning document decoding
+// responsibility (B4), the database / forensic / vendor stdio ownership (B5) and the typed host
+// split (B6).
+
+/// Production Rust sources under `directories` (a directory or one file), workspace-relative
+/// and sorted; test files and `tests` trees are left out. A directory without production
+/// sources is an error.
+fn production_sources(root: &Path, directories: &[&str]) -> Vec<(String, String)> {
+    let mut sources = Vec::new();
+    for directory in directories {
+        let base = root.join(directory);
+        let mut files = Vec::new();
+        if base.is_file() {
+            files.push(base);
+        } else {
+            collect_rust_files(&base, &mut files);
+        }
+        files.sort();
+        let before = sources.len();
+        for file in files {
+            let path = workspace_relative(root, &file);
+            if path
+                .split('/')
+                .any(|component| component == "tests" || component == "tests.rs")
+            {
+                continue;
+            }
+            let source =
+                fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            sources.push((path, source));
+        }
+        assert!(
+            sources.len() > before,
+            "{directory} has no production Rust sources"
+        );
+    }
+    sources
+}
+
+fn production_facts(root: &Path, directories: &[&str]) -> Vec<SourceFacts> {
+    production_sources(root, directories)
+        .iter()
+        .map(|(path, source)| {
+            inspect_source_facts(path, source).unwrap_or_else(|error| panic!("{error}"))
+        })
+        .collect()
+}
+
+/// The production facts of every workspace source tree outside the architecture tool, read
+/// once per test binary.
+fn workspace_production_facts() -> &'static [SourceFacts] {
+    static FACTS: OnceLock<Vec<SourceFacts>> = OnceLock::new();
+    FACTS.get_or_init(|| production_facts(&workspace_root(), &["apps", "crates", "providers"]))
+}
+
+/// The rows that differ from a named table, as an explicit report; `None` when they agree.
+fn table_difference(actual: &BTreeSet<String>, expected: &BTreeSet<String>) -> Option<String> {
+    let unlisted = actual.difference(expected).cloned().collect::<Vec<_>>();
+    let vanished = expected.difference(actual).cloned().collect::<Vec<_>>();
+    (!unlisted.is_empty() || !vanished.is_empty()).then(|| {
+        format!(
+            "rows not in the table:\n{}\ntable rows without a site:\n{}",
+            unlisted.join("\n"),
+            vanished.join("\n")
+        )
+    })
+}
+
+fn row_set<'a>(rows: impl IntoIterator<Item = &'a str>) -> BTreeSet<String> {
+    rows.into_iter().map(str::to_string).collect()
+}
+
+/// B2 (a): the single capacity predicate: `admit_bytes`, reached directly or through
+/// `ArtifactStore::admit_new_bytes`.
+const CAPACITY_PREDICATES: &[&str] = &["admit_bytes", "admit_new_bytes"];
+
+/// B2 (a): the artifact-store write entries: the `ArtifactStore` / `ArtifactStream` writes, the
+/// evidence export and the `FrameStore` overflow segment, whose spilled frames publish through
+/// `CapturePipeline::publish_candidate`.
+const ARTIFACT_WRITE_ENTRIES: &[&str] = &[
+    "ArtifactStore::begin_stream",
+    "ArtifactStore::commit_prepared",
+    "ArtifactStore::put",
+    "ArtifactStream::append",
+    "CapturePipeline::publish_candidate",
+    "EvidenceExporter::export",
+];
+
+/// B2 (a): every byte sink and write entry of crates/artifact-store with the admission that
+/// covers it: (row, reason). A sink outside admission is listed only with the reason it writes
+/// no new artifact bytes.
+const ARTIFACT_BYTE_WRITES: &[(&str, &str)] = &[
+    (
+        "crates/artifact-store/src/exporter.rs::CapacityArchiveWriter::write -> Write::write [admitted in place]",
+        "evidence archive bytes, admitted chunk by chunk through the exporter's store",
+    ),
+    (
+        "crates/artifact-store/src/exporter.rs::EvidenceExporter::export [reaches admit_new_bytes via EvidenceExporter::export -> EvidenceExporter::export_inner]",
+        "the evidence export entry",
+    ),
+    (
+        "crates/artifact-store/src/exporter.rs::create_export_temp -> OpenOptions(write+create_new).open [admitted by EvidenceExporter::export_inner]",
+        "the export temporary, created after its zero-byte admission",
+    ),
+    (
+        "crates/artifact-store/src/pipeline.rs::CapturePipeline::publish_candidate [reaches admit_bytes via CapturePipeline::publish_candidate -> ArtifactStore::put -> ArtifactStore::commit_prepared]",
+        "the FrameStore overflow segment: spilled frames publish as ordinary artifacts",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::ArtifactStore::begin_stream -> OpenOptions(write+create_new).open [admitted in place]",
+        "the stream staging file, created after its zero-byte admission",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::ArtifactStore::begin_stream [reaches admit_bytes via ArtifactStore::begin_stream]",
+        "the streaming write entry",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::ArtifactStore::commit_prepared [reaches admit_bytes via ArtifactStore::commit_prepared]",
+        "the prepared-artifact write entry",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::ArtifactStore::put [reaches admit_bytes via ArtifactStore::put -> ArtifactStore::commit_prepared]",
+        "the one-shot write entry",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::ArtifactStore::restore_recovery_reference -> OpenOptions(write+create_new).open [NOT admitted]",
+        "restores the exact bytes of an already persisted Ledger reference under the offline maintenance owner, not a new artifact; its capacity exception is #287's open offline-restore item",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::ArtifactStream::append [reaches admit_bytes via ArtifactStream::append -> ArtifactStream::write]",
+        "the streaming append entry",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::ArtifactStream::write -> Write::write [admitted in place]",
+        "streamed artifact bytes, admitted chunk by chunk",
+    ),
+    (
+        "crates/artifact-store/src/store.rs::write_synced_with -> OpenOptions(write+create_new).open [admitted by ArtifactStore::commit_prepared]",
+        "the one-shot artifact temporary",
+    ),
+    (
+        "crates/artifact-store/src/usage.rs::open_lock -> OpenOptions(write+create).open [NOT admitted]",
+        "a zero-byte OS lock file for use and delete coordination; it holds no artifact bytes",
+    ),
+];
+
+/// B2 (a): the only functions that ask the capacity owner for a decision directly: the
+/// predicate itself, and stream publication, which records a zero-byte decision for bytes the
+/// stream's writes already admitted.
+const CAPACITY_DECISION_CALLERS: &[&str] = &[
+    "crates/artifact-store/src/store.rs::ArtifactStore::seal_stream -> decide",
+    "crates/artifact-store/src/store.rs::admit_bytes -> decide",
+];
+
+#[test]
+fn b2_new_artifact_bytes_pass_the_single_capacity_predicate() {
+    let root = workspace_root();
+    let sources = production_facts(&root, &["crates/artifact-store/src"]);
+    let predicate = sources
+        .iter()
+        .flat_map(|source| &source.functions)
+        .filter(|function| function.qualified_name() == "admit_bytes")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        predicate.len(),
+        1,
+        "crates/artifact-store must define exactly one production admit_bytes predicate"
+    );
+    let new_bytes = sources
+        .iter()
+        .flat_map(|source| &source.functions)
+        .filter(|function| function.qualified_name() == "ArtifactStore::admit_new_bytes")
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(new_bytes.as_slice(), [function] if function.calls("admit_bytes")),
+        "ArtifactStore::admit_new_bytes must exist once and delegate to admit_bytes"
+    );
+    let rows = inspect_artifact_byte_writes(&sources, CAPACITY_PREDICATES, ARTIFACT_WRITE_ENTRIES)
+        .unwrap_or_else(|error| panic!("{error}"));
+    if let Some(difference) = table_difference(
+        &rows.into_iter().collect(),
+        &row_set(ARTIFACT_BYTE_WRITES.iter().map(|(row, _)| *row)),
+    ) {
+        panic!(
+            "artifact byte writes and their capacity admission differ from ARTIFACT_BYTE_WRITES \
+             (a sink outside admit_bytes / admit_new_bytes may only be listed with the reason it \
+             writes no new artifact bytes):\n{difference}"
+        );
+    }
+    let decisions = inspect_call_sites(&sources, &["decide"]);
+    if let Some(difference) = table_difference(
+        &decisions.into_iter().collect(),
+        &row_set(CAPACITY_DECISION_CALLERS.iter().copied()),
+    ) {
+        panic!(
+            "direct capacity decisions outside the single predicate differ from \
+             CAPACITY_DECISION_CALLERS:\n{difference}"
+        );
+    }
+}
+
+/// B2 (b): the capacity admission handles as (file, scope, expression): the evidence archive
+/// writer's admission, the store's installed owner, a stream's retained owner, the owner an
+/// evidence store inherits, the predicate's parameter, and the host's lease / business capacity
+/// owner.
+const CAPACITY_ADMISSION_HANDLES: &[(&str, &str, &str)] = &[
+    (
+        "crates/artifact-store/src/exporter.rs",
+        "*",
+        "self.admission",
+    ),
+    (
+        "crates/artifact-store/src/exporter.rs",
+        "write_archive",
+        "file.admission",
+    ),
+    ("crates/artifact-store/src/store.rs", "*", "self.capacity"),
+    ("crates/artifact-store/src/store.rs", "*", "stream.capacity"),
+    ("crates/artifact-store/src/store.rs", "*", "source.capacity"),
+    (
+        "crates/artifact-store/src/store.rs",
+        "admit_bytes",
+        "admission",
+    ),
+    (
+        "crates/runtime-host/src/performance/capacity.rs",
+        "PerformanceMonitor::admit_capacity",
+        "self.capacity",
+    ),
+];
+
+/// B2 (b): every production use of those handles. A use that decides an absent handle must
+/// refuse with the distinct code `capacity_owner_missing`; the others pass the handle on.
+const CAPACITY_ADMISSION_HANDLE_USES: &[&str] = &[
+    "crates/artifact-store/src/exporter.rs::CapacityArchiveWriter::io_error -> self.admission: projection .2",
+    "crates/artifact-store/src/exporter.rs::CapacityArchiveWriter::write -> self.admission: bound to a pattern",
+    "crates/artifact-store/src/exporter.rs::write_archive -> file.admission: projection .2",
+    "crates/artifact-store/src/store.rs::ArtifactStore::admit_new_bytes -> self.capacity: argument of admit_bytes",
+    "crates/artifact-store/src/store.rs::ArtifactStore::begin_stream -> self.capacity: bound to capacity",
+    "crates/artifact-store/src/store.rs::ArtifactStore::commit_prepared -> self.capacity: argument of admit_bytes",
+    "crates/artifact-store/src/store.rs::ArtifactStore::inherit_capacity -> source.capacity: ok_or Err(capacity_owner_missing)",
+    "crates/artifact-store/src/store.rs::ArtifactStore::install_capacity_admission -> self.capacity: receiver of .set",
+    "crates/artifact-store/src/store.rs::ArtifactStore::seal_stream -> stream.capacity: let-else Err(capacity_owner_missing)",
+    "crates/artifact-store/src/store.rs::ArtifactStream::write -> self.capacity: argument of admit_bytes",
+    "crates/artifact-store/src/store.rs::admit_bytes -> admission: let-else Err(capacity_owner_missing)",
+    "crates/artifact-store/src/store.rs::admit_bytes -> admission: receiver of .decide",
+    "crates/runtime-host/src/performance/capacity.rs::PerformanceMonitor::admit_capacity -> self.capacity: ok_or Err(capacity_owner_missing)",
+];
+
+#[test]
+fn b2_an_absent_admission_handle_refuses_with_a_distinct_code() {
+    let root = workspace_root();
+    let mut files = CAPACITY_ADMISSION_HANDLES
+        .iter()
+        .map(|(file, _, _)| *file)
+        .collect::<Vec<_>>();
+    files.dedup();
+    let mut rows = BTreeSet::new();
+    for file in files {
+        let source = fs::read_to_string(root.join(file))
+            .unwrap_or_else(|error| panic!("read {file}: {error}"));
+        let handles = CAPACITY_ADMISSION_HANDLES
+            .iter()
+            .filter(|(handle_file, _, _)| *handle_file == file)
+            .map(|(_, scope, expression)| (*scope, *expression))
+            .collect::<Vec<_>>();
+        rows.extend(
+            inspect_admission_handle_uses(file, &source, &handles)
+                .unwrap_or_else(|error| panic!("{error}")),
+        );
+    }
+    let deciding = rows
+        .iter()
+        .filter(|row| {
+            ["let-else", "if-let", "match ", "ok_or", "None decided"]
+                .iter()
+                .any(|use_label| row.contains(&format!(": {use_label}")))
+        })
+        .filter(|row| {
+            !row.ends_with(": let-else Err(capacity_owner_missing)")
+                && !row.ends_with(": ok_or Err(capacity_owner_missing)")
+                && !row.ends_with(": if-let else Err(capacity_owner_missing)")
+                && !row.ends_with(": match None Err(capacity_owner_missing)")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        deciding.is_empty(),
+        "an absent capacity admission handle is admitted or decided without the distinct \
+         capacity_owner_missing refusal:\n{}",
+        deciding.join("\n")
+    );
+    if let Some(difference) = table_difference(
+        &rows,
+        &row_set(CAPACITY_ADMISSION_HANDLE_USES.iter().copied()),
+    ) {
+        panic!(
+            "capacity admission handle uses differ from CAPACITY_ADMISSION_HANDLE_USES:\n{difference}"
+        );
+    }
+}
+
+/// B2 (c): the production callers of the lease / business capacity admission in
+/// crates/runtime-host/src (`admit_capacity`, `require_business_capacity`).
+const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
+    "crates/runtime-host/src/host/contained_task.rs::HostShared::run_contained_task -> require_business_capacity",
+    "crates/runtime-host/src/host/contained_task.rs::HostShared::run_scheduled_contained_task -> require_business_capacity",
+    "crates/runtime-host/src/host/contained_task.rs::HostShared::run_startup_package -> require_business_capacity",
+    "crates/runtime-host/src/host/lease.rs::HostShared::grant_prepared_lease_with_links -> require_business_capacity",
+    "crates/runtime-host/src/host/monitor_control.rs::HostShared::run_monitor_probe -> admit_capacity",
+    "crates/runtime-host/src/host/observation.rs::HostShared::capture_observation_with_links -> require_business_capacity",
+    "crates/runtime-host/src/host/performance.rs::HostShared::admit_capacity -> admit_capacity",
+    "crates/runtime-host/src/host/performance.rs::HostShared::capacity_allows_transfer -> admit_capacity",
+    "crates/runtime-host/src/host/performance.rs::HostShared::require_business_capacity -> admit_capacity",
+    "crates/runtime-host/src/host/policy_dispatch.rs::HostShared::admit_policy_dispatch -> admit_capacity",
+    "crates/runtime-host/src/performance/capacity.rs::PerformanceMonitor::preflight_capacity -> admit_capacity",
+];
+
+#[test]
+fn b2_business_capacity_admission_has_a_named_caller_set() {
+    let root = workspace_root();
+    let sources = production_facts(&root, &["crates/runtime-host/src"]);
+    let rows = inspect_call_sites(&sources, &["admit_capacity", "require_business_capacity"]);
+    if let Some(difference) = table_difference(
+        &rows.into_iter().collect(),
+        &row_set(BUSINESS_CAPACITY_ADMISSION_CALLERS.iter().copied()),
+    ) {
+        panic!(
+            "callers of the lease / business capacity admission differ from \
+             BUSINESS_CAPACITY_ADMISSION_CALLERS:\n{difference}"
+        );
+    }
+}
+
+/// B4: who handles a planning document envelope (a `RuntimePlanningDocument`, or a policy
+/// catalog generation record of the five scheduling documents), by responsibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvelopeResponsibility {
+    /// Builds an envelope (schema version, content hash and kind) through the owner's encoder.
+    Construct,
+    /// Opens an envelope only through its owner's single decoding entry.
+    Decode,
+    /// Hands raw catalog document bytes to the policy compiler; never builds or opens an envelope.
+    Source,
+}
+
+/// B4: the envelope calls the site scan reports: the contract envelope's encoder and decoding
+/// entry (a method call counts inside a function whose signature names the envelope), the host
+/// catalog store's generation record builder and verified loader, and raw catalog sources.
+const PLANNING_ENVELOPE_API: &[&str] = &[
+    "RuntimePlanningDocument::encode",
+    "RuntimePlanningDocument::decode",
+    "RuntimePlanningDocument::validate",
+    "RuntimePlanningDocument::validate_kind",
+    ".decode@RuntimePlanningDocument",
+    ".validate@RuntimePlanningDocument",
+    ".validate_kind@RuntimePlanningDocument",
+    "source_record",
+    ".load_source",
+    "CatalogDocumentSource::new",
+];
+
+/// B4: every production envelope site outside the contract (the envelope's owner), with its
+/// responsibility. The fifth catalog document, `selection`, is recorded and loaded like the
+/// other four.
+const PLANNING_ENVELOPE_SITES: &[(&str, EnvelopeResponsibility)] = &[
+    (
+        "apps/actingd/src/config.rs::read_catalog_document -> CatalogDocumentSource::new(_, _)",
+        EnvelopeResponsibility::Source,
+    ),
+    (
+        "apps/actinglab/src/resource_declarations.rs::DeclarationReader::validate -> CatalogDocumentSource::new(_, _)",
+        EnvelopeResponsibility::Source,
+    ),
+    (
+        "crates/lab/src/scheduling.rs::read_source -> CatalogDocumentSource::new(_, _)",
+        EnvelopeResponsibility::Source,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::PredictiveMaintenanceRequest::new -> encode_policy_document(RuntimePlanningDocumentKind::MaintenanceTrendPolicy, _, \"build_predictive_maintenance_request\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::assess_predictive_maintenance -> .decode_policy_document(_, RuntimePlanningDocumentKind::MaintenanceAssessmentV2, \"assess_predictive_maintenance\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::decode_policy_document -> .decode(_)",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::prepare_strategic_report -> .decode_policy_document(_, RuntimePlanningDocumentKind::StrategicProjection, \"prepare_strategic_report\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::prepare_strategic_report -> encode_policy_document(RuntimePlanningDocumentKind::StrategicReport, _, \"prepare_strategic_report\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::project_policy_forward -> .decode_policy_document(_, RuntimePlanningDocumentKind::ForwardProjection, \"project_policy_forward\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::project_policy_forward -> encode_policy_document(RuntimePlanningDocumentKind::EvaluationFacts, _, \"project_policy_forward\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::project_policy_forward -> encode_policy_document(RuntimePlanningDocumentKind::EvaluationResources, _, \"project_policy_forward\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::project_policy_forward -> encode_policy_document(RuntimePlanningDocumentKind::EvaluationTime, _, \"project_policy_forward\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::RuntimeClient::project_policy_forward -> encode_policy_document(RuntimePlanningDocumentKind::ForwardProjectionConfig, _, \"project_policy_forward\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-client/src/client.rs::encode_policy_document -> RuntimePlanningDocument::encode(_, _)",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::assess_predictive_maintenance_ipc -> decode_planning_document(_, RuntimePlanningDocumentKind::MaintenanceTrendPolicy, \"assess_predictive_maintenance\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::assess_predictive_maintenance_ipc -> encode_planning_document(RuntimePlanningDocumentKind::MaintenanceAssessmentV2, _, \"assess_predictive_maintenance\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::prepare_strategic_report_ipc -> decode_planning_document(_, RuntimePlanningDocumentKind::StrategicReport, \"prepare_strategic_report\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::prepare_strategic_report_with -> encode_planning_document(RuntimePlanningDocumentKind::StrategicProjection, _, \"prepare_strategic_report\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::project_policy_forward_ipc -> decode_planning_document(_, RuntimePlanningDocumentKind::EvaluationFacts, \"project_policy_forward\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::project_policy_forward_ipc -> decode_planning_document(_, RuntimePlanningDocumentKind::EvaluationResources, \"project_policy_forward\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::project_policy_forward_ipc -> decode_planning_document(_, RuntimePlanningDocumentKind::EvaluationTime, \"project_policy_forward\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::project_policy_forward_ipc -> decode_planning_document(_, RuntimePlanningDocumentKind::ForwardProjectionConfig, \"project_policy_forward\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::HostShared::project_policy_forward_ipc -> encode_planning_document(RuntimePlanningDocumentKind::ForwardProjection, _, \"project_policy_forward\")",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::decode_planning_document -> .decode(_)",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/host/planning.rs::encode_planning_document -> RuntimePlanningDocument::encode(_, _)",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::CatalogStore::load_source -> CatalogDocumentSource::new(_, _)",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::CatalogStore::read_generation -> .load_source(_, _, \"activity\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::CatalogStore::read_generation -> .load_source(_, _, \"pools\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::CatalogStore::read_generation -> .load_source(_, _, \"selection\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::CatalogStore::read_generation -> .load_source(_, _, \"tasks\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::CatalogStore::read_generation -> .load_source(_, _, \"timeline\")",
+        EnvelopeResponsibility::Decode,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::generation_from -> source_record(\"activity\", _)",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::generation_from -> source_record(\"pools\", _)",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::generation_from -> source_record(\"selection\", _)",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::generation_from -> source_record(\"tasks\", _)",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs::generation_from -> source_record(\"timeline\", _)",
+        EnvelopeResponsibility::Construct,
+    ),
+    (
+        "crates/runtime-host/src/proposal.rs::encode_document -> CatalogDocumentSource::new(_, _)",
+        EnvelopeResponsibility::Source,
+    ),
+];
+
+/// B4: each envelope's single decoding entry and the validation it must make, as (file,
+/// function, required references): the contract envelope checks schema version, content hash
+/// and kind before it decodes; the catalog store checks the generation's schema version and
+/// hash and each source record's kind and hash before a document reaches the compiler.
+const PLANNING_ENVELOPE_ENTRIES: &[(&str, &str, &[&str])] = &[
+    (
+        "crates/actingcommand-contract/src/runtime.rs",
+        "RuntimePlanningDocument::validate",
+        &[
+            "self.schema_version",
+            "RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION",
+            "\"unsupported_planning_document_schema\"",
+            "self.sha256",
+            "Sha256::digest",
+            "\"planning_document_hash_mismatch\"",
+        ],
+    ),
+    (
+        "crates/actingcommand-contract/src/runtime.rs",
+        "RuntimePlanningDocument::validate_kind",
+        &[
+            "self.validate",
+            "self.kind",
+            "\"planning_document_kind_mismatch\"",
+        ],
+    ),
+    (
+        "crates/actingcommand-contract/src/runtime.rs",
+        "RuntimePlanningDocument::decode",
+        &[
+            "self.validate_kind",
+            "serde_json::from_value",
+            "self.document",
+        ],
+    ),
+    (
+        "crates/actingcommand-contract/src/runtime.rs",
+        "RuntimePlanningDocument::encode",
+        &[
+            "RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION",
+            "Sha256::digest",
+            "envelope.validate",
+        ],
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs",
+        "CatalogStore::read_generation",
+        &[
+            "CATALOG_STATE_SCHEMA",
+            "\"catalog_generation_identity_mismatch\"",
+            "self.load_source",
+            "compile_catalog",
+            "\"catalog_generation_content_mismatch\"",
+        ],
+    ),
+    (
+        "crates/runtime-host/src/policy_host.rs",
+        "CatalogStore::load_source",
+        &[
+            "\"catalog_source_missing\"",
+            "sha256",
+            "\"catalog_source_hash_mismatch\"",
+            "CatalogDocumentSource::new",
+        ],
+    ),
+];
+
+#[test]
+fn b4_planning_envelopes_are_validated_by_their_single_decoding_entry() {
+    let facts = workspace_production_facts();
+    let mut problems = Vec::new();
+    for (file, function, required) in PLANNING_ENVELOPE_ENTRIES {
+        let source = facts
+            .iter()
+            .find(|source| source.path == *file)
+            .unwrap_or_else(|| panic!("{file} is not a workspace production source"));
+        let entries = source
+            .functions
+            .iter()
+            .filter(|candidate| candidate.qualified_name() == *function)
+            .collect::<Vec<_>>();
+        let [entry] = entries.as_slice() else {
+            problems.push(format!(
+                "{file}: expected one production {function}, found {}",
+                entries.len()
+            ));
+            continue;
+        };
+        for reference in *required {
+            if !entry.references_target(reference) {
+                problems.push(format!(
+                    "{file}::{function} no longer references {reference}"
+                ));
+            }
+        }
+    }
+    let contract = "crates/actingcommand-contract/src/runtime.rs";
+    let contract_facts = facts
+        .iter()
+        .find(|source| source.path == contract)
+        .unwrap_or_else(|| panic!("{contract} is not a workspace production source"));
+    let decoders = contract_facts
+        .functions
+        .iter()
+        .filter(|function| {
+            function.references_target("self.document")
+                && [
+                    "serde_json::from_value",
+                    "serde_json::from_str",
+                    "serde_json::from_slice",
+                ]
+                .iter()
+                .any(|decoder| function.calls(decoder))
+        })
+        .map(|function| function.qualified_name())
+        .collect::<Vec<_>>();
+    if decoders != ["RuntimePlanningDocument::decode"] {
+        problems.push(format!(
+            "the envelope document must be decoded by RuntimePlanningDocument::decode alone, found {decoders:?}"
+        ));
+    }
+    let envelope_fields = contract_facts
+        .fields
+        .iter()
+        .filter(|(owner, _, _)| owner == "RuntimePlanningDocument")
+        .collect::<Vec<_>>();
+    if envelope_fields.is_empty()
+        || envelope_fields
+            .iter()
+            .any(|(_, _, visibility)| *visibility != DeclaredVisibility::Private)
+    {
+        problems.push(format!(
+            "RuntimePlanningDocument fields must exist and stay private to the contract: {envelope_fields:?}"
+        ));
+    }
+    assert!(
+        problems.is_empty(),
+        "planning document envelope validation lost its single decoding entry:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn b4_planning_envelope_sites_match_the_responsibility_table() {
+    assert!(
+        PLANNING_ENVELOPE_SITES.iter().all(|(row, responsibility)| {
+            *responsibility != EnvelopeResponsibility::Construct
+                || !(row.starts_with("crates/lab/") || row.starts_with("apps/actinglab/"))
+        }),
+        "Lab may only decode or hand raw sources to the compiler; it never builds an envelope"
+    );
+    let root = workspace_root();
+    let mut rows = BTreeSet::new();
+    for (path, source) in production_sources(&root, &["apps", "crates", "providers"]) {
+        if path.starts_with("crates/actingcommand-contract/") {
+            continue;
+        }
+        rows.extend(
+            inspect_envelope_sites(
+                &path,
+                &source,
+                PLANNING_ENVELOPE_API,
+                &["RuntimePlanningDocumentKind"],
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+        );
+    }
+    if let Some(difference) = table_difference(
+        &rows,
+        &row_set(PLANNING_ENVELOPE_SITES.iter().map(|(row, _)| *row)),
+    ) {
+        panic!(
+            "planning document envelope sites differ from PLANNING_ENVELOPE_SITES (who may \
+             construct an envelope and who may only decode):\n{difference}"
+        );
+    }
+}
+
+/// B5 (a): the production constructors of the Runtime database, which owns the SQLite file
+/// and its integrity key, and of its backup material: (row, owner and reason). The frozen
+/// model places construction in the ledger crate; main also constructs it in runtime-state and
+/// runtime-host, recorded here by owner, and any other site fails.
+const RUNTIME_DATABASE_CONSTRUCTORS: &[(&str, &str)] = &[
+    (
+        "crates/ledger/src/global/evidence.rs::GlobalLedger::open_evidence -> RuntimeDatabase",
+        "ledger: forensic evidence opens the existing database read-only",
+    ),
+    (
+        "crates/ledger/src/global/evidence.rs::GlobalLedger::open_metadata -> RuntimeDatabase",
+        "ledger: forensic metadata opens the existing database read-only",
+    ),
+    (
+        "crates/runtime-host/src/host.rs::RuntimeHost::start_with_provider -> RuntimeDatabase",
+        "runtime-host: startup opens existing storage (fresh storage goes through runtime-state)",
+    ),
+    (
+        "crates/runtime-host/src/ledger_maintenance.rs::restore -> RuntimeDatabase",
+        "runtime-host: offline restore verifies the restored database",
+    ),
+    (
+        "crates/runtime-host/src/ledger_maintenance.rs::restore -> restore_backup",
+        "runtime-host: offline restore writes the backup material into the target root",
+    ),
+    (
+        "crates/runtime-host/src/ledger_maintenance.rs::run_locked -> RuntimeDatabase",
+        "runtime-host: offline backup opens the source database",
+    ),
+    (
+        "crates/runtime-host/src/ledger_maintenance.rs::run_locked -> backup",
+        "runtime-host: offline backup writes the backup material",
+    ),
+    (
+        "crates/runtime-host/src/ledger_maintenance.rs::verify_backup_binding -> RuntimeDatabase",
+        "runtime-host: offline backup verifies the archived database read-only",
+    ),
+    (
+        "crates/runtime-host/src/owner_unlock.rs::record -> RuntimeDatabase",
+        "runtime-host: the owner unlock record opens the existing database",
+    ),
+    (
+        "crates/runtime-state/src/store.rs::RuntimeStateStore::open_database -> RuntimeDatabase",
+        "runtime-state: fresh storage opens with the state-owned schema",
+    ),
+];
+
+#[test]
+fn b5_runtime_database_file_and_key_have_a_named_constructor_table() {
+    let facts = workspace_production_facts();
+    let mut rows = inspect_type_constructions(facts, &["RuntimeDatabase"])
+        .into_iter()
+        .filter(|row| !row.starts_with("crates/runtime-database/"))
+        .collect::<BTreeSet<_>>();
+    rows.extend(
+        inspect_call_sites(facts, &["backup", "restore_backup"])
+            .into_iter()
+            .filter(|row| !row.starts_with("crates/runtime-database/")),
+    );
+    if let Some(difference) = table_difference(
+        &rows,
+        &row_set(RUNTIME_DATABASE_CONSTRUCTORS.iter().map(|(row, _)| *row)),
+    ) {
+        panic!(
+            "Runtime database (file and integrity key) constructors differ from \
+             RUNTIME_DATABASE_CONSTRUCTORS:\n{difference}"
+        );
+    }
+}
+
+/// B5 (b): the forensic read chain: the ledger's read-only snapshot module and the forensic
+/// leaf crate.
+const FORENSIC_READ_CHAIN: &[&str] = &[
+    "crates/ledger/src/global/read_only.rs",
+    "crates/ledger-forensics/src",
+];
+
+/// B5 (b): the write entries the forensic read chain never calls: Ledger, Runtime database and
+/// artifact writers. File-system mutations are refused separately.
+const FORENSIC_FORBIDDEN_WRITE_ENTRIES: &[&str] = &[
+    "GlobalLedger::open",
+    "GlobalLedger::open_with_artifact_verifier",
+    "GlobalLedger::open_sqlite_candidate",
+    "GlobalLedger::open_sqlite_candidate_with_artifact_verifier",
+    "append",
+    "append_transaction",
+    "append_with_observation",
+    "append_deferred",
+    "append_event",
+    "confirm_deferred",
+    "LedgerMaintenance::acquire",
+    "initialize_empty",
+    "open_writer",
+    "import",
+    "LabLedger::create",
+    "LabLedger::open_or_create",
+    "LabLedger::create_runtime_shard",
+    "commit_then_record",
+    "enforce_retention",
+    "RuntimeDatabase::open",
+    "RuntimeDatabase::open_with_initializer",
+    "backup",
+    "restore_backup",
+    "borrow_transaction",
+    "put",
+    "commit_prepared",
+    "begin_stream",
+    "seal_stream",
+    "restore_recovery_reference",
+    "install_capacity_admission",
+    "EvidenceExporter::open",
+    "EvidenceExporter::open_with_admission",
+    "try_artifact_delete_guard",
+    "remove_after_durable_intent",
+];
+
+/// B5 (b): the read entries through which the chain opens the ledger.
+const FORENSIC_READ_ENTRIES: &[&str] =
+    &["GlobalLedger::open_evidence", "GlobalLedger::open_metadata"];
+
+#[test]
+fn b5_forensic_read_chain_reaches_no_write_entry() {
+    let root = workspace_root();
+    let chain = production_facts(&root, FORENSIC_READ_CHAIN);
+    for file in FORENSIC_READ_CHAIN {
+        assert!(
+            chain
+                .iter()
+                .any(|source| source.path.starts_with(file) && !source.functions.is_empty()),
+            "forensic read chain part {file} has no production functions"
+        );
+    }
+    let mut violations = inspect_call_sites(&chain, FORENSIC_FORBIDDEN_WRITE_ENTRIES);
+    for function in chain.iter().flat_map(|source| &source.functions) {
+        for (write, line) in &function.file_writes {
+            violations.push(format!("{}:{line} -> {write}", function.site()));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "the forensic read chain reaches a write entry:\n{}",
+        violations.join("\n")
+    );
+    for entry in FORENSIC_READ_ENTRIES {
+        assert!(
+            !inspect_call_sites(&chain, &[entry]).is_empty(),
+            "the forensic read chain no longer opens the ledger through {entry}"
+        );
+    }
+}
+
+/// B5 (c): the vendor stdio diagnostic types, in their device and ledger contract forms.
+const VENDOR_STDIO_TYPES: &[&str] = &[
+    "DeviceStdioObservation",
+    "ExecutionStdioObservation",
+    "StdioApi",
+    "StdioFact",
+    "StdioFileIdentity",
+    "StdioNativeError",
+    "StdioPathFact",
+    "StdioPathRemoval",
+    "StdioPhase",
+    "StdioReference",
+    "StdioReferenceFact",
+    "StdioRmApi",
+    "StdioRmAvailability",
+    "StdioRmCall",
+    "StdioRmFacts",
+    "StdioRmProcess",
+    "StdioStep",
+    "StdioTargetRetirement",
+    "StdioUnknown",
+    "VendorStdioCapture",
+    "VendorStdioFacts",
+];
+
+/// B5 (c): where vendor stdio diagnostics may be constructed: (workspace path prefix, reason).
+/// The host and every other crate only consume them.
+const VENDOR_STDIO_CONSTRUCTION_OWNERS: &[(&str, &str)] = &[
+    (
+        "crates/device/src/",
+        "the device domain: the vendor stdio session and its native facts",
+    ),
+    (
+        "crates/execution-kernel/src/error.rs",
+        "the device backend shell: a device close observation joins the execution error",
+    ),
+    (
+        "crates/execution-kernel/src/error/vendor_stdio.rs",
+        "the device backend shell: device facts convert one-to-one into the contract form",
+    ),
+    (
+        "crates/execution-kernel/src/session.rs",
+        "the device backend shell: device close observations join the execution outcome",
+    ),
+];
+
+#[test]
+fn b5_vendor_stdio_diagnostics_are_constructed_in_the_device_domain_only() {
+    let rows = inspect_type_constructions(workspace_production_facts(), VENDOR_STDIO_TYPES);
+    assert!(
+        !rows.is_empty(),
+        "no vendor stdio diagnostic construction found; the scan lost its target"
+    );
+    let outside = rows
+        .iter()
+        .filter(|row| {
+            !VENDOR_STDIO_CONSTRUCTION_OWNERS
+                .iter()
+                .any(|(prefix, _)| row.starts_with(prefix))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        outside.is_empty(),
+        "vendor stdio diagnostics constructed outside the device domain (the host only consumes \
+         them):\n{}",
+        outside.join("\n")
+    );
+    let stale = VENDOR_STDIO_CONSTRUCTION_OWNERS
+        .iter()
+        .filter(|(prefix, _)| !rows.iter().any(|row| row.starts_with(prefix)))
+        .map(|(prefix, _)| *prefix)
+        .collect::<Vec<_>>();
+    assert!(
+        stale.is_empty(),
+        "VENDOR_STDIO_CONSTRUCTION_OWNERS entries without a construction: {stale:?}"
+    );
+}
+
+/// B6: one definition a host-split module owns, as the existing ownership checks named it.
+struct HostDefinition {
+    /// `Owner::name`, or `name` for a free function.
+    name: &'static str,
+    visibility: DeclaredVisibility,
+    /// The crates/runtime-host/src files whose production code calls it.
+    callers: &'static [&'static str],
+    /// References its body must make (see `reference_matches`): its delegation path.
+    delegates: &'static [&'static str],
+}
+
+/// B6: one `crates/runtime-host/src/host/*.rs` module of the #161 host split.
+struct HostModule {
+    /// The file stem, declared `mod <module>;` in host.rs.
+    module: &'static str,
+    /// The types outside the module that its `impl` blocks extend.
+    owners: &'static [&'static str],
+    definitions: &'static [HostDefinition],
+    /// References some production function of the module must make.
+    delegates: &'static [&'static str],
+}
+
+const fn host_module(module: &'static str, owners: &'static [&'static str]) -> HostModule {
+    HostModule {
+        module,
+        owners,
+        definitions: &[],
+        delegates: &[],
+    }
+}
+
+/// B6: every module of the host split with its owner types; the ownership, visibility, caller
+/// and delegation facts the former text checks asserted sit on the modules they concern.
+const HOST_SPLIT: &[HostModule] = &[
+    host_module("agent_control", &["HostShared"]),
+    host_module("backend_open", &["HostShared"]),
+    host_module("client_events", &["HostShared"]),
+    HostModule {
+        module: "contained_task",
+        owners: &["HostShared"],
+        definitions: &[],
+        delegates: &[
+            "TaskSemanticFact::RecognitionStarted",
+            "TaskSemanticFact::EffectIntent",
+            "TaskSemanticFact::TerminalCommitted",
+            "TaskSemanticFact::TerminalRejected",
+        ],
+    },
+    host_module("device_diagnostic", &["HostShared"]),
+    host_module("emulator_instance", &["HostShared"]),
+    host_module("evidence_export", &["HostShared"]),
+    host_module("facts", &["HostShared"]),
+    host_module("foreground_gate", &["HostShared"]),
+    host_module("frame_retention", &["HostShared"]),
+    host_module("governance", &["HostShared"]),
+    host_module("input", &["HostShared"]),
+    host_module("instance_discovery", &["HostShared"]),
+    host_module("lab_operation", &["HostShared"]),
+    host_module("lease", &["HostShared"]),
+    host_module("lifecycle", &["HostShared", "RuntimeLifecycleFailureStage"]),
+    host_module("material_read", &["HostShared"]),
+    HostModule {
+        module: "monitor_control",
+        owners: &["HostShared"],
+        definitions: &[
+            HostDefinition {
+                name: "monitor_probe_loop",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host.rs"],
+                delegates: &[],
+            },
+            HostDefinition {
+                name: "HostShared::run_monitor_probe",
+                visibility: DeclaredVisibility::Private,
+                callers: &["host/monitor_control.rs"],
+                delegates: &[
+                    "self.artifacts",
+                    "CapturePipeline::open_with_frame_store",
+                    "pipeline.persist_frame",
+                ],
+            },
+            HostDefinition {
+                name: "HostShared::record_monitor_recovery_coordination",
+                visibility: DeclaredVisibility::Private,
+                callers: &["host/monitor_control.rs"],
+                delegates: &[],
+            },
+            HostDefinition {
+                name: "HostShared::monitor_recovery_admission",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/emulator_instance.rs", "host/monitor_control.rs"],
+                delegates: &[],
+            },
+        ],
+        delegates: &[
+            "MonitorPayloadDraft::completed",
+            "MonitorPayloadDraft::recovery_admitted",
+            "MonitorPayloadDraft::recovery_deferred",
+        ],
+    },
+    host_module("nemu_input", &["HostShared"]),
+    HostModule {
+        module: "observation",
+        owners: &["HostShared"],
+        definitions: &[
+            HostDefinition {
+                name: "HostShared::capture_sequence",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/requests.rs"],
+                delegates: &[
+                    "capture_readonly_observation",
+                    "thread::sleep",
+                    "CaptureSequence::new",
+                ],
+            },
+            HostDefinition {
+                name: "HostShared::capture_readonly_observation",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/observation.rs", "host/online_observation.rs"],
+                delegates: &[],
+            },
+        ],
+        delegates: &[],
+    },
+    host_module("online_observation", &["HostShared"]),
+    host_module("package_debug", &["HostShared"]),
+    host_module("performance", &["HostShared"]),
+    host_module("planning", &["HostShared"]),
+    host_module("policy_catalog", &["HostShared"]),
+    host_module("policy_dispatch", &["HostShared"]),
+    host_module("policy_outcome", &["HostShared"]),
+    host_module("ppocr_diagnostic", &["HostShared", "RuntimeContainedTask"]),
+    HostModule {
+        module: "read_events",
+        owners: &["HostShared"],
+        definitions: &[HostDefinition {
+            name: "HostShared::control_plane_status",
+            visibility: DeclaredVisibility::Super,
+            callers: &["host/requests.rs"],
+            delegates: &[],
+        }],
+        delegates: &[],
+    },
+    host_module("recovery_ladder", &["HostShared"]),
+    host_module(
+        "requests",
+        &["HostShared", "OperationSuccess", "RuntimeRunLinks"],
+    ),
+    host_module("resource_close", &["HostShared"]),
+    host_module("runtime_facts", &["HostShared"]),
+    host_module("saved_artifact_ocr", &["HostShared"]),
+    host_module("signatures", &["HostShared"]),
+    host_module("startup_package", &["HostShared"]),
+    host_module("state_control", &["HostShared"]),
+    host_module("task_diagnostic", &["RuntimeContainedTask"]),
+    host_module("task_timing", &[]),
+];
+
+#[test]
+fn b6_host_split_modules_match_their_typed_owner_and_delegation_table() {
+    let root = workspace_root();
+    let host_root = "crates/runtime-host/src";
+    let host_file = format!("{host_root}/host.rs");
+    let host = inspect_source_facts(
+        &host_file,
+        &fs::read_to_string(root.join(&host_file))
+            .unwrap_or_else(|error| panic!("read {host_file}: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let mut problems = Vec::new();
+    for (module, visibility) in &host.modules {
+        if *visibility != DeclaredVisibility::Private {
+            problems.push(format!(
+                "host.rs declares module {module} as {visibility:?}, not private"
+            ));
+        }
+    }
+    let declared = host
+        .modules
+        .iter()
+        .map(|(module, _)| module.clone())
+        .collect::<BTreeSet<_>>();
+    let directory = root.join(host_root).join("host");
+    let files = fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("read host module entry: {error}"))
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+        .filter_map(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !files.is_empty() && !declared.is_empty(),
+        "the host split scan found no host/*.rs modules ({} files, {} declarations)",
+        files.len(),
+        declared.len()
+    );
+    let tabled = HOST_SPLIT
+        .iter()
+        .map(|module| module.module.to_string())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        tabled.len(),
+        HOST_SPLIT.len(),
+        "HOST_SPLIT names a module twice"
+    );
+    for missing in tabled.difference(&files) {
+        problems.push(format!(
+            "host module {missing} has no file {host_root}/host/{missing}.rs"
+        ));
+    }
+    for missing in declared.difference(&files) {
+        problems.push(format!("host.rs declares module {missing} without a file"));
+    }
+    for unlisted in files.difference(&tabled) {
+        problems.push(format!(
+            "{host_root}/host/{unlisted}.rs is not in HOST_SPLIT"
+        ));
+    }
+    for undeclared in files.difference(&declared) {
+        problems.push(format!(
+            "{host_root}/host/{undeclared}.rs is not declared in host.rs"
+        ));
+    }
+    let crate_facts = production_facts(&root, &[host_root]);
+    for module in HOST_SPLIT {
+        let path = format!("{host_root}/host/{}.rs", module.module);
+        let Some(facts) = crate_facts.iter().find(|source| source.path == path) else {
+            problems.push(format!(
+                "{path} is missing from the runtime-host production sources"
+            ));
+            continue;
+        };
+        if facts.functions.is_empty() {
+            problems.push(format!("{path} has no production functions"));
+        }
+        let owners = module
+            .owners
+            .iter()
+            .map(|owner| (*owner).to_string())
+            .collect::<BTreeSet<_>>();
+        if facts.extended_types() != owners {
+            problems.push(format!(
+                "{path} extends {:?}, HOST_SPLIT names {owners:?}",
+                facts.extended_types()
+            ));
+        }
+        for definition in module.definitions {
+            let found = facts
+                .functions
+                .iter()
+                .filter(|function| function.qualified_name() == definition.name)
+                .collect::<Vec<_>>();
+            let [function] = found.as_slice() else {
+                problems.push(format!(
+                    "{path} must define {} once, found {}",
+                    definition.name,
+                    found.len()
+                ));
+                continue;
+            };
+            if function.visibility != definition.visibility {
+                problems.push(format!(
+                    "{path}::{} is {:?}, HOST_SPLIT names {:?}",
+                    definition.name, function.visibility, definition.visibility
+                ));
+            }
+            let callee = definition
+                .name
+                .rsplit("::")
+                .next()
+                .expect("definition name");
+            let callers = crate_facts
+                .iter()
+                .filter(|source| source.functions.iter().any(|caller| caller.calls(callee)))
+                .map(|source| {
+                    source
+                        .path
+                        .strip_prefix(&format!("{host_root}/"))
+                        .expect("runtime-host source")
+                        .to_string()
+                })
+                .collect::<BTreeSet<_>>();
+            let expected = definition
+                .callers
+                .iter()
+                .map(|caller| (*caller).to_string())
+                .collect::<BTreeSet<_>>();
+            if callers != expected {
+                problems.push(format!(
+                    "{path}::{} is called from {callers:?}, HOST_SPLIT allows {expected:?}",
+                    definition.name
+                ));
+            }
+            for delegate in definition.delegates {
+                if !function.references_target(delegate) {
+                    problems.push(format!(
+                        "{path}::{} no longer delegates to {delegate}",
+                        definition.name
+                    ));
+                }
+            }
+        }
+        for delegate in module.delegates {
+            if !facts
+                .functions
+                .iter()
+                .any(|function| function.references_target(delegate))
+            {
+                problems.push(format!("{path} no longer delegates to {delegate}"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "the host split differs from HOST_SPLIT (owner types, allowed callers and delegation \
+         paths per host/*.rs module):\n{}",
+        problems.join("\n")
+    );
+}
+
 #[test]
 fn c5_disconnected_runtime_core_prototype_is_retired() {
     let root = workspace_root();
@@ -3436,9 +4669,6 @@ fn c7_lab_has_no_production_ledger_writer_authority() {
     let runtime_contract =
         fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
             .expect("read Runtime contract");
-    let runtime_host =
-        fs::read_to_string(root.join("crates/runtime-host/src/host/contained_task.rs"))
-            .expect("read Runtime contained-task adapter");
     assert!(
         main.contains("local_ledger_retired"),
         "legacy local ledger command must remain a fail-loud tombstone"
@@ -3469,21 +4699,12 @@ fn c7_lab_has_no_production_ledger_writer_authority() {
             "ActingLab environment adapter regained an in-memory semantic source via {forbidden}"
         );
     }
+    // The Runtime semantic owner (host/contained_task.rs constructing the RecognitionStarted,
+    // EffectIntent, TerminalCommitted and TerminalRejected task facts) is a HOST_SPLIT entry.
     assert!(
         !runtime_contract.contains("TaskSemanticFact"),
         "clients must not be able to submit Runtime task semantic facts"
     );
-    for required in [
-        "TaskSemanticFact::RecognitionStarted",
-        "TaskSemanticFact::EffectIntent",
-        "TaskSemanticFact::TerminalCommitted",
-        "TaskSemanticFact::TerminalRejected",
-    ] {
-        assert!(
-            runtime_host.contains(required),
-            "Runtime semantic owner lost {required}"
-        );
-    }
 }
 
 #[test]
