@@ -257,7 +257,7 @@ impl EvidenceExporter {
             temp_file,
             &entries,
             &manifest_bytes,
-            Some((&self.artifact_store, &temp_path, write_context)),
+            (&self.artifact_store, &temp_path, write_context),
         ) {
             return Err(cleanup_file(&temp_path, "cleanup_evidence_temp", error));
         }
@@ -824,7 +824,7 @@ fn create_export_temp(output_path: &Path) -> ArtifactStoreResult<(PathBuf, File)
 
 struct CapacityArchiveWriter<'a> {
     file: File,
-    admission: Option<(&'a ArtifactStore, &'a Path, &'a mut ArtifactWriteContext)>,
+    admission: (&'a ArtifactStore, &'a Path, &'a mut ArtifactWriteContext),
     failure: Option<ArtifactStoreError>,
 }
 
@@ -836,11 +836,7 @@ impl CapacityArchiveWriter<'_> {
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
-        .with_capacity(
-            self.admission
-                .as_ref()
-                .and_then(|(_, _, context)| context.capacity.clone()),
-        );
+        .with_capacity(self.admission.2.capacity.clone());
         self.failure = Some(error.clone());
         std::io::Error::other(error)
     }
@@ -851,9 +847,8 @@ impl Write for CapacityArchiveWriter<'_> {
         if let Some(error) = &self.failure {
             return Err(std::io::Error::other(error.clone()));
         }
-        if let Some((store, path, context)) = &mut self.admission
-            && let Err(error) = store.admit_new_bytes(context, path, bytes.len() as u64)
-        {
+        let (store, path, context) = &mut self.admission;
+        if let Err(error) = store.admit_new_bytes(context, path, bytes.len() as u64) {
             self.failure = Some(error.clone());
             return Err(std::io::Error::other(error));
         }
@@ -886,7 +881,7 @@ fn write_archive(
     file: File,
     entries: &BTreeMap<String, Vec<u8>>,
     manifest: &[u8],
-    admission: Option<(&ArtifactStore, &Path, &mut ArtifactWriteContext)>,
+    admission: (&ArtifactStore, &Path, &mut ArtifactWriteContext),
 ) -> ArtifactStoreResult<()> {
     let options = FileOptions::default()
         .compression_method(CompressionMethod::Deflated)
@@ -914,11 +909,7 @@ fn write_archive(
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
-        .with_capacity(
-            file.admission
-                .as_ref()
-                .and_then(|(_, _, context)| context.capacity.clone()),
-        )
+        .with_capacity(file.admission.2.capacity.clone())
     })
 }
 
@@ -1754,7 +1745,14 @@ mod tests {
             .create_new(true)
             .open(&corrupt)
             .expect("corrupt output");
-        write_archive(file, &entries, &manifest, None).expect("rewrite corrupt archive");
+        let mut rewrite = context(identity, None, 1_752_147_200_124);
+        write_archive(
+            file,
+            &entries,
+            &manifest,
+            (&exporter.artifact_store, &corrupt, &mut rewrite),
+        )
+        .expect("rewrite corrupt archive");
         let actual_hash = canonical_sha256(&fs::read(&corrupt).expect("corrupt bytes"));
 
         let error = verify_evidence_archive(&corrupt, &actual_hash)
