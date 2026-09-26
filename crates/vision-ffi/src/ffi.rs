@@ -22,9 +22,9 @@ use std::{
     sync::Mutex,
 };
 
-const OCR_READ_TEXT_SYMBOL: &[u8] = b"ac_fastdeploy_ppocr_read_text_json\0";
-const NN_CLASSIFY_SYMBOL: &[u8] = b"ac_onnxruntime_classify_json\0";
-const FREE_BUFFER_SYMBOL: &[u8] = b"ac_vision_free_buffer\0";
+pub const OCR_READ_TEXT_SYMBOL: &[u8] = b"ac_fastdeploy_ppocr_read_text_json\0";
+pub const NN_CLASSIFY_SYMBOL: &[u8] = b"ac_onnxruntime_classify_json\0";
+pub const FREE_BUFFER_SYMBOL: &[u8] = b"ac_vision_free_buffer\0";
 const MAX_FFI_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 const CUDA_SUCCESS: i32 = 0;
 const CUDA_PCI_BUS_ID_BYTES: usize = 64;
