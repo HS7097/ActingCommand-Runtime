@@ -437,7 +437,7 @@ impl SemanticInputExecutor for AppSemanticInputExecutor {
         let operation = proxy.input(action).map(|_| ());
         let close = proxy.close();
         match (operation, close) {
-            (Ok(()), Ok(())) => Ok(input_report()),
+            (Ok(()), Ok(())) => Ok(input_report("lease_acquire")),
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(LabError::device(error.to_string())),
             (Err(operation), Err(close)) => Err(LabError::device(format!(
                 "{operation}; Runtime input proxy close also failed: {close}"
@@ -456,6 +456,7 @@ impl InputBackendFactory for AppInputFactory {
             instance_alias,
             config: _runtime_owned_touch_config,
             observation,
+            lease,
         } = request;
         let metadata = instance_alias
             .map(InputFactoryMetadata::new)
@@ -468,11 +469,18 @@ impl InputBackendFactory for AppInputFactory {
             actingcommand_contract::EventSource::Lab,
         ))
         .map_err(|error| LabError::device(error.to_string()))?;
-        let proxy = super::runtime_input_backend::RuntimeInputBackend::connect(
-            client,
-            &metadata.instance_alias,
-        )
-        .map_err(|error| LabError::device(error.to_string()))?;
+        let proxy = match lease {
+            None => super::runtime_input_backend::RuntimeInputBackend::connect(
+                client,
+                &metadata.instance_alias,
+            )
+            .map_err(|error| LabError::device(error.to_string()))?,
+            // The Runtime validates the caller's lease, including its connection, and mints
+            // the device write witness for each input as it does for the proxy's own lease.
+            Some(token) => {
+                super::runtime_input_backend::RuntimeInputBackend::with_held_lease(client, token)
+            }
+        };
         let backend = ObservedInputBackend { proxy, observation };
         backend.publish_report()?;
         Ok(Box::new(backend))
@@ -487,7 +495,7 @@ struct ObservedInputBackend {
 impl ObservedInputBackend {
     fn publish_report(&self) -> Result<(), LabError> {
         if let Some(observation) = &self.observation {
-            observation.record(input_report())?;
+            observation.record(input_report(self.proxy.lease_action()))?;
         }
         Ok(())
     }
@@ -550,7 +558,7 @@ impl LabInputPort for ObservedInputBackend {
     }
 }
 
-fn input_report() -> InputBackendReport {
+fn input_report(lease_action: &str) -> InputBackendReport {
     InputBackendReport {
         backend: "runtime_proxy".to_string(),
         requested_backend: "runtime_owned".to_string(),
@@ -561,7 +569,7 @@ fn input_report() -> InputBackendReport {
             backend: "runtime_proxy".to_string(),
             ok: true,
             elapsed_ms: 0,
-            action: Some("lease_acquire".to_string()),
+            action: Some(lease_action.to_string()),
             fallback_backend: None,
             error_reason: None,
             selected: true,

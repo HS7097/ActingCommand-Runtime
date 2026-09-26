@@ -5,7 +5,6 @@ use actingcommand_device::{DeviceError, DeviceResult, InputCheckPhase, InputOper
 
 pub(super) struct RuntimeInputCheck {
     scheduler: Arc<Mutex<SeedScheduler>>,
-    token: LeaseToken,
     connection_id: ConnectionId,
     clock: Arc<dyn RuntimeClock>,
     clock_origin: u64,
@@ -59,16 +58,11 @@ impl RuntimeInputCheck {
             .scheduler
             .lock()
             .map_err(|_| DeviceError::fatal("Nemu input scheduler is poisoned"))?;
+        // The witness check covers the step's current lease, connection, expiry and cooldown;
+        // its Business lease was write-admitted when `begin_destructive_step` minted it.
         scheduler
             .validate_destructive_step(witness, self.connection_id, now)
             .map_err(|error| DeviceError::fatal(format!("Nemu input fencing failed: {error}")))?;
-        if !self.closing {
-            scheduler
-                .validate_write(&self.token, self.connection_id, now)
-                .map_err(|error| {
-                    DeviceError::fatal(format!("Nemu input write admission failed: {error}"))
-                })?;
-        }
         if matches!(phase, InputCheckPhase::Continue)
             && (self.closing
                 || self.fatal.is_shutdown_requested()
@@ -124,7 +118,6 @@ impl HostShared {
         }
         Ok(Some(RuntimeInputCheck {
             scheduler: Arc::clone(&self.scheduler),
-            token: token.clone(),
             connection_id,
             clock: Arc::clone(&self.clock),
             clock_origin: self.clock_origin_monotonic_ms,
