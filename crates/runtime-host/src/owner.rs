@@ -13,8 +13,9 @@ use std::process;
 
 pub(crate) const OWNER_FILE_NAME: &str = "owner.lock";
 const OWNER_SCHEMA_VERSION: &str = actingcommand_contract::OWNER_JOURNAL_SCHEMA;
-/// A running process whose creation time is further than this from the recorded
-/// `started_at_unix_ms` is another incarnation of a reused pid.
+/// A running process created more than this after the recorded `started_at_unix_ms` is
+/// another incarnation of a reused pid. One created earlier is the recorded owner itself,
+/// which writes its start only after loading its configuration and resources.
 const PID_REUSE_TOLERANCE_MS: u64 = 2_000;
 
 pub(crate) struct OwnerStartup {
@@ -65,8 +66,9 @@ impl std::fmt::Display for PriorOwnerReleasedByExit {
 
 /// A v2 InUse/Unconfirmed last record (a failed close included) is released only when its
 /// process is dead: no running process has the pid, or the running one was created more
-/// than `PID_REUSE_TOLERANCE_MS` away from the recorded start. Alive, or a probe that
-/// cannot decide, keeps the `owner_resource_unconfirmed` refusal with the probe outcome.
+/// than `PID_REUSE_TOLERANCE_MS` after the recorded start (a reused pid cannot have been
+/// created before it). Alive, or a probe that cannot decide, keeps the
+/// `owner_resource_unconfirmed` refusal with the probe outcome.
 fn release_exited_owner(
     previous: Option<&OwnerRecord>,
 ) -> RuntimeHostResult<Option<PriorOwnerReleasedByExit>> {
@@ -83,7 +85,10 @@ fn release_exited_owner(
     };
     let probe = match actingcommand_host_metrics::probe_process(record.pid) {
         ProcessProbe::Running { created_at_unix_ms }
-            if created_at_unix_ms.abs_diff(record.started_at_unix_ms) <= PID_REUSE_TOLERANCE_MS =>
+            if created_at_unix_ms
+                <= record
+                    .started_at_unix_ms
+                    .saturating_add(PID_REUSE_TOLERANCE_MS) =>
         {
             format!("pid {} alive", record.pid)
         }

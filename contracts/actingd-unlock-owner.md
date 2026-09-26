@@ -18,8 +18,9 @@ Before refusing, startup probes the process named by the last record's `pid`
 and `started_at_unix_ms` (Workflow #315 B2c-2):
 
 - dead: no running process has the pid (none exists, or the one that exists has
-  exited), or the running one was created more than 2 s away from
-  `started_at_unix_ms` (a reused pid). Startup takes the epoch over with the
+  exited), or the running one was created more than 2 s after
+  `started_at_unix_ms` (a reused pid, which can only have been created after
+  the recorded start). Startup takes the epoch over with the
   owner semantics of `--confirm-resources-released`: it appends only its own new
   active record (no `confirmed_closed` record is written for the old epoch),
   takes over the old epoch's active instances as after a crash, appends one
@@ -28,9 +29,10 @@ and `started_at_unix_ms` (Workflow #315 B2c-2):
   `last_disposition`, and prints
   `actingd owner_resources_released_by_exit pid=<pid> started_at_unix_ms=<ms> last_disposition=<in_use|unconfirmed>`
   on stdout before `actingd ready`. This command is not needed.
-- alive: the pid is running with a creation time within 2 s of
-  `started_at_unix_ms`. The refusal stays and its message ends in
-  `: pid <pid> alive`.
+- alive: the pid is running with a creation time at most 2 s after
+  `started_at_unix_ms`, however much earlier (the owner writes
+  `started_at_unix_ms` only after loading its configuration and resources). The
+  refusal stays and its message ends in `: pid <pid> alive`.
 - unknown: the probe cannot decide, for example because the query is refused
   (a protected process) or the exit status or creation time cannot be read. The
   refusal stays and its message ends in `: probe unknown: <reason>`. A probe

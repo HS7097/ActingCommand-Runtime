@@ -30,6 +30,10 @@ an instance no cycle has ranked yet has none.
   instance id), still one per transition and one level at a time.
 - When any candidate lacks an arbitration input, the instance id order decides
   (the order before slice 5c).
+- An instance raised above the global level keeps that level when its workload
+  ends (it then has no arbitration input) until a recovery lowers it; only an
+  instance at or below the global level leaves the controller with its
+  workload.
 
 Every per-instance suspend or recovery `PerformanceBalanceChanged` event
 carries `arbitration: {utility_milli, aging_ms, candidates, basis}`: the chosen

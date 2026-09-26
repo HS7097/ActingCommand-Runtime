@@ -553,8 +553,12 @@ impl PerformanceBalanceController {
                 }
             }
         }
-        self.instance_levels
-            .retain(|instance_id, _| active.contains(instance_id));
+        // An instance raised above the global level on its own keeps that level without a
+        // workload until recovery lowers it; only one at or below the global level leaves.
+        let global = self.level;
+        self.instance_levels.retain(|instance_id, level| {
+            active.contains(instance_id) || level.rank() > global.rank()
+        });
         self.instance_arbitration
             .retain(|instance_id, _| active.contains(instance_id));
         Ok(())

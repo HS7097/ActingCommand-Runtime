@@ -326,9 +326,9 @@ the backend self-check facts (source `device-proxy` or `capture`).
   success or failure and whatever the provider (native, fixture simulation,
   unobserved), is recorded as one `runtime.lifecycle_observed` event with phase
   `backend_open_observed` (`backend-open-observation.md`); right after that
-  event the host records four facts from its report, all with one host-clock
-  sample as `observed_at_unix_ms`, under `backend.selfcheck.<entry>.` where
-  `<entry>` is `input`, `capture` or `nemu` (the `nemu_pair` entry):
+  event the host records four facts from its report, all from one host-clock
+  sample, under `backend.selfcheck.<entry>.` where `<entry>` is `input`,
+  `capture` or `nemu` (the `nemu_pair` entry):
   - `status` (`string`): `passed` when the report's `status` and `connection`
     are `passed` and so is the entry's own check (`input_check` for input,
     `capture_check` for capture, both for nemu); `failed` when any of those is
@@ -337,17 +337,19 @@ the backend self-check facts (source `device-proxy` or `capture`).
   - `generation` (`integer`): the report's `session_generation`.
   - `selected` (`string`): the selected backend name, or `-` when none was
     selected.
-  - `checked_at_unix_ms` (`integer`): the observation time, saturated at the
+  - `checked_at_unix_ms` (`integer`): the clock sample, saturated at the
     largest integer for a wall clock beyond it (the records'
     `observed_at_unix_ms` stays exact).
 
-  A newer open of the same entry replaces all four and an identical record
-  appends nothing. A report whose event links carry no instance fails with
-  `backend_selfcheck_instance_missing` (fatal); every refusal of a record
-  (including `runtime_fact_stale`, an open of one entry at the same or an
-  earlier wall-clock millisecond than the stored facts) is returned to the
-  open's observation consumer, whose existing failure path poisons the Runtime
-  exactly as a failed event append does. A lease release, a task end
+  Each record's `observed_at_unix_ms` is the clock sample, or one millisecond
+  after the stored record of the same key when the sample is not later (an
+  open of the entry in the same millisecond or after a wall-clock step back),
+  read and written under one `fact_write_gate` hold, so a newer open of the
+  same entry always replaces all four and never meets `runtime_fact_stale`.
+  A report whose event links carry no instance fails with
+  `backend_selfcheck_instance_missing` (fatal); every refusal of a record is
+  returned to the open's observation consumer, whose existing failure path
+  poisons the Runtime exactly as a failed event append does. A lease release, a task end
   or a retained-session close leaves them in place: they describe the last
   open. Invalidated with `device_closed` by emulator control after `stop`,
   `start` and `restart`, once the endpoint was rebound (or returned to
