@@ -88,7 +88,8 @@ impl HostShared {
     }
 
     /// Performs one control action whose intent is already recorded under `links`: fence,
-    /// session close, provider control, rebinding, ADB baseline, `command.validated` (or
+    /// session close, provider control, rebinding, `backend.selfcheck.*` invalidation, ADB
+    /// baseline, `command.validated` (or
     /// `command.rejected` + `runtime.failed`), `runtime.instance_bound`, `device.connected`,
     /// and the startup package's scheduling intent.
     pub(super) fn drive_emulator_control(
@@ -184,6 +185,17 @@ impl HostShared {
                 )?);
             }
         };
+        // Workflow #317 sc1: the self-check facts describe the session closed above, opened on
+        // the binding just replaced; they are dropped before any lease can open a new one.
+        if let Err(error) = self.invalidate_backend_selfcheck_facts(instance_id) {
+            return Err(self.emulator_control_failure(
+                links,
+                event_action,
+                error,
+                RuntimeReceiptState::Failed,
+                EffectDisposition::Indeterminate,
+            )?);
+        }
         // Slice #316-B3 (ADB baseline): the vendor reports `running` a few seconds before
         // adbd answers. Still under the admission guard, a bound `start` / `restart` succeeds
         // only once the ADB baseline answers; a timeout is a non-fatal backend failure that
