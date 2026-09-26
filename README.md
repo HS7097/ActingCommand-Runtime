@@ -20,6 +20,15 @@ ActingCommand Runtime is a resident Rust runtime for running multi-target automa
 
 [CI main status](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain) (Windows: fmt / clippy `-D warnings` / test) · [Exact-SHA Windows build](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · License `AGPL-3.0-only` · [Coordination board](https://github.com/HS7097/ActingCommand-Workflow) · [UI console](https://github.com/HS7097/ActingCommand-UI) · [Legacy archive](https://github.com/HS7097/ActingCommand-Legacy-Runtime)
 
+## Repository family
+
+| Repository | Role |
+| --- | --- |
+| [HS7097/ActingCommand](https://github.com/HS7097/ActingCommand) | Umbrella (portal) repository: the family README, the resource bundles under `bundles/`, and the Releases page with the installers and the daily builds |
+| [HS7097/ActingCommand-Runtime](https://github.com/HS7097/ActingCommand-Runtime) | This repository: the resident runtime (daemon, CLI, ledger, device backends) |
+| [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | Installer wizard and monitoring console; talks to the runtime only through its API |
+| [HS7097/ActingCommand-Workflow](https://github.com/HS7097/ActingCommand-Workflow) | Coordination board; work starts from an issue here |
+
 ## Architecture overview
 
 ![ActingCommand Runtime layering and ownership overview](docs/assets/readme/architecture-overview.en.png)
@@ -209,16 +218,7 @@ Note: the daemon binary cargo produces is named `actingcommand-actingd`; the sho
 - The UI is an external read-only console, at an early stage in a separate repository; it must go through the runtime API and must not own the runtime lifecycle.
 - Only the daemon side of the agent surface is built: `runtime-host` has an `AgentDispatcher` (wake records, session start/stop and bounded management) that can be enabled from the `agent_dispatcher` section of the `actingd` config, and `actingctl agent-publish-facts` is an existing Agent/Adapter origin entry point. This repository contains no external agent client, and automatic wake-up, autonomous exploration and the complete self-maintenance loop are not built yet.
 
-## Related repositories and collaboration
-
-| Repository | Role |
-| --- | --- |
-| [HS7097/ActingCommand-Workflow](https://github.com/HS7097/ActingCommand-Workflow) | Coordination board; work starts from an issue here |
-| [HS7097/ActingCommand-Resources-Arknights](https://github.com/HS7097/ActingCommand-Resources-Arknights) | Resource repository |
-| [HS7097/ActingCommand-Resources-BlueArchive](https://github.com/HS7097/ActingCommand-Resources-BlueArchive) | Resource repository |
-| [HS7097/ActingCommand-Resources-AzurLane](https://github.com/HS7097/ActingCommand-Resources-AzurLane) | Resource repository |
-| [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | External read-only console, at an early stage |
-| [HS7097/ActingCommand-Legacy-Runtime](https://github.com/HS7097/ActingCommand-Legacy-Runtime) | Archive of the historical Go interface |
+## Collaboration
 
 Identities: HS7097 is the owner and arbitrator; HS7097Agt is the implementer account; HS7097ViW is the acceptance account. The `commit-identity-guard` workflow requires the author and committer email of every commit to fall inside an exact eight-entry allowlist: two noreply forms for each of these three accounts, one registered mailbox address, and the GitHub web committer `noreply@github.com`.
 
