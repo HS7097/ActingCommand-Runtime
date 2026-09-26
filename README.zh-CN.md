@@ -20,6 +20,15 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 
 [CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / test） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · 许可 `AGPL-3.0-only` · [协作看板](https://github.com/HS7097/ActingCommand-Workflow) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI) · [历史归档](https://github.com/HS7097/ActingCommand-Legacy-Runtime)
 
+## 仓库族
+
+| 仓库 | 角色 |
+| --- | --- |
+| [HS7097/ActingCommand](https://github.com/HS7097/ActingCommand) | 伞仓（门面页）：项目族 README、`bundles/` 下的标准包，以及 Releases 里的安装器与每日构建 |
+| [HS7097/ActingCommand-Runtime](https://github.com/HS7097/ActingCommand-Runtime) | 本仓：常驻运行时（守护进程、CLI、账本、设备后端） |
+| [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | 安装向导与监控台，只经运行时 API 与运行时通信 |
+| [HS7097/ActingCommand-Workflow](https://github.com/HS7097/ActingCommand-Workflow) | 协作看板，工作从这里的 issue 起步 |
+
 ## 架构总览
 
 ![ActingCommand Runtime 分层与归属总览](docs/assets/readme/architecture-overview.zh.png)
@@ -213,16 +222,7 @@ actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 - UI 是外部只读控制台，在独立仓中起步阶段，必须经运行时 API 且不得拥有运行时生命周期。
 - 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`（唤醒记录、会话起停与有界管理），可由 `actingd` 配置的 `agent_dispatcher` 段启用；`actingctl agent-publish-facts` 是已有的 Agent/Adapter 来源入口。本仓不含任何外部代理客户端，自动唤起、自主探索与完整的自维护回路尚未建成。
 
-## 相关仓库与协作
-
-| 仓库 | 角色 |
-| --- | --- |
-| [HS7097/ActingCommand-Workflow](https://github.com/HS7097/ActingCommand-Workflow) | 协作看板，工作从这里的 issue 起步 |
-| [HS7097/ActingCommand-Resources-Arknights](https://github.com/HS7097/ActingCommand-Resources-Arknights) | 资源仓 |
-| [HS7097/ActingCommand-Resources-BlueArchive](https://github.com/HS7097/ActingCommand-Resources-BlueArchive) | 资源仓 |
-| [HS7097/ActingCommand-Resources-AzurLane](https://github.com/HS7097/ActingCommand-Resources-AzurLane) | 资源仓 |
-| [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | 外部只读控制台，起步阶段 |
-| [HS7097/ActingCommand-Legacy-Runtime](https://github.com/HS7097/ActingCommand-Legacy-Runtime) | 历史 Go 接口归档 |
+## 协作
 
 身份：HS7097 是所有者与裁定者；HS7097Agt 是实施账号；HS7097ViW 是验收账号。`commit-identity-guard` 工作流要求每个提交的 author 与 committer 邮箱都落在一份八项精确白名单内：这三个账号各两种 noreply 形式、一个注册邮箱地址，以及 GitHub 网页端提交者 `noreply@github.com`。
 
