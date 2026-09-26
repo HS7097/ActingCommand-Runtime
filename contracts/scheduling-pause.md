@@ -153,8 +153,11 @@ A failed reconnect does not roll the resume back and is not retried: the resume 
 the failure is recorded, the instance stays unavailable until a self-check passes, and the
 receipt reports it. Only an unconfirmed close or a failed record fails the request.
 `actingctl selfcheck <alias>` (`SelfCheckInstance`) runs the same phase without a pause and
-answers `InstanceSelfChecked { instance_alias, selfcheck }` with this `selfcheck` shape. A resume triggers no extra policy
-evaluation: the next cycle runs on its ordinary trigger.
+answers `InstanceSelfChecked { instance_alias, selfcheck }` with this `selfcheck` shape. The
+client's receipt wait for an instance resume and for a self-check is the backend-open bound
+`CONNECTION_PREPARATION_WAIT_MS` (`30_000` ms: the touch handshake and the capture prime) plus
+its IO timeout (Workflow #191 h2); a global resume keeps the IO timeout. A resume triggers no
+extra policy evaluation: the next cycle runs on its ordinary trigger.
 
 ## Revisions and refusals
 

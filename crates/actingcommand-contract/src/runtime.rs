@@ -82,6 +82,10 @@ pub const MAX_SCHEDULING_PAUSE_REASON_BYTES: usize = 64;
 /// How long an instance pause waits, once its drain timeout expired, for the runs it asked to
 /// stop to reach their next checkpoint; past it the pause fails and its gate is lifted.
 pub const SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS: u64 = 30_000;
+/// The bound of a device reconnect's backend opens (the touch handshake, 8 s by default, and the
+/// capture prime): a client waits this long plus its IO timeout for the receipt of an instance
+/// `ResumeScheduling` or a `SelfCheckInstance` (Workflow #191 h2).
+pub const CONNECTION_PREPARATION_WAIT_MS: u64 = 30_000;
 pub const RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION: &str =
     "actingcommand.runtime.planning-document.v1";
 pub const MAX_RUNTIME_PLANNING_DOCUMENT_BYTES: usize = 512 * 1024;

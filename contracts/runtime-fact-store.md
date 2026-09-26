@@ -449,7 +449,8 @@ internal). For one physical instance, under its admission guard:
    the close path and withdraws availability; an unconfirmed one is fatal, as
    on every close path.
 
-Nothing is sent to the device and nothing is retried. The phase answers the
+Nothing is sent to the device and nothing is retried but the daemon start's
+cooldown retry (below). The phase answers the
 self-check projected from its own opens in the shape of an instance resume's
 (`scheduling-pause.md`, "Resume"), with the code of the failing step as
 `failure_code`. Only a fatal failure (a ledger append, an unconfirmed close)
@@ -462,7 +463,12 @@ is returned as an error; every other failure leaves the instance unavailable.
   thread is spawned and so before `actingd ready`: every registered device
   self-checked instance, in registry order, is first withdrawn
   (`backend_selfcheck:unchecked`) and then prepared. A failed preparation does
-  not stop the start; a fatal one does.
+  not stop the start; a fatal one does. Workflow #191 h2: an instance whose
+  preparation lease the takeover cooldown refused (`lease_cooldown`, after an
+  unclean restart) is prepared once more after the first pass, once its
+  cooldown deadline has passed and still before `actingd ready` (the whole wait
+  is bounded by `takeover_cooldown_ms`); a second refusal is recorded like the
+  first and leaves it unavailable.
 - **Emulator control** — after a successful `start` / `restart` of a device
   self-checked instance (its `command.validated`, `runtime.instance_bound` and
   `device.connected` recorded, before its startup package is scheduled); the

@@ -48,6 +48,9 @@ An instance scheduling pause hands its device back through this path without reu
 lease (`scheduling-pause.md`, stage (c)); its dedicated close lease is released with
 `LeaseReleaseReason::InstancePaused`, which names no transfer, where the other callers
 release with `HostShutdown`.
+The dedicated preparation lease of the connection preparation phase (`runtime-fact-store.md`,
+"Connection preparation phase") is released with `LeaseReleaseReason::ConnectionPrepared`,
+which names no transfer either (Workflow #191 h2; `lease.released` carries no reason field).
 The primary capture failure and any actual cleanup cause retain their existing
 typed GlobalLedger representation.
 

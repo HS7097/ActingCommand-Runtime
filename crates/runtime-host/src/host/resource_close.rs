@@ -448,7 +448,8 @@ impl HostShared {
     // `backend.selfcheck.*` facts, one `device.self_check` status hint per entry and the policy
     // availability they gate), then closes the session and releases the lease. It sends no input
     // and keeps no frame. A failing step is recorded and leaves the instance unavailable; nothing
-    // is retried. Only a fatal failure (a ledger append, an unconfirmed close) is returned.
+    // is retried except, once, a daemon start's lease refused by the takeover cooldown (Workflow
+    // #191 h2). Only a fatal failure (a ledger append, an unconfirmed close) is returned.
     //
     // Triggers: daemon start (every registered physical instance in order, before the host
     // answers), emulator control `start` / `restart`, an instance `ResumeScheduling` and the
@@ -460,25 +461,56 @@ impl HostShared {
     /// thread is spawned, withdraws the policy availability of every registered physical
     /// instance and runs its preparation phase, in registry order. A failed preparation leaves
     /// its instance unavailable and does not stop the start; only a fatal failure does.
+    /// Workflow #191 h2: an instance whose preparation lease the takeover cooldown refused
+    /// (`lease_cooldown`) is prepared once more after the first pass, once that cooldown ended;
+    /// every takeover cooldown ends at the same deadline (the scheduler's start plus
+    /// `takeover_cooldown_ms`), which bounds the whole wait. A second refusal is recorded like
+    /// the first.
     pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
         let instances = lock(&self.registered_instances, "list_physical_instances")?
             .values()
             .filter(|instance| instance.device_self_checked())
             .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
             .collect::<Vec<_>>();
+        let mut cooling = Vec::new();
         for (instance_alias, instance_id) in instances {
             self.withhold_policy_instance_availability(instance_id)?;
-            let links = self
-                .events
-                .system_links()?
-                .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
-            let instance_guard = self
-                .instance_guard(instance_id)
-                .map_err(|failure| *failure.error)?;
-            let admission = lock(&instance_guard, "lock_instance_admission")?;
-            self.prepare_instance_connection(&instance_alias, instance_id, links, &admission)?;
+            if let Some(cooldown_until) =
+                self.prepare_physical_instance_on_start(&instance_alias, instance_id)?
+            {
+                cooling.push((instance_alias, instance_id, cooldown_until));
+            }
+        }
+        for (instance_alias, instance_id, cooldown_until) in cooling {
+            let wait_ms = cooldown_until.saturating_sub(self.monotonic_ms()?);
+            thread::sleep(Duration::from_millis(wait_ms));
+            self.prepare_physical_instance_on_start(&instance_alias, instance_id)?;
         }
         Ok(())
+    }
+
+    /// One start preparation of `instance_id` under its admission guard. Returns the monotonic
+    /// deadline of the takeover cooldown that refused its preparation lease, if one did.
+    fn prepare_physical_instance_on_start(
+        &self,
+        instance_alias: &str,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let links = self
+            .events
+            .system_links()?
+            .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+        let instance_guard = self
+            .instance_guard(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        self.prepare_instance_connection_with_cooldown(
+            instance_alias,
+            instance_id,
+            links,
+            &admission,
+        )
+        .map(|(_, cooldown_until)| cooldown_until)
     }
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
@@ -517,6 +549,24 @@ impl HostShared {
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<SchedulingResumeSelfCheck> {
+        self.prepare_instance_connection_with_cooldown(
+            instance_alias,
+            instance_id,
+            links,
+            admission,
+        )
+        .map(|(selfcheck, _)| selfcheck)
+    }
+
+    /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover
+    /// cooldown when it refused the preparation lease (`lease_cooldown`, Workflow #191 h2).
+    fn prepare_instance_connection_with_cooldown(
+        &self,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<u64>)> {
         let frame_owner = self
             .events
             .issuer()
@@ -537,8 +587,25 @@ impl HostShared {
             Err(error) if error.is_fatal() => return Err(error),
             Err(error) => {
                 let failure_code = error.code();
+                let cooldown_until = match error.projection().retry_after_ms {
+                    Some(retry_after_ms) if failure_code == "lease_cooldown" => Some(
+                        self.monotonic_ms()?
+                            .checked_add(retry_after_ms)
+                            .ok_or_else(|| {
+                                RuntimeHostError::fatal(
+                                    "connection_preparation_cooldown_overflow",
+                                    "prepare_instance_connection",
+                                    RuntimeErrorCode::RuntimeFatal,
+                                )
+                            })?,
+                    ),
+                    _ => None,
+                };
                 self.record_connection_preparation_failure(instance_id, links, error)?;
-                return Ok(scheduling_resume_selfcheck(&[], Some(failure_code)));
+                return Ok((
+                    scheduling_resume_selfcheck(&[], Some(failure_code)),
+                    cooldown_until,
+                ));
             }
         };
         let registration = self.mark_resources_in_use()?;
@@ -583,7 +650,7 @@ impl HostShared {
             self.cleanup_token_inner(
                 &token,
                 connection_id,
-                LeaseReleaseReason::HostShutdown,
+                LeaseReleaseReason::ConnectionPrepared,
                 None,
                 Some(admission),
             )?;
@@ -605,7 +672,10 @@ impl HostShared {
         if failure_code.is_some() {
             self.withhold_policy_instance_availability(instance_id)?;
         }
-        Ok(scheduling_resume_selfcheck(&observations, failure_code))
+        Ok((
+            scheduling_resume_selfcheck(&observations, failure_code),
+            None,
+        ))
     }
 
     /// A preparation step other than an open failed without being fatal (the preparation lease

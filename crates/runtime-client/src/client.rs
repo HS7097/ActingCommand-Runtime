@@ -1002,7 +1002,9 @@ impl RuntimeClient {
     }
 
     /// Lifts a scheduling pause (`ResumeScheduling`, Workflow #191 ps1) and returns the
-    /// `RuntimeResult::SchedulingResumed` result verbatim.
+    /// `RuntimeResult::SchedulingResumed` result verbatim. An instance resume reconnects the
+    /// device, so its receipt wait is `CONNECTION_PREPARATION_WAIT_MS` plus the IO margin
+    /// (Workflow #191 h2); a global resume keeps the IO timeout.
     pub fn resume_scheduling(
         &self,
         scope: SchedulingPauseScope,
@@ -1023,6 +1025,7 @@ impl RuntimeClient {
 
     /// Reconnects one physical instance and self-checks it now (`SelfCheckInstance`,
     /// Workflow #317 sc3) and returns the `RuntimeResult::InstanceSelfChecked` result verbatim.
+    /// The receipt wait is `CONNECTION_PREPARATION_WAIT_MS` plus the IO margin (#191 h2).
     pub fn self_check_instance(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeResult> {
         let result = self.execute(
             "self_check_instance",
@@ -5237,12 +5240,19 @@ pub(super) fn receipt_response_timeout(
             })
         }
         // Workflow #317 sc3: the preparation phase opens the backends (first frame included)
-        // and closes the session again before it answers.
-        RuntimeOperation::SelfCheckInstance { .. } => {
-            backend_open_timeout.checked_add(io_timeout).ok_or_else(|| {
-                RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "self_check_instance")
-            })
-        }
+        // and closes the session again before it answers; an instance resume reconnects through
+        // it. Both wait its backend-open bound plus the IO margin (Workflow #191 h2).
+        RuntimeOperation::SelfCheckInstance { .. }
+        | RuntimeOperation::ResumeScheduling {
+            scope: SchedulingPauseScope::Instance { .. },
+        } => Duration::from_millis(actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS)
+            .checked_add(io_timeout)
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    "runtime_receipt_timeout_overflow",
+                    "connection_preparation",
+                )
+            }),
         _ => Ok(io_timeout),
     }
 }
