@@ -41,6 +41,7 @@ impl HostShared {
                 .pending_dispatch_completions()
                 .into_iter()
                 .collect::<BTreeSet<_>>();
+            let reconciled = eligible.clone();
             let mut settled = false;
             for decision_id in eligible {
                 if pending_completions.contains(&decision_id) {
@@ -66,6 +67,18 @@ impl HostShared {
                     &self.authoritative_policy_outcomes,
                     "recover_online_policy_outcomes",
                 )? = recover_authoritative_policy_outcomes(&policy, &self.ledger)?;
+            }
+            // Reconciled settlements carry their four settlement facts too (Workflow #308
+            // slice 5b).
+            let mut settlements = Vec::new();
+            for decision_id in &reconciled {
+                if let Some(settlement) = policy.latest_settlement_for_decision(decision_id)? {
+                    settlements.push(settlement);
+                }
+            }
+            drop(policy);
+            for settlement in &settlements {
+                self.record_policy_settlement_facts(settlement)?;
             }
             Ok(())
         })();
@@ -847,6 +860,11 @@ impl HostShared {
             if let Some(existing) = replay {
                 let mut policy = lock(&self.policy, "finish_replayed_policy_outcome")?;
                 self.finish_policy_dispatch_outcome(&mut policy, &existing, context, cache_update)?;
+                let settlement = policy
+                    .latest_settlement(&existing.task_id, &existing.instance_id)?
+                    .ok_or_else(policy_settlement_missing)?;
+                drop(policy);
+                self.record_policy_settlement_facts(&settlement)?;
                 return Ok(existing);
             }
             if let Some(context) = context {
@@ -932,6 +950,12 @@ impl HostShared {
                 PolicyExecutionPreparation::Replay(data) => data,
             };
             self.finish_policy_dispatch_outcome(&mut policy, &data, context, cache_update)?;
+            // The settled run's four settlement facts (Workflow #308 slice 5b).
+            let settlement = policy
+                .latest_settlement(&data.task_id, &data.instance_id)?
+                .ok_or_else(policy_settlement_missing)?;
+            drop(policy);
+            self.record_policy_settlement_facts(&settlement)?;
             Ok(data)
         })();
         if let Err(error) = &result
@@ -1600,6 +1624,15 @@ fn policy_recovery_outcome_matches(
         }
         _ => false,
     }
+}
+
+/// A recorded execution always gives its pair a settlement; its absence is a host invariant
+/// failure.
+fn policy_settlement_missing() -> RuntimeHostError {
+    policy_admission_fatal(
+        "policy_settlement_missing",
+        "record_policy_settlement_facts",
+    )
 }
 
 fn policy_execution_severity(data: &PolicyExecutionEventData) -> EventSeverity {

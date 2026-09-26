@@ -81,7 +81,16 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
         incremental_measurement.execution,
         PolicyEvaluationExecution::FullCatalogScan
     );
-    assert_eq!(incremental_measurement.cost, startup_measurement.cost);
+    // Workflow #308 slice 5b: the pair found eligible at startup now carries its eligibility
+    // age, one more task-state record; every other input dimension is unchanged.
+    assert_eq!(
+        incremental_measurement.cost,
+        PolicyEvaluationCost {
+            task_state_records: startup_measurement.cost.task_state_records + 1,
+            work_units: startup_measurement.cost.work_units + 1,
+            ..startup_measurement.cost
+        }
+    );
     assert!(
         incremental_measurement.sampled_at_monotonic_ms
             >= startup_measurement.sampled_at_monotonic_ms

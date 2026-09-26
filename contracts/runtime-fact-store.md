@@ -11,10 +11,11 @@ Workflow #313 owns the design. This document freezes the contract half, the
 pure store, and the host wiring that makes the store ledger-backed: the three
 ledger events, the append-first rule, startup replay, takeover invalidation,
 the periodic snapshot, the read operation, the offline read, and the producers built so far
-(see "Producers"). The `task.` family has three producers (`task.game`,
-`task.server`, `task.page`); the remaining producers (`host.`, … facts),
-policy-input rewiring, and the per-instance read operation land in later
-slices.
+(see "Producers"). The `task.` family has three single-key producers (`task.game`,
+`task.server`, `task.page`) and the four per-task settlement facts
+(`task.<catalog_task_id>.*`, Workflow #308 slice 5b); the remaining producers
+(`host.`, … facts), policy-input rewiring, and the per-instance read operation land
+in later slices.
 
 ## Records
 
@@ -243,8 +244,8 @@ exits nonzero with `runtime_facts_not_available` or the failure code.
 
 ## Producers
 
-Five producers write the store today; all go through the append-first rule
-above with source `runtime`.
+Six producers write the store today; all go through the append-first rule
+above, with source `runtime` except the settlement facts (source `policy`).
 
 - `device.connected` (slice #316-B) — instance scope, `boolean`: the running
   state emulator instance control observed after `status` / `start` / `stop` /
@@ -284,6 +285,39 @@ above with source `runtime`.
   `adb_unreachable` wherever `device.connected` is (foreground gate and
   contained-task capture), and with `runtime_takeover`. Written for fixture and
   physical instances alike.
+- Settlement facts (Workflow #308, slice 5b) — instance scope (the registered
+  instance the policy run was dispatched to), source `policy`, no lifetime,
+  all four with `observed_at_unix_ms` = the run's settlement time. They describe
+  the latest settled policy run of one catalog task on one instance:
+  - `task.<catalog_task_id>.last_duration_ms` (`integer`): the run's
+    `runtime_ms` when it succeeded; for a failure, the execution record's
+    `observed_at_unix_ms` minus the admission's `admitted_at_unix_ms` (0 when a
+    settlement reconciled from ledger timestamps precedes its admission).
+  - `task.<catalog_task_id>.last_outcome` (`string`): `succeeded` or `failed`.
+  - `task.<catalog_task_id>.failure_streak` (`integer`): consecutive failed
+    runs of that task on that instance ending at this run; 0 after a success.
+  - `task.<catalog_task_id>.completed_at_unix_ms` (`integer`): the settlement
+    time.
+
+  The host records them right after `policy.execution_recorded` and its
+  `policy.dispatch_completed` are appended (live settlement, the replayed
+  completion of an already recorded execution, and the reconciliation trigger),
+  computed from the policy dispatch records, so the values equal the evaluator
+  inputs of "Settlement feedback and eligibility age" in
+  `contracts/scheduling/README.md`. Once per startup, after the configuration
+  facts, the host derives the four facts of every pair's latest settled run
+  again: settlements reconciled during startup (before this store exists) and a
+  stop between a settlement and its facts reach the same store state as the
+  live path, and identical records append nothing, so replay never appends a
+  record twice. A pair whose instance is no longer registered has no instance
+  scope and keeps what the ledger holds. Any refusal while recording them
+  (stale, capacity, invalid, unknown instance) is fatal: the settlement is
+  already durable. They survive a takeover and emulator `stop`.
+  The key bound limits a catalog task id to 102 bytes (128 −
+  `task.` − `.completed_at_unix_ms`); catalog activation, rollback and
+  promotion refuse a catalog with a longer task id with
+  `task_id_too_long_for_facts` (request class) before anything is appended, so
+  no run of such a task can exist.
 - `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
   configuration manifest (`RuntimeConfigManifest` in contract module
@@ -346,9 +380,11 @@ Contract: `runtime_fact_ledger_position_invalid`,
 `invalid_config_subsystem_name`, `invalid_config_subsystem_reason`,
 `invalid_config_parameter_key`. Host: `runtime_fact_stale`,
 `runtime_fact_capacity_exceeded`, `runtime_fact_missing`,
-`runtime_fact_instance_unknown` (request class);
-`runtime_fact_store_desync`, `runtime_fact_replay_failed`,
-`invalid_runtime_config_manifest` (fatal). Offline read:
+`runtime_fact_instance_unknown`, `task_id_too_long_for_facts` (request class;
+a refusal while recording settlement facts is raised as fatal with the same
+code); `runtime_fact_store_desync`, `runtime_fact_replay_failed`,
+`invalid_runtime_config_manifest`, `policy_settlement_instance_unknown`,
+`policy_settlement_missing`, `policy_settlement_fact_overflow` (fatal). Offline read:
 `runtime_facts_source_incomplete`, `runtime_facts_position_missing`,
 `runtime_facts_read_budget_exceeded`; `actingledger facts`:
 `runtime_facts_not_available`.

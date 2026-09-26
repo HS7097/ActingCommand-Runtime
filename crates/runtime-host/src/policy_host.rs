@@ -25,8 +25,9 @@ use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
     ActivityProfile, CandidateEligibility, CatalogDocumentSource, CatalogSources, CompiledCatalog,
     CompletedActivityWindow, DecisionReason, DecisionReasonChain, DispatchIntent,
-    DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime, InstanceSnapshot,
-    MAX_EVALUATION_INSTANCES, PolicyEvaluation, ScopeSelector, TaskRuntimeSnapshot,
+    DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources, EvaluationTime,
+    InstanceSnapshot, MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS,
+    PolicyEvaluation, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
     TaskTerminalState, compile_catalog, evaluate_with_eligibility,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
@@ -590,6 +591,140 @@ impl PolicyCadenceState {
     }
 }
 
+/// One (task, instance) pair's latest settled policy run as its settlement facts describe it
+/// (Workflow #308 slice 5b). Runs of one pair are serialized by the instance lease, so
+/// admission order is settlement order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PolicySettlement {
+    pub(crate) catalog_task_id: String,
+    pub(crate) instance_alias: String,
+    /// `runtime_ms` of a success; `observed_at_unix_ms - admitted_at_unix_ms` of a failure,
+    /// 0 when a settlement reconciled from ledger timestamps precedes its admission.
+    pub(crate) duration_ms: u64,
+    pub(crate) succeeded: bool,
+    /// Consecutive failed runs ending at this run; 0 after a success.
+    pub(crate) failure_streak: u64,
+    pub(crate) completed_at_unix_ms: u64,
+}
+
+/// How one evaluated decision moves its pair's eligibility age (Workflow #308 slice 5b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EligibilityVerdict {
+    /// Eligible, Selected or `score_deferred`, with no dispatch in flight: keep or start.
+    Waiting,
+    /// Eligible but deferred for another reason, or waiting with a dispatch in flight: keep
+    /// an existing age, start none.
+    Retained,
+    /// Blocked or not eligible: the age ends.
+    Dropped,
+}
+
+fn eligibility_verdict(decision: &TaskDecision, in_flight: bool) -> EligibilityVerdict {
+    if decision.eligibility != EligibilityState::True
+        || decision.state == SchedulingDecisionState::Blocked
+    {
+        return EligibilityVerdict::Dropped;
+    }
+    let waiting = match decision.state {
+        SchedulingDecisionState::Eligible | SchedulingDecisionState::Selected => true,
+        SchedulingDecisionState::Deferred => decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "score_deferred"),
+        SchedulingDecisionState::Blocked => false,
+    };
+    if waiting && !in_flight {
+        EligibilityVerdict::Waiting
+    } else {
+        EligibilityVerdict::Retained
+    }
+}
+
+/// Memory-only eligibility ages (Workflow #308 slice 5b, iron rule 13): the evaluation instant
+/// at which each (task, instance) pair started waiting. Nothing here reaches the ledger; a
+/// host starts with an empty map.
+#[derive(Debug, Default)]
+struct EligibilityAges {
+    since: BTreeMap<(String, String), u64>,
+    /// The last evaluated cycle's verdicts. They apply when the next evaluation starts, so an
+    /// evaluation and the admissions of its intents project the same ages.
+    pending: Option<EligibilityVerdicts>,
+    /// Whether any cycle's verdicts were applied since the host opened.
+    known: bool,
+}
+
+#[derive(Debug)]
+struct EligibilityVerdicts {
+    evaluated_at_unix_ms: u64,
+    waiting: BTreeSet<(String, String)>,
+    retained: BTreeSet<(String, String)>,
+}
+
+impl EligibilityAges {
+    fn apply_pending(&mut self) {
+        let Some(verdicts) = self.pending.take() else {
+            return;
+        };
+        let mut since = BTreeMap::new();
+        for key in verdicts.waiting {
+            let started = self
+                .since
+                .get(&key)
+                .copied()
+                .unwrap_or(verdicts.evaluated_at_unix_ms);
+            since.insert(key, started);
+        }
+        for key in verdicts.retained {
+            if let Some(started) = self.since.get(&key) {
+                since.insert(key, *started);
+            }
+        }
+        self.since = since;
+        self.known = true;
+    }
+
+    fn stage(
+        &mut self,
+        evaluation: &PolicyEvaluation,
+        evaluated_at_unix_ms: u64,
+        in_flight: &BTreeSet<(&str, &str)>,
+    ) {
+        let mut verdicts = EligibilityVerdicts {
+            evaluated_at_unix_ms,
+            waiting: BTreeSet::new(),
+            retained: BTreeSet::new(),
+        };
+        for decision in &evaluation.decisions {
+            let Some(instance_id) = decision.instance_id.as_deref() else {
+                continue;
+            };
+            let key = (decision.task_id.clone(), instance_id.to_owned());
+            match eligibility_verdict(
+                decision,
+                in_flight.contains(&(decision.task_id.as_str(), instance_id)),
+            ) {
+                EligibilityVerdict::Waiting => {
+                    verdicts.waiting.insert(key);
+                }
+                EligibilityVerdict::Retained => {
+                    verdicts.retained.insert(key);
+                }
+                EligibilityVerdict::Dropped => {}
+            }
+        }
+        self.pending = Some(verdicts);
+    }
+
+    fn forget(&mut self, task_id: &str, instance_id: &str) {
+        let key = (task_id.to_owned(), instance_id.to_owned());
+        self.since.remove(&key);
+        if let Some(pending) = &mut self.pending {
+            pending.waiting.remove(&key);
+            pending.retained.remove(&key);
+        }
+    }
+}
+
 pub(crate) struct PolicyHost {
     store: CatalogStore,
     active: Option<LoadedCatalog>,
@@ -599,6 +734,7 @@ pub(crate) struct PolicyHost {
     pinned_dispatches: BTreeMap<String, CatalogGeneration>,
     detection_quota: DetectionQuotaState,
     control: PolicyControlState,
+    eligibility: EligibilityAges,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -627,6 +763,7 @@ impl PolicyHost {
             pinned_dispatches: BTreeMap::new(),
             detection_quota: DetectionQuotaState::default(),
             control: PolicyControlState::default(),
+            eligibility: EligibilityAges::default(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -766,21 +903,39 @@ impl PolicyHost {
             .collect()
     }
 
+    /// One snapshot per (task, instance) of the active catalog. The dispatch, terminal and
+    /// settlement fields are position-exact: the latest admitted dispatch at or before
+    /// `ledger_position`, and `last_duration_ms` / `failure_streak` from the runs completed at
+    /// or before it, saturated at the evaluator's input bounds. `eligible_since_unix_ms` is the
+    /// memory-only eligibility age (Workflow #308 slice 5b): reported only when
+    /// `eligibility_as_of_unix_ms` names the evaluation instant, and only for an age that
+    /// started strictly before it (a younger one is zero and reads as absent). A
+    /// position-only projection reports none.
     pub(crate) fn task_runtime_snapshots(
         &self,
         ledger_position: u64,
+        eligibility_as_of_unix_ms: Option<u64>,
     ) -> RuntimeHostResult<Vec<TaskRuntimeSnapshot>> {
+        let Some(active) = self.active.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let task_ids = active
+            .compiled
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let settlements = fold_settlements(self.seen_dispatches.values().filter(|dispatch| {
+            task_ids.contains(dispatch.data.task_id.as_str())
+                && dispatch
+                    .completed_sequence
+                    .is_some_and(|sequence| sequence <= ledger_position)
+        }))?;
         let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
         for dispatch in self.seen_dispatches.values() {
-            if self.active.as_ref().is_none_or(|active| {
-                !active
-                    .compiled
-                    .catalog()
-                    .tasks
-                    .tasks
-                    .iter()
-                    .any(|task| task.id == dispatch.data.task_id)
-            }) {
+            if !task_ids.contains(dispatch.data.task_id.as_str()) {
                 continue;
             }
             let Some(sequence) = dispatch
@@ -800,7 +955,7 @@ impl PolicyHost {
                 latest.insert(key, (sequence, dispatch));
             }
         }
-        latest
+        let mut snapshots = latest
             .into_iter()
             .map(|((task_id, instance_id), (_, dispatch))| {
                 let admission = dispatch.admission.as_ref().ok_or_else(|| {
@@ -833,19 +988,101 @@ impl PolicyHost {
                 } else {
                     (None, None)
                 };
-                Ok(TaskRuntimeSnapshot {
-                    task_id: task_id.to_owned(),
-                    instance_id: instance_id.to_owned(),
-                    last_dispatched_unix_ms: Some(admission.activity.admitted_at_unix_ms),
-                    // No ledger fact establishes the start of continuous eligibility.
-                    eligible_since_unix_ms: None,
-                    terminal_state,
-                    completed_window,
-                    last_duration_ms: None,
-                    failure_streak: None,
-                })
+                let settlement = settlements.get(&(task_id.to_owned(), instance_id.to_owned()));
+                Ok((
+                    (task_id.to_owned(), instance_id.to_owned()),
+                    TaskRuntimeSnapshot {
+                        task_id: task_id.to_owned(),
+                        instance_id: instance_id.to_owned(),
+                        last_dispatched_unix_ms: Some(admission.activity.admitted_at_unix_ms),
+                        eligible_since_unix_ms: None,
+                        terminal_state,
+                        completed_window,
+                        last_duration_ms: settlement.map(|settlement| {
+                            settlement.duration_ms.min(MAX_TASK_LAST_DURATION_MS)
+                        }),
+                        failure_streak: settlement.map(|settlement| {
+                            u16::try_from(settlement.failure_streak)
+                                .unwrap_or(u16::MAX)
+                                .min(MAX_TASK_FAILURE_STREAK)
+                        }),
+                    },
+                ))
             })
-            .collect()
+            .collect::<RuntimeHostResult<BTreeMap<_, _>>>()?;
+        if let Some(as_of_unix_ms) = eligibility_as_of_unix_ms {
+            for ((task_id, instance_id), since) in &self.eligibility.since {
+                if *since >= as_of_unix_ms || !task_ids.contains(task_id.as_str()) {
+                    continue;
+                }
+                snapshots
+                    .entry((task_id.clone(), instance_id.clone()))
+                    .or_insert_with(|| TaskRuntimeSnapshot {
+                        task_id: task_id.clone(),
+                        instance_id: instance_id.clone(),
+                        last_dispatched_unix_ms: None,
+                        eligible_since_unix_ms: None,
+                        terminal_state: None,
+                        completed_window: None,
+                        last_duration_ms: None,
+                        failure_streak: None,
+                    })
+                    .eligible_since_unix_ms = Some(*since);
+            }
+        }
+        Ok(snapshots.into_values().collect())
+    }
+
+    /// Applies the previous evaluated cycle's eligibility verdicts (Workflow #308 slice 5b).
+    /// Called once when an evaluation starts, before its inputs are projected.
+    pub(crate) fn apply_eligibility_verdicts(&mut self) {
+        self.eligibility.apply_pending();
+    }
+
+    /// The pairs the last evaluation started aging while no cycle's verdicts had been applied
+    /// since the host opened: their age before this host is unknown. Empty afterwards.
+    pub(crate) fn eligibility_unknown_pairs(&self) -> BTreeSet<(String, String)> {
+        match (&self.eligibility.pending, self.eligibility.known) {
+            (Some(pending), false) => pending.waiting.clone(),
+            _ => BTreeSet::new(),
+        }
+    }
+
+    /// The settlement of one pair's latest executed run, if it has one.
+    pub(crate) fn latest_settlement(
+        &self,
+        task_id: &str,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<PolicySettlement>> {
+        Ok(
+            fold_settlements(self.seen_dispatches.values().filter(|dispatch| {
+                dispatch.data.task_id == task_id && dispatch.data.instance_id == instance_alias
+            }))?
+            .remove(&(task_id.to_owned(), instance_alias.to_owned())),
+        )
+    }
+
+    /// The latest settlement of the pair `decision_id` dispatched to, once that dispatch has
+    /// an execution outcome.
+    pub(crate) fn latest_settlement_for_decision(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<PolicySettlement>> {
+        let dispatch = self
+            .seen_dispatches
+            .get(decision_id)
+            .ok_or_else(|| request("policy_dispatch_unknown", "read_policy_settlement"))?;
+        if dispatch.execution.is_none() {
+            return Ok(None);
+        }
+        self.latest_settlement(&dispatch.data.task_id, &dispatch.data.instance_id)
+    }
+
+    /// The settlement of every pair's latest executed run.
+    pub(crate) fn latest_settlements(&self) -> RuntimeHostResult<Vec<PolicySettlement>> {
+        Ok(fold_settlements(self.seen_dispatches.values())?
+            .into_values()
+            .collect())
     }
 
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
@@ -968,6 +1205,24 @@ impl PolicyHost {
             &pending_dispatch_intents,
             time.unix_ms,
         )?;
+        let in_flight = self
+            .seen_dispatches
+            .values()
+            .filter(|dispatch| {
+                matches!(
+                    dispatch.lifecycle,
+                    DispatchLifecycle::Intent | DispatchLifecycle::Admitted
+                )
+            })
+            .map(|dispatch| {
+                (
+                    dispatch.data.task_id.as_str(),
+                    dispatch.data.instance_id.as_str(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        self.eligibility
+            .stage(&evaluation, time.unix_ms, &in_flight);
         let requested_recompute = directive.kind;
         Ok(PolicyCycle {
             directive,
@@ -1144,7 +1399,11 @@ impl PolicyHost {
             .as_ref()
             .ok_or_else(|| request("policy_catalog_unavailable", "commit_policy_budget"))?;
         self.control
-            .commit_admission(&active.compiled, intent, admission)
+            .commit_admission(&active.compiled, intent, admission)?;
+        // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b).
+        self.eligibility
+            .forget(&intent.task_id, &intent.instance_id);
+        Ok(())
     }
 
     pub(crate) fn refresh_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
@@ -2436,6 +2695,65 @@ fn completed_policy_run_identity(
         completion_sequence: event.sequence(),
         activity_window_id: admission.activity.window_id.clone(),
     })
+}
+
+/// Folds the executed runs among `runs`, in admission order per (task, instance) pair, into
+/// each pair's latest settlement (Workflow #308 slice 5b).
+fn fold_settlements<'a>(
+    runs: impl Iterator<Item = &'a SeenDispatch>,
+) -> RuntimeHostResult<BTreeMap<(String, String), PolicySettlement>> {
+    let mut executed = runs
+        .filter_map(|dispatch| {
+            dispatch
+                .execution
+                .as_ref()
+                .map(|execution| (dispatch, execution))
+        })
+        .collect::<Vec<_>>();
+    executed.sort_by_key(|(dispatch, _)| (dispatch.admitted_sequence, dispatch.intent_sequence));
+    let mut latest = BTreeMap::<(String, String), PolicySettlement>::new();
+    for (dispatch, execution) in executed {
+        let admission = dispatch.admission.as_ref().ok_or_else(|| {
+            fatal(
+                "policy_dispatch_admission_missing",
+                "project_policy_settlement",
+            )
+        })?;
+        let (succeeded, duration_ms) = match &execution.outcome {
+            PolicyExecutionOutcome::Succeeded { runtime_ms } => (true, *runtime_ms),
+            // The failure's duration is its settlement time minus its admission time.
+            PolicyExecutionOutcome::Failed { .. } => (
+                false,
+                execution
+                    .observed_at_unix_ms
+                    .saturating_sub(admission.activity.admitted_at_unix_ms),
+            ),
+        };
+        let key = (
+            dispatch.data.task_id.clone(),
+            dispatch.data.instance_id.clone(),
+        );
+        let failure_streak = if succeeded {
+            0
+        } else {
+            latest
+                .get(&key)
+                .map_or(0, |previous| previous.failure_streak)
+                .saturating_add(1)
+        };
+        latest.insert(
+            key,
+            PolicySettlement {
+                catalog_task_id: dispatch.data.task_id.clone(),
+                instance_alias: dispatch.data.instance_id.clone(),
+                duration_ms,
+                succeeded,
+                failure_streak,
+                completed_at_unix_ms: execution.observed_at_unix_ms,
+            },
+        );
+    }
+    Ok(latest)
 }
 
 fn execution_event_data(

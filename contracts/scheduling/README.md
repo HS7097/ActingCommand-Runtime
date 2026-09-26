@@ -179,6 +179,53 @@ the four documents. An agent proposal compiled against a catalog with a
 selection document carries that document unchanged into the proposed catalog;
 proposal patches address only the four catalog documents.
 
+## Settlement Feedback And Eligibility Age
+
+In the Runtime (Workflow #308 slice 5b) every `TaskRuntimeSnapshot` the host
+projects carries what earlier runs of that task on that instance settled:
+
+- `last_duration_ms` is the duration of the latest policy run completed at or
+  before the input ledger position (`policy.dispatch_completed`): its
+  `runtime_ms` when it succeeded, `observed_at_unix_ms - admitted_at_unix_ms`
+  of its execution record when it failed (0 when a reconciled settlement
+  precedes its admission). The score stage uses it as the utility cost:
+  `cost_ms = last_duration_ms` when above zero, else the declared
+  `expected_duration_ms`, and the `scored` detail prints that `cost_ms`.
+- `failure_streak` is the number of consecutive failed runs ending at that
+  latest completed run, 0 after a success. The evaluator validates and carries
+  it; the score stage does not consume it yet.
+- Both are absent while no run of the pair has completed. They are
+  position-exact, read from the same policy dispatch records as the four
+  settlement facts of `contracts/runtime-fact-store.md` (`task.<task_id>.<name>`
+  for `last_duration_ms`, `last_outcome`, `failure_streak` and
+  `completed_at_unix_ms`), and saturate at the evaluator's input bounds
+  (86,400,000 ms and 10,000), while the facts keep the exact values.
+
+`eligible_since_unix_ms` is the eligibility age the evaluator turns into
+`aging_ms = now - eligible_since_unix_ms`. The host keeps it in memory only
+(iron rule 13), one instant per (task, instance):
+
+- After every evaluated cycle, a pair whose decision is `eligible`, `selected`
+  or deferred with `score_deferred`, and that has no dispatch in flight, keeps
+  its instant or starts one at the cycle's evaluation instant. A pair deferred
+  for another reason (cooldown, Runtime availability) or with a dispatch in
+  flight keeps an existing instant but starts none. Every other pair (blocked,
+  not eligible, or not evaluated) loses its instant. Admitting a pair's intent
+  ends its instant at once.
+- A cycle's verdicts take effect when the next evaluation starts, before its
+  inputs are projected, so an evaluation and the admission of its intents
+  project the same ages. An instant is reported only to an evaluation instant
+  strictly after it (a zero age reads as absent), and admission projects as of
+  its intent's evaluation instant. Projections bound to a ledger position alone
+  (`ProjectPolicyInputIdentity`, strategic reports) report no age.
+- `fact_snapshot_id` hashes the projected task snapshots, so each of the three
+  fields is part of the snapshot identity and of the decision identity derived
+  from it.
+- Nothing about ages reaches the ledger: evaluations are not ledger events, so
+  a restarted host cannot rebuild them. It starts with no ages; the first cycle
+  evaluated after a start adds `eligible_since_unknown` to every decision whose
+  pair starts aging there, and those ages count from that cycle.
+
 ## Runtime Enforcement
 
 Time validity is evaluated over the pinned input snapshot. Timeline invalidation
