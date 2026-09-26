@@ -829,6 +829,12 @@ fn resolve_metric_current(
                     "strategic outcome input is duplicated",
                 ));
             }
+            if outcome
+                .expires_at_unix_ms
+                .is_some_and(|expires| as_of_unix_ms > expires)
+            {
+                return Ok(None);
+            }
             Ok(match &outcome.value {
                 FactValue::Integer(value) => Some(*value),
                 _ => None,
