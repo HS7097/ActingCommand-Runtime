@@ -1159,33 +1159,41 @@ pub(super) fn reconcile_policy_dispatches(
     if pending.is_empty() {
         return Ok(());
     }
-    let persisted = ledger
-        .query(EventQuery::default())
+    // Every read below is pinned to one position and goes through an index (Workflow #317
+    // rf2), never the whole ledger; the original predicates still select the events.
+    let through = ledger
+        .latest_sequence()
         .map_err(|_| ledger_error("reconcile_policy_dispatches"))?;
     for dispatch in pending {
-        let intent = persisted
-            .iter()
-            .find(|event| {
-                event.event_type() == EventType::PolicyDispatchIntent
-                    && matches!(
-                        event.payload(),
-                        EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
-                            if payload.decision_id() == dispatch.data.decision_id.as_str()
-                    )
-            })
-            .ok_or_else(|| {
-                policy_admission_fatal(
-                    "policy_dispatch_intent_missing",
-                    "reconcile_policy_dispatches",
-                )
-            })?;
-        let lease_granted = persisted.iter().any(|event| {
-            event.sequence() > intent.sequence()
-                && event.event_type() == EventType::LeaseGranted
-                && event.links().request_id() == intent.links().request_id()
-                && event.links().correlation_id() == intent.links().correlation_id()
-                && event.links().instance_id() == intent.links().instance_id()
-        });
+        let intent = policy_dispatch_intent(
+            ledger,
+            &dispatch.data.decision_id,
+            through,
+            "reconcile_policy_dispatches",
+        )?;
+        let lease_granted = !linked_policy_run_events(
+            ledger,
+            EventQuery {
+                from_sequence: Some(intent.sequence().saturating_add(1)),
+                to_sequence: Some(through),
+                event_type: Some(EventType::LeaseGranted),
+                instance_id: intent.links().instance_id().copied(),
+                request_id: intent.links().request_id().copied(),
+                correlation_id: intent.links().correlation_id().copied(),
+                ..EventQuery::default()
+            },
+            through,
+            1,
+            "reconcile_policy_dispatches",
+            |event| {
+                event.sequence() > intent.sequence()
+                    && event.event_type() == EventType::LeaseGranted
+                    && event.links().request_id() == intent.links().request_id()
+                    && event.links().correlation_id() == intent.links().correlation_id()
+                    && event.links().instance_id() == intent.links().instance_id()
+            },
+        )?
+        .is_empty();
         let effect = if lease_granted {
             EffectDisposition::Indeterminate
         } else {
@@ -1223,26 +1231,14 @@ fn reconcile_scheduled_policy_outcomes_for(
     if pending.is_empty() {
         return Ok(());
     }
-    let persisted = ledger
-        .query(EventQuery::default())
+    // Every read below is pinned to one position and goes through an index (Workflow #317
+    // rf2), never the whole ledger; the original predicates still select the events.
+    let through = ledger
+        .latest_sequence()
         .map_err(|_| ledger_error("reconcile_policy_outcomes"))?;
     for decision_id in pending {
-        let intents = persisted
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.payload(),
-                    EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
-                        if payload.decision_id() == decision_id
-                )
-            })
-            .collect::<Vec<_>>();
-        let [intent] = intents.as_slice() else {
-            return Err(policy_admission_fatal(
-                "policy_dispatch_intent_missing",
-                "reconcile_policy_outcomes",
-            ));
-        };
+        let intent =
+            &policy_dispatch_intent(ledger, &decision_id, through, "reconcile_policy_outcomes")?;
         let (
             Some(instance_id),
             Some(request_id),
@@ -1262,17 +1258,30 @@ fn reconcile_scheduled_policy_outcomes_for(
                 "reconcile_policy_outcomes",
             ));
         };
-        let lease_grants = persisted
-            .iter()
-            .filter(|event| {
+        let lease_grants = linked_policy_run_events(
+            ledger,
+            EventQuery {
+                to_sequence: Some(through),
+                event_type: Some(EventType::LeaseGranted),
+                instance_id: Some(*instance_id),
+                request_id: Some(*request_id),
+                correlation_id: Some(*correlation_id),
+                task_id: Some(*task_id),
+                run_id: Some(*run_id),
+                ..EventQuery::default()
+            },
+            through,
+            2,
+            "reconcile_policy_outcomes",
+            |event| {
                 event.event_type() == EventType::LeaseGranted
                     && event.links().instance_id() == Some(instance_id)
                     && event.links().request_id() == Some(request_id)
                     && event.links().correlation_id() == Some(correlation_id)
                     && event.links().task_id() == Some(task_id)
                     && event.links().run_id() == Some(run_id)
-            })
-            .collect::<Vec<_>>();
+            },
+        )?;
         let [lease_granted] = lease_grants.as_slice() else {
             return Err(policy_admission_fatal(
                 "policy_run_lease_fact_not_unique",
@@ -1285,22 +1294,48 @@ fn reconcile_scheduled_policy_outcomes_for(
                 "reconcile_policy_outcomes",
             ));
         };
-        let terminals = persisted
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.event_type(),
-                    EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
-                ) && event.links().correlation_id() == Some(correlation_id)
-                    && event.links().task_id() == Some(task_id)
-                    && event.links().run_id() == Some(run_id)
-                    && event.links().lease_id() == Some(lease_id)
-            })
-            .collect::<Vec<_>>();
-        let (source, input, runtime_ms) = match terminals.as_slice() {
+        let mut terminals = Vec::new();
+        for terminal_type in [
+            EventType::TaskCompleted,
+            EventType::TaskFailed,
+            EventType::TaskCancelled,
+        ] {
+            if terminals.len() > 1 {
+                break;
+            }
+            terminals.extend(linked_policy_run_events(
+                ledger,
+                EventQuery {
+                    to_sequence: Some(through),
+                    event_type: Some(terminal_type),
+                    correlation_id: Some(*correlation_id),
+                    task_id: Some(*task_id),
+                    run_id: Some(*run_id),
+                    lease_id: Some(*lease_id),
+                    ..EventQuery::default()
+                },
+                through,
+                2 - terminals.len(),
+                "reconcile_policy_outcomes",
+                |event| {
+                    matches!(
+                        event.event_type(),
+                        EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+                    ) && event.links().correlation_id() == Some(correlation_id)
+                        && event.links().task_id() == Some(task_id)
+                        && event.links().run_id() == Some(run_id)
+                        && event.links().lease_id() == Some(lease_id)
+                },
+            )?);
+        }
+        let (observed_at_unix_ms, input, runtime_ms) = match terminals.as_slice() {
             [terminal] if terminal.event_type() == EventType::TaskCompleted => {
-                let runtime_ms = recovered_scheduled_task_runtime_ms(&persisted, terminal)?;
-                (*terminal, PolicyExecutionInput::Succeeded, runtime_ms)
+                let runtime_ms = recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
+                (
+                    terminal.timestamp_unix_ms(),
+                    PolicyExecutionInput::Succeeded,
+                    runtime_ms,
+                )
             }
             [terminal] if terminal.event_type() == EventType::TaskFailed => {
                 let class = match terminal.severity() {
@@ -1330,9 +1365,9 @@ fn reconcile_scheduled_policy_outcomes_for(
                         "reconcile_policy_outcomes",
                     ));
                 };
-                let runtime_ms = recovered_scheduled_task_runtime_ms(&persisted, terminal)?;
+                let runtime_ms = recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
                 (
-                    *terminal,
+                    terminal.timestamp_unix_ms(),
                     PolicyExecutionInput::Failed {
                         error_code: error_code.clone(),
                         class,
@@ -1341,13 +1376,27 @@ fn reconcile_scheduled_policy_outcomes_for(
                 )
             }
             [] => {
-                let releases = persisted
-                    .iter()
-                    .filter(|event| scheduled_admission_release_matches(event, intent, lease_id))
-                    .collect::<Vec<_>>();
+                let releases = linked_policy_run_events(
+                    ledger,
+                    EventQuery {
+                        to_sequence: Some(through),
+                        event_type: Some(EventType::LeaseReleased),
+                        instance_id: Some(*instance_id),
+                        request_id: Some(*request_id),
+                        correlation_id: Some(*correlation_id),
+                        task_id: Some(*task_id),
+                        run_id: Some(*run_id),
+                        lease_id: Some(*lease_id),
+                        ..EventQuery::default()
+                    },
+                    through,
+                    2,
+                    "reconcile_policy_outcomes",
+                    |event| scheduled_admission_release_matches(event, intent, lease_id),
+                )?;
                 let release = match releases.as_slice() {
                     [] => continue,
-                    [release] => *release,
+                    [release] => release,
                     _ => {
                         return Err(policy_admission_fatal(
                             "policy_run_release_fact_not_unique",
@@ -1356,7 +1405,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                     }
                 };
                 (
-                    release,
+                    release.timestamp_unix_ms(),
                     PolicyExecutionInput::Failed {
                         error_code: "policy_settlement_interrupted".to_owned(),
                         class: PolicyFailureClass::Severe,
@@ -1371,7 +1420,6 @@ fn reconcile_scheduled_policy_outcomes_for(
                 ));
             }
         };
-        let observed_at_unix_ms = source.timestamp_unix_ms();
         let data = match policy.prepare_execution(
             &decision_id,
             observed_at_unix_ms,
@@ -1449,6 +1497,43 @@ fn linked_policy_run_events(
         if exhausted {
             return Ok(selected);
         }
+    }
+}
+
+/// The one `PolicyDispatchIntent` of `decision_id` through `through`, read with two-event
+/// pages of the intent type index (Workflow #317 rf2). No link names a decision, so the page
+/// query is the event type and the decision is the filter; none or more than one is
+/// `policy_dispatch_intent_missing`.
+fn policy_dispatch_intent(
+    ledger: &GlobalLedger,
+    decision_id: &str,
+    through: u64,
+    operation: &'static str,
+) -> RuntimeHostResult<PersistedEvent> {
+    let mut intents = linked_policy_run_events(
+        ledger,
+        EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(EventType::PolicyDispatchIntent),
+            ..EventQuery::default()
+        },
+        through,
+        2,
+        operation,
+        |event| {
+            matches!(
+                event.payload(),
+                EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                    if payload.decision_id() == decision_id
+            )
+        },
+    )?;
+    match (intents.pop(), intents.is_empty()) {
+        (Some(intent), true) => Ok(intent),
+        _ => Err(policy_admission_fatal(
+            "policy_dispatch_intent_missing",
+            operation,
+        )),
     }
 }
 
@@ -1734,12 +1819,27 @@ pub(crate) fn insert_authoritative_policy_outcome(
 }
 
 fn recovered_scheduled_task_runtime_ms(
-    persisted: &[PersistedEvent],
+    ledger: &GlobalLedger,
+    through: u64,
     terminal: &PersistedEvent,
 ) -> RuntimeHostResult<u64> {
-    let requests = persisted
-        .iter()
-        .filter(|event| {
+    let links = terminal.links();
+    let requests = linked_policy_run_events(
+        ledger,
+        EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(EventType::LabRequest),
+            instance_id: links.instance_id().copied(),
+            request_id: links.request_id().copied(),
+            correlation_id: links.correlation_id().copied(),
+            task_id: links.task_id().copied(),
+            run_id: links.run_id().copied(),
+            ..EventQuery::default()
+        },
+        through,
+        2,
+        "reconcile_policy_outcomes",
+        |event| {
             event.event_type() == EventType::LabRequest
                 && event.links().instance_id() == terminal.links().instance_id()
                 && event.links().request_id() == terminal.links().request_id()
@@ -1747,8 +1847,8 @@ fn recovered_scheduled_task_runtime_ms(
                 && event.links().task_id() == terminal.links().task_id()
                 && event.links().run_id() == terminal.links().run_id()
                 && event.links().lease_id().is_none()
-        })
-        .collect::<Vec<_>>();
+        },
+    )?;
     let [request] = requests.as_slice() else {
         return Err(policy_admission_fatal(
             "policy_run_task_request_not_unique",
