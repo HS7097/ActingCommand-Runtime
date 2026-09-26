@@ -97,15 +97,26 @@ impl HostShared {
         pending: &[String],
         missing_outcomes: &BTreeSet<String>,
     ) -> RuntimeHostResult<Vec<String>> {
-        let persisted = self
+        // Every read below is pinned to one position. Past the dispatch intents, each pending
+        // decision is read through its own run links (Workflow #317 item B), never the whole
+        // ledger; every original predicate still selects the events it counts.
+        let through = self
             .ledger
-            .query(EventQuery::default())
+            .latest_sequence()
+            .map_err(|_| ledger_error("select_policy_settlements"))?;
+        let dispatch_intents = self
+            .ledger
+            .query(EventQuery {
+                to_sequence: Some(through),
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            })
             .map_err(|_| ledger_error("select_policy_settlements"))?;
         let leases = lock(&self.scheduler, "select_policy_settlements")?.active_tokens();
         let runs = lock(&self.contained_runs, "select_policy_settlements")?;
         let mut eligible = Vec::new();
         for decision_id in pending {
-            let intents = persisted
+            let intents = dispatch_intents
                 .iter()
                 .filter(|event| {
                     matches!(
@@ -142,20 +153,36 @@ impl HostShared {
             {
                 continue;
             }
-            let grants = persisted
-                .iter()
-                .filter(|event| {
+            let run_links = EventQuery {
+                to_sequence: Some(through),
+                instance_id: links.instance_id().copied(),
+                correlation_id: links.correlation_id().copied(),
+                task_id: links.task_id().copied(),
+                run_id: links.run_id().copied(),
+                ..EventQuery::default()
+            };
+            let grants = linked_policy_run_events(
+                &self.ledger,
+                EventQuery {
+                    event_type: Some(EventType::LeaseGranted),
+                    request_id: links.request_id().copied(),
+                    ..run_links.clone()
+                },
+                through,
+                2,
+                "select_policy_settlements",
+                |event| {
                     event.event_type() == EventType::LeaseGranted
                         && event.links().instance_id() == links.instance_id()
                         && event.links().request_id() == links.request_id()
                         && event.links().correlation_id() == links.correlation_id()
                         && event.links().task_id() == links.task_id()
                         && event.links().run_id() == links.run_id()
-                })
-                .collect::<Vec<_>>();
+                },
+            )?;
             let grant = match grants.as_slice() {
                 [] => continue,
-                [grant] => *grant,
+                [grant] => grant,
                 _ => {
                     return Err(policy_admission_fatal(
                         "policy_run_lease_fact_not_unique",
@@ -172,9 +199,20 @@ impl HostShared {
             if leases.iter().any(|token| token.lease_id() == *lease_id) {
                 continue;
             }
-            let releases = persisted
-                .iter()
-                .filter(|event| {
+            let lease_links = EventQuery {
+                lease_id: Some(*lease_id),
+                ..run_links.clone()
+            };
+            let releases = linked_policy_run_events(
+                &self.ledger,
+                EventQuery {
+                    event_type: Some(EventType::LeaseReleased),
+                    ..lease_links.clone()
+                },
+                through,
+                2,
+                "select_policy_settlements",
+                |event| {
                     event.event_type() == EventType::LeaseReleased
                         && event.links().instance_id() == links.instance_id()
                         && event.links().request_id().is_some()
@@ -182,28 +220,49 @@ impl HostShared {
                         && event.links().task_id() == links.task_id()
                         && event.links().run_id() == links.run_id()
                         && event.links().lease_id() == Some(lease_id)
-                })
-                .count();
+                },
+            )?
+            .len();
             if releases > 1 {
                 return Err(policy_admission_fatal(
                     "policy_run_release_fact_not_unique",
                     "select_policy_settlements",
                 ));
             }
-            let terminals = persisted
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event.event_type(),
-                        EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
-                    ) && event.links().instance_id() == links.instance_id()
-                        && event.links().request_id().is_some()
-                        && event.links().correlation_id() == links.correlation_id()
-                        && event.links().task_id() == links.task_id()
-                        && event.links().run_id() == links.run_id()
-                        && event.links().lease_id() == Some(lease_id)
-                })
-                .count();
+            let mut terminals = 0;
+            for terminal_type in [
+                EventType::TaskCompleted,
+                EventType::TaskFailed,
+                EventType::TaskCancelled,
+            ] {
+                if terminals > 1 {
+                    break;
+                }
+                terminals += linked_policy_run_events(
+                    &self.ledger,
+                    EventQuery {
+                        event_type: Some(terminal_type),
+                        ..lease_links.clone()
+                    },
+                    through,
+                    2 - terminals,
+                    "select_policy_settlements",
+                    |event| {
+                        matches!(
+                            event.event_type(),
+                            EventType::TaskCompleted
+                                | EventType::TaskFailed
+                                | EventType::TaskCancelled
+                        ) && event.links().instance_id() == links.instance_id()
+                            && event.links().request_id().is_some()
+                            && event.links().correlation_id() == links.correlation_id()
+                            && event.links().task_id() == links.task_id()
+                            && event.links().run_id() == links.run_id()
+                            && event.links().lease_id() == Some(lease_id)
+                    },
+                )?
+                .len();
+            }
             if terminals > 1 {
                 return Err(policy_admission_fatal(
                     "policy_run_terminal_not_unique",
@@ -214,21 +273,20 @@ impl HostShared {
                 // The accepted recovery consumer can settle a released admission
                 // without a task terminal only when no effect was started.
                 if !missing_outcomes.contains(decision_id)
-                    || !persisted
-                        .iter()
-                        .any(|event| scheduled_admission_release_matches(event, intent, lease_id))
-                    || persisted.iter().any(|event| {
-                        event.links().task_id() == links.task_id()
-                            && event.links().run_id() == links.run_id()
-                            && matches!(
-                                event.event_type(),
-                                EventType::TaskEffectIntent
-                                    | EventType::TaskEffectCompleted
-                                    | EventType::InputIntent
-                                    | EventType::InputCommitted
-                                    | EventType::InputFailed
-                            )
-                    })
+                    || linked_policy_run_events(
+                        &self.ledger,
+                        EventQuery {
+                            event_type: Some(EventType::LeaseReleased),
+                            request_id: links.request_id().copied(),
+                            ..lease_links.clone()
+                        },
+                        through,
+                        1,
+                        "select_policy_settlements",
+                        |event| scheduled_admission_release_matches(event, intent, lease_id),
+                    )?
+                    .is_empty()
+                    || policy_run_effect_started(&self.ledger, links, through)?
                 {
                     continue;
                 }
@@ -977,25 +1035,44 @@ impl HostShared {
         let decision_id = &data.decision_id;
         if policy.dispatch_needs_completion(decision_id)? {
             let (dispatch, admission) = policy.completion_data(decision_id)?;
-            let completions = self
-                .ledger
-                .query(EventQuery {
-                    event_type: Some(EventType::PolicyDispatchCompleted),
-                    ..EventQuery::default()
-                })
-                .map_err(|_| ledger_error("read_policy_dispatch_completion"))?;
-            let completions = completions
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event.payload(),
-                        EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
-                            if payload.decision_id() == decision_id.as_str()
-                    )
-                })
-                .collect::<Vec<_>>();
+            let completes_decision = |event: &PersistedEvent| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
+                        if payload.decision_id() == decision_id.as_str()
+                )
+            };
+            // A scheduled run's completion carries that run's links, whether this host or the
+            // ledger's settlement recovery appended it: read them through the link index
+            // (Workflow #317 item C). Without a run context every completion is read.
+            let completions = match context {
+                Some(context) => linked_policy_run_events(
+                    &self.ledger,
+                    EventQuery {
+                        event_type: Some(EventType::PolicyDispatchCompleted),
+                        correlation_id: Some(context.correlation_id()),
+                        task_id: Some(context.task_id()),
+                        run_id: Some(context.run_id()),
+                        ..EventQuery::default()
+                    },
+                    u64::MAX,
+                    2,
+                    "read_policy_dispatch_completion",
+                    completes_decision,
+                )?,
+                None => self
+                    .ledger
+                    .query(EventQuery {
+                        event_type: Some(EventType::PolicyDispatchCompleted),
+                        ..EventQuery::default()
+                    })
+                    .map_err(|_| ledger_error("read_policy_dispatch_completion"))?
+                    .into_iter()
+                    .filter(|event| completes_decision(event))
+                    .collect::<Vec<_>>(),
+            };
             let completion = match completions.as_slice() {
-                [completion] => (**completion).clone(),
+                [completion] => completion.clone(),
                 [] => self.append_event_raw(
                     EventSeverity::Info,
                     EventSource::Scheduler,
@@ -1337,6 +1414,87 @@ fn scheduled_admission_release_matches(
         && event.links().task_id() == intent.links().task_id()
         && event.links().run_id() == intent.links().run_id()
         && event.links().lease_id() == Some(lease_id)
+}
+
+/// The events of one link-indexed query through `through` that `keep` selects, read two per
+/// page and stopping at `cap` (Workflow #317 items B and C). The query only narrows the rows
+/// read; `keep` is the original predicate over the whole ledger.
+fn linked_policy_run_events(
+    ledger: &GlobalLedger,
+    query: EventQuery,
+    through: u64,
+    cap: usize,
+    operation: &'static str,
+    mut keep: impl FnMut(&PersistedEvent) -> bool,
+) -> RuntimeHostResult<Vec<PersistedEvent>> {
+    const LINKED_PAGE_EVENTS: usize = 2;
+    let mut selected = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = ledger
+            .query_page(query.clone(), after, through, LINKED_PAGE_EVENTS)
+            .map_err(|_| ledger_error(operation))?;
+        let exhausted = page.len() < LINKED_PAGE_EVENTS;
+        if let Some(last) = page.last() {
+            after = last.sequence();
+        }
+        for event in page {
+            if keep(&event) {
+                selected.push(event);
+                if selected.len() >= cap {
+                    return Ok(selected);
+                }
+            }
+        }
+        if exhausted {
+            return Ok(selected);
+        }
+    }
+}
+
+/// Whether any effect of this run was started, read through its task and run links.
+fn policy_run_effect_started(
+    ledger: &GlobalLedger,
+    links: &actingcommand_contract::EventLinks,
+    through: u64,
+) -> RuntimeHostResult<bool> {
+    for effect_type in [
+        EventType::TaskEffectIntent,
+        EventType::TaskEffectCompleted,
+        EventType::InputIntent,
+        EventType::InputCommitted,
+        EventType::InputFailed,
+    ] {
+        let started = linked_policy_run_events(
+            ledger,
+            EventQuery {
+                to_sequence: Some(through),
+                event_type: Some(effect_type),
+                task_id: links.task_id().copied(),
+                run_id: links.run_id().copied(),
+                ..EventQuery::default()
+            },
+            through,
+            1,
+            "select_policy_settlements",
+            |event| {
+                event.links().task_id() == links.task_id()
+                    && event.links().run_id() == links.run_id()
+                    && matches!(
+                        event.event_type(),
+                        EventType::TaskEffectIntent
+                            | EventType::TaskEffectCompleted
+                            | EventType::InputIntent
+                            | EventType::InputCommitted
+                            | EventType::InputFailed
+                    )
+            },
+        )?;
+        if !started.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(super) fn recover_authoritative_policy_outcomes(

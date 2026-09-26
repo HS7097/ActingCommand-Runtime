@@ -458,6 +458,18 @@ pub(crate) struct InstanceFactStore {
 }
 
 impl InstanceFactStore {
+    /// The live store's active records, only when it has replayed exactly through
+    /// `ledger_position` (Workflow #317 item E); `None` sends the caller to
+    /// `active_records_at`, which replays the ledger for any other position.
+    pub(crate) fn active_records_if_at(&self, ledger_position: u64) -> Option<Vec<FactRecord>> {
+        (ledger_position != 0 && ledger_position == self.last_sequence).then(|| {
+            self.active
+                .values()
+                .map(|stored| stored.record.clone())
+                .collect()
+        })
+    }
+
     pub(crate) fn active_records_at(
         ledger: &GlobalLedger,
         ledger_position: u64,

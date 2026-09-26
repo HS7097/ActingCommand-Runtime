@@ -3,7 +3,44 @@
 use super::agent_control::append_agent_wake;
 use super::*;
 
+/// Every `ArtifactVerified` reference read so far, in ledger order (Workflow #317 item C).
+/// The first read after start reads every verified event; each later read starts after the
+/// last verified event already seen.
+#[derive(Default)]
+pub(super) struct VerifiedArtifactIndex {
+    through: u64,
+    references: Vec<(u64, ProjectedArtifactReference)>,
+}
+
 impl HostShared {
+    /// Brings the verified artifact index up to the ledger tail and hands `read` every
+    /// verified reference with its event sequence, in ledger order.
+    fn read_verified_artifacts<T>(
+        &self,
+        operation: &'static str,
+        read: impl FnOnce(&[(u64, ProjectedArtifactReference)]) -> T,
+    ) -> RuntimeHostResult<T> {
+        let mut index = lock(&self.verified_artifacts, operation)?;
+        let events = self
+            .ledger
+            .query(EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                from_sequence: (index.through != 0).then_some(index.through + 1),
+                ..EventQuery::default()
+            })
+            .map_err(|_| ledger_error(operation))?;
+        for event in &events {
+            index.references.extend(
+                event
+                    .artifacts()
+                    .iter()
+                    .map(|artifact| (event.sequence(), artifact.project(true))),
+            );
+            index.through = event.sequence();
+        }
+        Ok(read(&index.references))
+    }
+
     pub(super) fn record_policy_planning_signal(
         &self,
         signal: PolicyPlanningSignalEventData,
@@ -427,17 +464,17 @@ impl HostShared {
     }
 
     fn verify_proposal_reports(&self, proposal: &CatalogProposal) -> Result<(), RequestFailure> {
-        let verified_events = self
-            .ledger
-            .query(EventQuery {
-                event_type: Some(EventType::ArtifactVerified),
-                ..EventQuery::default()
+        let verified = self
+            .read_verified_artifacts("verify_proposal_reports", |verified| {
+                proposal
+                    .report_refs()
+                    .iter()
+                    .map(|reference| proposal_report_is_verified(verified, reference))
+                    .collect::<Vec<_>>()
             })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error("verify_proposal_reports"))
-            })?;
-        for reference in proposal.report_refs() {
-            if !proposal_report_is_verified(&verified_events, reference) {
+            .map_err(RequestFailure::poison_without_terminal)?;
+        for (reference, verified) in proposal.report_refs().iter().zip(verified) {
+            if !verified {
                 return Err(proposal_request_failure(RuntimeHostError::request(
                     "proposal_report_unverified",
                     "verify_proposal_reports",
@@ -624,15 +661,15 @@ impl HostShared {
         report: &StrategicReport,
         evidence: &[ProjectedArtifactReference],
     ) -> RuntimeHostResult<()> {
-        let verified_events = self
-            .ledger
-            .query(EventQuery {
-                event_type: Some(EventType::ArtifactVerified),
-                ..EventQuery::default()
-            })
-            .map_err(|_| ledger_error("verify_strategic_evidence"))?;
+        let verified_sequences =
+            self.read_verified_artifacts("verify_strategic_evidence", |verified| {
+                evidence
+                    .iter()
+                    .map(|reference| proposal_report_verified_sequence(verified, reference))
+                    .collect::<Vec<_>>()
+            })?;
         let mut pointers = Vec::with_capacity(evidence.len());
-        for reference in evidence {
+        for (reference, verified_sequence) in evidence.iter().zip(verified_sequences) {
             reference.validate().map_err(|_| {
                 RuntimeHostError::request(
                     "strategic_evidence_invalid",
@@ -640,7 +677,6 @@ impl HostShared {
                     RuntimeErrorCode::InvalidRequest,
                 )
             })?;
-            let verified_sequence = proposal_report_verified_sequence(&verified_events, reference);
             if reference.object_key().is_none()
                 || reference.redaction_state() == ArtifactRedactionState::Pending
                 || verified_sequence.is_none()
@@ -678,22 +714,17 @@ impl HostShared {
         bytes: &[u8],
     ) -> RuntimeHostResult<(ProjectedArtifactReference, Option<PreparedArtifact>)> {
         let sha256 = format!("sha256:{:x}", Sha256::digest(bytes));
-        let events = self
-            .ledger
-            .query(EventQuery {
-                event_type: Some(EventType::ArtifactVerified),
-                ..EventQuery::default()
-            })
-            .map_err(|_| ledger_error("find_strategic_report"))?;
+        let matching = self.read_verified_artifacts("find_strategic_report", |verified| {
+            verified
+                .iter()
+                .filter(|(_, reference)| {
+                    reference.kind() == ArtifactKind::StrategyReport && reference.sha256() == sha256
+                })
+                .map(|(_, reference)| reference.clone())
+                .collect::<Vec<_>>()
+        })?;
         let mut existing = Vec::new();
-        for reference in events
-            .iter()
-            .flat_map(PersistedEvent::artifacts)
-            .filter(|reference| {
-                reference.kind() == ArtifactKind::StrategyReport && reference.sha256() == sha256
-            })
-        {
-            let reference = reference.project(true);
+        for reference in matching {
             existing.push((artifact_id_text(&reference)?, reference));
         }
         existing.sort_by(|left, right| left.0.cmp(&right.0));
@@ -854,23 +885,19 @@ fn proposal_request_failure(error: RuntimeHostError) -> RequestFailure {
 }
 
 fn proposal_report_is_verified(
-    events: &[PersistedEvent],
+    verified: &[(u64, ProjectedArtifactReference)],
     reference: &ProjectedArtifactReference,
 ) -> bool {
-    proposal_report_verified_sequence(events, reference).is_some()
+    proposal_report_verified_sequence(verified, reference).is_some()
 }
 
 fn proposal_report_verified_sequence(
-    events: &[PersistedEvent],
+    verified: &[(u64, ProjectedArtifactReference)],
     reference: &ProjectedArtifactReference,
 ) -> Option<u64> {
-    events.iter().find_map(|event| {
-        event
-            .artifacts()
-            .iter()
-            .any(|artifact| artifact.project(true) == *reference)
-            .then_some(event.sequence())
-    })
+    verified
+        .iter()
+        .find_map(|(sequence, artifact)| (artifact == reference).then_some(*sequence))
 }
 
 fn strategic_evidence_pointer(

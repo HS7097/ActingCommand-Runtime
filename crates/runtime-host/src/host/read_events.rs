@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::project_interface::{
-    ProjectDiagnosticProjection, ProjectInterfaceProjection, retain_recent_diagnostics,
+    MAX_PROJECT_DIAGNOSTICS, ProjectDiagnosticProjection, ProjectInterfaceProjection,
+    retain_recent_diagnostics,
 };
 
 impl HostShared {
@@ -37,11 +38,18 @@ impl HostShared {
                 RuntimeErrorCode::ProtocolInvalid,
             )));
         }
-        let facts = InstanceFactStore::active_records_at(&self.ledger, ledger_position)
+        // The live fact store answers the position it has replayed exactly through (Workflow
+        // #317 item E); any other position replays the ledger.
+        let live_facts =
+            lock(&self.facts, "project_runtime_facts")?.active_records_if_at(ledger_position);
+        let facts = match live_facts {
+            Some(facts) => facts,
+            None => InstanceFactStore::active_records_at(&self.ledger, ledger_position)
+                .map_err(RequestFailure::poison_without_terminal)?,
+        };
+        let approvals = lock(&self.approval_records, "project_runtime_approvals")?
+            .records_at(&self.ledger, Arc::clone(&self.state), ledger_position)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let approvals =
-            ApprovalProjection::records_at(&self.ledger, Arc::clone(&self.state), ledger_position)
-                .map_err(RequestFailure::poison_without_terminal)?;
         let (catalog, decisions) = {
             let mut policy = lock(&self.policy, "project_runtime_policy")?;
             policy
@@ -63,24 +71,7 @@ impl HostShared {
                 ),
             ));
         }
-        let diagnostics = self
-            .ledger
-            .query(EventQuery {
-                to_sequence: Some(ledger_position),
-                minimum_severity: Some(EventSeverity::Warning),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error("project_runtime_diagnostics"))
-            })?
-            .into_iter()
-            .map(|event| ProjectDiagnosticProjection {
-                sequence: event.sequence(),
-                timestamp_unix_ms: event.timestamp_unix_ms(),
-                severity: event.severity(),
-                event_type: event.event_type(),
-            })
-            .collect();
+        let diagnostics = self.recent_project_diagnostics(ledger_position)?;
         let (state, source) = self.observe_runtime_state(validated, || {
             let status = self.control_plane_status_projection()?;
             let fatal = self
@@ -120,6 +111,60 @@ impl HostShared {
                 response: Box::new(response),
             },
         })
+    }
+
+    /// The most recent diagnostics at or before `ledger_position`, in ledger order. They are
+    /// read backwards in doubling sequence windows and the read stops once the projection cap
+    /// is filled (Workflow #317 item C); fewer diagnostics than the cap read every window.
+    fn recent_project_diagnostics(
+        &self,
+        ledger_position: u64,
+    ) -> Result<Vec<ProjectDiagnosticProjection>, RequestFailure> {
+        let query = EventQuery {
+            to_sequence: Some(ledger_position),
+            minimum_severity: Some(EventSeverity::Warning),
+            ..EventQuery::default()
+        };
+        let mut recent = VecDeque::new();
+        let mut upper = ledger_position;
+        let mut window = MAX_PROJECT_DIAGNOSTICS as u64;
+        while upper > 0 && recent.len() < MAX_PROJECT_DIAGNOSTICS {
+            let lower = upper.saturating_sub(window);
+            let mut older = Vec::new();
+            let mut after = lower;
+            loop {
+                let page = self
+                    .ledger
+                    .query_page(query.clone(), after, upper, MAX_PROJECT_DIAGNOSTICS)
+                    .map_err(|_| {
+                        RequestFailure::poison_without_terminal(ledger_error(
+                            "project_runtime_diagnostics",
+                        ))
+                    })?;
+                let exhausted = page.len() < MAX_PROJECT_DIAGNOSTICS;
+                if let Some(last) = page.last() {
+                    after = last.sequence();
+                }
+                older.extend(page.into_iter().map(|event| ProjectDiagnosticProjection {
+                    sequence: event.sequence(),
+                    timestamp_unix_ms: event.timestamp_unix_ms(),
+                    severity: event.severity(),
+                    event_type: event.event_type(),
+                }));
+                if older.len() > MAX_PROJECT_DIAGNOSTICS {
+                    older.drain(..older.len() - MAX_PROJECT_DIAGNOSTICS);
+                }
+                if exhausted {
+                    break;
+                }
+            }
+            for diagnostic in older.into_iter().rev() {
+                recent.push_front(diagnostic);
+            }
+            upper = lower;
+            window = window.saturating_mul(2);
+        }
+        Ok(retain_recent_diagnostics(recent.into()))
     }
 
     pub(super) fn subscribe_events(
