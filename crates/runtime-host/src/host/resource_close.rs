@@ -233,11 +233,13 @@ impl HostShared {
     }
 
     /// The instance admission guard excludes capture registration and business native calls.
+    /// A dedicated close lease is released with `release_reason` once the close is confirmed.
     pub(super) fn close_retained_instance_while_guarded(
         &self,
         instance_id: InstanceId,
         links: EventLinksDraft,
         reuse_active_lease: bool,
+        release_reason: LeaseReleaseReason,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
         if !self
@@ -326,13 +328,7 @@ impl HostShared {
             .err()
             .is_none_or(|error| error.resource_quiescence() == Some(ResourceQuiescence::Confirmed));
         if acquired && confirmed {
-            self.cleanup_token_inner(
-                &token,
-                connection_id,
-                LeaseReleaseReason::HostShutdown,
-                None,
-                Some(admission),
-            )?;
+            self.cleanup_token_inner(&token, connection_id, release_reason, None, Some(admission))?;
         }
         Ok(result)
     }
@@ -399,6 +395,7 @@ impl HostShared {
             instance_id,
             links.clone(),
             true,
+            LeaseReleaseReason::HostShutdown,
             admission,
         ) {
             Ok(Ok(())) => Ok(primary),

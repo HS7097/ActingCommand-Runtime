@@ -44,6 +44,10 @@ Readonly, monitor and contained-task capture failures share this close path unde
 the instance admission mutex. They can reuse a current business lease only when
 its existing close checks permit it. That lease remains with its original cleanup
 owner. A dedicated close lease is released by the same Host cleanup implementation.
+An instance scheduling pause hands its device back through this path without reusing a
+lease (`scheduling-pause.md`, stage (c)); its dedicated close lease is released with
+`LeaseReleaseReason::InstancePaused`, which names no transfer, where the other callers
+release with `HostShutdown`.
 The primary capture failure and any actual cleanup cause retain their existing
 typed GlobalLedger representation.
 

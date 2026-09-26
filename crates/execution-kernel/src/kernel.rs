@@ -221,6 +221,24 @@ impl ExecutionKernel {
         Ok((frame, reference))
     }
 
+    /// Workflow #191 ps2: opens the instance's input and capture backends now (an instance
+    /// resume reconnects at once) through the provider opens the lazy paths use; a backend the
+    /// session holds is reused. Returns the reports of the opens made. The Host releases its
+    /// journal lock after session registration and closes a failed session itself, as after a
+    /// retained capture failure.
+    pub fn open_instance_backends<G>(
+        &self,
+        instance_alias: &str,
+        registration_guard: G,
+        memory: actingcommand_device::FrameMemoryBudget,
+    ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
+        let session = self.session(instance_alias)?;
+        drop(registration_guard);
+        session
+            .open_backends(memory)
+            .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
+    }
+
     pub fn finish_failed_capture(
         &self,
         primary: ExecutionKernelError,

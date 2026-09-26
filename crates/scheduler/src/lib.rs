@@ -81,6 +81,9 @@ pub enum LeaseReleaseReason {
     Expired,
     BackendFailure,
     HostShutdown,
+    /// The dedicated close lease of an instance scheduling pause handing the device back
+    /// (Workflow #191 ps2); it names no transfer.
+    InstancePaused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

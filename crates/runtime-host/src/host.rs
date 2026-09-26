@@ -3133,6 +3133,7 @@ impl HostShared {
                             instance_id,
                             EventLinksDraft::default(),
                             false,
+                            LeaseReleaseReason::HostShutdown,
                             &admission,
                         )?
                         .map_err(|error| {

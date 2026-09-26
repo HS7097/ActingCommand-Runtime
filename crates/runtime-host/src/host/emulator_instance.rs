@@ -120,6 +120,7 @@ impl HostShared {
             instance_id,
             links.clone(),
             false,
+            LeaseReleaseReason::HostShutdown,
             &admission,
         ) {
             Ok(Ok(())) => {}

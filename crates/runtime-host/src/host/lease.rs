@@ -1786,7 +1786,8 @@ impl HostShared {
             LeaseReleaseReason::Explicit
             | LeaseReleaseReason::Preempted
             | LeaseReleaseReason::BackendFailure
-            | LeaseReleaseReason::HostShutdown => None,
+            | LeaseReleaseReason::HostShutdown
+            | LeaseReleaseReason::InstancePaused => None,
         };
         if let Some(transfer_reason) = transfer_reason {
             let transfer = lock(&self.scheduler, "prepare_cleanup_transfer")?
@@ -2259,6 +2260,8 @@ impl HostShared {
             "cleanup_governance_connection",
         )?
         .remove(&connection_id);
+        // Workflow #191 ps2: a closed connection sends no further reset.
+        self.forget_client_resets(connection_id)?;
         let queued_instances = lock(&self.scheduler, "list_connection_queues")?
             .queued_instance_ids_for_connection(connection_id);
         for instance_id in queued_instances {

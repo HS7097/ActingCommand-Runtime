@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::contained_task::{SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, SchedulingPauseDeadlines};
 use super::*;
 use actingcommand_contract::{
-    InstancePauseStage, InstancePauseState, SchedulingPauseScope, SchedulingPauseState,
+    BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState,
+    SchedulingDrainSummary, SchedulingPauseScope, SchedulingPauseState,
+    SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
 
 fn validate_static_fact_pool_authority(
@@ -126,9 +129,43 @@ pub(super) struct SchedulingPauseTable {
     global: Option<SchedulingPauseState>,
     instance_revisions: BTreeMap<String, u64>,
     instances: BTreeMap<String, InstancePauseState>,
+    /// Workflow #191 ps2: per instance alias, the connections whose contained run ended
+    /// cancelled and whose client has not reset the instance yet (`SafeReset`). An instance
+    /// pause hands the device back only once none is left.
+    client_resets: BTreeMap<String, BTreeSet<ConnectionId>>,
 }
 
 impl SchedulingPauseTable {
+    /// Moves an instance pause of `revision` from stage `from` to `to`; any other state means
+    /// the pause this request set was lost.
+    fn advance_instance(
+        &mut self,
+        instance_alias: &str,
+        revision: u64,
+        from: InstancePauseStage,
+        to: InstancePauseStage,
+    ) -> RuntimeHostResult<()> {
+        let state = self
+            .instances
+            .get_mut(instance_alias)
+            .filter(|state| state.revision == revision && state.stage == from)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "scheduling_pause_state_lost",
+                    "pause_scheduling",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        state.stage = to;
+        Ok(())
+    }
+
+    fn awaits_client_reset(&self, instance_alias: &str) -> bool {
+        self.client_resets
+            .get(instance_alias)
+            .is_some_and(|connections| !connections.is_empty())
+    }
+
     /// The deferral code a policy dispatch to `instance_alias` meets, if a gate is closed.
     pub(super) fn deferral(&self, instance_alias: &str) -> Option<&'static str> {
         if self.global.is_some() {
@@ -175,6 +212,68 @@ fn scheduling_pause_denied(code: &'static str, operation: &'static str) -> Reque
         RuntimeReceiptState::Denied,
         None,
     )
+}
+
+/// Workflow #191 ps2: a failed device hand-back fails the pause request (`Failed`); a fatal
+/// error poisons it.
+fn scheduling_pause_release_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+    }
+}
+
+/// Workflow #191 ps2: the self-check of an instance resume, projected from the open reports of
+/// its own reconnect. Capture: the last Capture or Nemu pair report, `ok` when its open status
+/// and `capture_check` passed, with its frame size and selected backend. Touch: the last Input or
+/// Nemu pair report, `ok` when its open status and `input_check` passed, with its selected
+/// backend and its connection's bounds (the input geometry, else the handshake limits). A side
+/// without a report of this reconnect (its backend was reused) is `ok: false` with no values.
+fn scheduling_resume_selfcheck(
+    observations: &[actingcommand_device::BackendOpenObservation],
+    failure_code: Option<&str>,
+) -> SchedulingResumeSelfCheck {
+    let report = |entry: BackendOpenEntry| {
+        observations
+            .iter()
+            .rev()
+            .map(|observation| &observation.report)
+            .find(|report| report.entry == entry || report.entry == BackendOpenEntry::NemuPair)
+    };
+    let passed = BackendObservationStatus::Passed;
+    let capture = report(BackendOpenEntry::Capture);
+    let touch = report(BackendOpenEntry::Input);
+    let positive = |x: i32, y: i32| (x > 0 && y > 0).then_some((x, y));
+    let bounds = touch.and_then(|report| {
+        report
+            .input_geometry
+            .as_ref()
+            .and_then(|geometry| positive(geometry.natural_max_x, geometry.natural_max_y))
+            .or_else(|| {
+                report
+                    .handshake
+                    .as_ref()
+                    .and_then(|handshake| positive(handshake.max_x, handshake.max_y))
+            })
+    });
+    SchedulingResumeSelfCheck {
+        capture: SchedulingResumeCaptureCheck {
+            ok: capture
+                .is_some_and(|report| report.status == passed && report.capture_check == passed),
+            width: capture.and_then(|report| report.frame_width),
+            height: capture.and_then(|report| report.frame_height),
+            capture_backend: capture.and_then(|report| report.selected.clone()),
+        },
+        touch: SchedulingResumeTouchCheck {
+            ok: touch.is_some_and(|report| report.status == passed && report.input_check == passed),
+            backend: touch.and_then(|report| report.selected.clone()),
+            max_x: bounds.map(|(max_x, _)| max_x),
+            max_y: bounds.map(|(_, max_y)| max_y),
+            invasive: false,
+        },
+        failure_code: failure_code.map(str::to_owned),
+    }
 }
 
 struct PolicyAdmissionAppender<'a> {
@@ -1370,12 +1469,14 @@ impl HostShared {
         }
     }
 
-    /// `PauseScheduling` (Workflow #191 ps1). `Global` closes the dispatch gate of every
+    /// `PauseScheduling` (Workflow #191 ps1, ps2). `Global` closes the dispatch gate of every
     /// instance and closes no device session. `Instance` closes the gate of one physical
-    /// instance at once (stage `Draining`), drains its in-flight contained runs and answers
-    /// once none is left (stage `Paused`); a failed drain lifts the gate again.
+    /// instance at once (stage `Draining`), drains its in-flight contained runs (stage
+    /// `Paused`), hands its device back by closing its device session (stage `Released`, ps2)
+    /// and then answers; a failed stage lifts the gate again.
     pub(super) fn pause_scheduling(
         &self,
+        request: &ValidatedRuntimeRequest<'_>,
         scope: &SchedulingPauseScope,
         reason_code: &str,
         drain_timeout_ms: u64,
@@ -1436,34 +1537,40 @@ impl HostShared {
                 (instance_alias, instance_id, revision)
             }
         };
-        match self.drain_contained_runs_for_pause(instance_id, drain_timeout_ms) {
-            Ok(drained) => {
-                let mut table = lock(&self.scheduling_pause, "finish_instance_pause_drain")?;
-                let state = table
-                    .instances
-                    .get_mut(instance_alias)
-                    .filter(|state| {
-                        state.revision == revision && state.stage == InstancePauseStage::Draining
-                    })
-                    .ok_or_else(|| {
-                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                            "scheduling_pause_state_lost",
-                            "pause_scheduling",
-                            RuntimeErrorCode::RuntimeFatal,
-                        ))
-                    })?;
-                state.stage = InstancePauseStage::Paused;
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Completed,
-                    terminal: None,
-                    result: RuntimeResult::SchedulingPaused {
-                        scope: scope.clone(),
-                        revision,
-                        drained: Some(drained),
-                    },
-                })
-            }
-            // No half-open pause: the failed drain lifts the gate it closed.
+        let staged = SchedulingPauseDeadlines::after(drain_timeout_ms).and_then(|deadlines| {
+            let mut drained = self.drain_contained_runs_for_pause(instance_id, deadlines)?;
+            lock(&self.scheduling_pause, "finish_instance_pause_drain")?.advance_instance(
+                instance_alias,
+                revision,
+                InstancePauseStage::Draining,
+                InstancePauseStage::Paused,
+            )?;
+            self.release_paused_instance(
+                request,
+                instance_alias,
+                instance_id,
+                deadlines,
+                &mut drained,
+            )?;
+            lock(&self.scheduling_pause, "finish_instance_pause_release")?.advance_instance(
+                instance_alias,
+                revision,
+                InstancePauseStage::Paused,
+                InstancePauseStage::Released,
+            )?;
+            Ok(drained)
+        });
+        match staged {
+            Ok(drained) => Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: None,
+                result: RuntimeResult::SchedulingPaused {
+                    scope: scope.clone(),
+                    revision,
+                    drained: Some(drained),
+                },
+            }),
+            // No half-open pause: a failed stage lifts the gate it closed.
             Err(failure) => {
                 match lock(&self.scheduling_pause, "lift_failed_instance_pause")
                     .and_then(|mut table| table.lift_instance(instance_alias))
@@ -1475,15 +1582,130 @@ impl HostShared {
         }
     }
 
-    /// `ResumeScheduling` (Workflow #191 ps1): lifts the matching gate and bumps its revision.
-    /// An instance whose pause is still draining cannot be resumed yet.
+    /// Workflow #191 ps2 (c): hands the paused instance's device back. Right before the close,
+    /// under the instance admission guard, it re-checks that nothing still uses the device: a
+    /// non-empty lease queue fails at once (`TransferNotSafe`); a contained run that started
+    /// after (b) (a policy dispatch admitted before the gate closed) is drained again under the
+    /// pause's deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an
+    /// active lease are waited for until the grace deadline (`scheduling_pause_release_busy`).
+    /// The device session then closes through `close_retained_instance_while_guarded` without
+    /// reusing a lease: the dedicated close lease is released with
+    /// `LeaseReleaseReason::InstancePaused`. An instance with no device session open closes
+    /// nothing.
+    fn release_paused_instance(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        deadlines: SchedulingPauseDeadlines,
+        drained: &mut SchedulingDrainSummary,
+    ) -> Result<(), RequestFailure> {
+        // A policy admission that read the gate before (a) holds this gate until its lease is
+        // granted or refused; passing it once makes that lease visible to the check below.
+        drop(lock(
+            &self.governance_write_gate,
+            "await_policy_admissions_for_pause",
+        )?);
+        let links = self
+            .events
+            .request_links(request, Some(instance_id), None, None);
+        loop {
+            if let Some(error) = self
+                .fatal
+                .current()
+                .map_err(RequestFailure::poison_without_terminal)?
+            {
+                return Err(RequestFailure::poison_without_terminal(error));
+            }
+            if self.fatal.is_shutdown_requested() {
+                return Err(scheduling_pause_release_failure(RuntimeHostError::request(
+                    "scheduling_pause_release_interrupted",
+                    "release_paused_instance",
+                    RuntimeErrorCode::RuntimeUnavailable,
+                )));
+            }
+            let instance_guard = self.instance_guard(instance_id)?;
+            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let (lease_held, queue_waiting) = {
+                let scheduler = lock(&self.scheduler, "read_released_instance_lease")?;
+                (
+                    scheduler.active_lease(instance_id).is_some(),
+                    scheduler.queued_count(instance_id) > 0,
+                )
+            };
+            // The close path's own rule (`prepare_resource_close`: a non-empty queue is
+            // `TransferNotSafe`), applied before any wait: a queued client waits for the device.
+            if queue_waiting {
+                return Err(scheduling_pause_release_failure(
+                    RuntimeHostError::scheduler(
+                        "prepare_resource_close_lease",
+                        &SchedulerError::TransferNotSafe,
+                    ),
+                ));
+            }
+            let run_in_flight = lock(&self.contained_runs, "read_released_instance_runs")?
+                .values()
+                .any(|control| control.instance_id == instance_id);
+            let reset_awaited = lock(&self.scheduling_pause, "read_awaited_client_resets")?
+                .awaits_client_reset(instance_alias);
+            if !run_in_flight && !reset_awaited && !lease_held {
+                return match self.close_retained_instance_while_guarded(
+                    instance_id,
+                    links,
+                    false,
+                    LeaseReleaseReason::InstancePaused,
+                    &admission,
+                ) {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(close_error)) => Err(scheduling_pause_release_failure(
+                        RuntimeHostError::execution("close_paused_instance_session", &close_error),
+                    )),
+                    Err(error) => Err(scheduling_pause_release_failure(error)),
+                };
+            }
+            drop(admission);
+            if run_in_flight {
+                let again = self.drain_contained_runs_for_pause(instance_id, deadlines)?;
+                let overflow = || {
+                    RuntimeHostError::fatal(
+                        "scheduling_pause_drain_count_overflow",
+                        "release_paused_instance",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                };
+                drained.finished = drained
+                    .finished
+                    .checked_add(again.finished)
+                    .ok_or_else(overflow)?;
+                drained.cancelled = drained
+                    .cancelled
+                    .checked_add(again.cancelled)
+                    .ok_or_else(overflow)?;
+                continue;
+            }
+            if Instant::now() >= deadlines.grace {
+                return Err(scheduling_pause_release_failure(RuntimeHostError::request(
+                    "scheduling_pause_release_busy",
+                    "release_paused_instance",
+                    RuntimeErrorCode::LeaseBusy,
+                )));
+            }
+            thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);
+        }
+    }
+
+    /// `ResumeScheduling` (Workflow #191 ps1, ps2): lifts the matching gate and bumps its
+    /// revision. An instance whose pause is still draining (`Draining`) or handing its device
+    /// back (`Paused`) cannot be resumed yet. An instance resume then reconnects the device at
+    /// once instead of at the next lazy open (ps2); a global resume reconnects nothing.
     pub(super) fn resume_scheduling(
         &self,
+        request: &ValidatedRuntimeRequest<'_>,
         scope: &SchedulingPauseScope,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
-        let revision = match scope {
-            SchedulingPauseScope::Global => {
+        let SchedulingPauseScope::Instance { instance_alias } = scope else {
+            let revision = {
+                let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
                 if table.global.is_none() {
                     return Err(scheduling_pause_denied(
                         "scheduling_not_paused",
@@ -1492,34 +1714,172 @@ impl HostShared {
                 }
                 table.global = None;
                 next_scheduling_pause_revision(&mut table.global_revision)?
-            }
-            SchedulingPauseScope::Instance { instance_alias } => {
-                match table.instances.get(instance_alias).map(|state| state.stage) {
-                    None => {
-                        return Err(scheduling_pause_denied(
-                            "scheduling_not_paused",
-                            "resume_scheduling",
-                        ));
-                    }
-                    Some(InstancePauseStage::Draining) => {
-                        return Err(scheduling_pause_denied(
-                            "scheduling_pause_draining",
-                            "resume_scheduling",
-                        ));
-                    }
-                    Some(InstancePauseStage::Paused) => table.lift_instance(instance_alias)?,
+            };
+            return Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: None,
+                result: RuntimeResult::SchedulingResumed {
+                    scope: scope.clone(),
+                    revision,
+                    selfcheck: None,
+                },
+            });
+        };
+        let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+        // The admission guard spans the lift and the reconnect: a dispatch the lifted gate admits
+        // waits for the reconnect, so the self-check reports this resume's own opens.
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let revision = {
+            let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
+            match table.instances.get(instance_alias).map(|state| state.stage) {
+                None => {
+                    return Err(scheduling_pause_denied(
+                        "scheduling_not_paused",
+                        "resume_scheduling",
+                    ));
                 }
+                Some(InstancePauseStage::Draining) => {
+                    return Err(scheduling_pause_denied(
+                        "scheduling_pause_draining",
+                        "resume_scheduling",
+                    ));
+                }
+                Some(InstancePauseStage::Paused) => {
+                    return Err(scheduling_pause_denied(
+                        "scheduling_pause_releasing",
+                        "resume_scheduling",
+                    ));
+                }
+                Some(InstancePauseStage::Released) => table.lift_instance(instance_alias)?,
             }
         };
+        let selfcheck =
+            self.reconnect_resumed_instance(request, instance_alias, instance_id, &admission)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::SchedulingResumed {
                 scope: scope.clone(),
                 revision,
-                selfcheck: None,
+                selfcheck: Some(selfcheck),
             },
         })
+    }
+
+    /// Workflow #191 ps2: the reconnect of an instance resume. It opens the instance's input and
+    /// capture backends through `ExecutionKernel::open_instance_backends` and records the opens
+    /// as every open is recorded (`backend.open_observed`, the `backend.selfcheck.*` facts and the
+    /// availability they gate). A failed open is closed through the capture-failure close path
+    /// and reported in the self-check with its device code; it never rolls the resume back and is
+    /// not retried. Only an unconfirmed close or a failed record fails the request.
+    fn reconnect_resumed_instance(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        admission: &MutexGuard<'_, ()>,
+    ) -> Result<SchedulingResumeSelfCheck, RequestFailure> {
+        let links = self
+            .events
+            .request_links(request, Some(instance_id), None, None);
+        // The frame memory owner of every capture path: the first frame of a capture opened here
+        // is charged to it and dropped inside the open.
+        let frame_store = actingcommand_artifact_store::FrameStore::new(
+            frame_retention::spill_root(self.artifacts.root(), &request.request_id())
+                .map_err(RuntimeHostError::artifact)?,
+            frame_retention::capture_frame_store_config(),
+        )
+        .map_err(RuntimeHostError::artifact)?;
+        let registration = self
+            .mark_resources_in_use()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        match self.execution.open_instance_backends(
+            instance_alias,
+            registration,
+            frame_store.memory_budget(),
+        ) {
+            Ok(observations) => {
+                self.append_backend_open_observations(
+                    &observations,
+                    links,
+                    EventSource::Device,
+                    OriginModule::DeviceProxy,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+                Ok(scheduling_resume_selfcheck(&observations, None))
+            }
+            Err(error) => {
+                self.append_backend_open_failure_observations(
+                    &error,
+                    links.clone(),
+                    EventSource::Device,
+                    OriginModule::DeviceProxy,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+                let failure_code = error.code();
+                let observations = error.failure_context().backend_open_observations().to_vec();
+                let error = self
+                    .finish_capture_failure_while_guarded(error, links.clone(), admission)
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                let error = RuntimeHostError::execution("reconnect_resumed_instance", &error);
+                if self
+                    .retain_unconfirmed_resources(&error, links)
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    return Err(RequestFailure::poison_without_terminal(error));
+                }
+                Ok(scheduling_resume_selfcheck(
+                    &observations,
+                    Some(failure_code),
+                ))
+            }
+        }
+    }
+
+    /// Workflow #191 ps2: the client on `connection_id` owes `instance_alias` a reset after its
+    /// cancelled contained run.
+    pub(super) fn await_client_reset(
+        &self,
+        instance_alias: &str,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<()> {
+        lock(&self.scheduling_pause, "await_client_reset")?
+            .client_resets
+            .entry(instance_alias.to_owned())
+            .or_default()
+            .insert(connection_id);
+        Ok(())
+    }
+
+    /// Workflow #191 ps2: the client on `connection_id` finished a reset of `instance_alias`.
+    pub(super) fn settle_client_reset(
+        &self,
+        instance_alias: &str,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<()> {
+        let mut table = lock(&self.scheduling_pause, "settle_client_reset")?;
+        if let Some(connections) = table.client_resets.get_mut(instance_alias) {
+            connections.remove(&connection_id);
+            if connections.is_empty() {
+                table.client_resets.remove(instance_alias);
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #191 ps2: a closed connection owes no reset any more.
+    pub(super) fn forget_client_resets(
+        &self,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<()> {
+        lock(&self.scheduling_pause, "forget_client_resets")?
+            .client_resets
+            .retain(|_, connections| {
+                connections.remove(&connection_id);
+                !connections.is_empty()
+            });
+        Ok(())
     }
 
     pub(super) fn refresh_policy_dispatches(&self) -> RuntimeHostResult<()> {

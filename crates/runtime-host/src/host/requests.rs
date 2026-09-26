@@ -280,13 +280,22 @@ impl HostShared {
                 holder_id,
             } => {
                 self.require_physical_instance_alias(instance_alias)?;
-                self.safe_reset(
+                let reset = self.safe_reset(
                     request,
                     validated,
                     instance_alias,
                     *holder_id,
                     connection_id,
-                )
+                );
+                // Workflow #191 ps2: the reset this connection owed after a cancelled contained
+                // run has finished; an instance pause may now hand the device back.
+                match self.settle_client_reset(instance_alias, connection_id) {
+                    Ok(()) => reset,
+                    Err(error) => Err(match reset {
+                        Ok(_) => RequestFailure::poison_without_terminal(error),
+                        Err(failure) => failure.replace_with_poison(error),
+                    }),
+                }
             }
             RuntimeOperation::ApplicationLifecycle {
                 instance_alias,
@@ -319,13 +328,13 @@ impl HostShared {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.pause_scheduling(scope, reason_code, *drain_timeout_ms)
+                self.pause_scheduling(validated, scope, reason_code, *drain_timeout_ms)
             }
             RuntimeOperation::ResumeScheduling { scope } => {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.resume_scheduling(scope)
+                self.resume_scheduling(validated, scope)
             }
             RuntimeOperation::RunContainedTask {
                 instance_alias,

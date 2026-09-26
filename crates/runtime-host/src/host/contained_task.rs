@@ -11,8 +11,9 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::CaptureGeometrySessionRef;
 
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
-/// How often an instance pause re-reads its instance's in-flight contained runs.
-const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// How often an instance pause re-reads its instance's in-flight contained runs (and, in stage
+/// (c), its lease and owed client resets).
+pub(super) const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,6 +214,28 @@ fn pause_drain_fatal(code: &'static str) -> RequestFailure {
         "drain_paused_instance",
         RuntimeErrorCode::RuntimeFatal,
     ))
+}
+
+/// The two deadlines of one instance pause, fixed when it starts: runs still in flight at `drain`
+/// are asked to stop, and the pause fails if its drain or its device hand-back (Workflow #191 ps2)
+/// has not finished by `grace` (`drain` plus `SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`).
+#[derive(Clone, Copy)]
+pub(super) struct SchedulingPauseDeadlines {
+    pub(super) drain: Instant,
+    pub(super) grace: Instant,
+}
+
+impl SchedulingPauseDeadlines {
+    pub(super) fn after(drain_timeout_ms: u64) -> Result<Self, RequestFailure> {
+        let overflow = || pause_drain_fatal("scheduling_pause_drain_deadline_overflow");
+        let drain = Instant::now()
+            .checked_add(Duration::from_millis(drain_timeout_ms))
+            .ok_or_else(overflow)?;
+        let grace = drain
+            .checked_add(Duration::from_millis(SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS))
+            .ok_or_else(overflow)?;
+        Ok(Self { drain, grace })
+    }
 }
 
 struct ActiveContainedRun<'a> {
@@ -4142,6 +4165,16 @@ impl HostShared {
             active_run.control(),
             None,
         );
+        // Workflow #191 ps2: the client of a cancelled run resets the instance next
+        // (`SafeReset` on this connection); an instance pause hands the device back only after
+        // that. Noted while the run is still registered, so a draining pause sees it.
+        let awaited = match &executed {
+            Ok(OperationSuccess {
+                result: RuntimeResult::ContainedTaskCancelled { .. },
+                ..
+            }) => self.await_client_reset(instance_alias, connection_id),
+            _ => Ok(()),
+        };
         // Slice #316-B4: parked until the connection has written this request's receipt.
         let staged = self.stage_recovery_ladder(
             &active_run.control,
@@ -4150,7 +4183,7 @@ impl HostShared {
             task_request,
             RecoveryLadderAdmission::AfterReceipt,
         );
-        with_recovery_ladder_staging(executed, staged)
+        with_recovery_ladder_staging(executed, awaited.and(staged))
     }
 
     fn package_material_deadline(
@@ -5865,18 +5898,15 @@ impl HostShared {
     }
 
     /// Workflow #191 ps1 (b): waits until no contained run of `instance_id` is in flight. A
-    /// run still in flight once `drain_timeout_ms` elapsed is asked to stop at its next
-    /// checkpoint (`contained_task_paused`); no lease is preempted or reclaimed. Runs asked to
-    /// stop that have not ended `SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS` later fail the drain.
+    /// run still in flight at the drain deadline is asked to stop at its next checkpoint
+    /// (`contained_task_paused`); no lease is preempted or reclaimed. Runs asked to stop that have
+    /// not ended by the grace deadline fail the drain. Stage (c) (ps2) drains again with the same
+    /// deadlines when a run started after (b).
     pub(super) fn drain_contained_runs_for_pause(
         &self,
         instance_id: InstanceId,
-        drain_timeout_ms: u64,
+        deadlines: SchedulingPauseDeadlines,
     ) -> Result<SchedulingDrainSummary, RequestFailure> {
-        let drain_deadline = Instant::now()
-            .checked_add(Duration::from_millis(drain_timeout_ms))
-            .ok_or_else(|| pause_drain_fatal("scheduling_pause_drain_deadline_overflow"))?;
-        let mut grace_deadline = None;
         // Request identity -> (the run's control, whether this drain asked it to stop).
         let mut tracked = BTreeMap::<RequestId, (Arc<ContainedRunControl>, bool)>::new();
         let mut summary = SchedulingDrainSummary {
@@ -5934,24 +5964,13 @@ impl HostShared {
                 return Ok(summary);
             }
             let now = Instant::now();
-            if now >= drain_deadline {
+            if now >= deadlines.drain {
                 for (control, cancelled) in tracked.values_mut() {
                     if !*cancelled && control.request_pause_cancel() {
                         *cancelled = true;
                     }
                 }
-                let grace = match grace_deadline {
-                    Some(grace) => grace,
-                    None => *grace_deadline.insert(
-                        now.checked_add(Duration::from_millis(
-                            SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS,
-                        ))
-                        .ok_or_else(|| {
-                            pause_drain_fatal("scheduling_pause_drain_deadline_overflow")
-                        })?,
-                    ),
-                };
-                if now >= grace {
+                if now >= deadlines.grace {
                     return Err(RequestFailure::request(
                         RuntimeHostError::request(
                             "scheduling_pause_drain_incomplete",
