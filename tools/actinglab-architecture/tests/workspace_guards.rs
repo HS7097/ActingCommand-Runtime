@@ -7,13 +7,15 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use actingcommand_actinglab_architecture::{
-    DeclaredVisibility, FunctionFacts, FunctionReference, LedgerOwnerModule, RefusalBranch,
-    SourceFacts, contract_dependency_violations, discover_ledger_owners, extract_command_inventory,
-    function_source, inspect_admission_handle_uses, inspect_artifact_byte_writes,
-    inspect_call_sites, inspect_contract_fact_matching, inspect_disallowed_lint_escapes,
-    inspect_dispatch_arm_calls, inspect_enum_variants, inspect_envelope_sites,
-    inspect_field_accesses, inspect_function_origin_terms, inspect_generic_authoring_identity,
-    inspect_generic_runtime_identity, inspect_lab_source, inspect_ledger_append_ingress,
+    DeclaredVisibility, FunctionFacts, FunctionReference, GlueCaller, GlueDeclaration,
+    GlueInvariant, GlueText, GlueTolerance, LedgerOwnerModule, OwnerSymbol, RefusalBranch,
+    SourceFacts, SymbolKind, contract_dependency_violations, discover_ledger_owners,
+    extract_command_inventory, function_source, inspect_admission_handle_uses,
+    inspect_artifact_byte_writes, inspect_call_sites, inspect_contract_fact_matching,
+    inspect_disallowed_lint_escapes, inspect_dispatch_arm_calls, inspect_enum_variants,
+    inspect_envelope_sites, inspect_field_accesses, inspect_function_origin_terms,
+    inspect_generic_authoring_identity, inspect_generic_runtime_identity,
+    inspect_glue_declarations, inspect_lab_source, inspect_ledger_append_ingress,
     inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_non_reexport_items,
     inspect_persisted_event_ownership, inspect_producer_event_capabilities,
     inspect_provider_symbol_literals, inspect_public_api, inspect_pure_decision_source,
@@ -23,7 +25,6 @@ use actingcommand_actinglab_architecture::{
     resource_tooling_removability_violations, workspace_dependency_allow_list_violations,
     workspace_dependency_violations,
 };
-use sha2::{Digest, Sha256};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -31,10 +32,6 @@ fn workspace_root() -> PathBuf {
         .and_then(|path| path.parent())
         .expect("architecture tool must live at tools/<name>")
         .to_path_buf()
-}
-
-fn semantic_caller_row(path: &str, line: &str) -> String {
-    format!("{path}:{}\n", line.trim())
 }
 
 fn ledger_owners(root: &Path) -> Vec<LedgerOwnerModule> {
@@ -5513,3099 +5510,1228 @@ fn dependency_path(metadata: &str, from_name: &str, to_name: &str) -> Option<Vec
     None
 }
 
-#[test]
-fn actinglab_runtime_endpoint_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let runtime_endpoint = fs::read_to_string(root.join("apps/actinglab/src/runtime_endpoint.rs"))
-        .expect("read ActingLab Runtime endpoint module");
+// Workflow #310 work package D, first half (slice D-1, frozen model: the #310 coordinator comment
+// "D 冻模型"): the ActingLab glue modules main.rs delegates to. Each owner module is one typed
+// declaration that the library checker `inspect_glue_declarations` reads against every Rust file
+// of apps/actinglab/src; the entries replace the 30 `actinglab_*_glue_stays_out_of_main` tests,
+// named above each entry. Exact call expressions and import lines, the precedence / error-text /
+// parameter-mapping invariants and the behaviour test names stay verbatim. Per #325 the owner
+// body line / byte / sha256 freezes and the caller-serialization sha256 values are gone; their
+// purpose is carried by the declared owner, visibility, forbidden file and caller set.
 
-    assert!(
-        main.contains("mod runtime_endpoint;"),
-        "ActingLab main lost the private Runtime endpoint module"
-    );
-    for definition in [
-        "struct RuntimeEndpointPolicy",
-        "enum RuntimeEndpointChannel",
-        "impl RuntimeEndpointChannel",
-        "fn runtime_endpoint_check(",
-        "fn runtime_endpoint_policy(",
-        "fn runtime_endpoint_policy_json(",
-        "fn trusted_remote_auth_material(",
-        "fn env_var_non_empty(",
-        "fn runtime_tcp_available(",
-        "fn parse_endpoint_host_port(",
-        "fn parse_endpoint_parts(",
-        "fn is_loopback_host(",
-    ] {
-        assert!(
-            runtime_endpoint.contains(definition),
-            "Runtime endpoint module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained Runtime endpoint owner definition {definition}"
-        );
+const ACTINGLAB_SRC: &str = "apps/actinglab/src";
+const ACTINGLAB_MAIN: &str = "apps/actinglab/src/main.rs";
+const MAIN_ONLY: &[&str] = &[ACTINGLAB_MAIN];
+const CLI_INFORMATION: &str = "apps/actinglab/src/cli_information.rs";
+const FLAG_VALUES: &str = "apps/actinglab/src/flag_values.rs";
+const SESSION_RECORD: &str = "apps/actinglab/src/commands/session_record.rs";
+const DEVICE_COMMANDS: &str = "apps/actinglab/src/commands/device_commands.rs";
+
+const fn glue_owner(
+    name: &'static str,
+    kind: SymbolKind,
+    visibility: DeclaredVisibility,
+) -> OwnerSymbol {
+    OwnerSymbol {
+        name,
+        kind,
+        visibility,
+        test_only: false,
     }
 }
 
-#[test]
-fn actinglab_cli_result_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let cli_result = fs::read_to_string(root.join("apps/actinglab/src/cli_result.rs"))
-        .expect("read ActingLab CLI result module");
+/// A `pub(super) fn` owner.
+const fn glue_fn(name: &'static str) -> OwnerSymbol {
+    glue_owner(name, SymbolKind::Fn, DeclaredVisibility::Super)
+}
 
-    assert!(
-        main.contains("mod cli_result;"),
-        "ActingLab main lost the private CLI result module"
-    );
-    assert_eq!(
-        main.matches("use cli_result::human_summary;").count(),
-        1,
-        "ActingLab main lost the sole private human-summary import"
-    );
-    assert_eq!(
-        main.matches("let human = human_summary(&invocation.command_name, &data);")
-            .count(),
-        1,
-        "ActingLab main human-summary caller changed"
-    );
-    for definition in [
-        "fn human_summary(command: &str, data: &Value) -> String",
-        "Value::String(text) => text.clone(),",
-        r#"_ => with_input_outcome(format!("{command} ok"), data),"#,
-        "fn with_input_outcome(summary: String, data: &Value) -> String",
-        "struct CliResult",
-        "impl CliResult",
-        "fn ok(command: String, data: Value, print_json: bool, human: String) -> Self",
-        "fn err(command: String, err: CliError, print_json: bool) -> Self",
-        "fn exit_code(&self) -> i32",
-        "fn envelope_json(&self) -> String",
-        "fn human_text(&self) -> String",
-        "trait CliErrorExitCode",
-        "impl CliErrorExitCode for CliError",
-        "ErrorKind::UsageValidation => 2,",
-        "ErrorKind::SafetyBlocked => 3,",
-        "ErrorKind::DeviceInstance => 4,",
-        "ErrorKind::RuntimeUnavailable => 5,",
-        "ErrorKind::NotImplemented => 6,",
-    ] {
-        assert!(
-            cli_result.contains(definition),
-            "CLI result module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained CLI result owner definition {definition}"
-        );
-    }
-    assert_eq!(
-        cli_result.matches("pub(super) ").count(),
-        10,
-        "CLI result owner visibility changed"
-    );
-    for line in cli_result.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "CLI result owner exposed broader visibility: {line}"
-        );
+/// A private `fn` owner.
+const fn glue_private_fn(name: &'static str) -> OwnerSymbol {
+    glue_owner(name, SymbolKind::Fn, DeclaredVisibility::Private)
+}
+
+const fn glue_field(name: &'static str, visibility: DeclaredVisibility) -> OwnerSymbol {
+    glue_owner(name, SymbolKind::Field, visibility)
+}
+
+/// An owner defined under a `cfg(test)` scope.
+const fn glue_test_owner(
+    name: &'static str,
+    kind: SymbolKind,
+    visibility: DeclaredVisibility,
+) -> OwnerSymbol {
+    OwnerSymbol {
+        name,
+        kind,
+        visibility,
+        test_only: true,
     }
 }
 
-#[test]
-fn actinglab_flag_args_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let flag_args = fs::read_to_string(root.join("apps/actinglab/src/flag_args.rs"))
-        .expect("read ActingLab flag args module");
-
-    assert!(
-        main.contains("mod flag_args;"),
-        "ActingLab main lost the private flag args module"
-    );
-    for definition in [
-        "struct FlagArgs",
-        "flags: BTreeMap<String, Vec<String>>",
-        "positionals: Vec<String>",
-        "impl FlagArgs",
-        "fn parse(args: &[String]) -> CliOutcome<Self>",
-        "fn bool(&self, name: &str) -> bool",
-        "fn optional(&self, name: &str) -> Option<String>",
-        "fn values(&self, name: &str) -> Vec<String>",
-        "fn without_first_positional(&self) -> Self",
-        "fn required(&self, name: &str) -> CliOutcome<String>",
-        "fn optional_path(&self, name: &str) -> Option<PathBuf>",
-        "fn required_path(&self, name: &str) -> CliOutcome<PathBuf>",
-        "fn reject_flags(&self, command: &str) -> CliOutcome<()>",
-        "fn expect_positionals(&self, command: &str, expected: usize) -> CliOutcome<()>",
-        "fn required_positional(&self, index: usize, name: &str) -> CliOutcome<&str>",
-        "fn required_i32(&self, index: usize, name: &str) -> CliOutcome<i32>",
-        "fn required_u64(&self, index: usize, name: &str) -> CliOutcome<u64>",
-    ] {
-        assert!(
-            flag_args.contains(definition),
-            "flag args module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained flag args owner definition {definition}"
-        );
+/// `text` appears in `file` exactly `count` times.
+const fn exact(file: &'static str, text: &'static str, count: usize) -> GlueText {
+    GlueText {
+        file,
+        text,
+        count: Some(count),
     }
-
-    assert_eq!(
-        flag_args.matches("pub(super) ").count(),
-        17,
-        "flag args owner visibility changed"
-    );
-    for line in flag_args.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "flag args owner exposed broader visibility: {line}"
-        );
-    }
-
-    let marker = "#[derive(Debug, Clone, Default)]";
-    let (_, owner_tail) = flag_args
-        .split_once(marker)
-        .expect("flag args module contains owner marker");
-    let normalized_owner = format!("{marker}{owner_tail}").replace("pub(super) ", "");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        131,
-        "flag args owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        4_215,
-        "flag args owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "30176f62f169bbdb02a0a354c3a21f32c5e5b1a5469fd3f71d0d783914064fc3",
-        "flag args owner body changed"
-    );
 }
 
-#[test]
-fn actinglab_device_runtime_config_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let device_runtime_config =
-        fs::read_to_string(root.join("apps/actinglab/src/device_runtime_config.rs"))
-            .expect("read ActingLab device Runtime config module");
-
-    assert!(
-        main.contains("mod device_runtime_config;"),
-        "ActingLab main lost the private device Runtime config module"
-    );
-    for definition in [
-        "fn device_config(",
-        "fn device_config_for_instance(",
-        "struct DeviceRuntimeConfig",
-        "impl DeviceRuntimeConfig",
-        "fn runtime_capture_endpoint(",
-        "fn effective_capture_backend_choice(",
-        "fn effective_touch_backend_choice(",
-    ] {
-        assert!(
-            device_runtime_config.contains(definition),
-            "device Runtime config module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained device Runtime config owner definition {definition}"
-        );
+/// `text` appears in `file`.
+const fn present(file: &'static str, text: &'static str) -> GlueText {
+    GlueText {
+        file,
+        text,
+        count: None,
     }
-    for field in [
-        "instance_alias: String",
-        "runtime_state_root: PathBuf",
-        "target: DeviceTarget",
-        "adb_source: AdbPathSource",
-        "adb_warning: Option<String>",
-        "capture_backend: CaptureBackendChoice",
-        "touch_backend: TouchBackendChoice",
-    ] {
-        assert!(
-            device_runtime_config.contains(field),
-            "device Runtime config module lost owner field {field}"
-        );
-    }
-
-    assert_eq!(
-        device_runtime_config.matches("pub(super) ").count(),
-        9,
-        "device Runtime config owner visibility changed"
-    );
-    for line in device_runtime_config.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "device Runtime config owner exposed broader visibility: {line}"
-        );
-    }
-
-    let marker = "pub(super) fn device_config(";
-    let (_, owner_tail) = device_runtime_config
-        .split_once(marker)
-        .expect("device Runtime config module contains owner marker");
-    let normalized_owner = format!("fn device_config({owner_tail}").replace("pub(super) ", "");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        98,
-        "device Runtime config owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        3_325,
-        "device Runtime config owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "33f417f67615e680b48a520e7ce547cedd924b19305f1586df7c133f9a4a4541",
-        "device Runtime config owner body changed"
-    );
 }
 
-fn actinglab_instance_resolution_root_wiring_is_private(main: &str) -> bool {
-    let root = syn::parse_file(main).expect("parse ActingLab root module declarations");
-    let declarations = root
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            syn::Item::Mod(module) if module.ident == "instance_resolution" => Some(module),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    matches!(declarations.as_slice(), [module]
-        if matches!(module.vis, syn::Visibility::Inherited) && module.content.is_none())
+/// `text` never appears in `file`.
+const fn absent(file: &'static str, text: &'static str) -> GlueText {
+    GlueText {
+        file,
+        text,
+        count: Some(0),
+    }
 }
 
-#[test]
-fn actinglab_instance_resolution_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let instance_resolution =
-        fs::read_to_string(root.join("apps/actinglab/src/instance_resolution.rs"))
-            .expect("read ActingLab instance resolution module");
-
-    assert!(
-        actinglab_instance_resolution_root_wiring_is_private(&main),
-        "ActingLab main must declare one private external instance resolution module"
-    );
-    let counterexamples = [
-        ("plain pub declaration", "pub mod instance_resolution;"),
-        (
-            "pub(crate) declaration",
-            "pub(crate) mod instance_resolution;",
-        ),
-        (
-            "duplicate declaration",
-            "mod instance_resolution;\nmod instance_resolution;",
-        ),
-        ("missing declaration", ""),
-    ];
-    for (label, counterexample) in counterexamples {
-        assert!(
-            !actinglab_instance_resolution_root_wiring_is_private(counterexample),
-            "instance resolution guard accepted counterexample: {label}"
-        );
-    }
-    let moved_declaration = concat!(
-        "mod flag_args;\n",
-        "mod flag_values;\n",
-        "mod lab2_cli;\n",
-        "mod instance_resolution;",
-    );
-    assert!(
-        actinglab_instance_resolution_root_wiring_is_private(moved_declaration),
-        "private instance resolution ownership must allow equivalent module placement"
-    );
-    for definition in [
-        "fn resolve_instance_id(",
-        "fn resolve_instance_id_for_flags(",
-    ] {
-        assert!(
-            instance_resolution.contains(definition),
-            "instance resolution module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained instance resolution owner definition {definition}"
-        );
-    }
-
-    assert_eq!(
-        instance_resolution.matches("pub(super) ").count(),
-        2,
-        "instance resolution owner visibility changed"
-    );
-    for line in instance_resolution.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "instance resolution owner exposed broader visibility: {line}"
-        );
-    }
-
-    let marker = "pub(super) fn resolve_instance_id(";
-    let (_, owner_tail) = instance_resolution
-        .split_once(marker)
-        .expect("instance resolution module contains owner marker");
-    let normalized_owner =
-        format!("fn resolve_instance_id({owner_tail}").replace("pub(super) ", "");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        32,
-        "instance resolution owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        1_076,
-        "instance resolution owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "c279bb198a5c289604faa8659299ff42b995b071ce85b8150b056cc5c19b794d",
-        "instance resolution owner body changed"
-    );
+const fn glue_invariant(symbol: &'static str, text: &'static str) -> GlueInvariant {
+    GlueInvariant { symbol, text }
 }
 
-#[test]
-fn actinglab_user_config_store_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let user_config_store =
-        fs::read_to_string(root.join("apps/actinglab/src/user_config_store.rs"))
-            .expect("read ActingLab user config store module");
-    let cli_information = fs::read_to_string(root.join("apps/actinglab/src/cli_information.rs"))
-        .expect("read ActingLab CLI information source");
-
-    const ROOT_DECLARATION: &str = "mod user_config_store;";
-    const OLD_ROOT_IMPORT: &str =
-        "use user_config_store::{config_path, read_user_config, write_user_config};";
-    const OWNER_IMPORT: &str =
-        "use crate::user_config_store::{config_path, read_user_config, write_user_config};";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod user_config_store;"))
-        .collect::<Vec<_>>();
-    let owner_imports = cli_information
-        .lines()
-        .filter(|line| line.contains("user_config_store::"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private user config store module declaration"
-    );
-    assert_eq!(
-        owner_imports,
-        vec![OWNER_IMPORT],
-        "ActingLab CLI information source lost the one private user config store import"
-    );
-    assert!(
-        !main.contains(OLD_ROOT_IMPORT),
-        "ActingLab main regained the moved user config store import"
-    );
-
-    for definition in [
-        "fn read_user_config(",
-        "fn write_user_config(",
-        "fn config_path(",
-    ] {
-        assert!(
-            user_config_store.contains(definition),
-            "user config store module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained user config store owner definition {definition}"
-        );
+/// A caller file with its pinned number of references.
+const fn glue_caller(file: &'static str, count: usize) -> GlueCaller {
+    GlueCaller {
+        file,
+        count: Some(count),
     }
-
-    assert_eq!(
-        user_config_store.matches("pub(super) ").count(),
-        3,
-        "user config store owner visibility changed"
-    );
-    for line in user_config_store.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "user config store owner exposed broader visibility: {line}"
-        );
-    }
-
-    let marker = "pub(super) fn read_user_config() -> CliOutcome<UserConfig> {";
-    let (_, owner_tail) = user_config_store
-        .split_once(marker)
-        .expect("user config store module contains owner marker");
-    let normalized_owner =
-        format!("fn read_user_config() -> CliOutcome<UserConfig> {{{owner_tail}")
-            .replace("pub(super) ", "");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        41,
-        "user config store owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        1_322,
-        "user config store owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "87dbf54442842ff2307fa3f60f8c05f9e3be503f32b988643de6544b8b7dd97c",
-        "user config store owner body changed"
-    );
 }
 
-#[test]
-fn actinglab_user_config_keys_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let user_config_keys = fs::read_to_string(root.join("apps/actinglab/src/user_config_keys.rs"))
-        .expect("read ActingLab user config keys module");
-    let cli_information = fs::read_to_string(root.join("apps/actinglab/src/cli_information.rs"))
-        .expect("read ActingLab CLI information source");
-
-    const ROOT_DECLARATION: &str = "mod user_config_keys;";
-    const OLD_ROOT_IMPORT: &str = "use user_config_keys::{config_get, config_set};";
-    const OWNER_IMPORT: &str = "use crate::user_config_keys::{config_get, config_set};";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod user_config_keys;"))
-        .collect::<Vec<_>>();
-    let owner_imports = cli_information
-        .lines()
-        .filter(|line| line.contains("user_config_keys::"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private user config keys module declaration"
-    );
-    assert_eq!(
-        owner_imports,
-        vec![OWNER_IMPORT],
-        "ActingLab CLI information source lost the one private user config keys import"
-    );
-    assert!(
-        !main.contains(OLD_ROOT_IMPORT),
-        "ActingLab main regained the moved user config keys import"
-    );
-
-    for definition in [
-        "fn config_get(",
-        "fn config_set(",
-        "fn get_instance_value(",
-        "fn set_instance_value(",
-    ] {
-        assert!(
-            user_config_keys.contains(definition),
-            "user config keys module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained user config keys owner definition {definition}"
-        );
-    }
-
-    assert_eq!(
-        user_config_keys.matches("pub(super) ").count(),
-        2,
-        "user config keys owner visibility changed"
-    );
-    for line in user_config_keys.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "user config keys owner exposed broader visibility: {line}"
-        );
-    }
-
-    let marker = "pub(super) fn config_get(config: &UserConfig, key: &str) -> CliOutcome<Value> {";
-    let (_, owner_tail) = user_config_keys
-        .split_once(marker)
-        .expect("user config keys module contains owner marker");
-    let normalized_owner = format!(
-        "fn config_get(config: &UserConfig, key: &str) -> CliOutcome<Value> {{{owner_tail}"
-    )
-    .replace("pub(super) ", "");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        70,
-        "user config keys owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        3_405,
-        "user config keys owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "23ce53deda5cc13d6d3c44b2a312c94a60d2dbc68db7d34877a49b878d3463c0",
-        "user config keys owner body changed"
-    );
+/// A caller file without a pinned count.
+const fn glue_caller_file(file: &'static str) -> GlueCaller {
+    GlueCaller { file, count: None }
 }
 
-#[test]
-fn actinglab_safe_file_stem_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let safe_file_stem = fs::read_to_string(root.join("apps/actinglab/src/safe_file_stem.rs"))
-        .expect("read ActingLab safe file stem module");
-
-    const ROOT_DECLARATION: &str = "mod safe_file_stem;";
-    const ROOT_IMPORT: &str = "use safe_file_stem::safe_file_stem;";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod safe_file_stem;"))
-        .collect::<Vec<_>>();
-    let imports = main
-        .lines()
-        .filter(|line| line.contains("safe_file_stem::"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private safe file stem module declaration"
-    );
-    assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private safe file stem import"
-    );
-
-    const DEFINITION: &str = "fn safe_file_stem(value: &str) -> String {";
-    assert!(
-        safe_file_stem.contains(DEFINITION),
-        "safe file stem module lost owner definition"
-    );
-    assert!(
-        !main.contains(DEFINITION),
-        "ActingLab main regained safe file stem owner definition"
-    );
-
-    assert_eq!(
-        safe_file_stem.matches("pub(super) ").count(),
-        1,
-        "safe file stem owner visibility changed"
-    );
-    for line in safe_file_stem.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "safe file stem owner exposed broader visibility: {line}"
-        );
-    }
-
-    let normalized_owner = safe_file_stem.replacen("pub(super) ", "", 1);
-    assert_eq!(
-        normalized_owner.lines().count(),
-        12,
-        "safe file stem owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        273,
-        "safe file stem owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "2dfd834d20ddb6ec165c3084c8ea002daa4232c1e270559962c9ecad6e0bdcb4",
-        "safe file stem owner body changed"
-    );
-}
-
-#[test]
-fn actinglab_sha256_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let sha256 = fs::read_to_string(root.join("apps/actinglab/src/sha256.rs"))
-        .expect("read ActingLab SHA-256 module");
-
-    const ROOT_DECLARATION: &str = "mod sha256;";
-    const ROOT_IMPORT: &str = "use sha256::{file_sha256, hex_sha256};";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod sha256;"))
-        .collect::<Vec<_>>();
-    let imports = main
-        .lines()
-        .filter(|line| line.contains("sha256::"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private SHA-256 module declaration"
-    );
-    assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private SHA-256 import"
-    );
-
-    for definition in ["fn file_sha256(", "fn hex_sha256("] {
-        assert!(
-            sha256.contains(definition),
-            "SHA-256 module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained SHA-256 owner definition {definition}"
-        );
-    }
-
-    assert_eq!(
-        sha256.matches("pub(super) ").count(),
-        2,
-        "SHA-256 owner visibility changed"
-    );
-    for line in sha256.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "SHA-256 owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CHILD_IMPORTS: &str = concat!(
-        "use super::{CliError, CliOutcome};\n",
-        "use sha2::{Digest, Sha256};\n",
-        "use std::{fs, path::Path};\n\n",
-    );
-    let raw_owner = sha256
-        .strip_prefix(CHILD_IMPORTS)
-        .expect("SHA-256 module imports changed");
-    let normalized_owner = raw_owner.replacen("pub(super) ", "", 2);
-    assert_eq!(
-        normalized_owner.lines().count(),
-        9,
-        "SHA-256 owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        293,
-        "SHA-256 owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "f5e673a72156180e77e61ac7a711f741d80da0c6bb84328376b94a5038417748",
-        "SHA-256 owner body changed"
-    );
-}
-
-#[test]
-fn actinglab_zip_error_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let zip_error = fs::read_to_string(root.join("apps/actinglab/src/zip_error.rs"))
-        .expect("read ActingLab ZIP error module");
-    let resource_runtime_support =
-        fs::read_to_string(root.join("apps/actinglab/src/resource_runtime_support.rs"))
-            .expect("read ActingLab resource Runtime support source");
-
-    const ROOT_DECLARATION: &str = "mod zip_error;";
-    const OLD_ROOT_IMPORT: &str = "use zip_error::{zip_io_error, zip_write_error};";
-    const OWNER_IMPORT: &str = "use super::zip_error::{zip_io_error, zip_write_error};";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod zip_error;"))
-        .collect::<Vec<_>>();
-    let owner_imports = resource_runtime_support
-        .lines()
-        .filter(|line| line.contains("zip_error::"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private ZIP error module declaration"
-    );
-    assert_eq!(
-        owner_imports,
-        vec![OWNER_IMPORT],
-        "ActingLab resource Runtime support source lost the one private ZIP error import"
-    );
-    assert!(
-        !main.contains(OLD_ROOT_IMPORT),
-        "ActingLab main regained the moved ZIP error import"
-    );
-
-    for definition in ["fn zip_write_error(", "fn zip_io_error("] {
-        assert!(
-            zip_error.contains(definition),
-            "ZIP error module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained ZIP error owner definition {definition}"
-        );
-    }
-
-    assert_eq!(
-        zip_error.matches("pub(super) ").count(),
-        2,
-        "ZIP error owner visibility changed"
-    );
-    for line in zip_error.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "ZIP error owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CHILD_IMPORTS: &str = "use super::CliError;\nuse std::io;\n\n";
-    let raw_owner = zip_error
-        .strip_prefix(CHILD_IMPORTS)
-        .expect("ZIP error module imports changed");
-    let normalized_owner = raw_owner.replacen("pub(super) ", "", 2);
-    assert_eq!(
-        normalized_owner.lines().count(),
-        7,
-        "ZIP error owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        244,
-        "ZIP error owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "b15204ccc3490b7f5a81a792d7a13496b0809e6931644c4f27b1395cad758889",
-        "ZIP error owner body changed"
-    );
-}
-
-#[test]
-fn actinglab_state_roots_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let state_roots = fs::read_to_string(root.join("apps/actinglab/src/state_roots.rs"))
-        .expect("read ActingLab state roots module");
-
-    const ROOT_DECLARATION: &str = "mod state_roots;";
-    const ROOT_IMPORT: &str =
-        "use state_roots::{app_state_root, runtime_state_root, session_state_dir_from_flags};";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod state_roots;"))
-        .collect::<Vec<_>>();
-    let imports = main
-        .lines()
-        .filter(|line| line.contains("state_roots::"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private state roots module declaration"
-    );
-    assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private state roots import"
-    );
-
-    for definition in [
-        "fn app_state_root(",
-        "fn runtime_state_root(",
-        "fn session_state_dir_from_flags(",
-    ] {
-        assert!(
-            state_roots.contains(definition),
-            "state roots module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained state roots owner definition {definition}"
-        );
-    }
-
-    assert_eq!(
-        state_roots.matches("pub(super) ").count(),
-        3,
-        "state roots owner visibility changed"
-    );
-    for line in state_roots.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "state roots owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CHILD_IMPORTS: &str = concat!(
-        "use super::{CliError, CliOutcome, FlagArgs, RUNTIME_STATE_ROOT_ENV, SESSION_STATE_ENV};\n",
-        "use std::{env, path::PathBuf};\n\n",
-    );
-    let raw_owner = state_roots
-        .strip_prefix(CHILD_IMPORTS)
-        .expect("state roots module imports changed");
-    let normalized_owner = raw_owner.replacen("pub(super) ", "", 3);
-    assert_eq!(
-        normalized_owner.lines().count(),
-        31,
-        "state roots owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        1_178,
-        "state roots owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "eb07db2e6e1f6cc8384ccf06dad1a45e5b887f425ab0d50d670612c247534783",
-        "state roots owner body changed"
-    );
-}
-
-#[test]
-fn actinglab_unix_time_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let unix_time = fs::read_to_string(root.join("apps/actinglab/src/unix_time.rs"))
-        .expect("read ActingLab Unix time module");
-
-    const ROOT_DECLARATION: &str = "mod unix_time;";
-    const ROOT_IMPORT: &str = "use unix_time::current_unix_ms;";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod unix_time;"))
-        .collect::<Vec<_>>();
-    let imports = main
-        .lines()
-        .filter(|line| line.contains("unix_time::"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private Unix time module declaration"
-    );
-    assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private Unix time import"
-    );
-
-    const DEFINITION: &str = "fn current_unix_ms() -> u64 {";
-    assert!(
-        unix_time.contains(DEFINITION),
-        "Unix time module lost owner definition"
-    );
-    assert!(
-        !main.contains(DEFINITION),
-        "ActingLab main regained Unix time owner definition"
-    );
-
-    assert_eq!(
-        unix_time.matches("pub(super) ").count(),
-        1,
-        "Unix time owner visibility changed"
-    );
-    for line in unix_time.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "Unix time owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CHILD_IMPORTS: &str = "use std::time::{SystemTime, UNIX_EPOCH};\n\n";
-    let raw_owner = unix_time
-        .strip_prefix(CHILD_IMPORTS)
-        .expect("Unix time module imports changed");
-    let normalized_owner = format!("{}\n", raw_owner.replacen("pub(super) ", "", 1));
-    assert_eq!(
-        normalized_owner.lines().count(),
-        9,
-        "Unix time owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        190,
-        "Unix time owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "af8521650cc385ab755dc9937460b7246143c5e55ce75ff37223e8e334e78cf2",
-        "Unix time owner body changed"
-    );
-
-    let caller_files = [
-        ("apps/actinglab/src/env_detection.rs", 1_usize),
-        ("apps/actinglab/src/main.rs", 0_usize),
-        ("apps/actinglab/src/commands/session_contracts.rs", 4_usize),
-        ("apps/actinglab/src/commands/session_record.rs", 12_usize),
-        ("apps/actinglab/src/tests/session_record.rs", 1_usize),
-        ("apps/actinglab/src/runtime_session_adapter.rs", 1_usize),
-        ("apps/actinglab/src/runtime_stream_adapter.rs", 1_usize),
-    ];
-    let mut caller_closure = String::new();
-    let mut call_count = 0;
-    for (path, expected_calls) in caller_files {
-        let source = fs::read_to_string(root.join(path)).expect("read Unix time caller");
-        let calls = source
-            .lines()
-            .filter(|line| line.contains("current_unix_ms()"))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            calls.len(),
-            expected_calls,
-            "Unix time caller count changed in {path}"
-        );
-        if path != "apps/actinglab/src/main.rs"
-            && path != "apps/actinglab/src/tests/session_record.rs"
-        {
-            let root_import = source
-                .split_once(";\n")
-                .map(|(prefix, _)| prefix)
-                .expect("Unix time child import is missing");
-            let expected_import = if path == "apps/actinglab/src/commands/session_record.rs"
-                || path == "apps/actinglab/src/commands/session_contracts.rs"
-            {
-                "use crate::{"
-            } else {
-                "use super::{"
-            };
-            assert!(
-                root_import.contains(expected_import) && root_import.contains("current_unix_ms"),
-                "Unix time child import changed in {path}"
-            );
-        }
-        call_count += calls.len();
-        for line in calls {
-            caller_closure.push_str(path);
-            caller_closure.push(':');
-            caller_closure.push_str(line.trim());
-            caller_closure.push('\n');
-        }
-    }
-    assert_eq!(call_count, 20, "Unix time caller closure changed");
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_closure.as_bytes())),
-        "e36fc6e37d7b29437f1acc773220bcfb9da7f7a07707b57f82ebeeae66b8ce5b",
-        "Unix time caller source changed"
-    );
-}
-
-#[test]
-fn actinglab_flag_values_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    const ROOT_DECLARATION: &str = "mod flag_values;";
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod flag_values;"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private flag values module declaration"
-    );
-
-    for definition in [
-        "fn parse_optional_duration_ms(",
-        "fn parse_optional_usize(",
-        "fn parse_optional_string_value(",
-    ] {
-        assert!(
-            flag_values.contains(definition),
-            "flag values module lost owner definition {definition}"
-        );
-        assert!(
-            !main.contains(definition),
-            "ActingLab main regained flag values owner definition {definition}"
-        );
-    }
-
-    for line in flag_values.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "flag values owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CHILD_IMPORTS: &str = concat!(
-        "use super::{\n",
-        "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, SessionRecordRegion,\n",
-        "    TouchBackendChoice,\n",
-        "};\n",
-        "use std::path::PathBuf;\n",
-        "use std::time::Duration;\n\n",
-    );
-    let raw_owner = flag_values
-        .strip_prefix(CHILD_IMPORTS)
-        .expect("flag values module imports changed");
-    let (parser_owner, _) = raw_owner
-        .rsplit_once("\npub(super) fn required_non_empty_flag(")
-        .expect("flag values module lost the appended required-value owner");
-    assert_eq!(
-        parser_owner.matches("pub(super) ").count(),
-        3,
-        "flag values parser-trio visibility changed"
-    );
-    let normalized_owner = parser_owner
-        .replacen("pub(super) ", "", 3)
-        .replace(
-            concat!(
-                "fn parse_optional_usize(\n",
-                "    flags: &FlagArgs,\n",
-                "    name: &str,\n",
-                "    default_value: usize,\n",
-                ") -> CliOutcome<usize> {\n",
+const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
+    // actinglab_runtime_endpoint_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/runtime_endpoint.rs",
+        rule: "runtime_endpoint_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_owner(
+                "RuntimeEndpointPolicy",
+                SymbolKind::Struct,
+                DeclaredVisibility::Super,
             ),
-            concat!(
-                "fn parse_optional_usize(flags: &FlagArgs, name: &str, ",
-                "default_value: usize) -> CliOutcome<usize> {\n",
+            glue_field("RuntimeEndpointPolicy::scheme", DeclaredVisibility::Super),
+            glue_field("RuntimeEndpointPolicy::host", DeclaredVisibility::Super),
+            glue_field("RuntimeEndpointPolicy::port", DeclaredVisibility::Super),
+            glue_field("RuntimeEndpointPolicy::channel", DeclaredVisibility::Super),
+            glue_field(
+                "RuntimeEndpointPolicy::auth_material",
+                DeclaredVisibility::Super,
             ),
-        )
-        .replace(
-            concat!(
-                "fn parse_optional_string_value(\n",
-                "    flags: &FlagArgs,\n",
-                "    name: &str,\n",
-                ") -> CliOutcome<Option<String>> {\n",
+            glue_owner(
+                "RuntimeEndpointChannel",
+                SymbolKind::Enum,
+                DeclaredVisibility::Super,
             ),
-            concat!(
-                "fn parse_optional_string_value(flags: &FlagArgs, name: &str) ",
-                "-> CliOutcome<Option<String>> {\n",
+            glue_private_fn("RuntimeEndpointChannel::as_str"),
+            glue_fn("runtime_endpoint_check"),
+            glue_fn("runtime_endpoint_policy"),
+            glue_fn("runtime_endpoint_policy_json"),
+            glue_private_fn("trusted_remote_auth_material"),
+            glue_fn("env_var_non_empty"),
+            glue_fn("runtime_tcp_available"),
+            glue_private_fn("parse_endpoint_host_port"),
+            glue_private_fn("parse_endpoint_parts"),
+            glue_private_fn("is_loopback_host"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller_file(CLI_INFORMATION),
+            glue_caller_file("apps/actinglab/src/commands/session_transport.rs"),
+            glue_caller_file("apps/actinglab/src/resource_runtime_support.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_endpoint.rs"),
+        ],
+        required_calls: &[],
+        invariants: &[],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "the Runtime endpoint policy (channel, trusted-remote auth material, TCP probe) \
+                 is owned by runtime_endpoint.rs; main.rs only declares the private module",
+    },
+    // actinglab_cli_result_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/cli_result.rs",
+        rule: "cli_result_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_fn("human_summary"),
+            glue_private_fn("with_input_outcome"),
+            glue_owner("CliResult", SymbolKind::Struct, DeclaredVisibility::Super),
+            glue_field("CliResult::print_json", DeclaredVisibility::Super),
+            glue_field("CliResult::envelope", DeclaredVisibility::Super),
+            glue_fn("CliResult::ok"),
+            glue_fn("CliResult::err"),
+            glue_fn("CliResult::exit_code"),
+            glue_fn("CliResult::envelope_json"),
+            glue_fn("CliResult::human_text"),
+            glue_owner(
+                "CliErrorExitCode",
+                SymbolKind::Trait,
+                DeclaredVisibility::Super,
             ),
-        );
-    assert_eq!(
-        normalized_owner.lines().count(),
-        33,
-        "flag values owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        1_219,
-        "flag values owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "bf4488b5477458012436cbf5f8e8258bebeb01a184c311b9bfa6413680c6284c",
-        "flag values owner body changed"
-    );
-}
+            glue_private_fn("CliError::exit_code"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[glue_caller_file(ACTINGLAB_MAIN)],
+        required_calls: &[
+            exact(ACTINGLAB_MAIN, "use cli_result::human_summary;", 1),
+            exact(
+                ACTINGLAB_MAIN,
+                "let human = human_summary(&invocation.command_name, &data);",
+                1,
+            ),
+            present(
+                "apps/actinglab/src/cli_result.rs",
+                "impl CliErrorExitCode for CliError",
+            ),
+            absent(ACTINGLAB_MAIN, "Value::String(text) => text.clone(),"),
+            absent(
+                ACTINGLAB_MAIN,
+                r#"_ => with_input_outcome(format!("{command} ok"), data),"#,
+            ),
+            absent(ACTINGLAB_MAIN, "ErrorKind::UsageValidation => 2,"),
+            absent(ACTINGLAB_MAIN, "ErrorKind::SafetyBlocked => 3,"),
+            absent(ACTINGLAB_MAIN, "ErrorKind::DeviceInstance => 4,"),
+            absent(ACTINGLAB_MAIN, "ErrorKind::RuntimeUnavailable => 5,"),
+            absent(ACTINGLAB_MAIN, "ErrorKind::NotImplemented => 6,"),
+        ],
+        invariants: &[
+            glue_invariant(
+                "human_summary",
+                "fn human_summary(command: &str, data: &Value) -> String",
+            ),
+            glue_invariant("human_summary", "Value::String(text) => text.clone(),"),
+            glue_invariant(
+                "human_summary",
+                r#"_ => with_input_outcome(format!("{command} ok"), data),"#,
+            ),
+            glue_invariant(
+                "with_input_outcome",
+                "fn with_input_outcome(summary: String, data: &Value) -> String",
+            ),
+            glue_invariant(
+                "CliResult::ok",
+                "fn ok(command: String, data: Value, print_json: bool, human: String) -> Self",
+            ),
+            glue_invariant(
+                "CliResult::err",
+                "fn err(command: String, err: CliError, print_json: bool) -> Self",
+            ),
+            glue_invariant("CliResult::exit_code", "fn exit_code(&self) -> i32"),
+            glue_invariant(
+                "CliResult::envelope_json",
+                "fn envelope_json(&self) -> String",
+            ),
+            glue_invariant("CliResult::human_text", "fn human_text(&self) -> String"),
+            glue_invariant("CliError::exit_code", "ErrorKind::UsageValidation => 2,"),
+            glue_invariant("CliError::exit_code", "ErrorKind::SafetyBlocked => 3,"),
+            glue_invariant("CliError::exit_code", "ErrorKind::DeviceInstance => 4,"),
+            glue_invariant("CliError::exit_code", "ErrorKind::RuntimeUnavailable => 5,"),
+            glue_invariant("CliError::exit_code", "ErrorKind::NotImplemented => 6,"),
+        ],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "the CLI result envelope, human summary and exit-code mapping are owned by \
+                 cli_result.rs; main.rs imports human_summary privately and calls it once",
+    },
+    // actinglab_flag_args_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/flag_args.rs",
+        rule: "flag_args_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_owner("FlagArgs", SymbolKind::Struct, DeclaredVisibility::Super),
+            glue_field("FlagArgs::flags", DeclaredVisibility::Super),
+            glue_field("FlagArgs::positionals", DeclaredVisibility::Super),
+            glue_fn("FlagArgs::parse"),
+            glue_fn("FlagArgs::parse_values"),
+            glue_fn("FlagArgs::bool"),
+            glue_fn("FlagArgs::optional"),
+            glue_fn("FlagArgs::values"),
+            glue_fn("FlagArgs::without_first_positional"),
+            glue_fn("FlagArgs::required"),
+            glue_fn("FlagArgs::optional_path"),
+            glue_fn("FlagArgs::required_path"),
+            glue_fn("FlagArgs::reject_flags"),
+            glue_fn("FlagArgs::expect_positionals"),
+            glue_fn("FlagArgs::required_positional"),
+            glue_fn("FlagArgs::required_i32"),
+            glue_fn("FlagArgs::required_u64"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller_file(ACTINGLAB_MAIN),
+            glue_caller_file(CLI_INFORMATION),
+            glue_caller_file(DEVICE_COMMANDS),
+            glue_caller_file("apps/actinglab/src/commands/navigation_recovery.rs"),
+            glue_caller_file("apps/actinglab/src/commands/session_contracts.rs"),
+            glue_caller_file(SESSION_RECORD),
+            glue_caller_file("apps/actinglab/src/commands/session_transport.rs"),
+            glue_caller_file("apps/actinglab/src/drive_cli.rs"),
+            glue_caller_file("apps/actinglab/src/env_detection.rs"),
+            glue_caller_file("apps/actinglab/src/lab2_cli.rs"),
+            glue_caller_file("apps/actinglab/src/lab_package_control.rs"),
+            glue_caller_file("apps/actinglab/src/lab_run.rs"),
+            glue_caller_file("apps/actinglab/src/readonly_cli.rs"),
+            glue_caller_file("apps/actinglab/src/resource_restore.rs"),
+            glue_caller_file("apps/actinglab/src/resource_runtime_support.rs"),
+            glue_caller_file("apps/actinglab/src/run_summary.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_debug.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_session_adapter.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_slice_cli.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_stream_adapter.rs"),
+            glue_caller_file("apps/actinglab/src/scheduling_cli.rs"),
+            glue_caller_file("apps/actinglab/src/session_management.rs"),
+            glue_caller_file("apps/actinglab/src/signature_cli.rs"),
+        ],
+        required_calls: &[
+            absent(ACTINGLAB_MAIN, "flags: BTreeMap<String, Vec<String>>"),
+            absent(ACTINGLAB_MAIN, "positionals: Vec<String>"),
+        ],
+        invariants: &[
+            glue_invariant("FlagArgs", "flags: BTreeMap<String, Vec<String>>"),
+            glue_invariant("FlagArgs", "positionals: Vec<String>"),
+            glue_invariant(
+                "FlagArgs::parse",
+                "fn parse(args: &[String]) -> CliOutcome<Self>",
+            ),
+            glue_invariant("FlagArgs::bool", "fn bool(&self, name: &str) -> bool"),
+            glue_invariant(
+                "FlagArgs::optional",
+                "fn optional(&self, name: &str) -> Option<String>",
+            ),
+            glue_invariant(
+                "FlagArgs::values",
+                "fn values(&self, name: &str) -> Vec<String>",
+            ),
+            glue_invariant(
+                "FlagArgs::without_first_positional",
+                "fn without_first_positional(&self) -> Self",
+            ),
+            glue_invariant(
+                "FlagArgs::required",
+                "fn required(&self, name: &str) -> CliOutcome<String>",
+            ),
+            glue_invariant(
+                "FlagArgs::optional_path",
+                "fn optional_path(&self, name: &str) -> Option<PathBuf>",
+            ),
+            glue_invariant(
+                "FlagArgs::required_path",
+                "fn required_path(&self, name: &str) -> CliOutcome<PathBuf>",
+            ),
+            glue_invariant(
+                "FlagArgs::reject_flags",
+                "fn reject_flags(&self, command: &str) -> CliOutcome<()>",
+            ),
+            glue_invariant(
+                "FlagArgs::expect_positionals",
+                "fn expect_positionals(&self, command: &str, expected: usize) -> CliOutcome<()>",
+            ),
+            glue_invariant(
+                "FlagArgs::required_positional",
+                "fn required_positional(&self, index: usize, name: &str) -> CliOutcome<&str>",
+            ),
+            glue_invariant(
+                "FlagArgs::required_i32",
+                "fn required_i32(&self, index: usize, name: &str) -> CliOutcome<i32>",
+            ),
+            glue_invariant(
+                "FlagArgs::required_u64",
+                "fn required_u64(&self, index: usize, name: &str) -> CliOutcome<u64>",
+            ),
+        ],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "flag and positional parsing is owned by flag_args.rs; main.rs only declares \
+                 the private module",
+    },
+    // actinglab_device_runtime_config_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/device_runtime_config.rs",
+        rule: "device_runtime_config_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_fn("device_config"),
+            glue_private_fn("device_config_for_instance"),
+            glue_owner(
+                "DeviceRuntimeConfig",
+                SymbolKind::Struct,
+                DeclaredVisibility::Super,
+            ),
+            glue_field(
+                "DeviceRuntimeConfig::instance_alias",
+                DeclaredVisibility::Private,
+            ),
+            glue_field(
+                "DeviceRuntimeConfig::runtime_state_root",
+                DeclaredVisibility::Private,
+            ),
+            glue_test_owner(
+                "DeviceRuntimeConfig::target",
+                SymbolKind::Field,
+                DeclaredVisibility::Super,
+            ),
+            glue_field("DeviceRuntimeConfig::adb_source", DeclaredVisibility::Super),
+            glue_field(
+                "DeviceRuntimeConfig::adb_warning",
+                DeclaredVisibility::Super,
+            ),
+            glue_field(
+                "DeviceRuntimeConfig::capture_backend",
+                DeclaredVisibility::Super,
+            ),
+            glue_test_owner(
+                "DeviceRuntimeConfig::touch_backend",
+                SymbolKind::Field,
+                DeclaredVisibility::Super,
+            ),
+            glue_fn("DeviceRuntimeConfig::runtime_capture_endpoint"),
+            glue_fn("effective_capture_backend_choice"),
+            glue_test_owner(
+                "effective_touch_backend_choice",
+                SymbolKind::Fn,
+                DeclaredVisibility::Private,
+            ),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller_file(DEVICE_COMMANDS),
+            glue_caller_file("apps/actinglab/src/commands/navigation_recovery.rs"),
+            glue_caller_file(SESSION_RECORD),
+            glue_caller_file("apps/actinglab/src/device_runtime_config.rs"),
+        ],
+        required_calls: &[],
+        invariants: &[
+            glue_invariant("DeviceRuntimeConfig", "instance_alias: String"),
+            glue_invariant("DeviceRuntimeConfig", "runtime_state_root: PathBuf"),
+            glue_invariant("DeviceRuntimeConfig", "target: DeviceTarget"),
+            glue_invariant("DeviceRuntimeConfig", "adb_source: AdbPathSource"),
+            glue_invariant("DeviceRuntimeConfig", "adb_warning: Option<String>"),
+            glue_invariant(
+                "DeviceRuntimeConfig",
+                "capture_backend: CaptureBackendChoice",
+            ),
+            glue_invariant("DeviceRuntimeConfig", "touch_backend: TouchBackendChoice"),
+            glue_invariant(
+                "device_config_for_instance",
+                "enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;",
+            ),
+        ],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "the per-instance device Runtime configuration and backend choice are owned by \
+                 device_runtime_config.rs; main.rs only declares the private module",
+    },
+    // actinglab_instance_resolution_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/instance_resolution.rs",
+        rule: "instance_resolution_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_fn("resolve_instance_id"),
+            glue_fn("resolve_instance_id_for_flags"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller_file(DEVICE_COMMANDS),
+            glue_caller_file(SESSION_RECORD),
+            glue_caller_file("apps/actinglab/src/device_runtime_config.rs"),
+            glue_caller_file("apps/actinglab/src/drive_cli.rs"),
+            glue_caller_file("apps/actinglab/src/instance_resolution.rs"),
+            glue_caller_file("apps/actinglab/src/lab_run.rs"),
+            glue_caller_file("apps/actinglab/src/readonly_cli.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_stream_adapter.rs"),
+            glue_caller_file("apps/actinglab/src/session_management.rs"),
+        ],
+        required_calls: &[],
+        invariants: &[
+            glue_invariant("resolve_instance_id", "game_match && server_match"),
+            glue_invariant(
+                "resolve_instance_id_for_flags",
+                "flags.optional(\"--instance\").filter(|value| value != \"true\")",
+            ),
+        ],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "instance id resolution is owned by instance_resolution.rs, declared once as a \
+                 private out-of-line module",
+    },
+    // actinglab_user_config_store_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/user_config_store.rs",
+        rule: "user_config_store_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_fn("read_user_config"),
+            glue_fn("write_user_config"),
+            glue_fn("config_path"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller_file(CLI_INFORMATION),
+            glue_caller_file("apps/actinglab/src/commands/capabilities.rs"),
+            glue_caller_file(DEVICE_COMMANDS),
+            glue_caller_file("apps/actinglab/src/commands/navigation_recovery.rs"),
+            glue_caller_file(SESSION_RECORD),
+            glue_caller_file("apps/actinglab/src/drive_cli.rs"),
+            glue_caller_file("apps/actinglab/src/env_detection.rs"),
+            glue_caller_file("apps/actinglab/src/lab2_cli.rs"),
+            glue_caller_file("apps/actinglab/src/lab_run.rs"),
+            glue_caller_file("apps/actinglab/src/readonly_cli.rs"),
+            glue_caller_file("apps/actinglab/src/resource_runtime_support.rs"),
+            glue_caller_file("apps/actinglab/src/run_summary.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_stream_adapter.rs"),
+            glue_caller_file("apps/actinglab/src/session_management.rs"),
+            glue_caller_file("apps/actinglab/src/user_config_store.rs"),
+        ],
+        required_calls: &[
+            exact(
+                CLI_INFORMATION,
+                "use crate::user_config_store::{config_path, read_user_config, write_user_config};",
+                1,
+            ),
+            absent(
+                ACTINGLAB_MAIN,
+                "use user_config_store::{config_path, read_user_config, write_user_config};",
+            ),
+            absent(
+                "apps/actinglab/src/user_config_store.rs",
+                "unwrap_or_default",
+            ),
+        ],
+        invariants: &[glue_invariant(
+            "read_user_config",
+            "serde_json::from_str(&text).map_err(",
+        )],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "reading, writing and locating the user config file is owned by \
+                 user_config_store.rs; cli_information.rs imports it privately",
+    },
+    // actinglab_user_config_keys_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/user_config_keys.rs",
+        rule: "user_config_keys_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_fn("config_get"),
+            glue_fn("config_set"),
+            glue_private_fn("get_instance_value"),
+            glue_private_fn("set_instance_value"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[glue_caller_file(CLI_INFORMATION)],
+        required_calls: &[
+            exact(
+                CLI_INFORMATION,
+                "use crate::user_config_keys::{config_get, config_set};",
+                1,
+            ),
+            absent(
+                ACTINGLAB_MAIN,
+                "use user_config_keys::{config_get, config_set};",
+            ),
+        ],
+        invariants: &[],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "the user config key table (get / set, instance keys) is owned by \
+                 user_config_keys.rs; cli_information.rs imports it privately",
+    },
+    // actinglab_safe_file_stem_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/safe_file_stem.rs",
+        rule: "safe_file_stem_glue_stays_out_of_main",
+        owner_symbols: &[glue_fn("safe_file_stem")],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[glue_caller_file(SESSION_RECORD)],
+        required_calls: &[exact(
+            ACTINGLAB_MAIN,
+            "use safe_file_stem::safe_file_stem;",
+            1,
+        )],
+        invariants: &[glue_invariant(
+            "safe_file_stem",
+            "fn safe_file_stem(value: &str) -> String {",
+        )],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "file-stem sanitising is owned by safe_file_stem.rs; main.rs imports it privately",
+    },
+    // actinglab_sha256_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/sha256.rs",
+        rule: "sha256_glue_stays_out_of_main",
+        owner_symbols: &[glue_fn("file_sha256"), glue_fn("hex_sha256")],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller_file(SESSION_RECORD),
+            glue_caller_file("apps/actinglab/src/lab_package_control.rs"),
+            glue_caller_file("apps/actinglab/src/sha256.rs"),
+        ],
+        required_calls: &[
+            exact(ACTINGLAB_MAIN, "use sha256::{file_sha256, hex_sha256};", 1),
+            exact(
+                "apps/actinglab/src/sha256.rs",
+                concat!(
+                    "use super::{CliError, CliOutcome};\n",
+                    "use sha2::{Digest, Sha256};\n",
+                    "use std::{fs, path::Path};\n\n",
+                ),
+                1,
+            ),
+        ],
+        invariants: &[],
+        required_tests: &[],
+        tolerated_elsewhere: &[GlueTolerance {
+            file: "apps/actinglab/src/resource_authoring.rs",
+            symbol: "file_sha256",
+            kind: SymbolKind::Fn,
+            visibility: DeclaredVisibility::Private,
+            reason: "resource_authoring.rs keeps one private production file_sha256 of its own (its \
+                     read error names the authoring source), called only inside that file; it \
+                     predates D-1, whose product code is unchanged, and is reported for the owner \
+                     to route through sha256.rs or keep",
+        }],
+        reason: "file and byte SHA-256 hashing is owned by sha256.rs; main.rs imports it \
+                 privately",
+    },
+    // actinglab_zip_error_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/zip_error.rs",
+        rule: "zip_error_glue_stays_out_of_main",
+        owner_symbols: &[glue_fn("zip_write_error"), glue_fn("zip_io_error")],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[glue_caller_file(
+            "apps/actinglab/src/resource_runtime_support.rs",
+        )],
+        required_calls: &[
+            exact(
+                "apps/actinglab/src/resource_runtime_support.rs",
+                "use super::zip_error::{zip_io_error, zip_write_error};",
+                1,
+            ),
+            absent(
+                ACTINGLAB_MAIN,
+                "use zip_error::{zip_io_error, zip_write_error};",
+            ),
+            exact(
+                "apps/actinglab/src/zip_error.rs",
+                "use super::CliError;\nuse std::io;\n\n",
+                1,
+            ),
+        ],
+        invariants: &[],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "ZIP write error mapping is owned by zip_error.rs; resource_runtime_support.rs \
+                 imports it privately",
+    },
+    // actinglab_state_roots_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/state_roots.rs",
+        rule: "state_roots_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_fn("app_state_root"),
+            glue_fn("runtime_state_root"),
+            glue_fn("session_state_dir_from_flags"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller_file(DEVICE_COMMANDS),
+            glue_caller_file(SESSION_RECORD),
+            glue_caller_file("apps/actinglab/src/device_runtime_config.rs"),
+            glue_caller_file("apps/actinglab/src/env_detection.rs"),
+            glue_caller_file("apps/actinglab/src/lab2_cli.rs"),
+            glue_caller_file("apps/actinglab/src/lab_run.rs"),
+            glue_caller_file("apps/actinglab/src/readonly_cli.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_debug.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_session_adapter.rs"),
+            glue_caller_file("apps/actinglab/src/runtime_stream_adapter.rs"),
+            glue_caller_file("apps/actinglab/src/session_management.rs"),
+            glue_caller_file("apps/actinglab/src/state_roots.rs"),
+            glue_caller_file("apps/actinglab/src/user_config_store.rs"),
+        ],
+        required_calls: &[
+            exact(
+                ACTINGLAB_MAIN,
+                "use state_roots::{app_state_root, runtime_state_root, session_state_dir_from_flags};",
+                1,
+            ),
+            exact(
+                "apps/actinglab/src/state_roots.rs",
+                concat!(
+                    "use super::{CliError, CliOutcome, FlagArgs, RUNTIME_STATE_ROOT_ENV, SESSION_STATE_ENV};\n",
+                    "use std::{env, path::PathBuf};\n\n",
+                ),
+                1,
+            ),
+        ],
+        invariants: &[],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "the application, Runtime and session state roots are owned by state_roots.rs; \
+                 main.rs imports them privately",
+    },
+    // actinglab_unix_time_glue_stays_out_of_main
+    GlueDeclaration {
+        module: "apps/actinglab/src/unix_time.rs",
+        rule: "unix_time_glue_stays_out_of_main",
+        owner_symbols: &[glue_fn("current_unix_ms")],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller("apps/actinglab/src/commands/session_contracts.rs", 4),
+            glue_caller(SESSION_RECORD, 12),
+            glue_caller("apps/actinglab/src/env_detection.rs", 1),
+            glue_caller("apps/actinglab/src/runtime_session_adapter.rs", 1),
+            glue_caller("apps/actinglab/src/runtime_stream_adapter.rs", 1),
+        ],
+        required_calls: &[
+            exact(ACTINGLAB_MAIN, "use unix_time::current_unix_ms;", 1),
+            exact(
+                "apps/actinglab/src/unix_time.rs",
+                "use std::time::{SystemTime, UNIX_EPOCH};\n\n",
+                1,
+            ),
+        ],
+        invariants: &[glue_invariant(
+            "current_unix_ms",
+            "fn current_unix_ms() -> u64 {",
+        )],
+        required_tests: &[],
+        tolerated_elsewhere: &[],
+        reason: "the Unix millisecond clock is owned by unix_time.rs; main.rs imports it \
+                 privately and its callers reach it through the crate root",
+    },
+    // actinglab_flag_values_glue_stays_out_of_main,
+    // actinglab_required_non_empty_flag_glue_stays_out_of_main,
+    // actinglab_optional_unit_f64_glue_stays_out_of_main,
+    // actinglab_record_duration_flag_glue_stays_out_of_main,
+    // actinglab_record_amend_step_id_glue_stays_out_of_main,
+    // actinglab_split_csv_glue_stays_out_of_main,
+    // actinglab_stream_check_requested_glue_stays_out_of_main,
+    // actinglab_target_argument_glue_stays_out_of_main,
+    // actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main,
+    // actinglab_parse_touch_backend_override_glue_stays_out_of_main,
+    // actinglab_parse_match_metric_flag_glue_stays_out_of_main,
+    // actinglab_record_candidates_step_id_glue_stays_out_of_main,
+    // actinglab_stream_input_relay_action_glue_stays_out_of_main,
+    // actinglab_parse_record_build_resolution_glue_stays_out_of_main,
+    // actinglab_parse_session_record_region_glue_stays_out_of_main,
+    // actinglab_parse_session_record_rect_glue_stays_out_of_main,
+    // actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main,
+    // actinglab_parse_session_record_candidate_index_glue_stays_out_of_main
+    GlueDeclaration {
+        module: FLAG_VALUES,
+        rule: "flag_values_glue_stays_out_of_main",
+        owner_symbols: &[
+            glue_fn("parse_optional_duration_ms"),
+            glue_fn("parse_optional_usize"),
+            glue_fn("parse_optional_string_value"),
+            glue_fn("required_non_empty_flag"),
+            glue_fn("parse_optional_unit_f64"),
+            glue_fn("parse_record_duration_ms"),
+            glue_fn("record_amend_step_id"),
+            glue_fn("record_candidates_step_id"),
+            glue_fn("stream_input_relay_action"),
+            glue_fn("stream_check_requested"),
+            glue_fn("target_argument"),
+            glue_fn("session_record_drift_diagnostics_path"),
+            glue_fn("parse_touch_backend_override"),
+            glue_fn("parse_match_metric_flag"),
+            glue_fn("parse_record_build_resolution"),
+            glue_fn("parse_session_record_region"),
+            glue_fn("parse_session_record_rect"),
+            glue_fn("parse_session_record_swipe_rects"),
+            glue_fn("parse_session_record_candidate_index"),
+            glue_fn("split_csv"),
+        ],
+        forbidden_in: MAIN_ONLY,
+        allowed_callers: &[
+            glue_caller("apps/actinglab/src/cli_parse.rs", 1),
+            glue_caller(DEVICE_COMMANDS, 4),
+            glue_caller("apps/actinglab/src/commands/navigation_recovery.rs", 8),
+            glue_caller(SESSION_RECORD, 28),
+            glue_caller("apps/actinglab/src/commands/session_transport.rs", 1),
+            glue_caller("apps/actinglab/src/drive_cli.rs", 3),
+            glue_caller("apps/actinglab/src/env_detection.rs", 1),
+            glue_caller(FLAG_VALUES, 2),
+            glue_caller("apps/actinglab/src/lab2_cli.rs", 9),
+            glue_caller("apps/actinglab/src/readonly_cli.rs", 2),
+            glue_caller("apps/actinglab/src/runtime_session_adapter.rs", 1),
+            glue_caller("apps/actinglab/src/runtime_stream_adapter.rs", 8),
+        ],
+        required_calls: &[
+            exact(
+                FLAG_VALUES,
+                concat!(
+                    "use super::{\n",
+                    "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, SessionRecordRegion,\n",
+                    "    TouchBackendChoice,\n",
+                    "};\n",
+                    "use std::path::PathBuf;\n",
+                    "use std::time::Duration;\n\n",
+                ),
+                1,
+            ),
+            exact(
+                FLAG_VALUES,
+                concat!(
+                    "use super::{\n",
+                    "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, ",
+                    "SessionRecordRegion,\n",
+                    "    TouchBackendChoice,\n",
+                    "};",
+                ),
+                1,
+            ),
+            exact(FLAG_VALUES, "use std::path::PathBuf;", 1),
+            // The region and rectangle types the parsers return stay owned by the session-record
+            // commands, crate-visible, and main.rs declares neither more widely.
+            exact(SESSION_RECORD, "pub(crate) enum SessionRecordRegion {", 1),
+            exact(SESSION_RECORD, "pub(crate) struct SessionRecordRect {", 1),
+            absent(ACTINGLAB_MAIN, "pub enum SessionRecordRegion"),
+            absent(ACTINGLAB_MAIN, "pub(crate) enum SessionRecordRegion"),
+            absent(ACTINGLAB_MAIN, "pub struct SessionRecordRect"),
+            absent(ACTINGLAB_MAIN, "pub(crate) struct SessionRecordRect"),
+            exact(
+                SESSION_RECORD,
+                "let id = required_non_empty_flag(flags, \"--id\")?;",
+                3,
+            ),
+            exact(
+                SESSION_RECORD,
+                "let from = required_non_empty_flag(flags, \"--from\")?;",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "\"template_threshold\": parse_optional_unit_f64(flags, \"--default-threshold\")?.unwrap_or(0.95),",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "let threshold = parse_optional_unit_f64(flags, \"--threshold\")?;",
+                2,
+            ),
+            exact(
+                SESSION_RECORD,
+                "*target.threshold = parse_optional_unit_f64(flags, \"--threshold\")?;",
+                2,
+            ),
+            exact(
+                SESSION_RECORD,
+                "duration_ms: parse_record_duration_ms(flags, 500)?,",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "duration_ms: parse_record_duration_ms(flags, 700)?,",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "let step_id = record_amend_step_id(&flags)?;",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                concat!(
+                    "            let step_id = record_amend_step_id(&flags)?;\n",
+                    "            let Some(step) = record.steps.iter_mut().find(|step| step.step_id == step_id) else {",
+                ),
+                1,
+            ),
+            present(
+                "apps/actinglab/src/cli_parse.rs",
+                "global.instances = Some(split_csv(&require_raw(&raw, index, \"--instances\")?));",
+            ),
+            exact(
+                "apps/actinglab/src/lab2_cli.rs",
+                ".flat_map(|value| split_csv(&value))",
+                2,
+            ),
+            exact(
+                DEVICE_COMMANDS,
+                "if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {",
+                1,
+            ),
+            exact(
+                "apps/actinglab/src/commands/navigation_recovery.rs",
+                "let metric = parse_match_metric_flag(&flags)?;",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "let metric = parse_match_metric_flag(flags)?;",
+                1,
+            ),
+            exact(SESSION_RECORD, "Some(parse_match_metric_flag(flags)?)", 1),
+            exact(
+                SESSION_RECORD,
+                "let step_id = record_candidates_step_id(&flags)?;",
+                1,
+            ),
+            exact(
+                DEVICE_COMMANDS,
+                "if let Some((action, action_args)) = stream_input_relay_action(flags)? {",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "let mut resolution = parse_record_build_resolution(flags)?;",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "let region = parse_session_record_region(&flags.required(\"--region\")?)?;",
+                3,
+            ),
+            exact(
+                SESSION_RECORD,
+                "*target.region = parse_session_record_region(&value)?;",
+                3,
+            ),
+            exact(
+                FLAG_VALUES,
+                "parse_session_record_rect(from, \"--swipe from\")?,",
+                1,
+            ),
+            exact(
+                FLAG_VALUES,
+                "parse_session_record_rect(to, \"--swipe to\")?,",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "let (from, to) = parse_session_record_swipe_rects(&swipe)?;",
+                1,
+            ),
+            exact(
+                SESSION_RECORD,
+                "if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {",
+                3,
+            ),
+        ],
+        invariants: &[
+            glue_invariant(
+                "parse_record_duration_ms",
+                "failed to parse --duration-ms '{value}': {err}",
+            ),
+            glue_invariant("parse_record_duration_ms", "--duration-ms must be positive"),
+            glue_invariant("record_amend_step_id", ".optional(\"--step-id\")"),
+            glue_invariant("record_amend_step_id", ".filter(|value| value != \"true\")"),
+            glue_invariant(
+                "record_amend_step_id",
+                ".or_else(|| flags.positionals.first().cloned())",
+            ),
+            glue_invariant(
+                "record_amend_step_id",
+                "session record amend requires <step-id> or --step-id",
+            ),
+            glue_invariant("record_amend_step_id", "if value.trim().is_empty()"),
+            glue_invariant(
+                "record_amend_step_id",
+                "record amend step id must not be empty",
+            ),
+            glue_invariant("record_amend_step_id", "Ok(value)"),
+            glue_invariant("target_argument", ".optional(\"--target\")"),
+            glue_invariant("target_argument", ".filter(|value| value != \"true\")"),
+            glue_invariant("target_argument", "return Ok(target);"),
+            glue_invariant("target_argument", ".positionals"),
+            glue_invariant("target_argument", ".first()"),
+            glue_invariant("target_argument", ".cloned()"),
+            glue_invariant(
+                "target_argument",
+                "{command} requires <target> or --target <id>",
+            ),
+            glue_invariant(
+                "session_record_drift_diagnostics_path",
+                ".optional(\"--from-drift-diagnostics\")",
+            ),
+            glue_invariant("session_record_drift_diagnostics_path", "return Ok(None);"),
+            glue_invariant(
+                "session_record_drift_diagnostics_path",
+                "if value == \"true\"",
+            ),
+            glue_invariant(
+                "session_record_drift_diagnostics_path",
+                "session record amend --from-drift-diagnostics requires <path>",
+            ),
+            glue_invariant(
+                "session_record_drift_diagnostics_path",
+                "Ok(Some(PathBuf::from(value)))",
+            ),
+            glue_invariant(
+                "parse_touch_backend_override",
+                ".optional(\"--touch-backend\")",
+            ),
+            glue_invariant("parse_touch_backend_override", "return Ok(None);"),
+            glue_invariant("parse_touch_backend_override", "if value == \"true\""),
+            glue_invariant(
+                "parse_touch_backend_override",
+                "--touch-backend expects auto, auto-fastest, maatouch, minitouch, or adb_shell_input",
+            ),
+            glue_invariant(
+                "parse_touch_backend_override",
+                "TouchBackendChoice::parse(&value)",
+            ),
+            glue_invariant("parse_touch_backend_override", ".map(Some)"),
+            glue_invariant(
+                "parse_touch_backend_override",
+                ".map_err(|err| CliError::usage(err.to_string()))",
+            ),
+            glue_invariant("parse_match_metric_flag", ".optional(\"--metric\")"),
+            glue_invariant(
+                "parse_match_metric_flag",
+                ".unwrap_or_else(|| \"ccorr_normed\".to_string())",
+            ),
+            glue_invariant(
+                "parse_match_metric_flag",
+                "\"ccorr_normed\" => Ok(MatchMetric::CrossCorrelationNormalized)",
+            ),
+            glue_invariant(
+                "parse_match_metric_flag",
+                "\"ccoeff_normed\" => Ok(MatchMetric::CorrelationCoefficientNormalized)",
+            ),
+            glue_invariant(
+                "parse_match_metric_flag",
+                "unsupported --metric '{other}', expected ccorr_normed or ccoeff_normed",
+            ),
+            glue_invariant(
+                "record_candidates_step_id",
+                concat!(
+                    ".optional(\"--step-id\")\n",
+                    "        .filter(|value| value != \"true\")\n",
+                    "        .or_else(|| flags.positionals.first().cloned())"
+                ),
+            ),
+            glue_invariant(
+                "record_candidates_step_id",
+                "session record candidates requires <step-id> or --step-id",
+            ),
+            glue_invariant("record_candidates_step_id", "if value.trim().is_empty()"),
+            glue_invariant(
+                "record_candidates_step_id",
+                "record candidates step id must not be empty",
+            ),
+            glue_invariant("record_candidates_step_id", "Ok(value)"),
+            glue_invariant(
+                "stream_input_relay_action",
+                concat!(
+                    ".optional(\"--input-relay\")\n",
+                    "        .or_else(|| flags.optional(\"--interactive-input\"))"
+                ),
+            ),
+            glue_invariant("stream_input_relay_action", "return Ok(None);"),
+            glue_invariant("stream_input_relay_action", "if value == \"true\" {"),
+            glue_invariant(
+                "stream_input_relay_action",
+                "stream --input-relay expects an action: tap|swipe|long-tap|key|text",
+            ),
+            glue_invariant(
+                "stream_input_relay_action",
+                "flags.positionals.iter().skip(1).cloned().collect(),",
+            ),
+            glue_invariant(
+                "stream_input_relay_action",
+                "Ok(Some((value, flags.positionals.clone())))",
+            ),
+            glue_invariant(
+                "parse_record_build_resolution",
+                concat!(
+                    ".optional(\"--resolution\")\n",
+                    "        .filter(|value| value != \"true\")"
+                ),
+            ),
+            glue_invariant("parse_record_build_resolution", "return Ok(None);"),
+            glue_invariant(
+                "parse_record_build_resolution",
+                "value.replace(['X', '*'], \"x\")",
+            ),
+            glue_invariant(
+                "parse_record_build_resolution",
+                "normalized.split_once('x')",
+            ),
+            glue_invariant(
+                "parse_record_build_resolution",
+                "--resolution must use <width>x<height>, got {value}",
+            ),
+            glue_invariant(
+                "parse_record_build_resolution",
+                "failed to parse --resolution width '{width}': {err}",
+            ),
+            glue_invariant(
+                "parse_record_build_resolution",
+                "failed to parse --resolution height '{height}': {err}",
+            ),
+            glue_invariant(
+                "parse_record_build_resolution",
+                "if width == 0 || height == 0",
+            ),
+            glue_invariant(
+                "parse_record_build_resolution",
+                "--resolution width and height must be non-zero",
+            ),
+            glue_invariant("parse_record_build_resolution", "Ok(Some((width, height)))"),
+            glue_invariant("parse_session_record_region", "if value == \"auto\""),
+            glue_invariant(
+                "parse_session_record_region",
+                "return Ok(SessionRecordRegion::Auto);",
+            ),
+            glue_invariant(
+                "parse_session_record_region",
+                "value.split(',').map(str::trim).collect::<Vec<_>>()",
+            ),
+            glue_invariant("parse_session_record_region", "if parts.len() != 4"),
+            glue_invariant(
+                "parse_session_record_region",
+                "record anchor region must be auto or x,y,width,height: {value}",
+            ),
+            glue_invariant(
+                "parse_session_record_region",
+                "failed to parse record anchor region {name} '{}': {err}",
+            ),
+            glue_invariant("parse_session_record_region", "x: parse_part(0, \"x\")?"),
+            glue_invariant("parse_session_record_region", "y: parse_part(1, \"y\")?"),
+            glue_invariant(
+                "parse_session_record_region",
+                "width: parse_part(2, \"width\")?",
+            ),
+            glue_invariant(
+                "parse_session_record_region",
+                "height: parse_part(3, \"height\")?",
+            ),
+            glue_invariant(
+                "parse_session_record_region",
+                "if rect.width <= 0 || rect.height <= 0",
+            ),
+            glue_invariant(
+                "parse_session_record_region",
+                "record anchor region width and height must be positive",
+            ),
+            glue_invariant(
+                "parse_session_record_region",
+                "Ok(SessionRecordRegion::Rect { rect })",
+            ),
+            glue_invariant(
+                "parse_session_record_rect",
+                "value.split(',').map(str::trim).collect::<Vec<_>>()",
+            ),
+            glue_invariant("parse_session_record_rect", "if parts.len() != 4"),
+            glue_invariant(
+                "parse_session_record_rect",
+                "{label} must be formatted as x,y,width,height: {value}",
+            ),
+            glue_invariant(
+                "parse_session_record_rect",
+                "failed to parse {label} {name} '{}': {err}",
+            ),
+            glue_invariant("parse_session_record_rect", "x: parse(0, \"x\")?"),
+            glue_invariant("parse_session_record_rect", "y: parse(1, \"y\")?"),
+            glue_invariant("parse_session_record_rect", "width: parse(2, \"width\")?"),
+            glue_invariant("parse_session_record_rect", "height: parse(3, \"height\")?"),
+            glue_invariant(
+                "parse_session_record_rect",
+                "if rect.width <= 0 || rect.height <= 0",
+            ),
+            glue_invariant(
+                "parse_session_record_rect",
+                "{label} dimensions must be positive: {}x{}",
+            ),
+            glue_invariant("parse_session_record_rect", "Ok(rect)"),
+            glue_invariant("parse_session_record_swipe_rects", ".split_once(\"->\")"),
+            glue_invariant(
+                "parse_session_record_swipe_rects",
+                "--swipe must be formatted as x,y,w,h->x,y,w,h",
+            ),
+            glue_invariant(
+                "parse_session_record_swipe_rects",
+                "parse_session_record_rect(from, \"--swipe from\")?",
+            ),
+            glue_invariant(
+                "parse_session_record_swipe_rects",
+                "parse_session_record_rect(to, \"--swipe to\")?",
+            ),
+            glue_invariant("parse_session_record_swipe_rects", "Ok(("),
+        ],
+        required_tests: &[
+            "match_metric_flag_preserves_default_values_and_rejection",
+            "record_candidates_step_id_preserves_precedence_fallback_errors_and_original_value",
+            "stream_input_relay_action_preserves_precedence_fallback_absence_literal_true_errors_and_arguments",
+            "parse_record_build_resolution_preserves_absence_bare_true_normalization_parsing_errors_and_valid_values",
+            "parse_session_record_region_preserves_auto_rect_whitespace_parse_errors_and_positive_dimensions",
+            "parse_session_record_rect_preserves_whitespace_parse_order_labels_errors_and_positive_dimensions",
+            "parse_session_record_swipe_rects_preserves_first_arrow_order_labels_and_tuple",
+        ],
+        tolerated_elsewhere: &[],
+        reason: "the flag-value parsers of the ActingLab commands (durations, thresholds, step \
+                 ids, targets, backends, metrics, resolutions, regions, rectangles, swipes, \
+                 candidate indexes, CSV lists) are owned by flag_values.rs; main.rs imports them \
+                 privately for the command modules",
+    },
+];
 
 #[test]
-fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
+fn actinglab_glue_declarations_hold() {
     let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        flag_values.matches("fn required_non_empty_flag(").count(),
-        1,
-        "flag values module lost the one required-value definition"
-    );
-    assert!(
-        flag_values.contains("pub(super) fn required_non_empty_flag("),
-        "required-value owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn required_non_empty_flag("),
-        "ActingLab main regained the required-value owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "ActingLab main publicly re-exported flag-value glue"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    const ID_CALL: &str = "let id = required_non_empty_flag(flags, \"--id\")?;";
-    const FROM_CALL: &str = "let from = required_non_empty_flag(flags, \"--from\")?;";
-    assert_eq!(
-        session_record.matches("required_non_empty_flag(").count(),
-        4,
-        "ActingLab session-record required-value caller set changed"
-    );
-    assert_eq!(
-        session_record.matches(ID_CALL).count(),
-        3,
-        "ActingLab session-record lost an exact --id required-value caller"
-    );
-    assert_eq!(
-        session_record.matches(FROM_CALL).count(),
-        1,
-        "ActingLab session-record lost the exact --from required-value caller"
-    );
-
-    let marker = "\npub(super) fn required_non_empty_flag(";
-    let (_, owner_and_unit_f64) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended required-value owner");
-    let (owner_tail, _) = owner_and_unit_f64
-        .split_once("\npub(super) fn parse_optional_unit_f64(")
-        .expect("flag values module lost the following unit-f64 owner");
-    let normalized_owner = format!("fn required_non_empty_flag({owner_tail}");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        7,
-        "required-value owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        249,
-        "required-value owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "0b7facbdfec294aeec998cc3b628950ed082dd36be61ace9703356fb8bb572cd",
-        "required-value owner body changed"
-    );
-}
-
-#[test]
-fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        flag_values.matches("fn parse_optional_unit_f64(").count(),
-        1,
-        "flag values module lost the one unit-f64 definition"
-    );
-    assert!(
-        flag_values.contains("pub(super) fn parse_optional_unit_f64("),
-        "unit-f64 owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn parse_optional_unit_f64("),
-        "ActingLab main regained the unit-f64 owner"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    const DEFAULT_CALL: &str = "\"template_threshold\": parse_optional_unit_f64(flags, \"--default-threshold\")?.unwrap_or(0.95),";
-    const NEW_STEP_CALL: &str = "let threshold = parse_optional_unit_f64(flags, \"--threshold\")?;";
-    const AMEND_CALL: &str =
-        "*target.threshold = parse_optional_unit_f64(flags, \"--threshold\")?;";
-    assert_eq!(
-        session_record.matches("parse_optional_unit_f64(").count(),
-        5,
-        "ActingLab session-record unit-f64 caller set changed"
-    );
-    assert_eq!(
-        session_record.matches(DEFAULT_CALL).count(),
-        1,
-        "ActingLab session-record lost the exact default-threshold caller"
-    );
-    assert_eq!(
-        session_record.matches(NEW_STEP_CALL).count(),
-        2,
-        "ActingLab session-record lost an exact new-step threshold caller"
-    );
-    assert_eq!(
-        session_record.matches(AMEND_CALL).count(),
-        2,
-        "ActingLab session-record lost an exact amend threshold caller"
-    );
-
-    let marker = "\npub(super) fn parse_optional_unit_f64(";
-    let (_, owner_and_record_duration) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended unit-f64 owner");
-    let (owner_tail, _) = owner_and_record_duration
-        .split_once("\npub(super) fn parse_record_duration_ms(")
-        .expect("flag values module lost the following record-duration owner");
-    let normalized_owner = format!("fn parse_optional_unit_f64({owner_tail}");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        17,
-        "unit-f64 owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        623,
-        "unit-f64 owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "ce0a6e73bf99c9b59f12410e320d77f65408b7686af02a5dff09bacc194af261",
-        "unit-f64 owner body changed"
-    );
-}
-
-#[test]
-fn actinglab_record_duration_flag_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        flag_values.matches("fn parse_record_duration_ms(").count(),
-        1,
-        "flag values module lost the one record-duration definition"
-    );
-    assert!(
-        flag_values.contains("pub(super) fn parse_record_duration_ms("),
-        "record-duration owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn parse_record_duration_ms("),
-        "ActingLab main regained the record-duration owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "ActingLab main publicly re-exported flag-value glue"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    const SWIPE_CALL: &str = "duration_ms: parse_record_duration_ms(flags, 500)?,";
-    const LONG_PRESS_CALL: &str = "duration_ms: parse_record_duration_ms(flags, 700)?,";
-    assert_eq!(
-        session_record.matches("parse_record_duration_ms(").count(),
-        2,
-        "ActingLab session-record record-duration caller set changed"
-    );
-    assert_eq!(
-        session_record.matches(SWIPE_CALL).count(),
-        1,
-        "ActingLab session-record lost the exact swipe/drag duration caller"
-    );
-    assert_eq!(
-        session_record.matches(LONG_PRESS_CALL).count(),
-        1,
-        "ActingLab session-record lost the exact long-press/long-tap duration caller"
-    );
-
-    let marker = "\npub(super) fn parse_record_duration_ms(";
-    let (_, owner_and_record_amend_step_id) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended record-duration owner");
-    let (owner_tail, _) = owner_and_record_amend_step_id
-        .split_once("pub(super) fn record_amend_step_id(")
-        .expect("flag values module lost the following record-amend step-id owner");
-    let normalized_owner = format!("fn parse_record_duration_ms({owner_tail}");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        17,
-        "record-duration owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        557,
-        "record-duration owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "629a0606c83110e452458eab128ae1ac5f5531ca519db8b0814fd036447616fe",
-        "record-duration owner body changed"
-    );
-    assert!(
-        normalized_owner.contains("failed to parse --duration-ms '{value}': {err}"),
-        "record-duration parse error text changed"
-    );
-    assert!(
-        normalized_owner.contains("--duration-ms must be positive"),
-        "record-duration zero-value error text changed"
-    );
-}
-
-#[test]
-fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        flag_values.matches("fn record_amend_step_id(").count(),
-        1,
-        "flag values module lost the one record-amend step-id definition"
-    );
-    assert!(
-        flag_values.contains("pub(super) fn record_amend_step_id("),
-        "record-amend step-id owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn record_amend_step_id("),
-        "ActingLab main regained the record-amend step-id owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "ActingLab main publicly re-exported flag-value glue"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-    for line in flag_values.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
-            "flag values owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CALL: &str = "let step_id = record_amend_step_id(&flags)?;";
-    const CALL_AND_LOOKUP: &str = concat!(
-        "            let step_id = record_amend_step_id(&flags)?;\n",
-        "            let Some(step) = record.steps.iter_mut().find(|step| step.step_id == step_id) else {",
-    );
-    assert_eq!(
-        session_record.matches("record_amend_step_id(").count(),
-        1,
-        "ActingLab session-record record-amend step-id caller set changed"
-    );
-    assert_eq!(
-        session_record.matches(CALL).count(),
-        1,
-        "ActingLab session-record lost the exact record-amend step-id caller"
-    );
-    assert_eq!(
-        session_record.matches(CALL_AND_LOOKUP).count(),
-        1,
-        "ActingLab session-record changed record-amend step-id caller order"
-    );
-
-    let marker = "\npub(super) fn record_amend_step_id(";
-    let (_, owner_and_record_candidates_step_id) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended record-amend step-id owner");
-    let (owner_tail, _) = owner_and_record_candidates_step_id
-        .split_once("pub(super) fn record_candidates_step_id(")
-        .expect("flag values module lost the following record-candidates step-id owner");
-    let normalized_owner = format!("fn record_amend_step_id({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        12,
-        "record-amend step-id owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        449,
-        "record-amend step-id owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "07cbf7af6b9ae384308d5961a7f3226c9aab6226f983d434aa0d098dd62d5009",
-        "record-amend step-id owner body changed"
-    );
-    for invariant in [
-        ".optional(\"--step-id\")",
-        ".filter(|value| value != \"true\")",
-        ".or_else(|| flags.positionals.first().cloned())",
-        "session record amend requires <step-id> or --step-id",
-        "if value.trim().is_empty()",
-        "record amend step id must not be empty",
-        "Ok(value)",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "record-amend step-id invariant changed: {invariant}"
-        );
-    }
-}
-
-#[test]
-fn actinglab_split_csv_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let cli_parse = fs::read_to_string(root.join("apps/actinglab/src/cli_parse.rs"))
-        .expect("read ActingLab CLI parse owner");
-    let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
-        .expect("read ActingLab lab2 CLI");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        flag_values.matches("fn split_csv(").count(),
-        1,
-        "flag values module lost the one split CSV definition"
-    );
-    assert!(
-        flag_values.contains("pub(super) fn split_csv("),
-        "split CSV owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn split_csv("),
-        "ActingLab main regained the split CSV owner"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    const CLI_PARSE_CALL: &str =
-        "global.instances = Some(split_csv(&require_raw(&raw, index, \"--instances\")?));";
-    const TARGETS_CALL: &str = ".flat_map(|value| split_csv(&value))";
-    assert_eq!(
-        main.matches("split_csv(").count(),
-        0,
-        "ActingLab main split CSV caller set changed"
-    );
-    assert_eq!(
-        cli_parse.matches("split_csv(").count(),
-        1,
-        "ActingLab CLI parse split CSV caller set changed"
-    );
-    assert!(
-        cli_parse.contains(CLI_PARSE_CALL),
-        "ActingLab CLI parse owner lost the exact --instances split CSV caller"
-    );
-    assert_eq!(
-        lab2.matches("split_csv(").count(),
-        2,
-        "ActingLab lab2 split CSV caller set changed"
-    );
-    assert_eq!(
-        lab2.matches(TARGETS_CALL).count(),
-        2,
-        "ActingLab lab2 lost the exact targets/fields split CSV callers"
-    );
-}
-
-#[test]
-fn actinglab_stream_check_requested_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-    let runtime_stream_adapter =
-        fs::read_to_string(root.join("apps/actinglab/src/runtime_stream_adapter.rs"))
-            .expect("read ActingLab runtime stream adapter");
-
-    assert_eq!(
-        main.matches("stream_check_requested,").count(),
-        1,
-        "ActingLab main lost the private stream-check root import"
-    );
-    assert_eq!(
-        flag_values.matches("fn stream_check_requested(").count(),
-        1,
-        "flag values module lost the one stream-check definition"
-    );
-    assert!(
-        flag_values.contains("pub(super) fn stream_check_requested("),
-        "stream-check owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn stream_check_requested("),
-        "ActingLab main regained the stream-check owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    let caller_serialization = runtime_stream_adapter
-        .lines()
-        .filter(|line| line.contains("stream_check_requested("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/runtime_stream_adapter.rs", line))
-        .collect::<String>();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "ea00f4f80bf738d722a6c1226c205f8483f28f54189b631cc33940a5d3c06b1e",
-        "runtime stream adapter caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn stream_check_requested(";
-    let (_, owner_and_target_argument) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended stream-check owner");
-    let (owner_tail, _) = owner_and_target_argument
-        .split_once("pub(super) fn target_argument(")
-        .expect("flag values module lost the following target-argument owner");
-    let normalized_owner = format!("fn stream_check_requested({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        4,
-        "stream-check owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        124,
-        "stream-check owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "01a8a647eca7a375059814b233c5825df9dbcfcd16213d270c6762ef62cd7684",
-        "stream-check owner body changed"
-    );
-}
-
-#[test]
-fn actinglab_target_argument_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-    let drive_cli = fs::read_to_string(root.join("apps/actinglab/src/drive_cli.rs"))
-        .expect("read ActingLab drive CLI");
-    let lab2_cli = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
-        .expect("read ActingLab lab2 CLI");
-    let readonly_cli = fs::read_to_string(root.join("apps/actinglab/src/readonly_cli.rs"))
-        .expect("read ActingLab readonly CLI");
-
-    assert_eq!(
-        main.matches("target_argument,").count(),
-        1,
-        "ActingLab main lost the private target-argument root import"
-    );
-    assert_eq!(
-        flag_values.matches("fn target_argument(").count(),
-        1,
-        "flag values module lost the one target-argument definition"
-    );
-    assert!(
-        flag_values.contains("pub(super) fn target_argument("),
-        "target-argument owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn target_argument("),
-        "ActingLab main regained the target-argument owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    let mut caller_rows = Vec::new();
-    for (path, source) in [
-        ("apps/actinglab/src/drive_cli.rs", drive_cli.as_str()),
-        ("apps/actinglab/src/lab2_cli.rs", lab2_cli.as_str()),
-        ("apps/actinglab/src/readonly_cli.rs", readonly_cli.as_str()),
-    ] {
-        caller_rows.extend(
-            source
-                .lines()
-                .filter(|line| line.contains("target_argument("))
-                .map(|line| semantic_caller_row(path, line)),
-        );
-    }
-    caller_rows.sort();
-    assert_eq!(
-        caller_rows.len(),
-        3,
-        "target-argument production caller set changed"
-    );
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "39e2fa8b22731196377cc18d847542ac7a4146715c9a1690eaac05ab514745e5",
-        "target-argument caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn target_argument(";
-    let (_, owner_and_split_csv) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended target-argument owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("#[rustfmt::skip]\npub(super) fn session_record_drift_diagnostics_path(")
-        .expect("flag values module lost the following drift-diagnostics path owner");
-    let normalized_owner = format!("fn target_argument({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        11,
-        "target-argument owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        362,
-        "target-argument owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "3fcd7683f2b4bdf9b74b85170ddd335d7616b040e47b0228685b9ba50e40a6d8",
-        "target-argument owner body changed"
-    );
-    for invariant in [
-        ".optional(\"--target\")",
-        ".filter(|value| value != \"true\")",
-        "return Ok(target);",
-        ".positionals",
-        ".first()",
-        ".cloned()",
-        "{command} requires <target> or --target <id>",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "target-argument invariant changed: {invariant}"
-        );
-    }
-}
-
-#[test]
-fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("session_record_drift_diagnostics_path,")
-            .count(),
-        1,
-        "ActingLab main lost the private drift-diagnostics path root import"
-    );
-    assert_eq!(
-        flag_values
-            .matches("fn session_record_drift_diagnostics_path(")
-            .count(),
-        1,
-        "flag values module lost the one drift-diagnostics path definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches(concat!(
-                "#[rustfmt::skip]\n",
-                "pub(super) fn session_record_drift_diagnostics_path("
-            ))
-            .count(),
-        1,
-        "drift-diagnostics path owner lost its exact private visibility or format guard"
-    );
-    assert!(
-        !main.contains("fn session_record_drift_diagnostics_path("),
-        "ActingLab main regained the drift-diagnostics path owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("use std::path::PathBuf;").count(),
-        1,
-        "drift-diagnostics path owner lost its exact PathBuf import"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    let caller_rows = session_record
-        .lines()
-        .filter(|line| line.contains("session_record_drift_diagnostics_path("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
+    let mut files = Vec::new();
+    collect_rust_files(&root.join(ACTINGLAB_SRC), &mut files);
+    files.sort();
+    let sources = files
+        .iter()
+        .map(|file| {
+            let path = workspace_relative(&root, file);
+            let source =
+                fs::read_to_string(file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            (path, source)
+        })
         .collect::<Vec<_>>();
-    assert_eq!(
-        caller_rows.len(),
-        1,
-        "drift-diagnostics path production caller set changed"
-    );
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "d2092a8c512b9f09a02f032255c37b0be206793f2262f12f715869a3e952c3fa",
-        "drift-diagnostics path caller serialization changed"
-    );
+    assert!(!sources.is_empty(), "{ACTINGLAB_SRC} has no Rust sources");
 
-    let marker = concat!(
-        "\n#[rustfmt::skip]\n",
-        "pub(super) fn session_record_drift_diagnostics_path("
-    );
-    let (_, owner_and_touch_backend) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended drift-diagnostics path owner");
-    let (owner_tail, _) = owner_and_touch_backend
-        .split_once("pub(super) fn parse_touch_backend_override(")
-        .expect("flag values module lost the following touch-backend owner");
-    let normalized_owner = format!("fn session_record_drift_diagnostics_path({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        12,
-        "drift-diagnostics path owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        390,
-        "drift-diagnostics path owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "1e969a434fe92b75824078b03b5facd48d2de473455fefc2015cd94bc2add7b0",
-        "drift-diagnostics path owner body changed"
-    );
-    for invariant in [
-        ".optional(\"--from-drift-diagnostics\")",
-        "return Ok(None);",
-        "if value == \"true\"",
-        "session record amend --from-drift-diagnostics requires <path>",
-        "Ok(Some(PathBuf::from(value)))",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "drift-diagnostics path invariant changed: {invariant}"
-        );
-    }
-}
-
-#[test]
-fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let device_commands =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/device_commands.rs"))
-            .expect("read ActingLab device commands module");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("parse_touch_backend_override,").count(),
-        1,
-        "ActingLab main lost the private touch-backend root import"
-    );
-    assert_eq!(
-        flag_values
-            .matches("fn parse_touch_backend_override(")
-            .count(),
-        1,
-        "flag values module lost the one touch-backend definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn parse_touch_backend_override(")
-            .count(),
-        1,
-        "touch-backend owner visibility changed"
+    let violations = inspect_glue_declarations(&sources, GLUE_DECLARATIONS);
+    println!(
+        "glue declarations: {} modules, {} owner symbols, {} caller files, {} required calls, \
+         {} invariants, {} required tests over {} sources: {} violations",
+        GLUE_DECLARATIONS.len(),
+        GLUE_DECLARATIONS
+            .iter()
+            .map(|declaration| declaration.owner_symbols.len())
+            .sum::<usize>(),
+        GLUE_DECLARATIONS
+            .iter()
+            .map(|declaration| declaration.allowed_callers.len())
+            .sum::<usize>(),
+        GLUE_DECLARATIONS
+            .iter()
+            .map(|declaration| declaration.required_calls.len())
+            .sum::<usize>(),
+        GLUE_DECLARATIONS
+            .iter()
+            .map(|declaration| declaration.invariants.len())
+            .sum::<usize>(),
+        GLUE_DECLARATIONS
+            .iter()
+            .map(|declaration| declaration.required_tests.len())
+            .sum::<usize>(),
+        sources.len(),
+        violations.len()
     );
     assert!(
-        !main.contains("fn parse_touch_backend_override("),
-        "ActingLab main regained the touch-backend owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values
-            .matches(concat!(
-                "use super::{\n",
-                "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, ",
-                "SessionRecordRegion,\n",
-                "    TouchBackendChoice,\n",
-                "};",
-            ))
-            .count(),
-        1,
-        "touch-backend owner lost its exact private dependency import"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    const CALL: &str =
-        "if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {";
-    assert_eq!(
-        device_commands.matches(CALL).count(),
-        1,
-        "ActingLab device commands lost the exact touch-backend caller expression"
-    );
-    let caller_rows = [
-        ("apps/actinglab/src/main.rs", main.as_str()),
-        (
-            "apps/actinglab/src/commands/device_commands.rs",
-            device_commands.as_str(),
-        ),
-    ]
-    .into_iter()
-    .flat_map(|(path, source)| {
-        source
-            .lines()
-            .filter(|line| line.contains("parse_touch_backend_override("))
-            .map(move |line| semantic_caller_row(path, line))
-    })
-    .collect::<Vec<_>>();
-    assert_eq!(
-        caller_rows.len(),
-        1,
-        "touch-backend production caller set changed"
-    );
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "3a84606d759d774ae7c61c67fefca89aa9afe445ff7a880a031372bd7daf5633",
-        "touch-backend caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn parse_touch_backend_override(";
-    let (_, owner_and_match_metric) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended touch-backend owner");
-    let (owner_tail, _) = owner_and_match_metric
-        .split_once("pub(super) fn parse_match_metric_flag(")
-        .expect("flag values module lost the following match-metric owner");
-    let normalized_owner = format!("fn parse_touch_backend_override({owner_tail}").replace(
-        concat!(
-            "fn parse_touch_backend_override(\n",
-            "    flags: &FlagArgs,\n",
-            ") -> CliOutcome<Option<TouchBackendChoice>> {\n",
-        ),
-        concat!(
-            "fn parse_touch_backend_override(flags: &FlagArgs) ",
-            "-> CliOutcome<Option<TouchBackendChoice>> {\n",
-        ),
-    );
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        14,
-        "touch-backend owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        484,
-        "touch-backend owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "0d9772f83ec6bbf884476c9532941a33e58af14dfae5a99e34f360eea3a4a226",
-        "touch-backend owner body changed"
-    );
-    for invariant in [
-        ".optional(\"--touch-backend\")",
-        "return Ok(None);",
-        "if value == \"true\"",
-        "--touch-backend expects auto, auto-fastest, maatouch, minitouch, or adb_shell_input",
-        "TouchBackendChoice::parse(&value)",
-        ".map(Some)",
-        ".map_err(|err| CliError::usage(err.to_string()))",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "touch-backend invariant changed: {invariant}"
-        );
-    }
-}
-
-#[test]
-fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let navigation_recovery =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/navigation_recovery.rs"))
-            .expect("read ActingLab navigation/recovery commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("parse_match_metric_flag,").count(),
-        1,
-        "ActingLab main lost the private match-metric root import"
-    );
-    assert_eq!(
-        flag_values.matches("fn parse_match_metric_flag(").count(),
-        1,
-        "flag values module lost the one match-metric definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn parse_match_metric_flag(")
-            .count(),
-        1,
-        "match-metric owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn parse_match_metric_flag("),
-        "ActingLab main regained the match-metric owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values
-            .matches(concat!(
-                "use super::{\n",
-                "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, ",
-                "SessionRecordRegion,\n",
-                "    TouchBackendChoice,\n",
-                "};",
-            ))
-            .count(),
-        1,
-        "match-metric owner lost its exact private dependency import"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    const LOCATE_CALL: &str = "let metric = parse_match_metric_flag(&flags)?;";
-    const BACKTEST_CALL: &str = "let metric = parse_match_metric_flag(flags)?;";
-    const AUTO_REGION_CALL: &str = "Some(parse_match_metric_flag(flags)?)";
-    for (call, expected) in [(LOCATE_CALL, 1), (BACKTEST_CALL, 1), (AUTO_REGION_CALL, 1)] {
-        assert_eq!(
-            main.matches(call).count()
-                + session_record.matches(call).count()
-                + navigation_recovery.matches(call).count(),
-            expected,
-            "ActingLab changed an exact match-metric caller: {call}"
-        );
-    }
-    let caller_rows = [
-        ("apps/actinglab/src/main.rs", main.as_str()),
-        (
-            "apps/actinglab/src/commands/session_record.rs",
-            session_record.as_str(),
-        ),
-        (
-            "apps/actinglab/src/commands/navigation_recovery.rs",
-            navigation_recovery.as_str(),
-        ),
-    ]
-    .iter()
-    .flat_map(|(path, source)| {
-        source
-            .lines()
-            .filter(|line| line.contains("parse_match_metric_flag("))
-            .map(move |line| semantic_caller_row(path, line))
-    })
-    .collect::<Vec<_>>();
-    assert_eq!(caller_rows.len(), 3, "match-metric caller set changed");
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "5690593f43ab1d12e73273c0c20f1bd5c64c60d4fa4047ab29591361df703bba",
-        "match-metric caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn parse_match_metric_flag(";
-    let (_, owner_and_record_build_resolution) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended match-metric owner");
-    let (owner_tail, _) = owner_and_record_build_resolution
-        .split_once("pub(super) fn parse_record_build_resolution(")
-        .expect("flag values module lost the following record-build resolution owner");
-    let normalized_owner = format!("fn parse_match_metric_flag({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        14,
-        "match-metric owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        501,
-        "match-metric owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "ac1654d1a2a1b042afd6192d564ccfd9b699c47ffb981af8a7c47f6eef3526a1",
-        "match-metric owner body changed"
-    );
-    for invariant in [
-        ".optional(\"--metric\")",
-        ".unwrap_or_else(|| \"ccorr_normed\".to_string())",
-        "\"ccorr_normed\" => Ok(MatchMetric::CrossCorrelationNormalized)",
-        "\"ccoeff_normed\" => Ok(MatchMetric::CorrelationCoefficientNormalized)",
-        "unsupported --metric '{other}', expected ccorr_normed or ccoeff_normed",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "match-metric invariant changed: {invariant}"
-        );
-    }
-    assert_eq!(
-        flag_values
-            .matches("fn match_metric_flag_preserves_default_values_and_rejection(")
-            .count(),
-        1,
-        "match-metric behavior test coverage changed"
-    );
-
-    let mut actinglab_sources = Vec::new();
-    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
-    let definition_count = actinglab_sources
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-                .matches("fn parse_match_metric_flag(")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        definition_count, 1,
-        "ActingLab gained a second match-metric parser or authority"
-    );
-}
-
-#[test]
-fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("record_candidates_step_id,").count(),
-        1,
-        "ActingLab main lost the sole private record-candidates step-id root import"
-    );
-    assert_eq!(
-        main.matches("record_candidates_step_id").count()
-            + session_record.matches("record_candidates_step_id(").count(),
-        2,
-        "ActingLab session-record changed the private import or production caller set"
-    );
-    assert_eq!(
-        flag_values.matches("fn record_candidates_step_id(").count(),
-        1,
-        "flag values module lost the one record-candidates step-id definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn record_candidates_step_id(")
-            .count(),
-        1,
-        "record-candidates step-id owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn record_candidates_step_id("),
-        "ActingLab main regained the record-candidates step-id owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-
-    const CALL: &str = "let step_id = record_candidates_step_id(&flags)?;";
-    assert_eq!(
-        session_record.matches(CALL).count(),
-        1,
-        "ActingLab session-record lost the exact record-candidates step-id caller expression"
-    );
-    let caller_rows = session_record
-        .lines()
-        .filter(|line| line.contains("record_candidates_step_id("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        caller_rows.len(),
-        1,
-        "record-candidates step-id production caller set changed"
-    );
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "092a1d6d0e5de7d1820aa9581403b5199b8c1a857bb785f0d0faa307bf714d5e",
-        "record-candidates step-id caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn record_candidates_step_id(";
-    let (_, owner_and_stream_input_relay_action) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended record-candidates step-id owner");
-    let (owner_tail, _) = owner_and_stream_input_relay_action
-        .split_once("pub(super) fn stream_input_relay_action(")
-        .expect("flag values module lost the following input-relay owner");
-    let normalized_owner = format!("fn record_candidates_step_id({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        16,
-        "record-candidates step-id owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        511,
-        "record-candidates step-id owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "bdce77b80115ebc41f2fa2cf5d1da60cf15e8915f7bc4557e0b706626ec8b21c",
-        "record-candidates step-id owner body changed"
-    );
-    const PRECEDENCE: &str = concat!(
-        ".optional(\"--step-id\")\n",
-        "        .filter(|value| value != \"true\")\n",
-        "        .or_else(|| flags.positionals.first().cloned())"
-    );
-    for invariant in [
-        PRECEDENCE,
-        "session record candidates requires <step-id> or --step-id",
-        "if value.trim().is_empty()",
-        "record candidates step id must not be empty",
-        "Ok(value)",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "record-candidates step-id invariant changed: {invariant}"
-        );
-    }
-    assert_eq!(
-        flag_values
-            .matches(
-                "fn record_candidates_step_id_preserves_precedence_fallback_errors_and_original_value("
-            )
-            .count(),
-        1,
-        "record-candidates step-id behavior test coverage changed"
-    );
-
-    let mut actinglab_sources = Vec::new();
-    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
-    let definition_count = actinglab_sources
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-                .matches("fn record_candidates_step_id(")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        definition_count, 1,
-        "ActingLab gained a second record-candidates step-id parser or authority"
-    );
-}
-
-#[test]
-fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let device_commands =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/device_commands.rs"))
-            .expect("read ActingLab device commands module");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("stream_input_relay_action,").count(),
-        1,
-        "ActingLab main lost the sole private input-relay root import"
-    );
-    assert_eq!(
-        main.matches("stream_input_relay_action").count()
-            + device_commands
-                .matches("stream_input_relay_action(")
-                .count(),
-        2,
-        "ActingLab changed the private root import or production caller set"
-    );
-    assert_eq!(
-        flag_values.matches("fn stream_input_relay_action(").count(),
-        1,
-        "flag values module lost the one input-relay definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn stream_input_relay_action(")
-            .count(),
-        1,
-        "input-relay owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn stream_input_relay_action("),
-        "ActingLab main regained the input-relay owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-    for line in flag_values.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub fn stream_input_relay_action(")
-                && !trimmed.starts_with("pub(crate) fn stream_input_relay_action("),
-            "input-relay owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CALL: &str = "if let Some((action, action_args)) = stream_input_relay_action(flags)? {";
-    assert_eq!(
-        device_commands.matches(CALL).count(),
-        1,
-        "ActingLab device commands lost the exact input-relay caller expression"
-    );
-    let caller_rows = [
-        ("apps/actinglab/src/main.rs", main.as_str()),
-        (
-            "apps/actinglab/src/commands/device_commands.rs",
-            device_commands.as_str(),
-        ),
-    ]
-    .into_iter()
-    .flat_map(|(path, source)| {
-        source
-            .lines()
-            .filter(|line| line.contains("stream_input_relay_action("))
-            .map(move |line| semantic_caller_row(path, line))
-    })
-    .collect::<Vec<_>>();
-    assert_eq!(
-        caller_rows.len(),
-        1,
-        "input-relay production caller set changed"
-    );
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "ddd8768b246de0e186302dd907ec6393687697abd4b0b1f12e335f53e0aecc9a",
-        "input-relay caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn stream_input_relay_action(";
-    let (_, owner_and_stream_check_requested) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended input-relay owner");
-    let (owner_tail, _) = owner_and_stream_check_requested
-        .split_once("pub(super) fn stream_check_requested(")
-        .expect("flag values module lost the following stream-check owner");
-    const RUSTFMT_SIGNATURE_TAIL: &str =
-        "\n    flags: &FlagArgs,\n) -> CliOutcome<Option<(String, Vec<String>)>> {\n";
-    let body_tail = owner_tail
-        .strip_prefix(RUSTFMT_SIGNATURE_TAIL)
-        .expect("input-relay owner rustfmt signature layout changed");
-    let normalized_owner = format!(
-        "fn stream_input_relay_action(flags: &FlagArgs) -> CliOutcome<Option<(String, Vec<String>)>> {{\n{body_tail}"
-    );
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        19,
-        "input-relay owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        649,
-        "input-relay owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "f6188fcb2e4b80093de0eb2ec8e797f38b0be7841cc1d7515097b16ea549dc8d",
-        "input-relay owner body changed"
-    );
-    const PRECEDENCE: &str = concat!(
-        ".optional(\"--input-relay\")\n",
-        "        .or_else(|| flags.optional(\"--interactive-input\"))"
-    );
-    for invariant in [
-        PRECEDENCE,
-        "return Ok(None);",
-        "if value == \"true\" {",
-        "stream --input-relay expects an action: tap|swipe|long-tap|key|text",
-        "flags.positionals.iter().skip(1).cloned().collect(),",
-        "Ok(Some((value, flags.positionals.clone())))",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "input-relay invariant changed: {invariant}"
-        );
-    }
-    assert_eq!(
-        flag_values
-            .matches(
-                "fn stream_input_relay_action_preserves_precedence_fallback_absence_literal_true_errors_and_arguments("
-            )
-            .count(),
-        1,
-        "input-relay behavior test coverage changed"
-    );
-
-    let mut actinglab_sources = Vec::new();
-    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
-    let definition_count = actinglab_sources
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-                .matches("fn stream_input_relay_action(")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        definition_count, 1,
-        "ActingLab gained a second input-relay parser or authority"
-    );
-}
-
-#[test]
-fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("parse_record_build_resolution,").count(),
-        1,
-        "ActingLab main lost the sole private record-build resolution root import"
-    );
-    assert_eq!(
-        main.matches("parse_record_build_resolution").count()
-            + session_record
-                .matches("parse_record_build_resolution(")
-                .count(),
-        2,
-        "ActingLab session-record changed the private import or production caller set"
-    );
-    assert_eq!(
-        flag_values
-            .matches("fn parse_record_build_resolution(")
-            .count(),
-        1,
-        "flag values module lost the one record-build resolution definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn parse_record_build_resolution(")
-            .count(),
-        1,
-        "record-build resolution owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn parse_record_build_resolution("),
-        "ActingLab main regained the record-build resolution owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-    for line in flag_values.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub fn parse_record_build_resolution(")
-                && !trimmed.starts_with("pub(crate) fn parse_record_build_resolution("),
-            "record-build resolution owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CALL: &str = "let mut resolution = parse_record_build_resolution(flags)?;";
-    assert_eq!(
-        session_record.matches(CALL).count(),
-        1,
-        "ActingLab session-record lost the exact record-build resolution caller expression"
-    );
-    let caller_rows = session_record
-        .lines()
-        .filter(|line| line.contains("parse_record_build_resolution("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        caller_rows.len(),
-        1,
-        "record-build resolution production caller set changed"
-    );
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "74453e9c995037e811e013a9185c0147dc80aded6e697ea2fbe1bfd39064b8fe",
-        "record-build resolution caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn parse_record_build_resolution(";
-    let (_, owner_and_session_record_region) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended record-build resolution owner");
-    let (owner_tail, _) = owner_and_session_record_region
-        .split_once("pub(super) fn parse_session_record_region(")
-        .expect("flag values module lost the following session-record region owner");
-    let normalized_owner = format!("fn parse_record_build_resolution({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        31,
-        "record-build resolution owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        1_028,
-        "record-build resolution owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "d8b63c212e52f068512adfae6175ab15a09108981e04adb1a3ce433722a16b1a",
-        "record-build resolution owner body changed"
-    );
-    const FLAG_FILTER: &str = concat!(
-        ".optional(\"--resolution\")\n",
-        "        .filter(|value| value != \"true\")"
-    );
-    for invariant in [
-        FLAG_FILTER,
-        "return Ok(None);",
-        "value.replace(['X', '*'], \"x\")",
-        "normalized.split_once('x')",
-        "--resolution must use <width>x<height>, got {value}",
-        "failed to parse --resolution width '{width}': {err}",
-        "failed to parse --resolution height '{height}': {err}",
-        "if width == 0 || height == 0",
-        "--resolution width and height must be non-zero",
-        "Ok(Some((width, height)))",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "record-build resolution invariant changed: {invariant}"
-        );
-    }
-    assert_eq!(
-        flag_values
-            .matches(
-                "fn parse_record_build_resolution_preserves_absence_bare_true_normalization_parsing_errors_and_valid_values("
-            )
-            .count(),
-        1,
-        "record-build resolution behavior test coverage changed"
-    );
-
-    let mut actinglab_sources = Vec::new();
-    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
-    let definition_count = actinglab_sources
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-                .matches("fn parse_record_build_resolution(")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        definition_count, 1,
-        "ActingLab gained a second record-build resolution parser or authority"
-    );
-}
-
-#[test]
-fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("parse_session_record_region,").count(),
-        1,
-        "ActingLab main lost the sole private session-record region root import"
-    );
-    assert_eq!(
-        session_record
-            .matches("parse_session_record_region(")
-            .count(),
-        6,
-        "ActingLab session-record changed the production caller set"
-    );
-    assert_eq!(
-        flag_values
-            .matches("fn parse_session_record_region(")
-            .count(),
-        1,
-        "flag values module lost the one session-record region definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn parse_session_record_region(")
-            .count(),
-        1,
-        "session-record region owner visibility changed"
-    );
-    assert!(
-        !main.contains("fn parse_session_record_region("),
-        "ActingLab main regained the session-record region owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-    for line in flag_values.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub fn parse_session_record_region(")
-                && !trimmed.starts_with("pub(crate) fn parse_session_record_region("),
-            "session-record region owner exposed broader visibility: {line}"
-        );
-    }
-    assert_eq!(
-        session_record
-            .matches("pub(crate) enum SessionRecordRegion {")
-            .count(),
-        1,
-        "session-record region owner type changed"
-    );
-    assert_eq!(
-        session_record
-            .matches("pub(crate) struct SessionRecordRect {")
-            .count(),
-        1,
-        "session-record rectangle owner type changed"
-    );
-    assert!(
-        !main.contains("pub enum SessionRecordRegion")
-            && !main.contains("pub(crate) enum SessionRecordRegion")
-            && !main.contains("pub struct SessionRecordRect")
-            && !main.contains("pub(crate) struct SessionRecordRect"),
-        "session-record region type dependency gained broader visibility"
-    );
-
-    const CREATE_CALL: &str =
-        "let region = parse_session_record_region(&flags.required(\"--region\")?)?;";
-    const AMEND_CALL: &str = "*target.region = parse_session_record_region(&value)?;";
-    assert_eq!(
-        session_record.matches(CREATE_CALL).count(),
-        3,
-        "ActingLab session-record lost an exact session-record region create caller"
-    );
-    assert_eq!(
-        session_record.matches(AMEND_CALL).count(),
-        3,
-        "ActingLab session-record lost an exact session-record region amend caller"
-    );
-    let caller_rows = session_record
-        .lines()
-        .filter(|line| line.contains("parse_session_record_region("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        caller_rows.len(),
-        6,
-        "session-record region production caller set changed"
-    );
-    let caller_serialization = caller_rows.concat();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "06df9132f13e50965f855efeab08cdf3f088f166ba97b68d17f439fba59de0d2",
-        "session-record region caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn parse_session_record_region(";
-    let (_, owner_and_split_csv) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended session-record region owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("#[rustfmt::skip]\npub(super) fn parse_session_record_rect(")
-        .expect("flag values module lost the following session-record rectangle owner");
-    let normalized_owner = format!("fn parse_session_record_region({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        32,
-        "session-record region owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        1_072,
-        "session-record region owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "1e68198f7d09be2be1008039137f6a4e26bae308691247f6ba973673cbcc442c",
-        "session-record region owner body changed"
-    );
-    for invariant in [
-        "if value == \"auto\"",
-        "return Ok(SessionRecordRegion::Auto);",
-        "value.split(',').map(str::trim).collect::<Vec<_>>()",
-        "if parts.len() != 4",
-        "record anchor region must be auto or x,y,width,height: {value}",
-        "failed to parse record anchor region {name} '{}': {err}",
-        "x: parse_part(0, \"x\")?",
-        "y: parse_part(1, \"y\")?",
-        "width: parse_part(2, \"width\")?",
-        "height: parse_part(3, \"height\")?",
-        "if rect.width <= 0 || rect.height <= 0",
-        "record anchor region width and height must be positive",
-        "Ok(SessionRecordRegion::Rect { rect })",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "session-record region invariant changed: {invariant}"
-        );
-    }
-    assert_eq!(
-        flag_values
-            .matches(
-                "fn parse_session_record_region_preserves_auto_rect_whitespace_parse_errors_and_positive_dimensions("
-            )
-            .count(),
-        1,
-        "session-record region behavior test coverage changed"
-    );
-
-    let mut actinglab_sources = Vec::new();
-    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
-    let definition_count = actinglab_sources
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-                .matches("fn parse_session_record_region(")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        definition_count, 1,
-        "ActingLab gained a second session-record region parser or authority"
-    );
-}
-
-#[test]
-fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("parse_session_record_rect,").count(),
-        0,
-        "ActingLab main retained the session-record rectangle root import after its sole caller moved"
-    );
-    assert_eq!(
-        main.matches("parse_session_record_rect(").count(),
-        0,
-        "ActingLab main retained a session-record rectangle production caller"
-    );
-    assert_eq!(
-        flag_values.matches("fn parse_session_record_rect(").count(),
-        1,
-        "flag values module lost the one session-record rectangle definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn parse_session_record_rect(")
-            .count(),
-        1,
-        "session-record rectangle owner visibility changed"
-    );
-    assert_eq!(
-        flag_values
-            .matches("#[rustfmt::skip]\npub(super) fn parse_session_record_rect(")
-            .count(),
-        1,
-        "session-record rectangle owner lost its byte-preserving rustfmt boundary"
-    );
-    assert!(
-        !main.contains("fn parse_session_record_rect("),
-        "ActingLab main regained the session-record rectangle owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-    for line in flag_values.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub fn parse_session_record_rect(")
-                && !trimmed.starts_with("pub(crate) fn parse_session_record_rect("),
-            "session-record rectangle owner exposed broader visibility: {line}"
-        );
-    }
-    assert_eq!(
-        session_record
-            .matches("pub(crate) struct SessionRecordRect {")
-            .count(),
-        1,
-        "session-record rectangle owner type changed"
-    );
-    assert!(
-        !main.contains("pub struct SessionRecordRect")
-            && !main.contains("pub(crate) struct SessionRecordRect"),
-        "session-record rectangle type dependency gained broader visibility"
-    );
-
-    const FROM_CALL: &str = "parse_session_record_rect(from, \"--swipe from\")?,";
-    const TO_CALL: &str = "parse_session_record_rect(to, \"--swipe to\")?,";
-    assert_eq!(
-        flag_values.matches(FROM_CALL).count(),
-        1,
-        "flag values lost the exact swipe-from rectangle caller"
-    );
-    assert_eq!(
-        flag_values.matches(TO_CALL).count(),
-        1,
-        "flag values lost the exact swipe-to rectangle caller"
-    );
-    let semantic_callers = flag_values
-        .lines()
-        .filter(|line| matches!(line.trim(), FROM_CALL | TO_CALL))
-        .map(|line| semantic_caller_row("apps/actinglab/src/flag_values.rs", line))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        semantic_callers.len(),
-        2,
-        "session-record rectangle production caller set changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(semantic_callers.concat().as_bytes())),
-        "55729d99aa9ec6b3333f74ef30fea487394a0661f2fbc43340c770cc5ae9168c",
-        "session-record rectangle semantic caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn parse_session_record_rect(";
-    let (_, owner_and_split_csv) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended session-record rectangle owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("#[rustfmt::skip]\npub(super) fn parse_session_record_swipe_rects(")
-        .expect("flag values module lost the following session-record swipe owner");
-    let normalized_owner = format!("fn parse_session_record_rect({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        30,
-        "session-record rectangle owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        961,
-        "session-record rectangle owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "5ef2557e52060d170ed15432ba253ec8b7fdb56c329c2593d7935b8e99027501",
-        "session-record rectangle owner body changed"
-    );
-    for invariant in [
-        "value.split(',').map(str::trim).collect::<Vec<_>>()",
-        "if parts.len() != 4",
-        "{label} must be formatted as x,y,width,height: {value}",
-        "failed to parse {label} {name} '{}': {err}",
-        "x: parse(0, \"x\")?",
-        "y: parse(1, \"y\")?",
-        "width: parse(2, \"width\")?",
-        "height: parse(3, \"height\")?",
-        "if rect.width <= 0 || rect.height <= 0",
-        "{label} dimensions must be positive: {}x{}",
-        "Ok(rect)",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "session-record rectangle invariant changed: {invariant}"
-        );
-    }
-    assert_eq!(
-        flag_values
-            .matches(
-                "fn parse_session_record_rect_preserves_whitespace_parse_order_labels_errors_and_positive_dimensions("
-            )
-            .count(),
-        1,
-        "session-record rectangle behavior test coverage changed"
-    );
-
-    let mut actinglab_sources = Vec::new();
-    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
-    let definition_count = actinglab_sources
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-                .matches("fn parse_session_record_rect(")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        definition_count, 1,
-        "ActingLab gained a second session-record rectangle parser or authority"
-    );
-}
-
-#[test]
-fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("parse_session_record_swipe_rects,").count(),
-        1,
-        "ActingLab main lost the sole private session-record swipe root import"
-    );
-    assert_eq!(
-        flag_values
-            .matches("fn parse_session_record_swipe_rects(")
-            .count(),
-        1,
-        "flag values module lost the one session-record swipe definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn parse_session_record_swipe_rects(")
-            .count(),
-        1,
-        "session-record swipe owner visibility changed"
-    );
-    assert_eq!(
-        flag_values
-            .matches("#[rustfmt::skip]\npub(super) fn parse_session_record_swipe_rects(")
-            .count(),
-        1,
-        "session-record swipe owner lost its byte-preserving rustfmt boundary"
-    );
-    assert!(
-        !main.contains("fn parse_session_record_swipe_rects("),
-        "ActingLab main regained the session-record swipe owner"
-    );
-    assert!(
-        !main.contains("pub use flag_values::"),
-        "flag values owner became a public root re-export"
-    );
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        20,
-        "flag values module visibility changed"
-    );
-    for line in flag_values.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("pub fn parse_session_record_swipe_rects(")
-                && !trimmed.starts_with("pub(crate) fn parse_session_record_swipe_rects("),
-            "session-record swipe owner exposed broader visibility: {line}"
-        );
-    }
-
-    const CALL: &str = "let (from, to) = parse_session_record_swipe_rects(&swipe)?;";
-    assert_eq!(
-        session_record.matches(CALL).count(),
-        1,
-        "ActingLab session-record lost the sole exact session-record swipe caller"
-    );
-    let semantic_callers = session_record
-        .lines()
-        .filter(|line| line.trim() == CALL)
-        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        semantic_callers.len(),
-        1,
-        "session-record swipe production caller set changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(semantic_callers.concat().as_bytes())),
-        "a7f82fc131ff786b3b2b93222a395ee05301a3ffae8312ffa19bafa5a0d9d719",
-        "session-record swipe semantic caller serialization changed"
-    );
-
-    let marker = "\npub(super) fn parse_session_record_swipe_rects(";
-    let (_, owner_and_split_csv) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended session-record swipe owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("#[rustfmt::skip]\npub(super) fn parse_session_record_candidate_index(")
-        .expect("flag values module lost the following session-record candidate-index owner");
-    let normalized_owner = format!("fn parse_session_record_swipe_rects({owner_tail}");
-    assert_eq!(
-        normalized_owner.matches('\n').count(),
-        12,
-        "session-record swipe owner LF line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        387,
-        "session-record swipe owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "53ca35ca6072509978c6d87e3739ffc2a3b78ed0f2b2a55600c1dc05d4a18566",
-        "session-record swipe owner body changed"
-    );
-    for invariant in [
-        ".split_once(\"->\")",
-        "--swipe must be formatted as x,y,w,h->x,y,w,h",
-        "parse_session_record_rect(from, \"--swipe from\")?",
-        "parse_session_record_rect(to, \"--swipe to\")?",
-        "Ok((",
-    ] {
-        assert!(
-            normalized_owner.contains(invariant),
-            "session-record swipe invariant changed: {invariant}"
-        );
-    }
-    assert_eq!(
-        flag_values
-            .matches(
-                "fn parse_session_record_swipe_rects_preserves_first_arrow_order_labels_and_tuple("
-            )
-            .count(),
-        1,
-        "session-record swipe behavior test coverage changed"
-    );
-
-    let mut actinglab_sources = Vec::new();
-    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
-    let definition_count = actinglab_sources
-        .iter()
-        .map(|path| {
-            fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-                .matches("fn parse_session_record_swipe_rects(")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        definition_count, 1,
-        "ActingLab gained a second session-record swipe parser or authority"
-    );
-}
-
-#[test]
-fn actinglab_parse_session_record_candidate_index_glue_stays_out_of_main() {
-    let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
-    let session_record =
-        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
-            .expect("read ActingLab session record commands");
-    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
-        .expect("read ActingLab flag values module");
-
-    assert_eq!(
-        main.matches("parse_session_record_candidate_index,")
-            .count(),
-        1,
-        "ActingLab main lost the sole private session-record candidate-index root import"
-    );
-    assert_eq!(
-        flag_values
-            .matches("fn parse_session_record_candidate_index(")
-            .count(),
-        1,
-        "flag values module lost the one session-record candidate-index definition"
-    );
-    assert_eq!(
-        flag_values
-            .matches("pub(super) fn parse_session_record_candidate_index(")
-            .count(),
-        1,
-        "session-record candidate-index owner visibility changed"
-    );
-    assert_eq!(
-        flag_values
-            .matches("#[rustfmt::skip]\npub(super) fn parse_session_record_candidate_index(")
-            .count(),
-        1,
-        "session-record candidate-index owner lost its byte-preserving rustfmt boundary"
-    );
-    assert!(
-        !main.contains("fn parse_session_record_candidate_index("),
-        "ActingLab main regained the session-record candidate-index owner"
-    );
-
-    const CALL: &str =
-        "if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {";
-    assert_eq!(
-        session_record.matches(CALL).count(),
-        3,
-        "ActingLab session-record lost the three exact session-record candidate-index callers"
-    );
-    assert_eq!(
-        session_record
-            .matches("parse_session_record_candidate_index(")
-            .count(),
-        3,
-        "session-record candidate-index production caller set changed"
+        violations.is_empty(),
+        "ActingLab glue differs from GLUE_DECLARATIONS ([module] rule: file: reason):\n{}",
+        violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
