@@ -1547,6 +1547,16 @@ impl RuntimeHost {
             .activate_policy_catalog(sources)
     }
 
+    /// The latest decision of each approval id from the complete ledger-verified approval
+    /// projection; an id absent from the map has never been decided (Workflow #191 D2).
+    pub fn latest_approval_decisions(
+        &self,
+        approval_ids: &[String],
+    ) -> RuntimeHostResult<BTreeMap<String, ApprovalDecisionRecord>> {
+        self.work_ref("read_latest_approval_decisions")?
+            .latest_approval_decisions(approval_ids)
+    }
+
     #[cfg(test)]
     pub(crate) fn activate_policy_catalog_with_expected_for_test(
         &self,
