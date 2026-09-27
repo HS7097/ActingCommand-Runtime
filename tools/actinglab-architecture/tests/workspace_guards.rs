@@ -5923,6 +5923,10 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "capture_backend: CaptureBackendChoice",
             ),
             glue_invariant("DeviceRuntimeConfig", "touch_backend: TouchBackendChoice"),
+            glue_invariant(
+                "device_config_for_instance",
+                "enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;",
+            ),
         ],
         required_tests: &[],
         tolerated_elsewhere: &[],
@@ -5950,7 +5954,13 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_caller_file("apps/actinglab/src/session_management.rs"),
         ],
         required_calls: &[],
-        invariants: &[],
+        invariants: &[
+            glue_invariant("resolve_instance_id", "game_match && server_match"),
+            glue_invariant(
+                "resolve_instance_id_for_flags",
+                "flags.optional(\"--instance\").filter(|value| value != \"true\")",
+            ),
+        ],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "instance id resolution is owned by instance_resolution.rs, declared once as a \
@@ -5993,8 +6003,15 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 ACTINGLAB_MAIN,
                 "use user_config_store::{config_path, read_user_config, write_user_config};",
             ),
+            absent(
+                "apps/actinglab/src/user_config_store.rs",
+                "unwrap_or_default",
+            ),
         ],
-        invariants: &[],
+        invariants: &[glue_invariant(
+            "read_user_config",
+            "serde_json::from_str(&text).map_err(",
+        )],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "reading, writing and locating the user config file is owned by \
