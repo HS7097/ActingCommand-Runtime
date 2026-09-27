@@ -1,8 +1,12 @@
 # Ledger maintenance and cutover
 
 RuntimeHost owns one `Arc<RuntimeDatabase>` for State and GlobalLedger. Startup
-acquires OwnerGuard, validates State/ArtifactStore and the formal Ledger metadata,
-opens one SQLite writer, then assembles Provider and the remaining Runtime.
+acquires OwnerGuard, validates State/ArtifactStore, classifies the formal Ledger
+by its keyed metadata row alone without reading history, then opens the one
+SQLite writer, which performs the single complete verification. That pass reads
+no further than the authenticated head sequence and must finish within the held
+maintenance operation deadline. Startup then assembles Provider and the
+remaining Runtime.
 Existing roots without a formal marker require explicit maintenance. An empty
 root initializes formal schema and metadata atomically. Candidate, partial,
 invalid or unauthenticated metadata never enables a production writer.
@@ -68,8 +72,9 @@ migration ID binds the source and original frozen backup. A matching committed
 marker verifies and returns without inserting again; conflicts fail closed.
 An uncertain COMMIT reports the original error and a readback classification;
 it never retries the import. Writer startup consumes the same held lock handle
-without an unlock/relock interval. Subsequent SQLite appends preserve the marker
-and revalidate its original prefix and completion.
+without an unlock/relock interval. This writer open is the only complete
+verification in startup and in `actingd unlock-owner`. Subsequent SQLite appends
+preserve the marker and revalidate its original prefix and completion.
 
 ## Backup and restore
 
@@ -99,6 +104,16 @@ seconds and 128 SQLite pages per step. Typed limits must be positive and cannot
 exceed 4 GiB, 65,536 entries, 1,000,000 events, 600 seconds or 1,024 pages.
 Artifact copying uses bounded chunks and the same operation deadline. Existing
 State validation and database mutex acquisition retain their owner semantics.
+The defaults bound one maintenance operation. Startup and `actingd unlock-owner`
+use only their deadline; their material bound is the authenticated Ledger extent.
+The offline CLI `verify` and `backup` still return `ledger_read_budget_exceeded`
+for a root beyond the default limits; such a root needs
+`RuntimeHost::maintain_ledger` with explicit limits (at most 1,000,000 events,
+4 GiB, 600 seconds). The CLI takes no limit options. Later startup steps keep
+their own bounds: instance-fact and agent-dispatch recovery each query the full
+history from the writer within its 10 second command timeout, and a restart with
+more than 16,384 completed policy runs fails with
+`policy_scheduling_outcome_capacity_exceeded`.
 
 ## Portable evidence
 

@@ -336,6 +336,69 @@ pub(super) fn has_schema(database: &RuntimeDatabase) -> GlobalLedgerResult<bool>
     }
 }
 
+/// Authenticates the keyed meta row alone (format header, marker and head extent) with
+/// the error identities of complete verification. No history row is read.
+fn authenticated_extent(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+) -> GlobalLedgerResult<Option<(SqliteMarker, u64)>> {
+    let format = format_version(connection)?;
+    match (format, table_count(connection)?) {
+        (0, 0) => return Ok(None),
+        (0 | FORMAL_FORMAT_VERSION, 4) => {}
+        _ => {
+            return Err(failure(
+                "ledger_schema_incomplete",
+                "inspect_runtime_ledger",
+            ));
+        }
+    }
+    let meta = read_meta(connection)?;
+    let marker = SqliteMarker::parse(&meta)?;
+    let expected_format = if marker.state == "ready" {
+        FORMAL_FORMAT_VERSION
+    } else {
+        0
+    };
+    if format != expected_format {
+        return Err(failure(
+            "ledger_format_marker_mismatch",
+            "verify_database_format",
+        ));
+    }
+    let (Some(SqlValue::Integer(next)), Some(SqlValue::Integer(head)), Some(hash)) =
+        (meta.get(2), meta.get(3), meta.get(4))
+    else {
+        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+    };
+    let head = decode(*head);
+    let hash = match hash {
+        SqlValue::Null if head == 0 => None,
+        SqlValue::Text(hash) if head != 0 => Some(hash.as_str()),
+        _ => return Err(failure("ledger_meta_mismatch", "verify_sqlite_head")),
+    };
+    if decode(*next) != increment_sequence(head)?
+        || meta != meta_row_with_marker(database, decode(*next), head, hash, &marker)
+    {
+        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+    }
+    Ok(Some((marker, head)))
+}
+
+/// Classifies the formal medium from its keyed meta row without reading history.
+/// True does not mean the history is verified; the writer open is that verification.
+pub(super) fn formal_ready(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
+    let mut connection = database.connection("inspect_runtime_ledger")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .map_err(|error| sql_error(error, "begin_ledger_classification"))?;
+    let extent = authenticated_extent(database, &transaction)?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error(error, "close_ledger_classification"))?;
+    Ok(extent.is_some_and(|(marker, _)| marker.state == "ready"))
+}
+
 pub(super) fn storage_status<F>(
     database: &RuntimeDatabase,
     verifier: &mut F,
@@ -394,12 +457,13 @@ pub(super) fn open_formal<F>(
     database: Arc<RuntimeDatabase>,
     lock: super::storage::LockedWriterFile,
     compatibility: Option<super::storage::LockedWriterFile>,
+    deadline: Instant,
     mut verifier: F,
 ) -> GlobalLedgerResult<SqliteLedgerStore>
 where
     F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
 {
-    let raw = read_snapshot(&database, None)?;
+    let raw = read_formal_snapshot(&database, deadline)?;
     let marker = SqliteMarker::parse(&raw.meta)?;
     if marker.state != "ready" {
         return Err(failure("ledger_migration_required", "open_runtime_ledger"));
@@ -1773,6 +1837,31 @@ fn read_snapshot(
         .transaction_with_behavior(TransactionBehavior::Deferred)
         .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
     let raw = read_snapshot_connection(&transaction, budget)?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+    Ok(raw)
+}
+
+/// `read_snapshot` for the writer open: the keyed meta row is authenticated first in the
+/// same read transaction, and the read is bounded by its head sequence and the caller's
+/// deadline rather than by maintenance material limits.
+fn read_formal_snapshot(
+    database: &RuntimeDatabase,
+    deadline: Instant,
+) -> GlobalLedgerResult<RawSnapshot> {
+    check_read_budget(Some((u64::MAX, usize::MAX, deadline)), 0, 0)?;
+    let mut connection = database.connection("read_sqlite_snapshot")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+    let head = match authenticated_extent(database, &transaction)? {
+        Some((marker, head)) if marker.state == "ready" => head,
+        _ => return Err(failure("ledger_migration_required", "open_runtime_ledger")),
+    };
+    let head = usize::try_from(head)
+        .map_err(|_| failure("ledger_snapshot_overflow", "bound_sqlite_snapshot"))?;
+    let raw = read_snapshot_connection(&transaction, Some((u64::MAX, head, deadline)))?;
     transaction
         .commit()
         .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;

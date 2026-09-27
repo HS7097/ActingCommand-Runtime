@@ -10,7 +10,7 @@ use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, EventActor, EventSeverity, EventSource, OriginModule,
     OwnerEpoch, OwnerResourceDisposition, OwnerUnlockActor, RuntimeErrorCode,
 };
-use actingcommand_ledger::{GlobalLedgerError, LedgerMaintenance, LedgerStorageStatus};
+use actingcommand_ledger::{GlobalLedgerError, LedgerMaintenance};
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase, RuntimeDatabaseError};
 use std::path::Path;
 use std::sync::Arc;
@@ -73,12 +73,7 @@ fn record(
     let artifacts = ArtifactStore::open(root).map_err(RuntimeHostError::artifact)?;
     let maintenance =
         LedgerMaintenance::acquire(root, false, limits, deadline).map_err(ledger_error)?;
-    let status = maintenance
-        .status(&database, |reference| {
-            artifacts.verify_recovery_reference(reference).ok()
-        })
-        .map_err(ledger_error)?;
-    if !matches!(status, LedgerStorageStatus::Ready { .. }) {
+    if !maintenance.formal_ready(&database).map_err(ledger_error)? {
         return Err(RuntimeHostError::fatal(
             "ledger_migration_required",
             "select_runtime_storage",
