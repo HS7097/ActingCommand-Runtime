@@ -7108,9 +7108,14 @@ pub enum SymbolKind {
     Fn,
     Struct,
     Enum,
+    Union,
     Trait,
+    /// A `type` alias.
+    TypeAlias,
+    /// A `const`: `NAME`, or `Type::NAME` inside an `impl` / `trait`.
     Const,
-    /// A named struct field, `Struct::field`.
+    Static,
+    /// A struct or union field, `Struct::field`; a tuple-struct field is `Struct::0`.
     Field,
 }
 
@@ -7150,12 +7155,16 @@ pub struct GlueInvariant {
 }
 
 /// A definition of an owner symbol's name in another file that exists today and that the
-/// declaration names explicitly, with the reason; it must stay present (a stale entry is a
-/// violation) and never names a forbidden file.
+/// declaration names exactly: one free item of this kind and visibility, in production scope,
+/// with no other definition of that name in the file. It must stay so (a stale or changed entry
+/// is a violation), it never names a forbidden file, and no other file may reach it through a
+/// path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlueTolerance {
     pub file: &'static str,
     pub symbol: &'static str,
+    pub kind: SymbolKind,
+    pub visibility: DeclaredVisibility,
     pub reason: &'static str,
 }
 
@@ -7167,17 +7176,19 @@ pub struct GlueDeclaration {
     /// The rule name the violations of this declaration carry.
     pub rule: &'static str,
     pub owner_symbols: &'static [OwnerSymbol],
-    /// Files that must not define, `impl` or re-export beyond private the owner symbols.
+    /// Files that must not define, `impl` or re-export the owner symbols, nor define a function
+    /// of the bare name of any owner function.
     pub forbidden_in: &'static [&'static str],
     /// The exact set of files referencing the non-private owner functions from production code.
     pub allowed_callers: &'static [GlueCaller],
     /// Exact call expressions and import text, verbatim.
     pub required_calls: &'static [GlueText],
-    /// Precedence, error text and parameter mapping of the owner symbols, verbatim.
+    /// Precedence, defaults, boundaries, error text and parameter mapping of the owner symbols,
+    /// verbatim.
     pub invariants: &'static [GlueInvariant],
     /// Behaviour tests: `#[test]` functions under a `cfg(test)` scope of the owner file.
     pub required_tests: &'static [&'static str],
-    /// Same-name definitions outside the owner file that exist today, each named with a reason.
+    /// Same-name definitions outside the owner file that exist today, each named exactly.
     pub tolerated_elsewhere: &'static [GlueTolerance],
     pub reason: &'static str,
 }
@@ -7216,6 +7227,13 @@ struct GlueDefinition {
     span: Option<(proc_macro2::LineColumn, proc_macro2::LineColumn)>,
 }
 
+impl GlueDefinition {
+    /// The last segment of the name: the function name of a method.
+    fn bare(&self) -> &str {
+        self.name.rsplit("::").next().unwrap_or(&self.name)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct GlueImpl {
     self_type: Option<String>,
@@ -7223,8 +7241,30 @@ struct GlueImpl {
     line: usize,
 }
 
-/// One path production code names: an expression path (a call or a function value) or an
-/// `ident(::ident)*` run of a macro body that does not follow a `.`.
+/// One name a `use` item binds, in any scope.
+#[derive(Debug, Clone)]
+struct GlueUse {
+    local: String,
+    path: Vec<String>,
+    visibility: DeclaredVisibility,
+    test_scope: bool,
+    line: usize,
+}
+
+/// One `mod` item, in any scope, inline or out of line.
+#[derive(Debug, Clone)]
+struct GlueMod {
+    name: String,
+    visibility: DeclaredVisibility,
+    test_scope: bool,
+    inline: bool,
+    /// The `#[path]` value, or a marker when a `cfg_attr` may set one.
+    path: Option<String>,
+    line: usize,
+}
+
+/// One path production code names: an expression path (a call or a function value), `<T>::name`
+/// as `T::name`, or an `ident(::ident)*` run of a macro body that does not follow a `.`.
 #[derive(Debug, Clone)]
 struct GlueReference {
     path: Vec<String>,
@@ -7232,11 +7272,28 @@ struct GlueReference {
     line: usize,
 }
 
+/// An item a macro body (a `macro_rules!` definition or a macro invocation) spells out.
+#[derive(Debug, Clone)]
+enum GlueMacroItem {
+    Definition(SymbolKind, String),
+    /// The identifiers of an `impl` header.
+    Impl(Vec<String>),
+    /// A `pub` token.
+    Visibility,
+}
+
 #[derive(Default)]
 struct GlueFacts {
     definitions: Vec<GlueDefinition>,
     impls: Vec<GlueImpl>,
+    uses: Vec<GlueUse>,
+    mods: Vec<GlueMod>,
+    /// Non-private `extern crate` items: (name, visibility, line).
+    extern_crates: Vec<(String, DeclaredVisibility, usize)>,
+    /// `type` aliases: alias name to the last identifier of the aliased path.
+    aliases: BTreeMap<String, String>,
     references: Vec<GlueReference>,
+    macro_items: Vec<(GlueMacroItem, usize)>,
 }
 
 struct GlueVisitor {
@@ -7247,6 +7304,49 @@ struct GlueVisitor {
     /// The local binding names of each enclosing function.
     bound: Vec<BTreeSet<String>>,
     error: Option<String>,
+}
+
+/// The value of a `#[path]` attribute, or a marker when a `cfg_attr` may set one.
+fn glue_path_attribute(attributes: &[syn::Attribute]) -> Option<String> {
+    for attribute in attributes {
+        if attribute.path().is_ident("path") {
+            if let syn::Meta::NameValue(value) = &attribute.meta
+                && let Expr::Lit(syn::ExprLit {
+                    lit: Lit::Str(text),
+                    ..
+                }) = &value.value
+            {
+                return Some(text.value());
+            }
+            return Some("<unreadable #[path]>".to_string());
+        }
+        if attribute.path().is_ident("cfg_attr")
+            && let syn::Meta::List(list) = &attribute.meta
+        {
+            let mut flat = Vec::new();
+            flatten_tokens(list.tokens.clone(), &mut flat);
+            if flat
+                .iter()
+                .any(|token| matches!(token, TokenTree::Ident(ident) if ident == "path"))
+            {
+                return Some("<conditional #[cfg_attr(.., path = ..)]>".to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The path of an expression path; `<T>::name` reads as `T::name`.
+fn glue_expr_path(node: &syn::ExprPath) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(qself) = &node.qself
+        && qself.position == 0
+        && let Type::Path(value) = qself.ty.as_ref()
+    {
+        names.extend(path_names(&value.path));
+    }
+    names.extend(path_names(&node.path));
+    names
 }
 
 impl GlueVisitor {
@@ -7298,6 +7398,28 @@ impl GlueVisitor {
         }
     }
 
+    fn fields(&mut self, owner: &syn::Ident, fields: &syn::Fields) {
+        for (index, field) in fields.iter().enumerate() {
+            let (name, line) = match &field.ident {
+                Some(ident) => (ident.to_string(), ident.span().start().line),
+                None => (
+                    index.to_string(),
+                    syn::spanned::Spanned::span(field).start().line,
+                ),
+            };
+            self.scoped(&field.attrs, |visitor| {
+                visitor.define(
+                    SymbolKind::Field,
+                    format!("{owner}::{name}"),
+                    declared_visibility(&field.vis),
+                    &field.attrs,
+                    line,
+                    None,
+                );
+            });
+        }
+    }
+
     fn function_body(&mut self, name: String, signature: &syn::Signature, block: &syn::Block) {
         /// The names a function's parameters, `let` / `match` / closure patterns bind; nested
         /// items keep their own.
@@ -7321,6 +7443,12 @@ impl GlueVisitor {
         self.bound.pop();
         self.functions.pop();
         self.owner = owner;
+    }
+
+    fn initializer(&mut self, name: String, expr: &Expr) {
+        self.functions.push(name);
+        self.visit_expr(expr);
+        self.functions.pop();
     }
 
     /// Records a path production code names. A one-segment path outside call position that the
@@ -7347,12 +7475,109 @@ impl GlueVisitor {
             line: span.start().line,
         });
     }
+
+    /// Reads a macro body: every `ident(::ident)*` run that does not follow a `.` is a reference
+    /// (a call when a parenthesised group follows); `fn` / `struct` / `enum` / `union` / `trait` /
+    /// `type` / `const` / `static` followed by a name, `impl` headers and `pub` tokens are items
+    /// the macro spells out, in every scope.
+    fn macro_tokens(&mut self, tokens: TokenStream) {
+        let trees = tokens.into_iter().collect::<Vec<_>>();
+        let mut index = 0;
+        while index < trees.len() {
+            let first = match &trees[index] {
+                TokenTree::Group(group) => {
+                    self.macro_tokens(group.stream());
+                    index += 1;
+                    continue;
+                }
+                TokenTree::Ident(first) => first,
+                _ => {
+                    index += 1;
+                    continue;
+                }
+            };
+            let line = first.span().start().line;
+            let word = first.to_string();
+            let name_after = |offset: usize| match trees.get(index + offset) {
+                Some(TokenTree::Ident(name)) => Some(name.to_string()),
+                _ => None,
+            };
+            let kind = match word.as_str() {
+                "fn" => Some(SymbolKind::Fn),
+                "struct" => Some(SymbolKind::Struct),
+                "enum" => Some(SymbolKind::Enum),
+                "union" => Some(SymbolKind::Union),
+                "trait" => Some(SymbolKind::Trait),
+                "type" => Some(SymbolKind::TypeAlias),
+                "const" => Some(SymbolKind::Const),
+                "static" => Some(SymbolKind::Static),
+                _ => None,
+            };
+            if let Some(kind) = kind
+                && let Some(mut name) = name_after(1)
+            {
+                if name == "mut" {
+                    name = name_after(2).unwrap_or_default();
+                }
+                if !name.is_empty() && name != "fn" && name != "unsafe" {
+                    self.facts
+                        .macro_items
+                        .push((GlueMacroItem::Definition(kind, name), line));
+                }
+            }
+            if word == "impl" {
+                let mut header = Vec::new();
+                for tree in &trees[index + 1..] {
+                    match tree {
+                        TokenTree::Ident(ident) => header.push(ident.to_string()),
+                        TokenTree::Group(group)
+                            if group.delimiter() == proc_macro2::Delimiter::Brace =>
+                        {
+                            break;
+                        }
+                        TokenTree::Punct(punct) if matches!(punct.as_char(), ';' | ',') => break,
+                        _ => {}
+                    }
+                }
+                self.facts
+                    .macro_items
+                    .push((GlueMacroItem::Impl(header), line));
+            }
+            if word == "pub" {
+                self.facts
+                    .macro_items
+                    .push((GlueMacroItem::Visibility, line));
+            }
+            let after_dot = index > 0
+                && matches!(&trees[index - 1], TokenTree::Punct(dot) if dot.as_char() == '.');
+            let defined = index > 0
+                && matches!(&trees[index - 1], TokenTree::Ident(keyword) if keyword == "fn");
+            let mut segments = vec![word];
+            let mut next = index + 1;
+            while let (
+                Some(TokenTree::Punct(colon)),
+                Some(TokenTree::Punct(second)),
+                Some(TokenTree::Ident(segment)),
+            ) = (trees.get(next), trees.get(next + 1), trees.get(next + 2))
+            {
+                if colon.as_char() != ':' || second.as_char() != ':' {
+                    break;
+                }
+                segments.push(segment.to_string());
+                next += 3;
+            }
+            let call = matches!(trees.get(next), Some(TokenTree::Group(group))
+                if group.delimiter() == proc_macro2::Delimiter::Parenthesis);
+            if !after_dot && !defined {
+                self.reference(segments, first.span(), call);
+            }
+            index = next;
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for GlueVisitor {
     fn visit_attribute(&mut self, _: &'ast syn::Attribute) {}
-
-    fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
 
     fn visit_item(&mut self, node: &'ast Item) {
         match ledger_owners::item_attributes(node) {
@@ -7363,6 +7588,43 @@ impl<'ast> Visit<'ast> for GlueVisitor {
                 self.error.get_or_insert(error);
             }
         }
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        let mut bindings = Vec::new();
+        collect_use_bindings(&mut Vec::new(), &node.tree, &mut bindings);
+        let visibility = declared_visibility(&node.vis);
+        for (local, path, span) in bindings {
+            self.facts.uses.push(GlueUse {
+                local,
+                path,
+                visibility,
+                test_scope: self.test_scope,
+                line: span.start().line,
+            });
+        }
+    }
+
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        self.facts.mods.push(GlueMod {
+            name: node.ident.to_string(),
+            visibility: declared_visibility(&node.vis),
+            test_scope: self.test_scope,
+            inline: node.content.is_some(),
+            path: glue_path_attribute(&node.attrs),
+            line: node.ident.span().start().line,
+        });
+        let owner = self.owner.take();
+        syn::visit::visit_item_mod(self, node);
+        self.owner = owner;
+    }
+
+    fn visit_item_extern_crate(&mut self, node: &'ast syn::ItemExternCrate) {
+        self.facts.extern_crates.push((
+            node.ident.to_string(),
+            declared_visibility(&node.vis),
+            node.ident.span().start().line,
+        ));
     }
 
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
@@ -7440,9 +7702,18 @@ impl<'ast> Visit<'ast> for GlueVisitor {
                         item.semi_token.spans[0].end(),
                     )),
                 );
-                visitor.functions.push(name);
-                visitor.visit_expr(&item.expr);
-                visitor.functions.pop();
+                visitor.initializer(name, &item.expr);
+            }
+            syn::ImplItem::Type(item) => {
+                let name = visitor.qualified(&item.ident);
+                visitor.define(
+                    SymbolKind::TypeAlias,
+                    name,
+                    declared_visibility(&item.vis),
+                    &item.attrs,
+                    item.ident.span().start().line,
+                    None,
+                );
             }
             _ => syn::visit::visit_impl_item(visitor, node),
         });
@@ -7479,8 +7750,8 @@ impl<'ast> Visit<'ast> for GlueVisitor {
                 return;
             }
         };
-        self.scoped(attributes, |visitor| {
-            if let syn::TraitItem::Fn(item) = node {
+        self.scoped(attributes, |visitor| match node {
+            syn::TraitItem::Fn(item) => {
                 let name = visitor.qualified(&item.sig.ident);
                 let end = match (&item.default, &item.semi_token) {
                     (Some(block), _) => block.brace_token.span.close().end(),
@@ -7499,6 +7770,32 @@ impl<'ast> Visit<'ast> for GlueVisitor {
                     visitor.function_body(name, &item.sig, block);
                 }
             }
+            syn::TraitItem::Const(item) => {
+                let name = visitor.qualified(&item.ident);
+                visitor.define(
+                    SymbolKind::Const,
+                    name.clone(),
+                    DeclaredVisibility::Private,
+                    &item.attrs,
+                    item.ident.span().start().line,
+                    None,
+                );
+                if let Some((_, expr)) = &item.default {
+                    visitor.initializer(name, expr);
+                }
+            }
+            syn::TraitItem::Type(item) => {
+                let name = visitor.qualified(&item.ident);
+                visitor.define(
+                    SymbolKind::TypeAlias,
+                    name,
+                    DeclaredVisibility::Private,
+                    &item.attrs,
+                    item.ident.span().start().line,
+                    None,
+                );
+            }
+            _ => syn::visit::visit_trait_item(visitor, node),
         });
     }
 
@@ -7517,23 +7814,22 @@ impl<'ast> Visit<'ast> for GlueVisitor {
             node.ident.span().start().line,
             Some((node.struct_token.span.start(), end)),
         );
-        if let syn::Fields::Named(fields) = &node.fields {
-            for field in &fields.named {
-                let Some(ident) = &field.ident else {
-                    continue;
-                };
-                self.scoped(&field.attrs, |visitor| {
-                    visitor.define(
-                        SymbolKind::Field,
-                        format!("{}::{ident}", node.ident),
-                        declared_visibility(&field.vis),
-                        &field.attrs,
-                        ident.span().start().line,
-                        None,
-                    );
-                });
-            }
-        }
+        self.fields(&node.ident, &node.fields);
+    }
+
+    fn visit_item_union(&mut self, node: &'ast syn::ItemUnion) {
+        self.define(
+            SymbolKind::Union,
+            node.ident.to_string(),
+            declared_visibility(&node.vis),
+            &node.attrs,
+            node.ident.span().start().line,
+            Some((
+                node.union_token.span.start(),
+                node.fields.brace_token.span.close().end(),
+            )),
+        );
+        self.fields(&node.ident, &syn::Fields::Named(node.fields.clone()));
     }
 
     fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
@@ -7550,6 +7846,24 @@ impl<'ast> Visit<'ast> for GlueVisitor {
         );
     }
 
+    fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+        if let Type::Path(target) = node.ty.as_ref()
+            && let Some(last) = target.path.segments.last()
+        {
+            self.facts
+                .aliases
+                .insert(node.ident.to_string(), last.ident.to_string());
+        }
+        self.define(
+            SymbolKind::TypeAlias,
+            self.qualified(&node.ident),
+            declared_visibility(&node.vis),
+            &node.attrs,
+            node.ident.span().start().line,
+            Some((node.type_token.span.start(), node.semi_token.spans[0].end())),
+        );
+    }
+
     fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
         let name = self.qualified(&node.ident);
         self.define(
@@ -7563,9 +7877,23 @@ impl<'ast> Visit<'ast> for GlueVisitor {
                 node.semi_token.spans[0].end(),
             )),
         );
-        self.functions.push(name);
-        self.visit_expr(&node.expr);
-        self.functions.pop();
+        self.initializer(name, &node.expr);
+    }
+
+    fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+        let name = self.qualified(&node.ident);
+        self.define(
+            SymbolKind::Static,
+            name.clone(),
+            declared_visibility(&node.vis),
+            &node.attrs,
+            node.ident.span().start().line,
+            Some((
+                node.static_token.span.start(),
+                node.semi_token.spans[0].end(),
+            )),
+        );
+        self.initializer(name, &node.expr);
     }
 
     fn visit_stmt(&mut self, node: &'ast Stmt) {
@@ -7595,7 +7923,7 @@ impl<'ast> Visit<'ast> for GlueVisitor {
                 .segments
                 .first()
                 .map_or_else(Span::call_site, |segment| segment.ident.span());
-            self.reference(path_names(&function.path), span, true);
+            self.reference(glue_expr_path(function), span, true);
             for argument in &node.args {
                 self.visit_expr(argument);
             }
@@ -7610,56 +7938,11 @@ impl<'ast> Visit<'ast> for GlueVisitor {
             .segments
             .first()
             .map_or_else(Span::call_site, |segment| segment.ident.span());
-        self.reference(path_names(&node.path), span, false);
+        self.reference(glue_expr_path(node), span, false);
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        self.macro_references(node.tokens.clone());
-    }
-}
-
-impl GlueVisitor {
-    /// Every `ident(::ident)*` run of a macro body that does not follow a `.`; a run followed by
-    /// a parenthesised group is a call.
-    fn macro_references(&mut self, tokens: TokenStream) {
-        let trees = tokens.into_iter().collect::<Vec<_>>();
-        let mut index = 0;
-        while index < trees.len() {
-            let first = match &trees[index] {
-                TokenTree::Group(group) => {
-                    self.macro_references(group.stream());
-                    index += 1;
-                    continue;
-                }
-                TokenTree::Ident(first) => first,
-                _ => {
-                    index += 1;
-                    continue;
-                }
-            };
-            let after_dot = index > 0
-                && matches!(&trees[index - 1], TokenTree::Punct(dot) if dot.as_char() == '.');
-            let mut segments = vec![first.to_string()];
-            let mut next = index + 1;
-            while let (
-                Some(TokenTree::Punct(colon)),
-                Some(TokenTree::Punct(second)),
-                Some(TokenTree::Ident(segment)),
-            ) = (trees.get(next), trees.get(next + 1), trees.get(next + 2))
-            {
-                if colon.as_char() != ':' || second.as_char() != ':' {
-                    break;
-                }
-                segments.push(segment.to_string());
-                next += 3;
-            }
-            let call = matches!(trees.get(next), Some(TokenTree::Group(group))
-                if group.delimiter() == proc_macro2::Delimiter::Parenthesis);
-            if !after_dot {
-                self.reference(segments, first.span(), call);
-            }
-            index = next;
-        }
+        self.macro_tokens(node.tokens.clone());
     }
 }
 
@@ -7730,12 +8013,16 @@ fn visibility_text(visibility: DeclaredVisibility) -> &'static str {
     }
 }
 
-/// Functions and constants share the value namespace; structs, enums and traits the type
-/// namespace; fields belong to their struct.
+/// Functions, constants and statics share the value namespace; structs, enums, unions, traits
+/// and aliases the type namespace; fields belong to their struct.
 fn glue_namespace(kind: SymbolKind) -> u8 {
     match kind {
-        SymbolKind::Fn | SymbolKind::Const => 0,
-        SymbolKind::Struct | SymbolKind::Enum | SymbolKind::Trait => 1,
+        SymbolKind::Fn | SymbolKind::Const | SymbolKind::Static => 0,
+        SymbolKind::Struct
+        | SymbolKind::Enum
+        | SymbolKind::Union
+        | SymbolKind::Trait
+        | SymbolKind::TypeAlias => 1,
         SymbolKind::Field => 2,
     }
 }
@@ -7764,12 +8051,34 @@ fn glue_module_parents(module: &str) -> Option<(String, Vec<String>)> {
     ))
 }
 
+/// The file a `#[path]` value names, relative to the directory of the declaring file.
+fn glue_path_target(file: &str, value: &str) -> String {
+    let directory = file.rsplit_once('/').map_or("", |(directory, _)| directory);
+    let mut parts = directory
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let value = value.replace('\\', "/");
+    for part in value.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
 /// The non-private owner function a resolved reference names: `Type::name` by its last two
 /// segments; a free function `name` by its last segment when the path is that name alone or
-/// stays inside the crate (`crate` / `super` / `self` or through the owner module).
+/// stays inside the crate (`crate` / `super` / `self`, a module of the scanned sources, or
+/// through the owner module).
 fn glue_referenced_symbol(
     resolved: &[String],
     module_name: &str,
+    local_modules: &BTreeSet<String>,
     watched: &[&OwnerSymbol],
 ) -> Option<&'static str> {
     watched
@@ -7782,6 +8091,7 @@ fn glue_referenced_symbol(
             segments.len() > 1
                 || resolved.len() == 1
                 || matches!(resolved[0].as_str(), "crate" | "super" | "self")
+                || local_modules.contains(&resolved[0])
                 || resolved.iter().any(|segment| segment == module_name)
         })
         .map(|symbol| symbol.name)
@@ -7797,10 +8107,11 @@ struct GlueSource<'a> {
 /// Workflow #310 D-1: checks every glue declaration against `sources` (workspace-relative path
 /// and text of every Rust file of the scanned tree). Production and test scope follow the
 /// library's cfg filter (`production_items` / `production_attributes`) and the `tests` path rule;
-/// references are read from production code only, definitions from both scopes. Returns every
-/// difference; an empty result means every declaration holds. A declaration validates itself:
-/// an empty field, an owner file or named file missing from `sources`, an unfound symbol, an
-/// invariant of an undeclared symbol and an empty caller scan are violations.
+/// references are read from production code only; definitions, `use` and `mod` items and macro
+/// bodies from both scopes. Returns every difference; an empty result means every declaration
+/// holds. A declaration validates itself: an empty field, an owner file or named file missing
+/// from `sources`, an unfound symbol, an invariant of an undeclared symbol, an empty caller scan
+/// and a stale or changed tolerance are violations.
 pub fn inspect_glue_declarations(
     sources: &[(String, String)],
     declarations: &[GlueDeclaration],
@@ -7851,6 +8162,10 @@ pub fn inspect_glue_declarations(
             }
         }
     }
+    let local_modules = parsed
+        .values()
+        .flat_map(|source| source.glue.mods.iter().map(|item| item.name.clone()))
+        .collect::<BTreeSet<_>>();
     let mut modules = BTreeSet::new();
     for declaration in declarations {
         if !modules.insert(declaration.module) {
@@ -7860,7 +8175,7 @@ pub fn inspect_glue_declarations(
                 "is declared by more than one glue declaration".to_string(),
             ));
         }
-        check_glue_declaration(declaration, &parsed, &mut violations);
+        check_glue_declaration(declaration, &parsed, &local_modules, &mut violations);
     }
     violations.sort();
     violations.dedup();
@@ -7870,6 +8185,7 @@ pub fn inspect_glue_declarations(
 fn check_glue_declaration(
     declaration: &GlueDeclaration,
     sources: &BTreeMap<&str, GlueSource<'_>>,
+    local_modules: &BTreeSet<String>,
     violations: &mut Vec<GlueViolation>,
 ) {
     let mut problem = |check: &str, file: &str, reason: String| {
@@ -7995,12 +8311,13 @@ fn check_glue_declaration(
         );
     }
     for tolerance in declaration.tolerated_elsewhere {
-        let declared = declaration
-            .owner_symbols
-            .iter()
-            .any(|symbol| symbol.name == tolerance.symbol && symbol.kind != SymbolKind::Field);
-        let reason = if !declared {
-            Some("names an undeclared owner symbol")
+        let declared = declaration.owner_symbols.iter().any(|symbol| {
+            symbol.name == tolerance.symbol
+                && symbol.kind != SymbolKind::Field
+                && glue_namespace(symbol.kind) == glue_namespace(tolerance.kind)
+        });
+        let reason = if !declared || tolerance.symbol.contains("::") {
+            Some("names no free owner symbol of the same namespace")
         } else if tolerance.reason.is_empty() {
             Some("has no reason")
         } else if tolerance.file == module || declaration.forbidden_in.contains(&tolerance.file) {
@@ -8022,7 +8339,7 @@ fn check_glue_declaration(
         }
     }
 
-    // The owner file and its private module declaration.
+    // The owner file and its one private module declaration.
     let Some(owner) = sources.get(module) else {
         problem(
             "owner-module",
@@ -8050,16 +8367,14 @@ fn check_glue_declaration(
     };
     let mut declared = Vec::new();
     for parent in &parents {
-        if let Some(facts) = sources
-            .get(parent.as_str())
-            .and_then(|source| source.facts.as_ref())
-        {
+        if let Some(source) = sources.get(parent.as_str()) {
             declared.extend(
-                facts
-                    .modules
+                source
+                    .glue
+                    .mods
                     .iter()
-                    .filter(|(name, _)| *name == module_name)
-                    .map(|(_, visibility)| (parent.as_str(), *visibility)),
+                    .filter(|item| item.name == module_name)
+                    .map(|item| (parent.as_str(), item)),
             );
         }
     }
@@ -8068,27 +8383,71 @@ fn check_glue_declaration(
             "owner-module",
             module,
             format!(
-                "no production `mod {module_name};` declares the owner file in {}",
+                "no `mod {module_name};` declares the owner file in {}",
                 parents.join(" / ")
             ),
         ),
-        [(parent, visibility)] if *visibility != DeclaredVisibility::Private => problem(
-            "owner-module",
-            parent,
-            format!(
-                "declares `mod {module_name};` as {}; a glue module stays a private `mod`",
-                visibility_text(*visibility)
-            ),
-        ),
-        [_] => {}
+        [(parent, item)] => {
+            let mut wrong = Vec::new();
+            if item.visibility != DeclaredVisibility::Private {
+                wrong.push(format!("is {}", visibility_text(item.visibility)));
+            }
+            if item.test_scope {
+                wrong.push("sits under cfg(test)".to_string());
+            }
+            if item.inline {
+                wrong.push("is an inline module, not the owner file".to_string());
+            }
+            if let Some(path) = &item.path {
+                wrong.push(format!("carries #[path = {path:?}]"));
+            }
+            if !wrong.is_empty() {
+                problem(
+                    "owner-module",
+                    parent,
+                    format!(
+                        "line {}: `mod {module_name}` {}; a glue module stays one private \
+                         out-of-line `mod` of the owner file",
+                        item.line,
+                        wrong.join(", ")
+                    ),
+                );
+            }
+        }
         more => problem(
             "owner-module",
             more[0].0,
-            format!("declares `mod {module_name};` {} times", more.len()),
+            format!(
+                "declares `mod {module_name}` {} times across cfg scopes (lines {})",
+                more.len(),
+                more.iter()
+                    .map(|(parent, item)| format!("{parent}:{}", item.line))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         ),
     }
+    for (path, source) in sources {
+        for item in &source.glue.mods {
+            let Some(value) = &item.path else {
+                continue;
+            };
+            if value.starts_with('<') || glue_path_target(path, value) == module {
+                problem(
+                    "owner-module",
+                    path,
+                    format!(
+                        "line {}: `mod {}` carries #[path = {value:?}], which reaches or may \
+                         reach the owner file",
+                        item.line, item.name
+                    ),
+                );
+            }
+        }
+    }
 
-    // Owner symbols: defined once in the owner file with the declared kind, visibility and scope.
+    // Owner symbols: defined once in the owner file with the declared kind, visibility and scope;
+    // a free function's name is defined once in the owner file, methods included.
     let mut found = BTreeMap::new();
     for symbol in declaration.owner_symbols {
         let matches = owner
@@ -8146,9 +8505,35 @@ fn check_glue_declaration(
                 ),
             );
         }
+        if symbol.kind == SymbolKind::Fn && !symbol.name.contains("::") {
+            let others = owner
+                .glue
+                .definitions
+                .iter()
+                .filter(|other| {
+                    other.kind == SymbolKind::Fn
+                        && other.bare() == symbol.name
+                        && other.name != symbol.name
+                })
+                .map(|other| format!("{} (line {})", other.name, other.line))
+                .collect::<Vec<_>>();
+            if !others.is_empty() {
+                problem(
+                    "owner-symbol",
+                    module,
+                    format!(
+                        "defines the function name {} again: {}",
+                        symbol.name,
+                        others.join(", ")
+                    ),
+                );
+            }
+        }
         found.insert(symbol.name, *definition);
     }
-    // The owner surface: nothing but the declared symbols is visible outside the owner module.
+
+    // The owner surface: nothing but the declared symbols is visible outside the owner module,
+    // in any scope and for any item kind.
     for definition in &owner.glue.definitions {
         if definition.visibility != DeclaredVisibility::Private
             && !declaration
@@ -8160,92 +8545,183 @@ fn check_glue_declaration(
                 "owner-surface",
                 module,
                 format!(
-                    "{:?} {} (line {}) is {} but is not an owner symbol of the declaration",
+                    "{:?} {} (line {}{}) is {} but is not an owner symbol of the declaration",
                     definition.kind,
                     definition.name,
                     definition.line,
+                    if definition.test_scope {
+                        ", test code"
+                    } else {
+                        ""
+                    },
                     visibility_text(definition.visibility)
                 ),
             );
         }
     }
-    if let Some(facts) = &owner.facts {
-        for binding in &facts.uses {
-            if binding.visibility != DeclaredVisibility::Private {
-                problem(
-                    "owner-surface",
-                    module,
-                    format!(
-                        "line {} re-exports {} as {}",
-                        binding.line,
-                        binding.path.join("::"),
-                        visibility_text(binding.visibility)
-                    ),
-                );
-            }
+    for binding in &owner.glue.uses {
+        if binding.visibility != DeclaredVisibility::Private {
+            problem(
+                "owner-surface",
+                module,
+                format!(
+                    "line {}{} re-exports {} as {}",
+                    binding.line,
+                    if binding.test_scope {
+                        " (test code)"
+                    } else {
+                        ""
+                    },
+                    binding.path.join("::"),
+                    visibility_text(binding.visibility)
+                ),
+            );
         }
-        for (name, visibility) in &facts.modules {
-            if *visibility != DeclaredVisibility::Private {
-                problem(
-                    "owner-surface",
-                    module,
-                    format!("declares `mod {name};` as {}", visibility_text(*visibility)),
-                );
-            }
+    }
+    for item in &owner.glue.mods {
+        if item.visibility != DeclaredVisibility::Private {
+            problem(
+                "owner-surface",
+                module,
+                format!(
+                    "line {}: `mod {}` is {}",
+                    item.line,
+                    item.name,
+                    visibility_text(item.visibility)
+                ),
+            );
+        }
+    }
+    for (name, visibility, line) in &owner.glue.extern_crates {
+        if *visibility != DeclaredVisibility::Private {
+            problem(
+                "owner-surface",
+                module,
+                format!(
+                    "line {line}: `extern crate {name}` is {}",
+                    visibility_text(*visibility)
+                ),
+            );
+        }
+    }
+    for (item, line) in &owner.glue.macro_items {
+        if matches!(item, GlueMacroItem::Visibility) {
+            problem(
+                "owner-surface",
+                module,
+                format!(
+                    "line {line}: a macro body carries `pub`; items a macro generates stay \
+                     outside the declared surface"
+                ),
+            );
         }
     }
 
-    // No other file defines, implements or re-exports the owner symbols.
+    // No other file defines, implements or re-exports the owner symbols; no file spells them out
+    // in a macro body; the tolerated duplicates stay exactly as named.
+    let free_functions = declaration
+        .owner_symbols
+        .iter()
+        .filter(|symbol| symbol.kind == SymbolKind::Fn && !symbol.name.contains("::"))
+        .map(|symbol| symbol.name)
+        .collect::<BTreeSet<_>>();
+    let function_names = declaration
+        .owner_symbols
+        .iter()
+        .filter(|symbol| symbol.kind == SymbolKind::Fn)
+        .map(|symbol| symbol.name.rsplit("::").next().unwrap_or(symbol.name))
+        .collect::<BTreeSet<_>>();
     let declared_types = declaration
         .owner_symbols
         .iter()
         .filter(|symbol| glue_namespace(symbol.kind) == 1)
         .map(|symbol| symbol.name)
         .collect::<BTreeSet<_>>();
-    let bare_names = declaration
+    let free_names = declaration
         .owner_symbols
         .iter()
-        .map(|symbol| symbol.name.rsplit("::").next().unwrap_or(symbol.name))
+        .filter(|symbol| symbol.kind != SymbolKind::Field && !symbol.name.contains("::"))
+        .map(|symbol| symbol.name)
         .collect::<BTreeSet<_>>();
-    let mut tolerated_found = BTreeSet::new();
+    let tolerated = |path: &str, name: &str| {
+        declaration
+            .tolerated_elsewhere
+            .iter()
+            .find(|tolerance| tolerance.file == path && tolerance.symbol == name)
+    };
     for (path, source) in sources {
-        if *path == module {
-            continue;
-        }
-        let check = if declaration.forbidden_in.contains(path) {
-            "forbidden"
-        } else {
-            "elsewhere"
-        };
-        for definition in &source.glue.definitions {
-            if definition.kind != SymbolKind::Field
-                && declaration.owner_symbols.iter().any(|symbol| {
-                    glue_namespace(symbol.kind) == glue_namespace(definition.kind)
-                        && symbol.name == definition.name
-                })
-            {
-                if let Some(tolerance) = declaration.tolerated_elsewhere.iter().find(|tolerance| {
-                    tolerance.file == *path && tolerance.symbol == definition.name
-                }) {
-                    tolerated_found.insert((tolerance.file, tolerance.symbol));
-                    continue;
+        let forbidden = declaration.forbidden_in.contains(path);
+        let check = if forbidden { "forbidden" } else { "elsewhere" };
+        for (item, line) in &source.glue.macro_items {
+            let spelled = match item {
+                GlueMacroItem::Definition(SymbolKind::Fn, name) => {
+                    free_functions.contains(name.as_str())
+                        || (forbidden && function_names.contains(name.as_str()))
                 }
+                GlueMacroItem::Definition(kind, name) if glue_namespace(*kind) == 1 => {
+                    declared_types.contains(name.as_str())
+                }
+                GlueMacroItem::Definition(_, name) => {
+                    free_names.contains(name.as_str()) && !declared_types.contains(name.as_str())
+                }
+                GlueMacroItem::Impl(header) => header
+                    .iter()
+                    .any(|ident| declared_types.contains(ident.as_str())),
+                GlueMacroItem::Visibility => false,
+            };
+            if spelled {
                 problem(
-                    check,
+                    "macro",
                     path,
                     format!(
-                        "defines {:?} {} (line {}{}); the declaration keeps it in {module}",
-                        definition.kind,
-                        definition.name,
-                        definition.line,
-                        if definition.test_scope {
-                            ", test code"
-                        } else {
-                            ""
-                        }
+                        "line {line}: a macro body spells out {item:?}; glue items are plain \
+                         items of {module}"
                     ),
                 );
             }
+        }
+        if *path == module {
+            continue;
+        }
+        for definition in &source.glue.definitions {
+            let hit = match definition.kind {
+                SymbolKind::Field => false,
+                SymbolKind::Fn => {
+                    free_functions.contains(definition.bare())
+                        || (forbidden && function_names.contains(definition.bare()))
+                        || declaration.owner_symbols.iter().any(|symbol| {
+                            symbol.kind == SymbolKind::Fn && symbol.name == definition.name
+                        })
+                }
+                kind => declaration.owner_symbols.iter().any(|symbol| {
+                    glue_namespace(symbol.kind) == glue_namespace(kind)
+                        && (symbol.name == definition.name
+                            || (!symbol.name.contains("::")
+                                && symbol.name == definition.bare()
+                                && glue_namespace(kind) == 0))
+                }),
+            };
+            if !hit {
+                continue;
+            }
+            if tolerated(path, definition.bare()).is_some() {
+                continue;
+            }
+            problem(
+                check,
+                path,
+                format!(
+                    "defines {:?} {} (line {}{}); the declaration keeps that name in {module}",
+                    definition.kind,
+                    definition.name,
+                    definition.line,
+                    if definition.test_scope {
+                        ", test code"
+                    } else {
+                        ""
+                    }
+                ),
+            );
         }
         for item in &source.glue.impls {
             let own_type = item
@@ -8272,38 +8748,75 @@ fn check_glue_declaration(
                 );
             }
         }
-        if check == "forbidden"
-            && let Some(facts) = &source.facts
-        {
-            for binding in &facts.uses {
-                if binding.visibility != DeclaredVisibility::Private
-                    && (binding.path.contains(&module_name)
-                        || bare_names.contains(binding.local.as_str()))
-                {
-                    problem(
-                        check,
-                        path,
-                        format!(
-                            "line {} re-exports {} as {}",
-                            binding.line,
-                            binding.path.join("::"),
-                            visibility_text(binding.visibility)
-                        ),
-                    );
-                }
+        for binding in &source.glue.uses {
+            let names_glue = binding.path.contains(&module_name)
+                || free_names.contains(binding.local.as_str())
+                || binding
+                    .path
+                    .last()
+                    .is_some_and(|last| free_names.contains(last.as_str()));
+            if binding.visibility != DeclaredVisibility::Private && names_glue {
+                problem(
+                    if forbidden { "forbidden" } else { "reexport" },
+                    path,
+                    format!(
+                        "line {}{} re-exports {} as {}; glue is imported privately",
+                        binding.line,
+                        if binding.test_scope {
+                            " (test code)"
+                        } else {
+                            ""
+                        },
+                        binding.path.join("::"),
+                        visibility_text(binding.visibility)
+                    ),
+                );
             }
         }
     }
     for tolerance in declaration.tolerated_elsewhere {
-        if sources.contains_key(tolerance.file)
-            && !tolerated_found.contains(&(tolerance.file, tolerance.symbol))
-        {
+        let Some(source) = sources.get(tolerance.file) else {
+            continue;
+        };
+        let same = source
+            .glue
+            .definitions
+            .iter()
+            .filter(|definition| {
+                definition.bare() == tolerance.symbol
+                    && glue_namespace(definition.kind) == glue_namespace(tolerance.kind)
+            })
+            .collect::<Vec<_>>();
+        let exact = matches!(same.as_slice(), [definition]
+            if definition.kind == tolerance.kind
+                && definition.name == tolerance.symbol
+                && definition.visibility == tolerance.visibility
+                && !definition.test_scope);
+        if !exact {
             problem(
                 "elsewhere",
                 tolerance.file,
                 format!(
-                    "no longer defines the tolerated `{}`; drop the stale tolerance",
-                    tolerance.symbol
+                    "the tolerated `{}` must stay one production {:?} of visibility {}, found \
+                     [{}]; drop or restate the tolerance",
+                    tolerance.symbol,
+                    tolerance.kind,
+                    visibility_text(tolerance.visibility),
+                    same.iter()
+                        .map(|definition| format!(
+                            "{:?} {} {} line {}{}",
+                            definition.kind,
+                            visibility_text(definition.visibility),
+                            definition.name,
+                            definition.line,
+                            if definition.test_scope {
+                                " test code"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
             );
         }
@@ -8319,6 +8832,13 @@ fn check_glue_declaration(
                 && !symbol.test_only
         })
         .collect::<Vec<_>>();
+    let tolerated_paths = declaration
+        .tolerated_elsewhere
+        .iter()
+        .filter_map(|tolerance| {
+            glue_module_parents(tolerance.file).map(|(name, _)| (tolerance.file, name, tolerance))
+        })
+        .collect::<Vec<_>>();
     let mut callers = BTreeMap::<&str, Vec<String>>::new();
     for (path, source) in sources {
         let Some(facts) = &source.facts else {
@@ -8332,18 +8852,48 @@ fn check_glue_declaration(
                 .glue
                 .definitions
                 .iter()
-                .filter(|definition| definition.kind == SymbolKind::Fn)
+                .filter(|definition| {
+                    definition.kind == SymbolKind::Fn && !definition.name.contains("::")
+                })
                 .map(|definition| definition.name.as_str())
                 .collect::<BTreeSet<_>>()
         };
         for reference in &source.glue.references {
-            let resolved = facts.resolved_path(&reference.path);
+            let mut resolved = facts.resolved_path(&reference.path);
+            if resolved.len() >= 2 {
+                let index = resolved.len() - 2;
+                if let Some(target) = source.glue.aliases.get(&resolved[index]) {
+                    resolved[index] = target.clone();
+                }
+            }
             if let [name] = resolved.as_slice()
                 && own_functions.contains(name.as_str())
             {
                 continue;
             }
-            if let Some(symbol) = glue_referenced_symbol(&resolved, &module_name, &watched) {
+            if let [.., parent, name] = resolved.as_slice()
+                && let Some((file, _, tolerance)) =
+                    tolerated_paths
+                        .iter()
+                        .find(|(_, tolerated_module, tolerance)| {
+                            tolerated_module == parent && tolerance.symbol == name.as_str()
+                        })
+                && file != path
+            {
+                problem(
+                    "caller",
+                    path,
+                    format!(
+                        "{}:{} reaches the tolerated duplicate {}::{} of {file}; only its own file \
+                         may call it",
+                        reference.function, reference.line, parent, tolerance.symbol
+                    ),
+                );
+                continue;
+            }
+            if let Some(symbol) =
+                glue_referenced_symbol(&resolved, &module_name, local_modules, &watched)
+            {
                 callers.entry(*path).or_default().push(format!(
                     "{}:{} -> {symbol}",
                     reference.function, reference.line
@@ -9456,10 +10006,53 @@ mod tests {
         );
     }
 
+    const GLUE_COUNTER: &str = "\npub(super) struct Counter;\n\nimpl Counter {\n    pub(super) fn bump() -> u32 {\n        1\n    }\n}\n";
+    const GLUE_METHOD_DECLARATION: super::GlueDeclaration = super::GlueDeclaration {
+        owner_symbols: &[
+            super::OwnerSymbol {
+                name: "helper",
+                kind: super::SymbolKind::Fn,
+                visibility: super::DeclaredVisibility::Super,
+                test_only: false,
+            },
+            super::OwnerSymbol {
+                name: "Counter",
+                kind: super::SymbolKind::Struct,
+                visibility: super::DeclaredVisibility::Super,
+                test_only: false,
+            },
+            super::OwnerSymbol {
+                name: "Counter::bump",
+                kind: super::SymbolKind::Fn,
+                visibility: super::DeclaredVisibility::Super,
+                test_only: false,
+            },
+        ],
+        ..GLUE_DECLARATION
+    };
+    const GLUE_TOLERANCE: super::GlueDeclaration = super::GlueDeclaration {
+        tolerated_elsewhere: &[super::GlueTolerance {
+            file: GLUE_FIXTURE_OTHER,
+            symbol: "helper",
+            kind: super::SymbolKind::Fn,
+            visibility: super::DeclaredVisibility::Private,
+            reason: "a named duplicate",
+        }],
+        ..GLUE_DECLARATION
+    };
+
     #[test]
     fn glue_declarations_hold_on_a_conforming_fixture_and_keep_one_private_owner_module() {
         let clean = glue_check(GLUE_MAIN, GLUE_OWNER, GLUE_OTHER, GLUE_DECLARATION);
         assert!(clean.is_empty(), "{clean:?}");
+        let with_counter = format!("{GLUE_OWNER}{GLUE_COUNTER}");
+        let methods = glue_check(
+            GLUE_MAIN,
+            &with_counter,
+            GLUE_OTHER,
+            GLUE_METHOD_DECLARATION,
+        );
+        assert!(methods.is_empty(), "{methods:?}");
         let moved_placement =
             GLUE_MAIN.replace("mod glue;\nmod other;\n", "mod other;\nmod glue;\n");
         let moved = glue_check(&moved_placement, GLUE_OWNER, GLUE_OTHER, GLUE_DECLARATION);
@@ -9467,44 +10060,116 @@ mod tests {
             moved.is_empty(),
             "an equivalent module placement stays accepted: {moved:?}"
         );
-        for (label, main, reason) in [
+
+        // The owner file is the one private out-of-line module, in every cfg scope.
+        for (main, file, reason) in [
             (
-                "plain pub declaration",
                 GLUE_MAIN.replace("mod glue;", "pub mod glue;"),
-                "declares `mod glue;` as pub;",
+                GLUE_FIXTURE_MAIN,
+                "`mod glue` is pub;",
             ),
             (
-                "pub(crate) declaration",
                 GLUE_MAIN.replace("mod glue;", "pub(crate) mod glue;"),
-                "declares `mod glue;` as pub(crate);",
+                GLUE_FIXTURE_MAIN,
+                "`mod glue` is pub(crate);",
             ),
             (
-                "duplicate declaration",
                 GLUE_MAIN.replace("mod glue;", "mod glue;\nmod glue;"),
-                "declares `mod glue;` 2 times",
+                GLUE_FIXTURE_MAIN,
+                "declares `mod glue` 2 times across cfg scopes",
             ),
             (
-                "missing declaration",
                 GLUE_MAIN.replace("mod glue;\n", ""),
-                "no production `mod glue;` declares the owner file",
+                GLUE_FIXTURE_OWNER,
+                "no `mod glue;` declares the owner file",
             ),
             (
-                "test-only declaration",
                 GLUE_MAIN.replace("mod glue;", "#[cfg(test)]\nmod glue;"),
-                "no production `mod glue;` declares the owner file",
+                GLUE_FIXTURE_MAIN,
+                "`mod glue` sits under cfg(test)",
+            ),
+            (
+                GLUE_MAIN.replace(
+                    "mod glue;",
+                    "#[cfg(not(test))]\nmod glue;\n#[cfg(test)]\npub mod glue;",
+                ),
+                GLUE_FIXTURE_MAIN,
+                "declares `mod glue` 2 times across cfg scopes",
+            ),
+            (
+                GLUE_MAIN.replace("mod glue;", "#[path = \"other.rs\"]\nmod glue;"),
+                GLUE_FIXTURE_MAIN,
+                "carries #[path = \"other.rs\"]",
+            ),
+            (
+                GLUE_MAIN.replace("mod glue;", "mod glue {}"),
+                GLUE_FIXTURE_MAIN,
+                "is an inline module, not the owner file",
+            ),
+            (
+                GLUE_MAIN.replace("mod other;", "#[path = \"glue.rs\"]\nmod other;"),
+                GLUE_FIXTURE_MAIN,
+                "`mod other` carries #[path = \"glue.rs\"], which reaches or may reach the owner",
             ),
         ] {
             let violations = glue_check(&main, GLUE_OWNER, GLUE_OTHER, GLUE_DECLARATION);
-            let file = if label == "missing declaration" || label == "test-only declaration" {
-                GLUE_FIXTURE_OWNER
-            } else {
-                GLUE_FIXTURE_MAIN
-            };
             expect_glue_violation(
                 &violations,
                 GLUE_FIXTURE_OWNER,
                 "fixture_glue/owner-module",
                 file,
+                reason,
+            );
+        }
+
+        // The owner surface sees every item kind in every scope.
+        for (addition, reason) in [
+            (
+                "pub(super) static LIMIT: u32 = 3;\n",
+                "Static LIMIT (line 12) is pub(super)",
+            ),
+            (
+                "pub(crate) type Count = u32;\n",
+                "TypeAlias Count (line 12) is pub(crate)",
+            ),
+            (
+                "pub(super) union Bits {\n    value: u32,\n}\n",
+                "Union Bits (line 12) is pub(super)",
+            ),
+            ("pub(super) mod inner {}\n", "`mod inner` is pub(super)"),
+            (
+                "struct Wrapper(pub(super) u32);\n",
+                "Field Wrapper::0 (line 12) is pub(super)",
+            ),
+            (
+                "struct Holder;\nimpl Holder {\n    pub(super) const LIMIT: u32 = 3;\n}\n",
+                "Const Holder::LIMIT (line 14) is pub(super)",
+            ),
+            ("pub extern crate alloc;\n", "`extern crate alloc` is pub"),
+            (
+                "#[cfg(test)]\nmod checks {\n    pub use super::*;\n}\n",
+                "line 14 (test code) re-exports super::* as pub",
+            ),
+            (
+                "#[cfg(test)]\npub(crate) mod checks {}\n",
+                "`mod checks` is pub(crate)",
+            ),
+            (
+                "#[cfg(test)]\nmod checks {\n    pub(super) fn probe() {}\n}\n",
+                "Fn probe (line 14, test code) is pub(super)",
+            ),
+            (
+                "macro_rules! leak {\n    () => {\n        pub(crate) fn leaked() {}\n    };\n}\n",
+                "line 14: a macro body carries `pub`",
+            ),
+        ] {
+            let owner = format!("{GLUE_OWNER}{addition}");
+            let violations = glue_check(GLUE_MAIN, &owner, GLUE_OTHER, GLUE_DECLARATION);
+            expect_glue_violation(
+                &violations,
+                GLUE_FIXTURE_OWNER,
+                "fixture_glue/owner-surface",
+                GLUE_FIXTURE_OWNER,
                 reason,
             );
         }
@@ -9605,6 +10270,136 @@ mod tests {
             "helper lost `value + 1`",
         );
 
+        // Names reach what the old text walks reached: methods, macro bodies, re-exports.
+        let method_elsewhere = glue_check(
+            GLUE_MAIN,
+            GLUE_OWNER,
+            &format!(
+                "{GLUE_OTHER}\nstruct Parser;\n\nimpl Parser {{\n    fn helper() -> u32 {{\n        3\n    }}\n}}\n"
+            ),
+            GLUE_DECLARATION,
+        );
+        expect_glue_violation(
+            &method_elsewhere,
+            owner,
+            "fixture_glue/elsewhere",
+            GLUE_FIXTURE_OTHER,
+            "defines Fn Parser::helper (line 8)",
+        );
+        let method_in_owner = glue_check(
+            GLUE_MAIN,
+            &format!("{GLUE_OWNER}\nstruct Csv;\n\nimpl Csv {{\n    fn helper() {{}}\n}}\n"),
+            GLUE_OTHER,
+            GLUE_DECLARATION,
+        );
+        expect_glue_violation(
+            &method_in_owner,
+            owner,
+            "fixture_glue/owner-symbol",
+            owner,
+            "defines the function name helper again: Csv::helper (line 16)",
+        );
+        let with_counter = format!("{GLUE_OWNER}{GLUE_COUNTER}");
+        let free_method_name = glue_check(
+            &format!("{GLUE_MAIN}\nfn bump() -> u32 {{\n    2\n}}\n"),
+            &with_counter,
+            GLUE_OTHER,
+            GLUE_METHOD_DECLARATION,
+        );
+        expect_glue_violation(
+            &free_method_name,
+            owner,
+            "fixture_glue/forbidden",
+            GLUE_FIXTURE_MAIN,
+            "defines Fn bump (line 10)",
+        );
+        let macro_body = glue_check(
+            &format!(
+                "{GLUE_MAIN}\nmacro_rules! twin {{\n    () => {{\n        fn helper(value: u32) -> u32 {{\n            value + 1\n        }}\n    }};\n}}\ntwin!();\n"
+            ),
+            GLUE_OWNER,
+            GLUE_OTHER,
+            GLUE_DECLARATION,
+        );
+        expect_glue_violation(
+            &macro_body,
+            owner,
+            "fixture_glue/macro",
+            GLUE_FIXTURE_MAIN,
+            "line 12: a macro body spells out Definition(Fn, \"helper\")",
+        );
+        let macro_impl = glue_check(
+            &format!(
+                "{GLUE_MAIN}\nmacro_rules! more {{\n    () => {{\n        impl Counter {{}}\n    }};\n}}\n"
+            ),
+            &with_counter,
+            GLUE_OTHER,
+            GLUE_METHOD_DECLARATION,
+        );
+        expect_glue_violation(
+            &macro_impl,
+            owner,
+            "fixture_glue/macro",
+            GLUE_FIXTURE_MAIN,
+            "line 12: a macro body spells out Impl([\"Counter\"])",
+        );
+        let sibling = glue_check(
+            &GLUE_MAIN.replace(
+                "    let _ = total;",
+                "    let _ = total + other::helper(3);",
+            ),
+            GLUE_OWNER,
+            &format!("pub(super) use crate::glue::helper;\n\n{GLUE_OTHER}"),
+            GLUE_DECLARATION,
+        );
+        expect_glue_violation(
+            &sibling,
+            owner,
+            "fixture_glue/reexport",
+            GLUE_FIXTURE_OTHER,
+            "line 1 re-exports crate::glue::helper as pub(super)",
+        );
+        expect_glue_violation(
+            &sibling,
+            owner,
+            "fixture_glue/caller",
+            GLUE_FIXTURE_MAIN,
+            "references the glue 2 times, the declaration pins 1",
+        );
+        let test_reexport = glue_check(
+            &format!("{GLUE_MAIN}\n#[cfg(test)]\npub use glue::*;\n"),
+            GLUE_OWNER,
+            GLUE_OTHER,
+            GLUE_DECLARATION,
+        );
+        expect_glue_violation(
+            &test_reexport,
+            owner,
+            "fixture_glue/forbidden",
+            GLUE_FIXTURE_MAIN,
+            "(test code) re-exports glue::* as pub",
+        );
+        for (other, row) in [
+            (
+                "type Tally = crate::glue::Counter;\n\nfn count() -> u32 {\n    Tally::bump()\n}\n",
+                "count:4 -> Counter::bump",
+            ),
+            (
+                "fn count() -> u32 {\n    <crate::glue::Counter>::bump()\n}\n",
+                "count:2 -> Counter::bump",
+            ),
+        ] {
+            let aliased = glue_check(GLUE_MAIN, &with_counter, other, GLUE_METHOD_DECLARATION);
+            expect_glue_violation(
+                &aliased,
+                owner,
+                "fixture_glue/caller",
+                GLUE_FIXTURE_OTHER,
+                row,
+            );
+        }
+
+        // A tolerated duplicate is exact: one private production fn, reached only in its file.
         let duplicate = format!("{GLUE_OTHER}\nfn helper() -> u32 {{\n    2\n}}\n");
         let untolerated = glue_check(GLUE_MAIN, GLUE_OWNER, &duplicate, GLUE_DECLARATION);
         expect_glue_violation(
@@ -9614,25 +10409,43 @@ mod tests {
             GLUE_FIXTURE_OTHER,
             "defines Fn helper (line 5)",
         );
-        let tolerance = super::GlueDeclaration {
-            tolerated_elsewhere: &[super::GlueTolerance {
-                file: GLUE_FIXTURE_OTHER,
-                symbol: "helper",
-                reason: "a named duplicate",
-            }],
-            ..GLUE_DECLARATION
-        };
-        let tolerated = glue_check(GLUE_MAIN, GLUE_OWNER, &duplicate, tolerance);
+        let tolerated = glue_check(GLUE_MAIN, GLUE_OWNER, &duplicate, GLUE_TOLERANCE);
         assert!(tolerated.is_empty(), "{tolerated:?}");
-        let stale = glue_check(GLUE_MAIN, GLUE_OWNER, GLUE_OTHER, tolerance);
+        for (other, found) in [
+            (GLUE_OTHER.to_string(), "found []"),
+            (
+                duplicate.replace("\nfn helper()", "\npub(super) fn helper()"),
+                "found [Fn pub(super) helper line 5]",
+            ),
+            (
+                format!("{duplicate}\n#[cfg(test)]\nmod checks {{\n    fn helper() {{}}\n}}\n"),
+                "found [Fn private helper line 5, Fn private helper line 11 test code]",
+            ),
+        ] {
+            let violations = glue_check(GLUE_MAIN, GLUE_OWNER, &other, GLUE_TOLERANCE);
+            expect_glue_violation(
+                &violations,
+                owner,
+                "fixture_glue/elsewhere",
+                GLUE_FIXTURE_OTHER,
+                found,
+            );
+        }
+        let reached = glue_check(
+            &GLUE_MAIN.replace("    let _ = total;", "    let _ = total + other::helper();"),
+            GLUE_OWNER,
+            &duplicate,
+            GLUE_TOLERANCE,
+        );
         expect_glue_violation(
-            &stale,
+            &reached,
             owner,
-            "fixture_glue/elsewhere",
-            GLUE_FIXTURE_OTHER,
-            "no longer defines the tolerated `helper`",
+            "fixture_glue/caller",
+            GLUE_FIXTURE_MAIN,
+            "main:7 reaches the tolerated duplicate other::helper",
         );
 
+        // The declaration validates itself.
         let absent_owner = glue_check(
             GLUE_MAIN,
             GLUE_OWNER,
