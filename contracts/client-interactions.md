@@ -124,6 +124,20 @@ the card of the daemon's own policy driver, which connects to the Runtime as
 `{ client: "actingd-policy-driver", client_version: <actingd version> }`, so the
 ledger shows the daemon recorded those approvals.
 
+The driver reads the latest decision of its configured ids (at most 64) in
+process, from the approval projection the Runtime rebuilds from the complete
+ledger under its governance write gate: the same verified recovery an approval
+write and policy admission run, not the bounded client event query. An id is
+undecided only when that complete, verified history holds no decision for it,
+and only undecided ids are recorded. A latest decision that differs from the
+configured approval in any field (disposition, target, reason
+`configured_catalog_approval`) fails startup with
+`policy_catalog_approval_conflict`; an equal one is left as it is, so a restart
+with unchanged configuration records nothing. A failed read fails policy
+initialization and is never treated as undecided. Reading and recording are two
+separate steps: a decision another governance client records between them is
+not seen by the driver.
+
 The change is additive on the event wire (new event type
 `governance.identity_declared`, client payload kind
 `governance_identity_declared`, event action `governance.identity_declare`);

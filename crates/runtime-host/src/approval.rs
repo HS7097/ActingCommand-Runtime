@@ -242,6 +242,21 @@ impl ApprovalProjection {
         records.into_values().collect()
     }
 
+    /// The latest decision recorded for `approval_id` in the whole projected history; `None`
+    /// only when the id has never been decided.
+    pub(crate) fn latest_decision(
+        &self,
+        approval_id: &str,
+    ) -> RuntimeHostResult<Option<ApprovalDecisionRecord>> {
+        let Some(event) = self.latest.get(approval_id) else {
+            return Ok(None);
+        };
+        let EventPayload::Approval(ApprovalPayload::Decision(payload)) = event.payload() else {
+            return Err(approval_fatal("approval_projection_payload_mismatch"));
+        };
+        Ok(Some(payload.decision().clone()))
+    }
+
     pub(crate) fn active_for_dispatch(&self, intent: &DispatchIntent) -> BTreeSet<String> {
         self.active
             .values()
