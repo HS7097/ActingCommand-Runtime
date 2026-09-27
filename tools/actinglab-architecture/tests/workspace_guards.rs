@@ -6274,6 +6274,14 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 1,
             ),
             exact(FLAG_VALUES, "use std::path::PathBuf;", 1),
+            // The region and rectangle types the parsers return stay owned by the session-record
+            // commands, crate-visible, and main.rs declares neither more widely.
+            exact(SESSION_RECORD, "pub(crate) enum SessionRecordRegion {", 1),
+            exact(SESSION_RECORD, "pub(crate) struct SessionRecordRect {", 1),
+            absent(ACTINGLAB_MAIN, "pub enum SessionRecordRegion"),
+            absent(ACTINGLAB_MAIN, "pub(crate) enum SessionRecordRegion"),
+            absent(ACTINGLAB_MAIN, "pub struct SessionRecordRect"),
+            absent(ACTINGLAB_MAIN, "pub(crate) struct SessionRecordRect"),
             exact(
                 SESSION_RECORD,
                 "let id = required_non_empty_flag(flags, \"--id\")?;",
