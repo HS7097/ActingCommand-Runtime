@@ -28,7 +28,7 @@ State database construction preserves this order:
 5. Construct the state facade and validate every typed document, projection,
    release and pointer relation through its existing validation path.
 
-`crates/runtime-state/src/schema.sql` and its contract mirror remain unchanged.
+`contracts/sqlite/schema.sql` (embedded by `crates/runtime-state`) remains unchanged.
 The state owner supplies the existing nine-table DDL and version to database
 construction. The database owner performs that initialization and metadata check;
 schema semantics remain with state.

@@ -3192,20 +3192,6 @@ mod tests {
     }
 
     #[test]
-    fn executable_and_published_sqlite_schemas_are_identical() {
-        let published = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("contracts")
-            .join("sqlite")
-            .join("schema.sql");
-        assert_eq!(
-            include_bytes!("../../../contracts/sqlite/schema.sql").as_slice(),
-            fs::read(published).expect("published schema")
-        );
-    }
-
-    #[test]
     fn state_document_rollback_creates_a_new_monotonic_revision() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");

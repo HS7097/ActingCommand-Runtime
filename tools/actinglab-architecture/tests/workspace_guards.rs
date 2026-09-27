@@ -7,18 +7,19 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use actingcommand_actinglab_architecture::{
-    DeclaredVisibility, LedgerOwnerModule, RefusalBranch, SourceFacts,
-    contract_dependency_violations, discover_ledger_owners, extract_command_inventory,
+    DeclaredVisibility, FunctionFacts, FunctionReference, LedgerOwnerModule, RefusalBranch,
+    SourceFacts, contract_dependency_violations, discover_ledger_owners, extract_command_inventory,
     function_source, inspect_admission_handle_uses, inspect_artifact_byte_writes,
     inspect_call_sites, inspect_contract_fact_matching, inspect_disallowed_lint_escapes,
     inspect_dispatch_arm_calls, inspect_enum_variants, inspect_envelope_sites,
     inspect_field_accesses, inspect_function_origin_terms, inspect_generic_authoring_identity,
     inspect_generic_runtime_identity, inspect_lab_source, inspect_ledger_append_ingress,
-    inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_persisted_event_ownership,
-    inspect_producer_event_capabilities, inspect_provider_symbol_literals, inspect_public_api,
-    inspect_pure_decision_source, inspect_refusal_branches, inspect_source_facts,
-    inspect_stderr_writes, inspect_store_write_api, inspect_store_writes,
-    inspect_type_constructions, lab_removability_violations, ledger_owns_query_matching,
+    inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_non_reexport_items,
+    inspect_persisted_event_ownership, inspect_producer_event_capabilities,
+    inspect_provider_symbol_literals, inspect_public_api, inspect_pure_decision_source,
+    inspect_refusal_branches, inspect_source_facts, inspect_stderr_writes, inspect_store_write_api,
+    inspect_store_writes, inspect_type_constructions, lab_removability_violations,
+    ledger_owns_query_matching, reference_calls, reference_matches,
     resource_tooling_removability_violations, workspace_dependency_allow_list_violations,
     workspace_dependency_violations,
 };
@@ -2549,6 +2550,16 @@ fn feature_gated_forbidden_dependency_paths_are_detected() {
 #[test]
 fn all_non_lab_packages_remain_lab_free_with_all_features() {
     let metadata = workspace_metadata();
+    let document: serde_json::Value =
+        serde_json::from_str(&metadata).expect("parse cargo metadata");
+    assert!(
+        document["packages"].as_array().is_some_and(|packages| {
+            packages
+                .iter()
+                .any(|package| package["name"] == "actingcommand-lab")
+        }),
+        "the required crates/lab member must provide the actingcommand-lab package"
+    );
     let violations =
         lab_removability_violations(&metadata, &["actingcommand-lab", "actingcommand-actinglab"])
             .unwrap();
@@ -2604,6 +2615,527 @@ fn production_packages_cannot_reach_resource_tooling() {
                 .unwrap_or_else(|| "no path".to_string())
         );
     }
+}
+
+// Workflow #310 work packages C and E in one slice (C+E, frozen model: the #310 coordinator
+// comment "C+E 冻模型"). C1: the Lab environment bridge and re-export stay in crates/lab; this
+// guard names their owners and checks definitions, the bridge-to-entry call relationship and the
+// bridge's callers. The dependency-graph guards above stay as they are.
+
+const PACK_CONTAINMENT_CRATE: &str = "actingcommand_pack_containment";
+const RESOURCE_TOOLING_CRATE: &str = "actingcommand_resource_tooling";
+const LAB_CRATE: &str = "actingcommand_lab";
+
+/// C1: one definition of a Lab bridge-chain owner.
+struct BridgeDefinition {
+    /// `Owner::name`, or `name` for a free function.
+    name: &'static str,
+    /// For a Lab bridge, its resource-tooling entry: the reference its body must make, as
+    /// `reference_matches` reads it once the file's `use` bindings resolve the paths.
+    /// `self.inner.<method>` is the wrapped resource-tooling catalog, which only
+    /// `PackageBuildCatalog::open` builds, from its own resource-tooling entry. Owner definitions
+    /// have no entry.
+    entry: Option<&'static str>,
+}
+
+const fn owner_entry(name: &'static str) -> BridgeDefinition {
+    BridgeDefinition { name, entry: None }
+}
+
+const fn lab_bridge(name: &'static str, entry: &'static str) -> BridgeDefinition {
+    BridgeDefinition {
+        name,
+        entry: Some(entry),
+    }
+}
+
+/// C1: one owner module of the Lab bridge chain and the production file holding its definitions.
+struct BridgeOwner {
+    module: &'static str,
+    file: &'static str,
+    definitions: &'static [BridgeDefinition],
+}
+
+/// C1: the owner table. pack-containment owns the pure source-conversion core (the entries
+/// resource-tooling converts through); resource-tooling owns the package build and the MAA task
+/// graph compiler; Lab's package_build.rs defines exactly the environment bridge listed here,
+/// each bridge calling its resource-tooling entry and nothing of pack-containment.
+const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
+    BridgeOwner {
+        module: "pack-containment",
+        file: "crates/pack-containment/src/source/mod.rs",
+        definitions: &[
+            owner_entry("OperationConverter::build_all"),
+            owner_entry("OperationConverter::build_selected"),
+            owner_entry("OperationConverter::canonical_task"),
+            owner_entry("source_file_requests"),
+            owner_entry("validate_phases_bundle"),
+            owner_entry("validate_post_admission_ocr_bundle"),
+        ],
+    },
+    BridgeOwner {
+        module: "resource-tooling",
+        file: "crates/resource-tooling/src/package_build.rs",
+        definitions: &[
+            owner_entry("prepare_package_build_task"),
+            owner_entry("PackageBuildCatalog::build_task_archive"),
+            owner_entry("PackageBuildCatalog::build_task_archive_staged"),
+            owner_entry("PackageBuildCatalog::build_full_archive"),
+        ],
+    },
+    BridgeOwner {
+        module: "resource-tooling",
+        file: "crates/resource-tooling/src/maa_task_graph.rs",
+        definitions: &[owner_entry("compile_maa_task_graph")],
+    },
+    BridgeOwner {
+        module: "lab",
+        file: "crates/lab/src/package_build.rs",
+        definitions: &[
+            lab_bridge(
+                "Lab::package_build_task",
+                "actingcommand_resource_tooling::prepare_package_build_task",
+            ),
+            lab_bridge(
+                "PackageBuildCatalog::open",
+                "actingcommand_resource_tooling::PackageBuildCatalog::open",
+            ),
+            lab_bridge("PackageBuildCatalog::metadata", "self.inner.metadata"),
+            lab_bridge("PackageBuildCatalog::task_ids", "self.inner.task_ids"),
+            lab_bridge(
+                "PackageBuildCatalog::default_entry_task",
+                "self.inner.default_entry_task",
+            ),
+            lab_bridge(
+                "PackageBuildCatalog::build_task_archive",
+                "self.inner.build_task_archive",
+            ),
+            lab_bridge(
+                "PackageBuildCatalog::build_task_archive_staged",
+                "self.inner.build_task_archive_staged",
+            ),
+            lab_bridge(
+                "PackageBuildCatalog::build_full_archive",
+                "self.inner.build_full_archive",
+            ),
+            lab_bridge("PackageBuildCatalog::cleanup", "self.inner.cleanup"),
+            lab_bridge(
+                "resolve_environment_snapshot",
+                "actingcommand_resource_tooling::AuthoringEnvironmentSnapshot::from_resolved",
+            ),
+        ],
+    },
+];
+
+/// C1: Lab's re-export module holds only `pub use` items, each from resource-tooling, and
+/// re-exports these names.
+const LAB_REEXPORT_MODULE: (&str, &[&str]) = (
+    "crates/lab/src/maa_task_graph.rs",
+    &["compile_maa_task_graph"],
+);
+
+/// C1: the only production files that call the Lab bridge; their test items are exempt through
+/// their cfg(test) scope.
+const LAB_BRIDGE_CALLERS: &[&str] = &[
+    "apps/actinglab/src/maa_task_graph.rs",
+    "apps/actinglab/src/package_build.rs",
+];
+
+fn bridge_problem(module: &str, rule: &str, file: &str, reason: impl std::fmt::Display) -> String {
+    format!("[{module}] {rule}: {file}: {reason}")
+}
+
+fn reference_path(reference: &FunctionReference) -> Option<&[String]> {
+    match reference {
+        FunctionReference::Call(path)
+        | FunctionReference::Struct(path)
+        | FunctionReference::Value(path)
+        | FunctionReference::Pattern(path) => Some(path),
+        _ => None,
+    }
+}
+
+/// `reference` with its path resolved through the file's production `use` bindings.
+fn resolved_reference(source: &SourceFacts, reference: &FunctionReference) -> FunctionReference {
+    match reference {
+        FunctionReference::Call(path) => FunctionReference::Call(source.resolved_path(path)),
+        FunctionReference::Struct(path) => FunctionReference::Struct(source.resolved_path(path)),
+        FunctionReference::Value(path) => FunctionReference::Value(source.resolved_path(path)),
+        FunctionReference::Pattern(path) => FunctionReference::Pattern(source.resolved_path(path)),
+        other => other.clone(),
+    }
+}
+
+/// C1: the Lab bridge name a resolved path reaches: a path into Lab (`actingcommand_lab::…`;
+/// inside crates/lab/src also `crate` / `super` / `self` and the bridge names themselves) that
+/// names `compile_maa_task_graph`, the Lab `PackageBuildCatalog` or `Lab::package_build_task`.
+fn lab_bridge_path(source: &SourceFacts, path: &[String]) -> Option<String> {
+    let names = path.iter().map(String::as_str).collect::<Vec<_>>();
+    let first = *names.first()?;
+    let into_lab = first == LAB_CRATE
+        || (source.path.starts_with("crates/lab/src/")
+            && matches!(
+                first,
+                "crate"
+                    | "super"
+                    | "self"
+                    | "Lab"
+                    | "PackageBuildCatalog"
+                    | "compile_maa_task_graph"
+            ));
+    if !into_lab {
+        return None;
+    }
+    match names.as_slice() {
+        [.., "compile_maa_task_graph"] => Some("compile_maa_task_graph".to_string()),
+        [.., "PackageBuildCatalog", member] => Some(format!("PackageBuildCatalog::{member}")),
+        [.., "PackageBuildCatalog"] => Some("PackageBuildCatalog".to_string()),
+        [.., "Lab", "package_build_task"] => Some("Lab::package_build_task".to_string()),
+        _ => None,
+    }
+}
+
+/// C1: the Lab bridge name one production reference of `source` reaches: the Lab method
+/// `package_build_task` on any receiver, or a path `lab_bridge_path` accepts.
+fn lab_bridge_reference(source: &SourceFacts, reference: &FunctionReference) -> Option<String> {
+    if let FunctionReference::Method(_, method) = reference {
+        return (method == "package_build_task").then(|| "Lab::package_build_task".to_string());
+    }
+    lab_bridge_path(source, &source.resolved_path(reference_path(reference)?))
+}
+
+/// C1: whether a production function receives or returns the Lab `PackageBuildCatalog`.
+fn lab_catalog_in_signature(source: &SourceFacts, function: &FunctionFacts) -> bool {
+    function.signature_types.contains("PackageBuildCatalog")
+        && (function.signature_types.contains(LAB_CRATE)
+            || lab_bridge_path(
+                source,
+                &source.resolved_path(&["PackageBuildCatalog".to_string()]),
+            )
+            .is_some())
+}
+
+/// C1: whether a resolved reference of a Lab bridge reaches pack-containment directly: a path
+/// into that crate, or a call of one of its source-conversion core entries.
+fn reaches_pack_containment(reference: &FunctionReference, core_entries: &[&str]) -> bool {
+    reference_path(reference)
+        .and_then(|path| path.first())
+        .is_some_and(|first| first == PACK_CONTAINMENT_CRATE)
+        || core_entries
+            .iter()
+            .any(|entry| reference_calls(reference, entry))
+}
+
+fn bare_name(name: &str) -> &str {
+    name.rsplit("::").next().expect("definition name")
+}
+
+#[test]
+fn c1_lab_bridge_and_reexport_follow_their_owner_and_call_table() {
+    let root = workspace_root();
+    let mut problems = Vec::new();
+    let lab = LAB_BRIDGE_OWNERS
+        .iter()
+        .find(|owner| owner.module == "lab")
+        .expect("LAB_BRIDGE_OWNERS names the Lab bridge file");
+    let lab_rows = lab
+        .definitions
+        .iter()
+        .map(|definition| definition.name)
+        .collect::<BTreeSet<_>>();
+    let core_entries = LAB_BRIDGE_OWNERS
+        .iter()
+        .filter(|owner| owner.module == "pack-containment")
+        .flat_map(|owner| owner.definitions)
+        .map(|definition| bare_name(definition.name))
+        .collect::<Vec<_>>();
+    let owner_entries = LAB_BRIDGE_OWNERS
+        .iter()
+        .filter(|owner| owner.module != "lab")
+        .flat_map(|owner| owner.definitions)
+        .map(|definition| bare_name(definition.name))
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !core_entries.is_empty() && !owner_entries.is_empty(),
+        "LAB_BRIDGE_OWNERS names no owner entries"
+    );
+
+    for owner in LAB_BRIDGE_OWNERS {
+        let rule = if owner.module == "lab" {
+            "bridge-definition"
+        } else {
+            "owner-definition"
+        };
+        let sources = production_facts(&root, &[owner.file]);
+        let [facts] = sources.as_slice() else {
+            panic!(
+                "{} resolves to {} production files",
+                owner.file,
+                sources.len()
+            );
+        };
+        if facts.functions.is_empty() {
+            problems.push(bridge_problem(
+                owner.module,
+                rule,
+                owner.file,
+                "the file has no production functions; the table lost its target",
+            ));
+        }
+        for definition in owner.definitions {
+            let found = facts
+                .functions
+                .iter()
+                .filter(|function| function.qualified_name() == definition.name)
+                .collect::<Vec<_>>();
+            let [function] = found.as_slice() else {
+                problems.push(bridge_problem(
+                    owner.module,
+                    rule,
+                    owner.file,
+                    format!(
+                        "must define {} once, found {}",
+                        definition.name,
+                        found.len()
+                    ),
+                ));
+                continue;
+            };
+            let Some(entry) = definition.entry else {
+                continue;
+            };
+            let resolved = function
+                .references
+                .iter()
+                .map(|(reference, line)| (resolved_reference(facts, reference), *line))
+                .collect::<Vec<_>>();
+            if !resolved
+                .iter()
+                .any(|(reference, _)| reference_matches(reference, entry))
+            {
+                problems.push(bridge_problem(
+                    owner.module,
+                    "bridge-entry",
+                    owner.file,
+                    format!(
+                        "{} bypasses its resource-tooling entry {entry}",
+                        definition.name
+                    ),
+                ));
+            }
+            for (reference, line) in &resolved {
+                if reaches_pack_containment(reference, &core_entries) {
+                    problems.push(bridge_problem(
+                        owner.module,
+                        "no-pack-containment",
+                        owner.file,
+                        format!(
+                            "{}:{line} calls pack-containment directly ({reference:?})",
+                            definition.name
+                        ),
+                    ));
+                }
+            }
+        }
+        if owner.module != "lab" {
+            continue;
+        }
+        for function in &facts.functions {
+            if !lab_rows.contains(function.qualified_name().as_str()) {
+                problems.push(bridge_problem(
+                    owner.module,
+                    rule,
+                    owner.file,
+                    format!(
+                        "{}:{} is defined outside the bridge table",
+                        function.qualified_name(),
+                        function.line
+                    ),
+                ));
+            }
+        }
+        if facts.types != BTreeSet::from(["PackageBuildCatalog".to_string()]) {
+            problems.push(bridge_problem(
+                owner.module,
+                rule,
+                owner.file,
+                format!(
+                    "defines the types {:?}; the bridge table allows only PackageBuildCatalog",
+                    facts.types
+                ),
+            ));
+        }
+        if facts.fields
+            != [(
+                "PackageBuildCatalog".to_string(),
+                "inner".to_string(),
+                DeclaredVisibility::Private,
+            )]
+        {
+            problems.push(bridge_problem(
+                owner.module,
+                rule,
+                owner.file,
+                format!(
+                    "PackageBuildCatalog must wrap only the private resource-tooling catalog \
+                     `inner`, found {:?}",
+                    facts.fields
+                ),
+            ));
+        }
+        for binding in &facts.uses {
+            if binding.path.first().map(String::as_str) == Some(PACK_CONTAINMENT_CRATE) {
+                problems.push(bridge_problem(
+                    owner.module,
+                    "no-pack-containment",
+                    owner.file,
+                    format!("line {} imports {}", binding.line, binding.path.join("::")),
+                ));
+            }
+        }
+    }
+
+    for function in production_facts(&root, &["crates/lab/src"])
+        .iter()
+        .flat_map(|source| &source.functions)
+    {
+        if owner_entries.contains(function.name.as_str())
+            && !(function.path == lab.file && lab_rows.contains(function.qualified_name().as_str()))
+        {
+            problems.push(bridge_problem(
+                "lab",
+                "bridge-definition",
+                &function.path,
+                format!(
+                    "{}:{} defines an owner entry outside the bridge table",
+                    function.qualified_name(),
+                    function.line
+                ),
+            ));
+        }
+    }
+
+    let (reexport_file, reexported) = LAB_REEXPORT_MODULE;
+    let source = fs::read_to_string(root.join(reexport_file))
+        .unwrap_or_else(|error| panic!("read {reexport_file}: {error}"));
+    for row in
+        inspect_non_reexport_items(reexport_file, &source).unwrap_or_else(|error| panic!("{error}"))
+    {
+        problems.push(bridge_problem(
+            "lab",
+            "reexport-only",
+            reexport_file,
+            format!("{row} is not a `pub use` re-export"),
+        ));
+    }
+    let facts =
+        inspect_source_facts(reexport_file, &source).unwrap_or_else(|error| panic!("{error}"));
+    if facts.uses.is_empty() {
+        problems.push(bridge_problem(
+            "lab",
+            "reexport-only",
+            reexport_file,
+            "re-exports nothing; the table lost its target",
+        ));
+    }
+    for binding in &facts.uses {
+        if binding.path.first().map(String::as_str) != Some(RESOURCE_TOOLING_CRATE) {
+            problems.push(bridge_problem(
+                "lab",
+                "reexport-only",
+                reexport_file,
+                format!(
+                    "line {} re-exports {} from outside resource-tooling",
+                    binding.line,
+                    binding.path.join("::")
+                ),
+            ));
+        }
+    }
+    for name in reexported {
+        if !facts.uses.iter().any(|binding| {
+            binding.local == *name
+                && binding.visibility == DeclaredVisibility::Public
+                && binding.path == [RESOURCE_TOOLING_CRATE, *name]
+        }) {
+            problems.push(bridge_problem(
+                "lab",
+                "reexport-only",
+                reexport_file,
+                format!("no longer re-exports {RESOURCE_TOOLING_CRATE}::{name}"),
+            ));
+        }
+    }
+
+    let mut callers = BTreeMap::<String, Vec<String>>::new();
+    for source in workspace_production_facts() {
+        for binding in &source.uses {
+            if binding.local == "*" && binding.path.first().map(String::as_str) == Some(LAB_CRATE) {
+                callers
+                    .entry(source.path.clone())
+                    .or_default()
+                    .push(format!(
+                        "{}:{} -> a glob import of {LAB_CRATE} hides which bridge names it calls",
+                        source.path, binding.line
+                    ));
+            }
+        }
+        for function in &source.functions {
+            for (reference, line) in &function.references {
+                if let Some(symbol) = lab_bridge_reference(source, reference) {
+                    callers
+                        .entry(source.path.clone())
+                        .or_default()
+                        .push(format!("{}:{line} -> {symbol}", function.site()));
+                }
+            }
+            if lab_catalog_in_signature(source, function) {
+                callers
+                    .entry(source.path.clone())
+                    .or_default()
+                    .push(format!(
+                        "{}:{} -> PackageBuildCatalog in its signature",
+                        function.site(),
+                        function.line
+                    ));
+            }
+        }
+    }
+    for rows in callers.values() {
+        for row in rows {
+            println!("Lab bridge call: {row}");
+        }
+    }
+    let allowed = row_set(LAB_BRIDGE_CALLERS.iter().copied());
+    for (file, rows) in &callers {
+        if !allowed.contains(file) {
+            for row in rows {
+                problems.push(bridge_problem(
+                    "lab",
+                    "bridge-caller",
+                    file,
+                    format!("{row} is not an allowed caller of the Lab bridge"),
+                ));
+            }
+        }
+    }
+    for file in &allowed {
+        if !callers.contains_key(file) {
+            problems.push(bridge_problem(
+                "lab",
+                "bridge-caller",
+                file,
+                "is an allowed caller but calls no Lab bridge; the table lost its target",
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "the Lab bridge chain differs from LAB_BRIDGE_OWNERS / LAB_REEXPORT_MODULE / \
+         LAB_BRIDGE_CALLERS ([module] rule: file: reason):\n{}",
+        problems.join("\n")
+    );
 }
 
 fn workspace_relative(root: &Path, file: &Path) -> String {

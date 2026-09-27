@@ -747,19 +747,133 @@ mod tests {
         assert_eq!(decoded, diagnostic);
     }
 
+    /// The published V1 scheduling schemas, by file name.
+    const PUBLISHED_V1_SCHEMAS: [(&str, &str); 6] = [
+        (
+            "common.schema.json",
+            include_str!("../../../contracts/scheduling/common.schema.json"),
+        ),
+        (
+            "tasks.schema.json",
+            include_str!("../../../contracts/scheduling/tasks.schema.json"),
+        ),
+        (
+            "pools.schema.json",
+            include_str!("../../../contracts/scheduling/pools.schema.json"),
+        ),
+        (
+            "activity.schema.json",
+            include_str!("../../../contracts/scheduling/activity.schema.json"),
+        ),
+        (
+            "timeline.schema.json",
+            include_str!("../../../contracts/scheduling/timeline.schema.json"),
+        ),
+        (
+            "diagnostic.schema.json",
+            include_str!("../../../contracts/scheduling/diagnostic.schema.json"),
+        ),
+    ];
+
+    /// The five published V2 scheduling schemas, by file name.
+    const PUBLISHED_V2_SCHEMAS: [(&str, &str); 5] = [
+        (
+            "common.schema.json",
+            include_str!("../../../contracts/scheduling/v2/common.schema.json"),
+        ),
+        (
+            "tasks.schema.json",
+            include_str!("../../../contracts/scheduling/v2/tasks.schema.json"),
+        ),
+        (
+            "pools.schema.json",
+            include_str!("../../../contracts/scheduling/v2/pools.schema.json"),
+        ),
+        (
+            "activity.schema.json",
+            include_str!("../../../contracts/scheduling/v2/activity.schema.json"),
+        ),
+        (
+            "timeline.schema.json",
+            include_str!("../../../contracts/scheduling/v2/timeline.schema.json"),
+        ),
+    ];
+
+    /// Each published schema set as (version, file name -> parsed document).
+    fn published_schema_sets() -> [(&'static str, BTreeMap<&'static str, serde_json::Value>); 2] {
+        fn parse(
+            set: &str,
+            schemas: &[(&'static str, &'static str)],
+        ) -> BTreeMap<&'static str, serde_json::Value> {
+            schemas
+                .iter()
+                .map(|(name, text)| {
+                    let schema =
+                        serde_json::from_str::<serde_json::Value>(text).unwrap_or_else(|error| {
+                            panic!("{set}/{name} is not a JSON document: {error}")
+                        });
+                    (*name, schema)
+                })
+                .collect()
+        }
+        [
+            ("v1", parse("v1", &PUBLISHED_V1_SCHEMAS)),
+            ("v2", parse("v2", &PUBLISHED_V2_SCHEMAS)),
+        ]
+    }
+
     #[test]
     fn published_schemas_are_valid_json_documents() {
-        let schemas = [
-            include_str!("../../../contracts/scheduling/common.schema.json"),
-            include_str!("../../../contracts/scheduling/tasks.schema.json"),
-            include_str!("../../../contracts/scheduling/pools.schema.json"),
-            include_str!("../../../contracts/scheduling/activity.schema.json"),
-            include_str!("../../../contracts/scheduling/timeline.schema.json"),
-            include_str!("../../../contracts/scheduling/diagnostic.schema.json"),
-        ];
+        fn collect_references<'a>(value: &'a serde_json::Value, references: &mut Vec<&'a str>) {
+            match value {
+                serde_json::Value::Object(fields) => {
+                    for (key, child) in fields {
+                        if key == "$ref" {
+                            references.push(child.as_str().expect("$ref is a string"));
+                        } else {
+                            collect_references(child, references);
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for child in items {
+                        collect_references(child, references);
+                    }
+                }
+                _ => {}
+            }
+        }
 
-        for schema in schemas {
-            serde_json::from_str::<serde_json::Value>(schema).expect("schema JSON");
+        for (set, schemas) in published_schema_sets() {
+            let mut resolved = 0;
+            for (name, schema) in &schemas {
+                assert!(schema.is_object(), "{set}/{name} is not a schema object");
+                let mut references = Vec::new();
+                collect_references(schema, &mut references);
+                for reference in references {
+                    let (document, pointer) = reference.split_once('#').unwrap_or_else(|| {
+                        panic!("{set}/{name}: $ref {reference} has no fragment")
+                    });
+                    let target = if document.is_empty() {
+                        *name
+                    } else {
+                        document.strip_prefix("./").unwrap_or_else(|| {
+                            panic!("{set}/{name}: $ref {reference} leaves the schema directory")
+                        })
+                    };
+                    let target_schema = schemas.get(target).unwrap_or_else(|| {
+                        panic!(
+                            "{set}/{name}: $ref {reference} names a document outside the {set} set"
+                        )
+                    });
+                    assert!(
+                        target_schema.pointer(pointer).is_some(),
+                        "{set}/{name}: $ref {reference} does not resolve"
+                    );
+                    resolved += 1;
+                }
+            }
+            assert!(resolved > 0, "{set}: the published schemas hold no $ref");
         }
     }
 
@@ -801,114 +915,99 @@ mod tests {
             }
         }
 
-        for (name, schema) in [
-            (
-                "common",
-                include_str!("../../../contracts/scheduling/common.schema.json"),
-            ),
-            (
-                "tasks",
-                include_str!("../../../contracts/scheduling/tasks.schema.json"),
-            ),
-            (
-                "pools",
-                include_str!("../../../contracts/scheduling/pools.schema.json"),
-            ),
-            (
-                "activity",
-                include_str!("../../../contracts/scheduling/activity.schema.json"),
-            ),
-            (
-                "timeline",
-                include_str!("../../../contracts/scheduling/timeline.schema.json"),
-            ),
-            (
-                "diagnostic",
-                include_str!("../../../contracts/scheduling/diagnostic.schema.json"),
-            ),
-        ] {
-            let schema = serde_json::from_str::<serde_json::Value>(schema).expect("schema JSON");
-            verify(&schema, name);
+        for (set, schemas) in published_schema_sets() {
+            for (name, schema) in &schemas {
+                verify(schema, &format!("{set}/{name}"));
+            }
         }
     }
 
     #[test]
     fn published_schema_bounds_match_compiler_constants() {
-        let tasks: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../contracts/scheduling/tasks.schema.json"
-        ))
-        .expect("tasks schema");
-        let activity: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../contracts/scheduling/activity.schema.json"
-        ))
-        .expect("activity schema");
-        let pools: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../contracts/scheduling/pools.schema.json"
-        ))
-        .expect("pools schema");
-        let common: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../contracts/scheduling/common.schema.json"
-        ))
-        .expect("common schema");
+        let [(_, v1), (_, v2)] = published_schema_sets();
+        for (set, schemas) in [("v1", &v1), ("v2", &v2)] {
+            let tasks = &schemas["tasks.schema.json"];
+            let activity = &schemas["activity.schema.json"];
+            let pools = &schemas["pools.schema.json"];
+            let common = &schemas["common.schema.json"];
 
-        assert_eq!(
-            tasks["$defs"]["loopBudget"]["properties"]["daily_limit"]["minimum"],
-            1
-        );
-        assert_eq!(
-            tasks["$defs"]["loopBudget"]["properties"]["daily_limit"]["maximum"],
-            MAX_BUDGET_COUNT
-        );
-        assert_eq!(
-            activity["$defs"]["profile"]["properties"]["daily_budget"]["minimum"],
-            1
-        );
-        assert_eq!(
-            activity["$defs"]["profile"]["properties"]["daily_budget"]["maximum"],
-            MAX_BUDGET_COUNT
-        );
-        assert_eq!(
-            pools["$defs"]["pool"]["properties"]["projection"]["properties"]["amount"]["minimum"],
-            1
-        );
-        assert_eq!(
-            common["$defs"]["predicate"]["oneOf"][5]["properties"]["max_age_ms"]["minimum"],
-            1
-        );
-        assert_eq!(
-            common["$defs"]["predicate"]["oneOf"][5]["properties"]["max_age_ms"]["maximum"],
-            MAX_FACT_MAX_AGE_MS
-        );
-        let schedules = common["$defs"]["clockSchedule"]["oneOf"]
-            .as_array()
-            .expect("clock schedule variants");
-        assert_eq!(
-            schedules[0]["properties"]["clock_source"]["$ref"],
-            "#/$defs/clockSource"
-        );
-        for schedule in &schedules[1..] {
             assert_eq!(
-                schedule["properties"]["clock_source"]["$ref"],
-                "#/$defs/wallClockSource"
+                tasks["$defs"]["loopBudget"]["properties"]["daily_limit"]["minimum"], 1,
+                "{set}"
             );
+            assert_eq!(
+                tasks["$defs"]["loopBudget"]["properties"]["daily_limit"]["maximum"],
+                MAX_BUDGET_COUNT,
+                "{set}"
+            );
+            assert_eq!(
+                activity["$defs"]["profile"]["properties"]["daily_budget"]["minimum"], 1,
+                "{set}"
+            );
+            assert_eq!(
+                activity["$defs"]["profile"]["properties"]["daily_budget"]["maximum"],
+                MAX_BUDGET_COUNT,
+                "{set}"
+            );
+            assert_eq!(
+                pools["$defs"]["pool"]["properties"]["projection"]["properties"]["amount"]["minimum"],
+                1,
+                "{set}"
+            );
+            let fact = common["$defs"]["predicate"]["oneOf"]
+                .as_array()
+                .expect("predicate variants")
+                .iter()
+                .find(|variant| variant["properties"]["kind"]["const"] == "fact")
+                .unwrap_or_else(|| panic!("{set}: fact predicate"));
+            assert_eq!(fact["properties"]["max_age_ms"]["minimum"], 1, "{set}");
+            assert_eq!(
+                fact["properties"]["max_age_ms"]["maximum"], MAX_FACT_MAX_AGE_MS,
+                "{set}"
+            );
+            let schedules = common["$defs"]["clockSchedule"]["oneOf"]
+                .as_array()
+                .expect("clock schedule variants");
+            assert_eq!(
+                schedules[0]["properties"]["clock_source"]["$ref"], "#/$defs/clockSource",
+                "{set}"
+            );
+            for schedule in &schedules[1..] {
+                assert_eq!(
+                    schedule["properties"]["clock_source"]["$ref"], "#/$defs/wallClockSource",
+                    "{set}"
+                );
+            }
+            for variant in [1, 2] {
+                let properties = &common["$defs"]["clockSource"]["oneOf"][variant]["properties"];
+                assert_eq!(
+                    properties["utc_offset_minutes"]["minimum"], MIN_UTC_OFFSET_MINUTES,
+                    "{set}"
+                );
+                assert_eq!(
+                    properties["utc_offset_minutes"]["maximum"], MAX_UTC_OFFSET_MINUTES,
+                    "{set}"
+                );
+                assert_eq!(
+                    properties["dst_offset_minutes"]["minimum"], MIN_DST_OFFSET_MINUTES,
+                    "{set}"
+                );
+                assert_eq!(
+                    properties["dst_offset_minutes"]["maximum"], MAX_DST_OFFSET_MINUTES,
+                    "{set}"
+                );
+            }
         }
-        for variant in [1, 2] {
-            let properties = &common["$defs"]["clockSource"]["oneOf"][variant]["properties"];
+
+        // V2 alone bounds the timeline validity interval: unsigned Unix milliseconds that the
+        // compiler admits only as canonical safe integers.
+        let validity =
+            &v2["timeline.schema.json"]["$defs"]["event"]["properties"]["validity"]["properties"];
+        for field in ["from_unix_ms", "until_unix_ms"] {
+            assert_eq!(validity[field]["minimum"], 0, "v2 {field}");
             assert_eq!(
-                properties["utc_offset_minutes"]["minimum"],
-                MIN_UTC_OFFSET_MINUTES
-            );
-            assert_eq!(
-                properties["utc_offset_minutes"]["maximum"],
-                MAX_UTC_OFFSET_MINUTES
-            );
-            assert_eq!(
-                properties["dst_offset_minutes"]["minimum"],
-                MIN_DST_OFFSET_MINUTES
-            );
-            assert_eq!(
-                properties["dst_offset_minutes"]["maximum"],
-                MAX_DST_OFFSET_MINUTES
+                validity[field]["maximum"], MAX_CANONICAL_INTEGER,
+                "v2 {field}"
             );
         }
     }
