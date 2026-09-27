@@ -442,14 +442,17 @@ impl HostShared {
     // `prepare_instance_connection` connects and self-checks one physical instance outside any
     // client lease: under the instance admission guard it takes a dedicated preparation lease (the
     // close-lease precedent: a resource-close-only lease of a fixed Runtime connection, granted
-    // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`), opens the instance's
-    // input and capture backends through `ExecutionKernel::open_instance_backends` (a Nemu pair
-    // once), records the opens exactly as every open is recorded (`backend.open_observed`, the
-    // `backend.selfcheck.*` facts, one `device.self_check` status hint per entry and the policy
-    // availability they gate), then closes the session and releases the lease. It sends no input
-    // and keeps no frame. A failing step is recorded and leaves the instance unavailable; nothing
-    // is retried except, once, a daemon start's lease refused by the takeover cooldown (Workflow
-    // #191 h2). Only a fatal failure (a ledger append, an unconfirmed close) is returned.
+    // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`), closes a session a
+    // lease-free path retained (a read-only observe keeps its capture open, sc2; Workflow #191
+    // h3) through the fenced close path, opens the instance's input and capture backends through
+    // `ExecutionKernel::open_instance_backends` (a Nemu pair once) so the opens cover every
+    // required entry, records the opens exactly as every open is recorded
+    // (`backend.open_observed`, the `backend.selfcheck.*` facts, one `device.self_check` status
+    // hint per entry and the policy availability they gate), then closes the session and
+    // releases the lease. It sends no input and keeps no frame. A failing step is recorded and
+    // leaves the instance unavailable; nothing is retried except, once, a daemon start's lease
+    // refused by the takeover cooldown (Workflow #191 h2). Only a fatal failure (a ledger append,
+    // an unconfirmed close) is returned.
     //
     // Triggers: daemon start (every registered physical instance in order, before the host
     // answers), emulator control `start` / `restart`, an instance `ResumeScheduling` and the
@@ -608,13 +611,32 @@ impl HostShared {
                 ));
             }
         };
-        let registration = self.mark_resources_in_use()?;
-        let (observations, mut failure_code) = match self.execution.open_instance_backends(
-            instance_alias,
-            registration,
-            frame_store.memory_budget(),
-        ) {
-            Ok(observations) => {
+        // Workflow #191 h3: the preparation phase starts from a closed session. A session a
+        // lease-free path retained (a read-only observe keeps its capture open, sc2) is closed
+        // first through the fenced close path, so the opens below are complete and the
+        // self-check covers every required entry. A failed close skips the opens and ends the
+        // phase as a failed final close does.
+        let retained_close = if self
+            .execution
+            .has_session(instance_id)
+            .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
+        {
+            self.close_instance_resources_result(&token, connection_id, links.clone())
+                .map_err(|failure| *failure.error)?
+        } else {
+            Ok(())
+        };
+        let opened = match &retained_close {
+            Ok(()) => Some(self.execution.open_instance_backends(
+                instance_alias,
+                self.mark_resources_in_use()?,
+                frame_store.memory_budget(),
+            )),
+            Err(_) => None,
+        };
+        let (observations, mut failure_code) = match opened {
+            None => (Vec::new(), None),
+            Some(Ok(observations)) => {
                 self.append_backend_open_observations(
                     &observations,
                     links.clone(),
@@ -623,7 +645,7 @@ impl HostShared {
                 )?;
                 (observations, None)
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 self.append_backend_open_failure_observations(
                     &error,
                     links.clone(),
@@ -639,9 +661,12 @@ impl HostShared {
         // Releasing the preparation lease closes the session; the self-check facts stay. The
         // lease is released only once the close is confirmed, as for every dedicated close
         // lease; its queue is empty (checked at the grant, and the admission guard is held).
-        let closed = self
-            .close_instance_resources_result(&token, connection_id, links.clone())
-            .map_err(|failure| *failure.error)?;
+        let closed = match retained_close {
+            Ok(()) => self
+                .close_instance_resources_result(&token, connection_id, links.clone())
+                .map_err(|failure| *failure.error)?,
+            Err(close_error) => Err(close_error),
+        };
         let confirmed = closed
             .as_ref()
             .err()

@@ -480,7 +480,13 @@ internal). For one physical instance, under its admission guard:
    skips the instance: one `runtime.failed` record with lifecycle stage
    `runtime.lifecycle.connection_preparation` names the instance and the code,
    and its availability is withdrawn.
-2. **Opens.** `ExecutionKernel::open_instance_backends` opens the input and
+2. **Opens.** The preparation phase closes a retained session before it
+   connects, so the self-check covers every required entry (Workflow #191 h3:
+   a read-only observe keeping its capture session open without a lease is the
+   existing sc2 design, and the preparation phase reconciles it; the close is
+   step 3's fenced close with its `ResourceQuiescence` record, and a failed one
+   skips the opens and ends the phase as in step 3).
+   `ExecutionKernel::open_instance_backends` opens the input and
    capture backends through the provider opens the lazy paths use (a Nemu pair
    once) and takes the first frame of a capture it opened, which is dropped
    inside the open (no frame artifact is written). The opens are recorded like
