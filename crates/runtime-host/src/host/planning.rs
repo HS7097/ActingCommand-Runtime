@@ -524,10 +524,11 @@ impl HostShared {
                     &self.policy_outcome_gate,
                     "snapshot_strategic_outcome_state",
                 )?;
-                let outcome_keys =
-                    lock(&self.policy, "read_strategic_outcome_keys")?.outcome_key_snapshot()?;
+                let mut policy = lock(&self.policy, "read_strategic_outcome_keys")?;
+                let outcome_keys = policy.outcome_key_snapshot()?;
                 let _fact_gate = lock(&self.fact_write_gate, "project_strategic_facts")?;
                 self.project_authoritative_policy_inputs_under_gate(
+                    &mut policy,
                     "prepare_strategic_report",
                     &outcome_keys,
                     Some(report.as_of_ledger_position()),
