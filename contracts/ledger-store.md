@@ -151,9 +151,9 @@ Ordinary close authority and historical Intent validation remain unchanged.
 
 `verify_transaction_event(&RuntimeDatabase, &RuntimeTransaction, &PersistedEvent)`
 checks an already verified opaque fact synchronously inside the same owner's
-borrowed transaction. It authenticates the ledger metadata/format and compares the
-exact sequence's canonical row, identity, hash/tag, predecessor hash, link row and
-ordered artifact metadata through the Ledger's existing private representation.
+borrowed transaction. It authenticates the ledger metadata/format, the exact
+sequence's stored bytes by hash/tag and predecessor hash, and compares the fact's
+identity, index columns, link row and ordered artifact metadata with that row.
 Missing or inconsistent rows and a different Database identity fail explicitly.
 The caller retains transaction/rollback ownership. The check does not acquire a
 Database lock, send a writer command, commit, append or read artifact bytes. It is
@@ -288,12 +288,22 @@ Metadata opening uses the same authenticated result; recovery and schema upgrade
 continue to consume the original records. These representations belong only to
 the current call and confer no artifact availability capability.
 
-The shared SQLite row projector used by append and Release source authentication
-serializes the complete stored record for canonical bytes, hash and integrity tag.
-Its index-column view borrows only the original identity/type/origin/links/schema
-and ordered artifact fields. The same field serializers and SQL column extraction
-preserve string/null handling and ordered-u64 values, while the payload remains in
-the complete canonical serialization.
+The shared SQLite row projector has a write side and a verification side. Append and
+import serialize the complete stored record for canonical bytes, hash and integrity
+tag; this write-side canonical form is unchanged. Verification (full and tail
+recovery, read-only and forensic opens, `verify_transaction_event` and Release source
+authentication) takes the stored bytes as they are: ledger integrity is the hash chain
+plus the keyed integrity tag over those stored bytes, compared with the stored hash,
+predecessor and tag columns. The index columns must match the decoded record (for
+`verify_transaction_event`, the supplied fact). The index-column view borrows only the
+original identity/type/origin/links/schema and ordered artifact fields; the same field
+serializers and SQL column extraction preserve string/null handling and ordered-u64
+values. Decoding stays strict and the decoded record is not re-serialized for
+comparison, so an additive `serde(default)` field on a persisted contract structure
+does not affect the readability of an existing ledger's rows. (A Segment cutover
+marker's imported-prefix digests are still recomputed from the decoded prefix
+records.) A hash, tag or index-column mismatch remains a fatal
+`ledger_record_mismatch`.
 
 Segment recovery validates strict typed records, schemas, sequence continuity,
 unique EventIds and payload/link/reference consistency before rebuilding indexes.
