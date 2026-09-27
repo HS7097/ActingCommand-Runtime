@@ -119,7 +119,15 @@ pub fn verify_transaction_event(
             _ => return Err(failure("ledger_record_missing", OPERATION)),
         }
     };
-    let projected = project_record(database, event, previous.as_deref())?;
+    let Some(SqlValue::Blob(stored)) = row.get(10) else {
+        return Err(failure("ledger_record_mismatch", OPERATION));
+    };
+    let projected = project_stored_bytes(
+        database,
+        &StoredEventRecord::from_event(event),
+        stored.clone(),
+        previous.as_deref(),
+    )?;
     if *row != projected.event || (event.sequence() == head && projected.hash != *head_hash) {
         return Err(failure("ledger_record_mismatch", OPERATION));
     }
@@ -2017,8 +2025,8 @@ struct VerifiedRows {
 }
 
 /// The per-row checks shared by full and tail verification: record schema, sequence
-/// continuity from `next`, unique event ids, and each row equal to its projection
-/// chained from `head_hash`. Budget event counts are those of `rows`.
+/// continuity from `next`, unique event ids, and each row equal to its projection over
+/// the stored bytes chained from `head_hash`. Budget event counts are those of `rows`.
 fn verify_event_rows(
     database: &RuntimeDatabase,
     rows: Vec<SqlRow>,
@@ -2065,7 +2073,8 @@ fn verify_event_rows(
         if !ids.insert(*event.event_id()) {
             return Err(failure("duplicate_event_id", "recover_event_ids"));
         }
-        let projected = project_stored_record(database, &stored, head_hash.as_deref())?;
+        let projected =
+            project_stored_bytes(database, &stored, bytes.clone(), head_hash.as_deref())?;
         if row != projected.event {
             return Err(failure("ledger_record_mismatch", "verify_sqlite_record"));
         }
@@ -2100,6 +2109,7 @@ fn project_record(
     project_stored_record(database, &StoredEventRecord::from_event(event), previous)
 }
 
+/// Write side: the canonical bytes are the complete stored record's serialization.
 fn project_stored_record(
     database: &RuntimeDatabase,
     stored: &StoredEventRecord,
@@ -2108,6 +2118,18 @@ fn project_stored_record(
     let bytes = serde_json::to_vec(stored).map_err(|error| {
         GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
     })?;
+    project_stored_bytes(database, stored, bytes, previous)
+}
+
+/// Verification side: hash and tag over the bytes as stored, index columns from the
+/// decoded record. The record is not re-serialized, so an additive `serde(default)` field
+/// leaves an existing row verifiable.
+fn project_stored_bytes(
+    database: &RuntimeDatabase,
+    stored: &StoredEventRecord,
+    bytes: Vec<u8>,
+    previous: Option<&str>,
+) -> GlobalLedgerResult<ProjectedRecord> {
     let value = serde_json::to_value(stored.index_fields()).map_err(|error| {
         GlobalLedgerError::json(
             "event_serialization_failed",

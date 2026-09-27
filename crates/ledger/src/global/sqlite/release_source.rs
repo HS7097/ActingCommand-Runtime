@@ -344,7 +344,7 @@ fn verify_source_row(
         .clone()
         .into_metadata()
         .map_err(|error| failure(error.code(), OPERATION))?;
-    let projected = project_stored_record(database, &stored, previous)?;
+    let projected = project_stored_bytes(database, &stored, bytes.clone(), previous)?;
     if *row != projected.event {
         return Err(failure("ledger_record_mismatch", OPERATION));
     }
