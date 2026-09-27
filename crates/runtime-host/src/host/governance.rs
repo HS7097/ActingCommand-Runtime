@@ -5,6 +5,7 @@ use actingcommand_contract::{
     GovernanceIdentityCard, GovernanceIdentityRefusal, GovernanceIdentityVerdict, GovernancePeer,
     valid_governance_declaration_origin,
 };
+use actingcommand_policy::MAX_APPROVAL_REFS;
 
 impl HostShared {
     pub(super) fn record_approval_decision(
@@ -125,6 +126,48 @@ impl HostShared {
                 disposition: decision.disposition(),
             },
         })
+    }
+
+    /// Workflow #191 D2: the latest decision of each requested approval id, read from the
+    /// complete ledger-verified approval projection (the same recovery an approval write and
+    /// policy admission run) under the governance write gate. An id absent from the map has
+    /// never been decided; every failure is an `Err`, never an absence. Appends nothing and
+    /// releases the gate on return, before any caller records a decision.
+    pub(super) fn latest_approval_decisions(
+        &self,
+        approval_ids: &[String],
+    ) -> RuntimeHostResult<BTreeMap<String, ApprovalDecisionRecord>> {
+        if approval_ids.len() > MAX_APPROVAL_REFS {
+            return Err(RuntimeHostError::request(
+                "approval_read_ids_exceeded",
+                "read_latest_approval_decisions",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        if let Some(error) = self.fatal.current()? {
+            return Err(error);
+        }
+        // Recovery rewrites derived State rows, so it shares the gate of every other recovery.
+        let _gate = lock(
+            &self.governance_write_gate,
+            "read_latest_approval_decisions",
+        )?;
+        let approvals = match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
+            Ok(approvals) => approvals,
+            Err(error) => {
+                if error.is_fatal() {
+                    self.fatal.mark(error.clone())?;
+                }
+                return Err(error);
+            }
+        };
+        let mut latest = BTreeMap::new();
+        for approval_id in approval_ids {
+            if let Some(decision) = approvals.latest_decision(approval_id)? {
+                latest.insert(approval_id.clone(), decision);
+            }
+        }
+        Ok(latest)
     }
 
     /// Workflow #318 cfg4: verifies one declarative governance identity card and records it

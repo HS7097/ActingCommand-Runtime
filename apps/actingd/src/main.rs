@@ -16,11 +16,11 @@ mod owner_unlock;
 mod c4_support;
 
 use actingcommand_contract::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayload, ApprovalTarget, EventActor,
-    EventFamily, EventPayload, EventQuery, EventSource, EventType, GovernanceIdentityCard,
-    MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionPayload,
-    ProjectionProfile, RunId, RuntimeEventQueryPageRequest, RuntimeReceipt,
-    RuntimeSubscriptionRequest, SchedulingOutcomeProjection, SubscriptionCursor,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, EventActor, EventFamily,
+    EventQuery, EventSource, GovernanceIdentityCard, MAX_RUNTIME_SUBSCRIPTION_EVENTS,
+    PolicyExecutionEventData, ProjectedEvent, ProjectionProfile, RunId,
+    RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeSubscriptionRequest,
+    SchedulingOutcomeProjection, SubscriptionCursor,
 };
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
@@ -171,15 +171,11 @@ fn initialize_policy(
             instance: None,
         })
         .map_err(ActingdError::client)?;
-    let approval_events = governance
-        .query_events(
-            EventQuery {
-                event_type: Some(EventType::ApprovalDecision),
-                ..EventQuery::default()
-            },
-            ProjectionProfile::Forensic,
-        )
-        .map_err(ActingdError::client)?;
+    // Workflow #191 D2: the host's complete ledger-verified approval projection, not the
+    // bounded client event query, so a long approval history cannot keep startup failing.
+    let latest = host
+        .latest_approval_decisions(&policy.catalog_approval_ids)
+        .map_err(ActingdError::runtime)?;
     for approval_id in &policy.catalog_approval_ids {
         let decision = ApprovalDecisionRecord::new(
             approval_id,
@@ -191,22 +187,7 @@ fn initialize_policy(
             "configured_catalog_approval",
         )
         .map_err(|_| ActingdError::process("policy_catalog_approval_invalid"))?;
-        let existing = approval_events
-            .iter()
-            .filter_map(|event| match &event.payload {
-                ProjectionPayload::Full(payload) => match payload.as_ref() {
-                    EventPayload::Approval(ApprovalPayload::Decision(payload))
-                        if payload.decision().approval_id() == approval_id =>
-                    {
-                        Some((event.sequence, payload.decision()))
-                    }
-                    _ => None,
-                },
-                _ => None,
-            })
-            .max_by_key(|(sequence, _)| *sequence)
-            .map(|(_, decision)| decision);
-        if let Some(existing) = existing {
+        if let Some(existing) = latest.get(approval_id) {
             // A persisted rejection or revocation cannot be silently replaced by startup config.
             if existing != &decision {
                 return Err(ActingdError::process("policy_catalog_approval_conflict"));
@@ -1442,7 +1423,8 @@ mod tests {
     use super::*;
     use crate::config::ScheduledProcedureTask;
     use actingcommand_contract::{
-        ApplicationLifecycleAction, ContainedTaskRequest, IdentifierIssuer, PolicyPayload,
+        ApplicationLifecycleAction, ContainedTaskRequest, EventPayload, EventType,
+        IdentifierIssuer, PolicyPayload, ProjectionPayload,
     };
     use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend};
     use actingcommand_policy::{
