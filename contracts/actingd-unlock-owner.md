@@ -89,7 +89,8 @@ Every refusal below returns before the command writes anything.
    `owner.unlock`, origin source `cli`, module `runtime`, actor `user`, and
    client payload kind `owner_unlock` carrying `owner_epoch`,
    `previous_resource_disposition` and `actor`. The ledger is closed and the
-   lock released.
+   lock released. As at startup, the ledger is first classified by its keyed
+   metadata row and then verified once by the writer open, under the same bounds.
 
 No new owner epoch is acquired. The confirmed epoch stays the last journal
 record, so the next ordinary start takes it over automatically: it records

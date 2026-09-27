@@ -877,6 +877,9 @@ impl RuntimeHost {
         );
         let artifacts =
             Arc::new(ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?);
+        // At startup these limits bound only acquire, a fresh root's material listing and
+        // the writer open's deadline, plus the deadlines FrameRetention and prior-epoch
+        // recovery each take afresh; they never bound the length of the history.
         let limits = actingcommand_runtime_database::MaintenanceLimits::default();
         let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
             &config.state_root,
@@ -909,26 +912,19 @@ impl RuntimeHost {
                 .with_native_detail(format!("{error:?}"))
             })?;
         }
-        match maintenance
-            .status(&database, |reference| {
-                artifacts.verify_recovery_reference(reference).ok()
-            })
-            .map_err(|error| {
-                RuntimeHostError::fatal(
-                    error.code(),
-                    error.operation(),
-                    RuntimeErrorCode::LedgerFailure,
-                )
-                .with_native_detail(format!("{error:?}"))
-            })? {
-            actingcommand_ledger::LedgerStorageStatus::Ready { .. } => {}
-            _ => {
-                return Err(RuntimeHostError::fatal(
-                    "ledger_migration_required",
-                    "select_runtime_storage",
-                    RuntimeErrorCode::LedgerFailure,
-                ));
-            }
+        if !maintenance.formal_ready(&database).map_err(|error| {
+            RuntimeHostError::fatal(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::LedgerFailure,
+            )
+            .with_native_detail(format!("{error:?}"))
+        })? {
+            return Err(RuntimeHostError::fatal(
+                "ledger_migration_required",
+                "select_runtime_storage",
+                RuntimeErrorCode::LedgerFailure,
+            ));
         }
         let ledger = maintenance
             .open_writer(Arc::clone(&database), ledger_owner, |reference| {

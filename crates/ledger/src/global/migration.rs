@@ -269,6 +269,14 @@ impl LedgerMaintenance {
         sqlite::storage_status(database, &mut verifier, self.budget())
     }
 
+    /// Classifies the formal medium by authenticating only its keyed meta row; no history
+    /// is read. True does not mean the history is verified: the single complete
+    /// verification is `open_writer`.
+    pub fn formal_ready(&self, database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
+        self.validate_database(database)?;
+        sqlite::formal_ready(database)
+    }
+
     pub fn import(
         &self,
         database: &RuntimeDatabase,
@@ -306,6 +314,9 @@ impl LedgerMaintenance {
         sqlite::initialize_formal_empty(database)
     }
 
+    /// Opens the formal writer on the held lock. Its complete verification reads no
+    /// further than the authenticated head sequence and finishes within the held
+    /// operation deadline.
     pub fn open_writer<F>(
         self,
         database: Arc<RuntimeDatabase>,
@@ -317,8 +328,16 @@ impl LedgerMaintenance {
     {
         self.validate_database(&database)?;
         let config = GlobalLedgerConfig::new(self.root.join("ledger"), owner_id);
+        let deadline = self.deadline;
         GlobalLedger::open_with_store(config, move |config| {
-            sqlite::open_formal(config, database, self.lock, self.compatibility, verifier)
+            sqlite::open_formal(
+                config,
+                database,
+                self.lock,
+                self.compatibility,
+                deadline,
+                verifier,
+            )
         })
     }
 

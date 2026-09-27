@@ -17,6 +17,13 @@ The recovered store then moves to the writer. Failed construction joins the
 waiting thread; failed transfer closes the opened store and joins the thread.
 The caller never receives a ledger backed by an unfinished open operation.
 
+The formal SQLite constructor first authenticates the keyed metadata row, then
+reads and verifies the history in one pass, artifacts included, reading no
+further than the authenticated head sequence and within the caller's deadline.
+Exceeding either returns `ledger_read_budget_exceeded`, which RuntimeHost treats
+as fatal. Open time and memory grow linearly with committed history and retained
+artifact bytes; no persisted verification checkpoint, archive or rotation exists.
+
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit
 statistics and consuming close. Projection, request validation and subscription
