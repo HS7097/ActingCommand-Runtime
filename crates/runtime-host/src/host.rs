@@ -2801,6 +2801,7 @@ struct HostShared {
     // Concurrent work holds the read side; idle shutdown never waits for a busy writer slot.
     lifecycle_admission: RwLock<bool>,
     scheduler: Arc<Mutex<SeedScheduler>>,
+    // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
@@ -2810,6 +2811,7 @@ struct HostShared {
     governance_policy: GovernancePolicy,
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
+    // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     fact_write_gate: Mutex<()>,
     // A backend self-check write and the policy availability it implies are one ordered step
     // (Workflow #317 sc2); taken before, never inside, `fact_write_gate`.
@@ -2826,6 +2828,7 @@ struct HostShared {
     agent_write_gate: Mutex<()>,
     // Proposal recompilation, approval checks, and catalog activation form one ordered gate.
     proposal_write_gate: Mutex<()>,
+    // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     facts: Mutex<InstanceFactStore>,
     // The Runtime's own facts: ledger-first, memory-only, sealed periodically while dirty.
     runtime_facts: Mutex<RuntimeFactStore>,
@@ -2870,6 +2873,7 @@ struct HostShared {
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
+    // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     policy_outcome_gate: Mutex<()>,
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,

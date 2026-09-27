@@ -352,16 +352,15 @@ impl HostShared {
             })?;
         let (outcome_keys, facts, resources, missing_instance_facts, unknown_offset_tasks) = {
             let _outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-            let outcome_keys = {
-                let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
-                // The previous evaluated cycle's eligibility verdicts take effect here, before
-                // this cycle's inputs are projected (Workflow #308 slice 5b).
-                policy.apply_eligibility_verdicts();
-                policy.outcome_key_snapshot()?
-            };
+            let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
+            // The previous evaluated cycle's eligibility verdicts take effect here, before
+            // this cycle's inputs are projected (Workflow #308 slice 5b).
+            policy.apply_eligibility_verdicts();
+            let outcome_keys = policy.outcome_key_snapshot()?;
             let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
             let (facts, resources, missing_instance_facts, unknown_offset_tasks) = self
                 .project_authoritative_policy_inputs_with_gaps_under_gate(
+                    &mut policy,
                     "evaluate_policy_cycle",
                     &outcome_keys,
                     None,
@@ -451,12 +450,14 @@ impl HostShared {
 
     pub(super) fn project_authoritative_policy_inputs_under_gate(
         &self,
+        policy: &mut PolicyHost,
         operation: &'static str,
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
         let (facts, resources, _, _) = self
             .project_authoritative_policy_inputs_with_gaps_under_gate(
+                policy,
                 operation,
                 outcome_keys,
                 as_of_ledger_position,
@@ -473,8 +474,10 @@ impl HostShared {
     /// whose TTL has elapsed by then is not passed; without it every active offset is.
     /// `eligibility_as_of_unix_ms` is the evaluation instant whose memory-only eligibility
     /// ages are projected (Workflow #308 slice 5b); without it none are.
+    /// The caller holds `policy` and then `fact_write_gate` (Workflow #191 L1 lock order).
     pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
         &self,
+        policy: &mut PolicyHost,
         operation: &'static str,
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
@@ -566,8 +569,8 @@ impl HostShared {
             }
             base_facts.priority_offsets.push(offset);
         }
-        base_facts.tasks = lock(&self.policy, "project_policy_task_state")?
-            .task_runtime_snapshots(ledger_position, eligibility_as_of_unix_ms)?;
+        base_facts.tasks =
+            policy.task_runtime_snapshots(ledger_position, eligibility_as_of_unix_ms)?;
         base_facts.tasks.retain(|state| {
             base_facts
                 .instances
@@ -675,16 +678,13 @@ impl HostShared {
             // terminal stays confirmed: a repeated cycle does not re-read it (Workflow #313
             // goal 5, #317 item F).
             let through_sequence = identity.terminal_sequence();
-            if !lock(&self.policy, "read_confirmed_run_admission")?
-                .completed_run_admission_confirmed(expected_run, through_sequence)
-            {
+            if !policy.completed_run_admission_confirmed(expected_run, through_sequence) {
                 validate_completed_run_admission_request(
                     &self.ledger,
                     expected_run,
                     through_sequence,
                 )?;
-                lock(&self.policy, "record_confirmed_run_admission")?
-                    .record_completed_run_admission_confirmed(expected_run, through_sequence);
+                policy.record_completed_run_admission_confirmed(expected_run, through_sequence);
             }
             // A failed run was skipped above, so the settled duration is the success's
             // `runtime_ms`, the value slice 5b records as `last_duration_ms`.
@@ -733,7 +733,7 @@ impl HostShared {
                 });
             }
         }
-        let catalog = lock(&self.policy, "project_fact_pool_catalog")?.active_loaded();
+        let catalog = policy.active_loaded();
         let mut unknown_offset_tasks = UnknownPriorityOffsetTasks::new();
         if let Some(catalog) = &catalog {
             validate_static_fact_pool_authority(
@@ -1094,8 +1094,8 @@ impl HostShared {
             let (outcome_keys, current_facts, fact_gate) = {
                 let _outcome_gate =
                     lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-                let outcome_keys =
-                    lock(&self.policy, "read_policy_outcome_keys")?.outcome_key_snapshot()?;
+                let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
+                let outcome_keys = policy.outcome_key_snapshot()?;
                 if outcome_keys.generation.as_ref().is_none_or(|generation| {
                     generation.catalog_hash() != intent.catalog_hash
                         || generation.catalog_version() != intent.catalog_version
@@ -1110,6 +1110,7 @@ impl HostShared {
                 // that evaluation projected them (Workflow #308 slice 5b).
                 let (current_facts, _, _, _) = self
                     .project_authoritative_policy_inputs_with_gaps_under_gate(
+                        &mut policy,
                         "admit_policy_dispatch",
                         &outcome_keys,
                         None,
@@ -1868,10 +1869,11 @@ impl HostShared {
                 &self.policy_outcome_gate,
                 "snapshot_policy_input_identity_outcome_state",
             )?;
-            let outcome_keys = lock(&self.policy, "read_policy_input_identity_outcome_keys")?
-                .outcome_key_snapshot()?;
+            let mut policy = lock(&self.policy, "read_policy_input_identity_outcome_keys")?;
+            let outcome_keys = policy.outcome_key_snapshot()?;
             let _fact_gate = lock(&self.fact_write_gate, "project_policy_input_identity_facts")?;
             let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
+                &mut policy,
                 "project_policy_input_identity",
                 &outcome_keys,
                 Some(as_of_ledger_position),
