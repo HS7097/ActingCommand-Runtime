@@ -22,7 +22,8 @@ pub struct CommandInventory {
     pub commands: Vec<String>,
 }
 
-/// Finds CLI/process/config access forbidden inside the future `crates/lab` source tree.
+/// Finds CLI/process/config access forbidden inside the source tree of the required
+/// `crates/lab` workspace member.
 pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, String> {
     syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
 
@@ -3230,6 +3231,7 @@ pub fn workspace_dependency_violations(metadata: &str) -> Result<Vec<String>, St
 }
 
 /// Finds direct or transitive dependency paths from production workspace packages to Lab.
+/// Metadata without the required Lab package is an error.
 pub fn lab_removability_violations(
     metadata: &str,
     optional_packages: &[&str],
@@ -3238,6 +3240,7 @@ pub fn lab_removability_violations(
 }
 
 /// Finds direct or transitive dependency paths from production packages to developer-only tooling.
+/// Metadata without the resource-tooling package is an error.
 pub fn resource_tooling_removability_violations(
     metadata: &str,
     optional_packages: &[&str],
@@ -3284,7 +3287,9 @@ fn dependency_boundary_violations(
         ));
     }
     let Some(target_id) = target_ids.pop() else {
-        return Ok(Vec::new());
+        return Err(format!(
+            "cargo metadata is missing the required {target_package} package"
+        ));
     };
 
     let nodes = document
@@ -5558,9 +5563,37 @@ pub struct SourceFacts {
     pub modules: Vec<(String, DeclaredVisibility)>,
     /// Named fields of production structs as (struct, field, visibility).
     pub fields: Vec<(String, String, DeclaredVisibility)>,
+    /// Production `use` bindings, function-local ones included.
+    pub uses: Vec<UseFact>,
+}
+
+/// One name a production `use` item binds, as [`inspect_source_facts`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseFact {
+    /// The bound name: the rename, the last segment, or `*` for a glob.
+    pub local: String,
+    /// The imported path as written; a glob ends in `*`.
+    pub path: Vec<String>,
+    pub visibility: DeclaredVisibility,
+    pub line: usize,
 }
 
 impl SourceFacts {
+    /// `path` with its first segment replaced by the path of the production `use` binding of
+    /// that name; unchanged when the file binds no such name.
+    pub fn resolved_path(&self, path: &[String]) -> Vec<String> {
+        let Some((first, rest)) = path.split_first() else {
+            return Vec::new();
+        };
+        self.uses
+            .iter()
+            .find(|binding| &binding.local == first)
+            .map_or_else(
+                || path.to_vec(),
+                |binding| binding.path.iter().chain(rest).cloned().collect(),
+            )
+    }
+
     /// The types outside this file that its production `impl` blocks extend.
     pub fn extended_types(&self) -> std::collections::BTreeSet<String> {
         self.impls
@@ -5585,6 +5618,7 @@ pub fn inspect_source_facts(path: &str, source: &str) -> Result<SourceFacts, Str
         types: BTreeSetString::new(),
         modules: Vec::new(),
         fields: Vec::new(),
+        uses: Vec::new(),
     };
     if !ledger_owners::production_attributes(&file.attrs)? {
         return Ok(facts);
@@ -5606,6 +5640,63 @@ pub fn inspect_source_facts(path: &str, source: &str) -> Result<SourceFacts, Str
         return Err(error);
     }
     Ok(facts)
+}
+
+/// Lists every production item of a source file other than a `pub use` re-export, as
+/// `path:line: <kind> <name>`, for a module that may only re-export. Items outside production by
+/// their cfg scope (`#[cfg(test)]` and the like) are dropped first.
+pub fn inspect_non_reexport_items(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    if !ledger_owners::production_attributes(&file.attrs)? {
+        return Ok(Vec::new());
+    }
+    let mut rows = Vec::new();
+    for item in ledger_owners::production_items(&file.items)? {
+        let (kind, name, span) = match &item {
+            Item::Use(value) if matches!(value.vis, Visibility::Public(_)) => continue,
+            Item::Use(value) => {
+                let mut leaves = Vec::new();
+                collect_use_leaves(&mut Vec::new(), &value.tree, &mut leaves);
+                let names = leaves
+                    .iter()
+                    .map(|(segments, _)| segments.join("::"))
+                    .collect::<Vec<_>>();
+                ("non-public use", names.join(", "), value.use_token.span)
+            }
+            Item::Fn(value) => ("fn", value.sig.ident.to_string(), value.sig.ident.span()),
+            Item::Struct(value) => ("struct", value.ident.to_string(), value.ident.span()),
+            Item::Enum(value) => ("enum", value.ident.to_string(), value.ident.span()),
+            Item::Union(value) => ("union", value.ident.to_string(), value.ident.span()),
+            Item::Type(value) => ("type", value.ident.to_string(), value.ident.span()),
+            Item::Trait(value) => ("trait", value.ident.to_string(), value.ident.span()),
+            Item::TraitAlias(value) => ("trait alias", value.ident.to_string(), value.ident.span()),
+            Item::Const(value) => ("const", value.ident.to_string(), value.ident.span()),
+            Item::Static(value) => ("static", value.ident.to_string(), value.ident.span()),
+            Item::Mod(value) => ("mod", value.ident.to_string(), value.ident.span()),
+            Item::ExternCrate(value) => {
+                ("extern crate", value.ident.to_string(), value.ident.span())
+            }
+            Item::Impl(value) => (
+                "impl",
+                impl_self_ident(value).map_or_else(|| "?".to_string(), ToString::to_string),
+                value.impl_token.span,
+            ),
+            Item::Macro(value) => (
+                "macro",
+                path_names(&value.mac.path).join("::"),
+                value
+                    .mac
+                    .path
+                    .segments
+                    .first()
+                    .map_or_else(Span::call_site, |segment| segment.ident.span()),
+            ),
+            Item::ForeignMod(value) => ("extern block", String::new(), value.abi.extern_token.span),
+            _ => return Err(format!("{path}: unsupported production item")),
+        };
+        rows.push(format!("{path}:{}: {kind} {name}", span.start().line));
+    }
+    Ok(rows)
 }
 
 struct FactsVisitor<'a> {
@@ -5784,6 +5875,49 @@ fn is_upper_name(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
 }
 
+/// The (bound name, imported path, span) of every leaf of a `use` tree: `a::{self}` binds `a`,
+/// `a as b` binds `b`, and a glob binds `*` with a path ending in `*`.
+fn collect_use_bindings(
+    prefix: &mut Vec<String>,
+    tree: &UseTree,
+    bindings: &mut Vec<(String, Vec<String>, Span)>,
+) {
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_bindings(prefix, &path.tree, bindings);
+            prefix.pop();
+        }
+        UseTree::Name(name) if name.ident == "self" => {
+            if let Some(last) = prefix.last() {
+                bindings.push((last.clone(), prefix.clone(), name.ident.span()));
+            }
+        }
+        UseTree::Name(name) => {
+            let mut full = prefix.clone();
+            full.push(name.ident.to_string());
+            bindings.push((name.ident.to_string(), full, name.ident.span()));
+        }
+        UseTree::Rename(rename) => {
+            let mut full = prefix.clone();
+            if rename.ident != "self" {
+                full.push(rename.ident.to_string());
+            }
+            bindings.push((rename.rename.to_string(), full, rename.rename.span()));
+        }
+        UseTree::Glob(glob) => {
+            let mut full = prefix.clone();
+            full.push("*".to_string());
+            bindings.push(("*".to_string(), full, glob.star_token.spans[0]));
+        }
+        UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_bindings(prefix, item, bindings);
+            }
+        }
+    }
+}
+
 impl<'ast> Visit<'ast> for FactsVisitor<'_> {
     fn visit_attribute(&mut self, _: &'ast syn::Attribute) {}
 
@@ -5835,6 +5969,20 @@ impl<'ast> Visit<'ast> for FactsVisitor<'_> {
                 .push((node.ident.to_string(), declared_visibility(&node.vis)));
         }
         syn::visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        let mut bindings = Vec::new();
+        collect_use_bindings(&mut Vec::new(), &node.tree, &mut bindings);
+        let visibility = declared_visibility(&node.vis);
+        for (local, path, span) in bindings {
+            self.facts.uses.push(UseFact {
+                local,
+                path,
+                visibility,
+                line: span.start().line,
+            });
+        }
     }
 
     fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {

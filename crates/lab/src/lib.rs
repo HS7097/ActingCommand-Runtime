@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Optional ActingCommand Lab authoring and debug adapter.
+//! ActingCommand Lab authoring and debug adapter, a required workspace member.
 //!
 //! Production Runtime, scheduler, device, and ledger ownership live outside this
 //! crate. Lab consumes stable contracts and injected ports so production remains
