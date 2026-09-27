@@ -125,7 +125,9 @@ frame of a capture it opened, as the first lazy capture does, then drops it (no 
 is written). The opens are recorded like every open (`backend-open-observation.md`):
 `backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check`, and the
 instance's policy availability following the self-check. The session is then closed and the
-lease released; the next task opens it lazily. The receipt carries the self-check projected
+lease released; the next task opens it lazily. A session a read-only observe retained after
+the pause (the existing sc2 design) is closed first, so the receipt's self-check reflects this
+preparation's complete opens (Workflow #191 h3). The receipt carries the self-check projected
 from those reports:
 
 ```text
