@@ -7968,13 +7968,12 @@ fn glue_facts(path: &str, source: &str) -> Result<GlueFacts, String> {
     }
 }
 
-/// The source text between two span locations, as `function_source` cuts it.
+/// The source text between two span locations of a file's lines, as `function_source` cuts it.
 fn glue_source_between(
-    source: &str,
+    lines: &[&str],
     start: proc_macro2::LineColumn,
     end: proc_macro2::LineColumn,
 ) -> Option<String> {
-    let lines = source.lines().collect::<Vec<_>>();
     if start.line == 0 || end.line > lines.len() || start.line > end.line {
         return None;
     }
@@ -8182,21 +8181,47 @@ pub fn inspect_glue_declarations(
     violations
 }
 
+/// Collects the violations of one declaration as `[module] rule/check: file: reason`.
+struct GlueReport<'a> {
+    declaration: &'a GlueDeclaration,
+    violations: &'a mut Vec<GlueViolation>,
+}
+
+impl GlueReport<'_> {
+    fn problem(&mut self, check: &str, file: &str, reason: String) {
+        self.violations.push(GlueViolation {
+            module: self.declaration.module.to_string(),
+            rule: format!("{}/{check}", self.declaration.rule),
+            file: file.to_string(),
+            reason,
+        });
+    }
+}
+
 fn check_glue_declaration(
     declaration: &GlueDeclaration,
     sources: &BTreeMap<&str, GlueSource<'_>>,
     local_modules: &BTreeSet<String>,
     violations: &mut Vec<GlueViolation>,
 ) {
-    let mut problem = |check: &str, file: &str, reason: String| {
-        violations.push(GlueViolation {
-            module: declaration.module.to_string(),
-            rule: format!("{}/{check}", declaration.rule),
-            file: file.to_string(),
-            reason,
-        });
+    let mut report = GlueReport {
+        declaration,
+        violations,
     };
+    check_glue_fields(&mut report, sources);
+    let Some((owner, module_name, found)) = check_glue_owner(&mut report, sources) else {
+        return;
+    };
+    check_glue_placement(&mut report, sources, &module_name);
+    check_glue_callers(&mut report, sources, &module_name, local_modules);
+    check_glue_texts(&mut report, sources, owner, &found);
+}
+
+/// Declaration self-validation: empty fields, duplicates and named files.
+fn check_glue_fields(report: &mut GlueReport<'_>, sources: &BTreeMap<&str, GlueSource<'_>>) {
+    let declaration = report.declaration;
     let module = declaration.module;
+    let mut problem = |check: &str, file: &str, reason: String| report.problem(check, file, reason);
 
     // The declaration validates itself before it is read against the sources.
     for (field, empty) in [
@@ -8338,6 +8363,21 @@ fn check_glue_declaration(
             );
         }
     }
+}
+
+/// The owner: its one private module declaration, its symbols and its surface. Returns the owner
+/// source, the module name and the owner definition of each declared symbol.
+fn check_glue_owner<'s, 't>(
+    report: &mut GlueReport<'_>,
+    sources: &'s BTreeMap<&'t str, GlueSource<'t>>,
+) -> Option<(
+    &'s GlueSource<'t>,
+    String,
+    BTreeMap<&'static str, &'s GlueDefinition>,
+)> {
+    let declaration = report.declaration;
+    let module = declaration.module;
+    let mut problem = |check: &str, file: &str, reason: String| report.problem(check, file, reason);
 
     // The owner file and its one private module declaration.
     let Some(owner) = sources.get(module) else {
@@ -8346,7 +8386,7 @@ fn check_glue_declaration(
             module,
             "the owner file is not among the scanned sources".to_string(),
         );
-        return;
+        return None;
     };
     if owner.test_tree {
         problem(
@@ -8354,7 +8394,7 @@ fn check_glue_declaration(
             module,
             "the owner file is a test file".to_string(),
         );
-        return;
+        return None;
     }
     let Some((module_name, parents)) = glue_module_parents(module) else {
         problem(
@@ -8363,7 +8403,7 @@ fn check_glue_declaration(
             "the owner file is not a module file (`<dir>/<name>.rs` or `<dir>/<name>/mod.rs`)"
                 .to_string(),
         );
-        return;
+        return None;
     };
     let mut declared = Vec::new();
     for parent in &parents {
@@ -8617,6 +8657,19 @@ fn check_glue_declaration(
         }
     }
 
+    Some((owner, module_name, found))
+}
+
+/// Placement: forbidden and other files, macro bodies, re-exports and the tolerated duplicates.
+fn check_glue_placement(
+    report: &mut GlueReport<'_>,
+    sources: &BTreeMap<&str, GlueSource<'_>>,
+    module_name: &str,
+) {
+    let declaration = report.declaration;
+    let module = declaration.module;
+    let mut problem = |check: &str, file: &str, reason: String| report.problem(check, file, reason);
+
     // No other file defines, implements or re-exports the owner symbols; no file spells them out
     // in a macro body; the tolerated duplicates stay exactly as named.
     let free_functions = declaration
@@ -8749,7 +8802,7 @@ fn check_glue_declaration(
             }
         }
         for binding in &source.glue.uses {
-            let names_glue = binding.path.contains(&module_name)
+            let names_glue = binding.path.iter().any(|segment| segment == module_name)
                 || free_names.contains(binding.local.as_str())
                 || binding
                     .path
@@ -8821,6 +8874,18 @@ fn check_glue_declaration(
             );
         }
     }
+}
+
+/// The caller set of the non-private owner functions.
+fn check_glue_callers(
+    report: &mut GlueReport<'_>,
+    sources: &BTreeMap<&str, GlueSource<'_>>,
+    module_name: &str,
+    local_modules: &BTreeSet<String>,
+) {
+    let declaration = report.declaration;
+    let module = declaration.module;
+    let mut problem = |check: &str, file: &str, reason: String| report.problem(check, file, reason);
 
     // The caller set: production references of the non-private owner functions.
     let watched = declaration
@@ -8892,7 +8957,7 @@ fn check_glue_declaration(
                 continue;
             }
             if let Some(symbol) =
-                glue_referenced_symbol(&resolved, &module_name, local_modules, &watched)
+                glue_referenced_symbol(&resolved, module_name, local_modules, &watched)
             {
                 callers.entry(*path).or_default().push(format!(
                     "{}:{} -> {symbol}",
@@ -8948,6 +9013,18 @@ fn check_glue_declaration(
             );
         }
     }
+}
+
+/// Texts: exact calls and imports, invariants inside their symbol, behaviour tests.
+fn check_glue_texts(
+    report: &mut GlueReport<'_>,
+    sources: &BTreeMap<&str, GlueSource<'_>>,
+    owner: &GlueSource<'_>,
+    found: &BTreeMap<&'static str, &GlueDefinition>,
+) {
+    let declaration = report.declaration;
+    let module = declaration.module;
+    let mut problem = |check: &str, file: &str, reason: String| report.problem(check, file, reason);
 
     // Exact call expressions and import text, verbatim.
     for required in declaration.required_calls {
@@ -8973,14 +9050,19 @@ fn check_glue_declaration(
         }
     }
 
-    // Invariants, verbatim, inside the source of their owner symbol.
+    // Invariants, verbatim, inside the source of their owner symbol; each symbol's source is cut
+    // once.
+    let lines = owner.text.lines().collect::<Vec<_>>();
+    let mut slices = BTreeMap::<&str, Option<String>>::new();
     for invariant in declaration.invariants {
         let Some(definition) = found.get(invariant.symbol) else {
             continue;
         };
-        let text = definition
-            .span
-            .and_then(|(start, end)| glue_source_between(owner.text, start, end));
+        let text = slices.entry(invariant.symbol).or_insert_with(|| {
+            definition
+                .span
+                .and_then(|(start, end)| glue_source_between(&lines, start, end))
+        });
         match text {
             None => problem(
                 "invariant",

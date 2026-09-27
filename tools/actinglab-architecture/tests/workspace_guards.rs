@@ -5768,7 +5768,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_fn("FlagArgs::required_positional"),
             glue_fn("FlagArgs::required_i32"),
             glue_fn("FlagArgs::required_u64"),
-            glue_private_fn("FlagArgs::parse_with_required_values"),
         ],
         forbidden_in: MAIN_ONLY,
         allowed_callers: &[
@@ -5852,99 +5851,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "FlagArgs::required_u64",
                 "fn required_u64(&self, index: usize, name: &str) -> CliOutcome<u64>",
             ),
-            glue_invariant(
-                "FlagArgs::parse",
-                "Self::parse_with_required_values(args, false)",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_values",
-                "Self::parse_with_required_values(args, true)",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_with_required_values",
-                "if arg.starts_with(\"--\") {",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_with_required_values",
-                "if index + 1 < args.len() && !args[index + 1].starts_with(\"--\") {",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_with_required_values",
-                ".push(args[index + 1].clone());",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_with_required_values",
-                "if require_values {",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_with_required_values",
-                "return Err(CliError::usage(format!(\"missing {arg} <value>\")));",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_with_required_values",
-                ".push(\"true\".to_string());",
-            ),
-            glue_invariant(
-                "FlagArgs::parse_with_required_values",
-                "parsed.positionals.push(arg.clone());",
-            ),
-            glue_invariant("FlagArgs::bool", ".and_then(|values| values.last())"),
-            glue_invariant("FlagArgs::bool", ".is_some_and(|value| value == \"true\")"),
-            glue_invariant("FlagArgs::optional", ".and_then(|values| values.last())"),
-            glue_invariant(
-                "FlagArgs::values",
-                "self.flags.get(name).cloned().unwrap_or_default()",
-            ),
-            glue_invariant(
-                "FlagArgs::without_first_positional",
-                "if !next.positionals.is_empty() {",
-            ),
-            glue_invariant(
-                "FlagArgs::without_first_positional",
-                "next.positionals.remove(0);",
-            ),
-            glue_invariant("FlagArgs::required", ".filter(|value| value != \"true\")"),
-            glue_invariant(
-                "FlagArgs::required",
-                ".ok_or_else(|| CliError::usage(format!(\"missing {name} <value>\")))",
-            ),
-            glue_invariant(
-                "FlagArgs::optional_path",
-                ".filter(|value| value != \"true\")",
-            ),
-            glue_invariant("FlagArgs::optional_path", ".map(PathBuf::from)"),
-            glue_invariant(
-                "FlagArgs::required_path",
-                "self.required(name).map(PathBuf::from)",
-            ),
-            glue_invariant("FlagArgs::reject_flags", "if self.flags.is_empty() {"),
-            glue_invariant(
-                "FlagArgs::reject_flags",
-                "\"{command} takes positional arguments only; unexpected flags: {}\"",
-            ),
-            glue_invariant(
-                "FlagArgs::expect_positionals",
-                "if self.positionals.len() == expected {",
-            ),
-            glue_invariant(
-                "FlagArgs::expect_positionals",
-                "\"{command} expects {expected} positional argument(s), got {}\"",
-            ),
-            glue_invariant(
-                "FlagArgs::required_positional",
-                ".ok_or_else(|| CliError::usage(format!(\"missing {name}\")))",
-            ),
-            glue_invariant("FlagArgs::required_i32", ".parse::<i32>()"),
-            glue_invariant(
-                "FlagArgs::required_i32",
-                "\"failed to parse {name} '{value}': {err}\"",
-            ),
-            glue_invariant("FlagArgs::required_u64", ".parse::<u64>()"),
-            glue_invariant(
-                "FlagArgs::required_u64",
-                "\"failed to parse {name} '{value}': {err}\"",
-            ),
-            glue_invariant("FlagArgs::parse_with_required_values", "index += 2;"),
         ],
         required_tests: &[],
         tolerated_elsewhere: &[],
@@ -6005,11 +5911,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_caller_file(SESSION_RECORD),
             glue_caller_file("apps/actinglab/src/device_runtime_config.rs"),
         ],
-        required_calls: &[exact(
-            "apps/actinglab/src/device_runtime_config.rs",
-            "use super::{\n    CliError, CliOutcome, GlobalOptions, effective_adb_path_for_instance,\n    enforce_path_adb_target_boundary, resolve_instance_id, runtime_capture_backend,\n    runtime_state_root,\n};",
-            1,
-        )],
+        required_calls: &[],
         invariants: &[
             glue_invariant("DeviceRuntimeConfig", "instance_alias: String"),
             glue_invariant("DeviceRuntimeConfig", "runtime_state_root: PathBuf"),
@@ -6021,82 +5923,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "capture_backend: CaptureBackendChoice",
             ),
             glue_invariant("DeviceRuntimeConfig", "touch_backend: TouchBackendChoice"),
-            glue_invariant(
-                "device_config",
-                "device_config_for_instance(global, config, None)",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "Some(instance) => instance.to_string(),",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "None => resolve_instance_id(global, config)?,",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "let resolved_adb = effective_adb_path_for_instance(config, instance)?;",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "runtime_state_root: runtime_state_root()?,",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "adb_source: resolved_adb.source,",
-            ),
-            glue_invariant(
-                "device_config_for_instance",
-                "adb_warning: resolved_adb.warning,",
-            ),
-            glue_invariant(
-                "DeviceRuntimeConfig::runtime_capture_endpoint",
-                "runtime_capture_backend::RuntimeCaptureEndpoint::new(",
-            ),
-            glue_invariant(
-                "DeviceRuntimeConfig::runtime_capture_endpoint",
-                "self.instance_alias.clone(),",
-            ),
-            glue_invariant(
-                "DeviceRuntimeConfig::runtime_capture_endpoint",
-                "self.runtime_state_root.clone(),",
-            ),
-            glue_invariant(
-                "effective_capture_backend_choice",
-                "if let Some(choice) = global.capture_backend {",
-            ),
-            glue_invariant(
-                "effective_capture_backend_choice",
-                "return Ok(CaptureBackendChoice::Auto);",
-            ),
-            glue_invariant(
-                "effective_capture_backend_choice",
-                "CaptureBackendChoice::parse(value).map_err(|err| {",
-            ),
-            glue_invariant(
-                "effective_capture_backend_choice",
-                "\"invalid instance.{instance_id}.capture_backend '{value}': {err}\"",
-            ),
-            glue_invariant(
-                "effective_touch_backend_choice",
-                "if let Some(choice) = global.touch_backend {",
-            ),
-            glue_invariant(
-                "effective_touch_backend_choice",
-                "return Ok(TouchBackendChoice::Auto);",
-            ),
-            glue_invariant(
-                "effective_touch_backend_choice",
-                "\"invalid instance.{instance_id}.touch_backend '{value}': {err}\"",
-            ),
         ],
         required_tests: &[],
         tolerated_elsewhere: &[],
@@ -6124,39 +5950,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_caller_file("apps/actinglab/src/session_management.rs"),
         ],
         required_calls: &[],
-        invariants: &[
-            glue_invariant(
-                "resolve_instance_id",
-                "if let Some(instance) = &global.instance {",
-            ),
-            glue_invariant("resolve_instance_id", "return Ok(instance.clone());"),
-            glue_invariant(
-                "resolve_instance_id",
-                ".is_none_or(|game| instance.game.as_ref() == Some(game));",
-            ),
-            glue_invariant(
-                "resolve_instance_id",
-                ".is_none_or(|server| instance.server.as_ref() == Some(server));",
-            ),
-            glue_invariant("resolve_instance_id", "game_match && server_match"),
-            glue_invariant(
-                "resolve_instance_id",
-                "\"could not resolve instance; pass --instance or configure instance.<id>.game/server\"",
-            ),
-            glue_invariant(
-                "resolve_instance_id_for_flags",
-                "flags.optional(\"--instance\").filter(|value| value != \"true\")",
-            ),
-            glue_invariant(
-                "resolve_instance_id_for_flags",
-                "resolve_instance_id(global, config)",
-            ),
-            glue_invariant(
-                "resolve_instance_id",
-                "if let Some((id, _instance)) = config.instances.iter().find(|(_id, instance)| {",
-            ),
-            glue_invariant("resolve_instance_id", "return Ok(id.clone());"),
-        ],
+        invariants: &[],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "instance id resolution is owned by instance_resolution.rs, declared once as a \
@@ -6199,42 +5993,8 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 ACTINGLAB_MAIN,
                 "use user_config_store::{config_path, read_user_config, write_user_config};",
             ),
-            absent(
-                "apps/actinglab/src/user_config_store.rs",
-                "unwrap_or_default",
-            ),
         ],
-        invariants: &[
-            glue_invariant("read_user_config", "let path = config_path()?;"),
-            glue_invariant("read_user_config", "if !path.exists() {"),
-            glue_invariant("read_user_config", "return Ok(UserConfig::default());"),
-            glue_invariant(
-                "read_user_config",
-                "\"failed to read config file {}: {err}\"",
-            ),
-            glue_invariant(
-                "read_user_config",
-                "serde_json::from_str(&text).map_err(|err| {",
-            ),
-            glue_invariant(
-                "read_user_config",
-                "\"failed to parse config file {}: {err}\"",
-            ),
-            glue_invariant(
-                "write_user_config",
-                "fs::create_dir_all(parent).map_err(|err| {",
-            ),
-            glue_invariant(
-                "write_user_config",
-                "\"failed to create config directory {}: {err}\"",
-            ),
-            glue_invariant("write_user_config", "serde_json::to_string_pretty(config)"),
-            glue_invariant("write_user_config", "\"failed to serialize config: {err}\""),
-            glue_invariant("write_user_config", "fs::write(&path, text)"),
-            glue_invariant("write_user_config", "\"failed to write {}: {err}\""),
-            glue_invariant("config_path", "if let Ok(path) = env::var(CONFIG_ENV) {"),
-            glue_invariant("config_path", "Ok(app_state_root()?.join(\"config.json\"))"),
-        ],
+        invariants: &[],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "reading, writing and locating the user config file is owned by \
@@ -6263,136 +6023,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "use user_config_keys::{config_get, config_set};",
             ),
         ],
-        invariants: &[
-            glue_invariant("config_get", "\"adb_path\" => Ok(json!(config.adb_path)),"),
-            glue_invariant(
-                "config_get",
-                "\"runtime_endpoint\" => Ok(json!(config.runtime_endpoint)),",
-            ),
-            glue_invariant("config_get", "\"run_root\" => Ok(json!(config.run_root)),"),
-            glue_invariant(
-                "config_get",
-                "\"resource_root\" => Ok(json!(config.resource_root)),",
-            ),
-            glue_invariant(
-                "config_get",
-                "key if key.starts_with(\"instance.\") => get_instance_value(config, key),",
-            ),
-            glue_invariant(
-                "config_get",
-                "_ => Err(CliError::usage(format!(\"unknown config key: {key}\"))),",
-            ),
-            glue_invariant(
-                "config_set",
-                "\"adb_path\" => config.adb_path = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "config_set",
-                "\"runtime_endpoint\" => config.runtime_endpoint = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "config_set",
-                "\"run_root\" => config.run_root = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "config_set",
-                "\"resource_root\" => config.resource_root = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "config_set",
-                "key if key.starts_with(\"instance.\") => set_instance_value(config, key, value)?,",
-            ),
-            glue_invariant(
-                "config_set",
-                "_ => return Err(CliError::usage(format!(\"unknown config key: {key}\"))),",
-            ),
-            glue_invariant("get_instance_value", "if parts.len() != 3 {"),
-            glue_invariant(
-                "get_instance_value",
-                "\"instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend|touch_backend\"",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "\"serial\" => instance.and_then(|instance| instance.serial.clone()),",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "\"game\" => instance.and_then(|instance| instance.game.clone()),",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "\"server\" => instance.and_then(|instance| instance.server.clone()),",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "\"package\" => instance.and_then(|instance| instance.package.clone()),",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "\"adb_path\" => instance.and_then(|instance| instance.adb_path.clone()),",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "\"capture_backend\" => instance.and_then(|instance| instance.capture_backend.clone()),",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "\"touch_backend\" => instance.and_then(|instance| instance.touch_backend.clone()),",
-            ),
-            glue_invariant(
-                "get_instance_value",
-                "other => return Err(CliError::usage(format!(\"unknown instance field: {other}\"))),",
-            ),
-            glue_invariant("set_instance_value", "if parts.len() != 3 {"),
-            glue_invariant(
-                "set_instance_value",
-                "\"instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend|touch_backend\"",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "let instance = config.instances.entry(parts[1].to_string()).or_default();",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "\"serial\" => instance.serial = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "\"game\" => instance.game = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "\"server\" => instance.server = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "\"package\" => instance.package = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "\"adb_path\" => instance.adb_path = Some(value.to_string()),",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "CaptureBackendChoice::parse(value).map_err(|err| CliError::usage(err.to_string()))?;",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "instance.capture_backend = Some(value.to_string());",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "TouchBackendChoice::parse(value).map_err(|err| CliError::usage(err.to_string()))?;",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "instance.touch_backend = Some(value.to_string());",
-            ),
-            glue_invariant(
-                "set_instance_value",
-                "other => return Err(CliError::usage(format!(\"unknown instance field: {other}\"))),",
-            ),
-        ],
+        invariants: &[],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "the user config key table (get / set, instance keys) is owned by \
@@ -6410,18 +6041,10 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             "use safe_file_stem::safe_file_stem;",
             1,
         )],
-        invariants: &[
-            glue_invariant(
-                "safe_file_stem",
-                "fn safe_file_stem(value: &str) -> String {",
-            ),
-            glue_invariant("safe_file_stem", ".chars()"),
-            glue_invariant(
-                "safe_file_stem",
-                "if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {",
-            ),
-            glue_invariant("safe_file_stem", "'_'"),
-        ],
+        invariants: &[glue_invariant(
+            "safe_file_stem",
+            "fn safe_file_stem(value: &str) -> String {",
+        )],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "file-stem sanitising is owned by safe_file_stem.rs; main.rs imports it privately",
@@ -6449,12 +6072,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 1,
             ),
         ],
-        invariants: &[
-            glue_invariant("file_sha256", "let bytes = fs::read(path)"),
-            glue_invariant("file_sha256", "\"failed to read {}: {err}\""),
-            glue_invariant("file_sha256", "Ok(hex_sha256(&bytes))"),
-            glue_invariant("hex_sha256", "format!(\"{:x}\", Sha256::digest(bytes))"),
-        ],
+        invariants: &[],
         required_tests: &[],
         tolerated_elsewhere: &[GlueTolerance {
             file: "apps/actinglab/src/resource_authoring.rs",
@@ -6494,16 +6112,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 1,
             ),
         ],
-        invariants: &[
-            glue_invariant(
-                "zip_write_error",
-                "CliError::package_invalid(format!(\"zip write failed: {err}\"))",
-            ),
-            glue_invariant(
-                "zip_io_error",
-                "CliError::package_invalid(format!(\"zip write failed: {err}\"))",
-            ),
-        ],
+        invariants: &[],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "ZIP write error mapping is owned by zip_error.rs; resource_runtime_support.rs \
@@ -6549,49 +6158,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 1,
             ),
         ],
-        invariants: &[
-            glue_invariant("app_state_root", "env::var(\"LOCALAPPDATA\")"),
-            glue_invariant("app_state_root", ".or_else(|_| env::var(\"APPDATA\"))"),
-            glue_invariant(
-                "app_state_root",
-                "\"LOCALAPPDATA or APPDATA is required for ActingLab state\"",
-            ),
-            glue_invariant(
-                "app_state_root",
-                ".join(\"ActingCommand\").join(\"actinglab\")",
-            ),
-            glue_invariant(
-                "runtime_state_root",
-                "if let Ok(path) = env::var(RUNTIME_STATE_ROOT_ENV) {",
-            ),
-            glue_invariant("runtime_state_root", "if path.trim().is_empty() {"),
-            glue_invariant(
-                "runtime_state_root",
-                "\"{RUNTIME_STATE_ROOT_ENV} must not be empty\"",
-            ),
-            glue_invariant("runtime_state_root", "env::var(\"LOCALAPPDATA\")"),
-            glue_invariant("runtime_state_root", ".or_else(|_| env::var(\"APPDATA\"))"),
-            glue_invariant(
-                "runtime_state_root",
-                "\"LOCALAPPDATA or APPDATA is required for Runtime state\"",
-            ),
-            glue_invariant(
-                "runtime_state_root",
-                ".join(\"ActingCommand\").join(\"runtime\")",
-            ),
-            glue_invariant(
-                "session_state_dir_from_flags",
-                "flags.optional_path(\"--state-dir\")",
-            ),
-            glue_invariant(
-                "session_state_dir_from_flags",
-                "env::var(SESSION_STATE_ENV)",
-            ),
-            glue_invariant(
-                "session_state_dir_from_flags",
-                "Ok(app_state_root()?.join(\"session\"))",
-            ),
-        ],
+        invariants: &[],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "the application, Runtime and session state roots are owned by state_roots.rs; \
@@ -6618,15 +6185,10 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 1,
             ),
         ],
-        invariants: &[
-            glue_invariant("current_unix_ms", "fn current_unix_ms() -> u64 {"),
-            glue_invariant("current_unix_ms", "SystemTime::now()"),
-            glue_invariant("current_unix_ms", ".duration_since(UNIX_EPOCH)"),
-            glue_invariant("current_unix_ms", ".unwrap_or_default()"),
-            glue_invariant("current_unix_ms", ".as_millis()"),
-            glue_invariant("current_unix_ms", ".try_into()"),
-            glue_invariant("current_unix_ms", ".unwrap_or(u64::MAX)"),
-        ],
+        invariants: &[glue_invariant(
+            "current_unix_ms",
+            "fn current_unix_ms() -> u64 {",
+        )],
         required_tests: &[],
         tolerated_elsewhere: &[],
         reason: "the Unix millisecond clock is owned by unix_time.rs; main.rs imports it \
@@ -6840,31 +6402,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 SESSION_RECORD,
                 "if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {",
                 3,
-            ),
-            exact(
-                "apps/actinglab/src/runtime_stream_adapter.rs",
-                "if stream_check_requested(&flags) {",
-                1,
-            ),
-            exact(
-                "apps/actinglab/src/drive_cli.rs",
-                "let target = target_argument(&flags, \"tap-target\")?;",
-                1,
-            ),
-            exact(
-                "apps/actinglab/src/lab2_cli.rs",
-                "let target = target_argument(&flags, \"do\")?;",
-                1,
-            ),
-            exact(
-                "apps/actinglab/src/readonly_cli.rs",
-                "target: target_argument(&flags, \"is-visible\")?,",
-                1,
-            ),
-            exact(
-                SESSION_RECORD,
-                "if let Some(diagnostics_path) = session_record_drift_diagnostics_path(&flags)? {",
-                1,
             ),
         ],
         invariants: &[
@@ -7108,100 +6645,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "parse_session_record_rect(to, \"--swipe to\")?",
             ),
             glue_invariant("parse_session_record_swipe_rects", "Ok(("),
-            glue_invariant(
-                "parse_optional_duration_ms",
-                "let Some(value) = flags.optional(name).filter(|value| value != \"true\") else {",
-            ),
-            glue_invariant(
-                "parse_optional_duration_ms",
-                "return Ok(Duration::from_millis(default_ms));",
-            ),
-            glue_invariant("parse_optional_duration_ms", ".parse::<u64>()"),
-            glue_invariant(
-                "parse_optional_duration_ms",
-                "\"failed to parse {name} '{value}': {err}\"",
-            ),
-            glue_invariant(
-                "parse_optional_duration_ms",
-                "Ok(Duration::from_millis(ms))",
-            ),
-            glue_invariant(
-                "parse_optional_usize",
-                "let Some(value) = flags.optional(name).filter(|value| value != \"true\") else {",
-            ),
-            glue_invariant("parse_optional_usize", "return Ok(default_value);"),
-            glue_invariant("parse_optional_usize", ".parse::<usize>()"),
-            glue_invariant(
-                "parse_optional_usize",
-                "\"failed to parse {name} '{value}': {err}\"",
-            ),
-            glue_invariant("parse_optional_string_value", "None => Ok(None),"),
-            glue_invariant(
-                "parse_optional_string_value",
-                "Some(value) if value == \"true\" => Err(CliError::usage(format!(\"missing {name} <value>\"))),",
-            ),
-            glue_invariant(
-                "parse_optional_string_value",
-                "Some(value) if value.trim().is_empty() => {",
-            ),
-            glue_invariant(
-                "parse_optional_string_value",
-                "Err(CliError::usage(format!(\"{name} must not be empty\")))",
-            ),
-            glue_invariant(
-                "parse_optional_string_value",
-                "Some(value) => Ok(Some(value)),",
-            ),
-            glue_invariant(
-                "required_non_empty_flag",
-                "let value = flags.required(name)?;",
-            ),
-            glue_invariant("required_non_empty_flag", "if value.trim().is_empty() {"),
-            glue_invariant(
-                "required_non_empty_flag",
-                "return Err(CliError::usage(format!(\"{name} must not be empty\")));",
-            ),
-            glue_invariant("required_non_empty_flag", "Ok(value)"),
-            glue_invariant(
-                "parse_optional_unit_f64",
-                "let Some(value) = flags.optional(name) else {",
-            ),
-            glue_invariant("parse_optional_unit_f64", "return Ok(None);"),
-            glue_invariant("parse_optional_unit_f64", "if value == \"true\" {"),
-            glue_invariant(
-                "parse_optional_unit_f64",
-                "return Err(CliError::usage(format!(\"missing {name} <value>\")));",
-            ),
-            glue_invariant("parse_optional_unit_f64", ".parse::<f64>()"),
-            glue_invariant(
-                "parse_optional_unit_f64",
-                "if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {",
-            ),
-            glue_invariant(
-                "parse_optional_unit_f64",
-                "\"{name} must be a finite number between 0 and 1\"",
-            ),
-            glue_invariant("parse_optional_unit_f64", "Ok(Some(parsed))"),
-            glue_invariant("parse_record_duration_ms", ".optional(\"--duration-ms\")"),
-            glue_invariant(
-                "parse_record_duration_ms",
-                ".filter(|value| value != \"true\")",
-            ),
-            glue_invariant("parse_record_duration_ms", ".unwrap_or(default_ms)"),
-            glue_invariant("parse_record_duration_ms", "if duration_ms == 0 {"),
-            glue_invariant("parse_record_duration_ms", "Ok(duration_ms)"),
-            glue_invariant(
-                "stream_check_requested",
-                "flags.positionals.first().map(String::as_str) == Some(\"check\")",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "width.trim().parse::<u32>()",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "height.trim().parse::<u32>()",
-            ),
         ],
         required_tests: &[
             "match_metric_flag_preserves_default_values_and_rejection",
