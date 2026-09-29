@@ -25,6 +25,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
 - `actingd-unlock-owner.md` — offline `actingd unlock-owner`: the operator's confirmation appended as the retained owner epoch's close evidence, the `owner.unlock` fact and its result schema.
+- `owner-journal.md` — the `owner.lock` owner journal: records, the reader's derived state, the in-epoch checkpoint fold, its side-file crash recovery and error codes.
 - `emulator-control.md` — explicit emulator instance start/stop/restart: origin gate, per-instance fence, close-before-stop, tool timeouts and wait criteria, event shape, the `device.connected` program fact and `actingctl emulator`.
 - `scheduling-pause.md` — operator scheduling pause / resume: origin gate, the dispatch gate and its `Deferred` presentation, the instance drain with `contained_task_paused`, status fields, no persistence or expiry, and `actingctl pause` / `resume`.
 - `application-lifecycle.md` — the `application` effect of task packages (launch / restart / stop of the instance's assigned application), the foreground gate before every pointer input with the `application.foreground` program fact, and the startup package the host schedules after emulator `start` / `restart`.

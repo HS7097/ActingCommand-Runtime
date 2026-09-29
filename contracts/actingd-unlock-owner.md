@@ -8,8 +8,9 @@ resource disposition `in_use` or `unconfirmed`, nothing proves those resources
 were released, and the recorded owner process is still running or cannot be
 probed; a dead owner process is released by startup itself (see "When startup
 releases the owner itself"). The command records the operator's confirmation
-that the resources were released. It never deletes or rewrites the journal,
-which remains the native proof the ledger checks at every start
+that the resources were released. The command never deletes or rewrites the
+journal. The owner guard's checkpoint fold (`contracts/owner-journal.md`) keeps
+everything of the native proof the ledger checks at every start
 (`contracts/ledger-store.md`, "Prior-epoch scope close (proven or unproven)").
 
 ## When startup releases the owner itself
@@ -64,7 +65,8 @@ exit code 1.
 
 ## Order
 
-Every refusal below returns before the command writes anything.
+Every refusal below returns before the command writes anything. Recovery writes
+of the kind step 2 describes are not writes of this command.
 
 1. `owner.lock` is opened without being created and locked with the same
    exclusive OS lock the daemon holds while it runs. A missing file is
@@ -73,8 +75,10 @@ Every refusal below returns before the command writes anything.
    `runtime-info.json` is read.
 2. The journal is read with the startup reader: the same complete-read
    validation, and the same recovery that truncates an incomplete final line
-   left by a crash mid-append. Unless the last record is a v2 record with
-   disposition `in_use` or `unconfirmed`, the result is
+   left by a crash mid-append. Before that read, a checkpoint fold that a crash
+   interrupted is finished or discarded from its side file, as at startup
+   (`contracts/owner-journal.md`, "Side file"). Unless the last record is a v2
+   record with disposition `in_use` or `unconfirmed`, the result is
    `owner_unlock_not_required`.
 3. Without `--confirm-resources-released` the result is
    `owner_unlock_confirmation_missing`. This check follows the first two so the
