@@ -877,6 +877,31 @@ impl RuntimeClient {
         }
     }
 
+    /// Applies one instance resource target policy through the Runtime's formal entry
+    /// (Workflow #308 RT-S1a). Only the document length is checked here; the Runtime parses
+    /// and checks the content, and a refused document's receipt, with its field position, is
+    /// the error's `received_receipt()`.
+    pub fn apply_resource_targets(
+        &self,
+        document_json: String,
+    ) -> RuntimeClientResult<actingcommand_contract::ResourceTargetsApplied> {
+        if document_json.is_empty()
+            || document_json.len() > actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
+        {
+            return Err(RuntimeClientError::fatal(
+                "resource_targets_document_invalid",
+                "apply_resource_targets",
+            ));
+        }
+        match self.execute(
+            "apply_resource_targets",
+            RuntimeOperation::ApplyResourceTargets { document_json },
+        )? {
+            RuntimeResult::ResourceTargetsApplied { applied } => Ok(*applied),
+            _ => Err(self.unexpected_result("apply_resource_targets")),
+        }
+    }
+
     pub fn project_snapshot(
         &self,
         request: ProjectInterfaceRequest,

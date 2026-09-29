@@ -188,6 +188,7 @@ actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--inst
 actingctl request-shutdown --state-root <state-root>
 actingctl request-shutdown --state-root <state-root> --wait 60     # then wait (1..=3600 s) until the owner record is closed and the process has exited; read-only
 actingctl agent-publish-facts --state-root <state-root> --record-file <observation.json>     # Agent/Adapter origin: publish one bounded fact observation
+actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter origin: apply one instance resource target policy (contracts/resource-targets.md); prints {"applied": ...}, or the refusing receipt with its field position and a non-zero exit
 
 # Read-only forensics (same state root)
 actingledger --state-root <state-root> open

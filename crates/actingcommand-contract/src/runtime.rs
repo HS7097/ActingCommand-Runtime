@@ -3171,6 +3171,13 @@ pub enum RuntimeOperation {
     PromoteProposal {
         proposal: Box<CatalogProposal>,
     },
+    /// Applies one instance resource target policy (Workflow #308 RT-S1a): the raw
+    /// `actingcommand.resource-targets.v1` document (`1..=64 KiB`), parsed, checked and
+    /// stored as the instance fact `session.resource_targets` by the Runtime, the only formal
+    /// entry of that fact. Agent/Adapter only.
+    ApplyResourceTargets {
+        document_json: String,
+    },
 }
 
 impl RuntimeOperation {
@@ -3295,6 +3302,16 @@ impl RuntimeOperation {
             Self::CompileProposal { proposal } | Self::PromoteProposal { proposal } => proposal
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_catalog_proposal")),
+            Self::ApplyResourceTargets { document_json } => {
+                if document_json.is_empty()
+                    || document_json.len() > crate::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
+                {
+                    return Err(RuntimeContractError::new(
+                        "resource_targets_document_invalid",
+                    ));
+                }
+                Ok(())
+            }
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -3513,6 +3530,9 @@ impl fmt::Debug for RuntimeOperation {
             }
             Self::CompileProposal { .. } => "RuntimeOperation::CompileProposal(<typed-proposal>)",
             Self::PromoteProposal { .. } => "RuntimeOperation::PromoteProposal(<typed-proposal>)",
+            Self::ApplyResourceTargets { .. } => {
+                "RuntimeOperation::ApplyResourceTargets(<document>)"
+            }
         })
     }
 }
@@ -3695,6 +3715,7 @@ impl RuntimeRequest {
                 | RuntimeOperation::AssessPredictiveMaintenance { .. }
                 | RuntimeOperation::CompileProposal { .. }
                 | RuntimeOperation::PromoteProposal { .. }
+                | RuntimeOperation::ApplyResourceTargets { .. }
         ) && (self.actor != EventActor::Agent || self.source != EventSource::Adapter)
         {
             return Err(RuntimeContractError::new("invalid_agent_dispatcher_origin"));
@@ -4307,6 +4328,11 @@ pub enum RuntimeResult {
     ProposalPromoted {
         promotion: ProposalPromotion,
     },
+    /// `ApplyResourceTargets` stored (or replayed) the instance's policy; the receipt's
+    /// terminal is the `fact.published` event that holds it.
+    ResourceTargetsApplied {
+        applied: Box<crate::ResourceTargetsApplied>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4326,6 +4352,10 @@ pub struct RuntimeReceipt {
     resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_declaration_event: Option<TerminalEvent>,
+    /// The field-positioned rejection of an `ApplyResourceTargets` document (Denied, no
+    /// terminal, nothing recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_targets_rejection: Option<Box<crate::ResourceTargetsRejection>>,
 }
 
 impl RuntimeReceipt {
@@ -4371,6 +4401,7 @@ impl RuntimeReceipt {
             result: Some(RuntimeResult::MaterialRead { result }),
             resource_declaration: None,
             resource_declaration_event: None,
+            resource_targets_rejection: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -4400,6 +4431,7 @@ impl RuntimeReceipt {
             error,
             resource_declaration: None,
             resource_declaration_event: None,
+            resource_targets_rejection: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -4421,6 +4453,7 @@ impl RuntimeReceipt {
             error: None,
             resource_declaration: None,
             resource_declaration_event: None,
+            resource_targets_rejection: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -4442,6 +4475,7 @@ impl RuntimeReceipt {
             error: Some(error),
             resource_declaration: None,
             resource_declaration_event: None,
+            resource_targets_rejection: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -4464,6 +4498,21 @@ impl RuntimeReceipt {
 
     pub const fn resource_declaration_event(&self) -> Option<TerminalEvent> {
         self.resource_declaration_event
+    }
+
+    /// Attaches the field-positioned rejection of an `ApplyResourceTargets` document to a
+    /// Denied `InvalidRequest` receipt without a terminal.
+    pub fn with_resource_targets_rejection(
+        mut self,
+        rejection: crate::ResourceTargetsRejection,
+    ) -> RuntimeContractResult<Self> {
+        self.resource_targets_rejection = Some(Box::new(rejection));
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn resource_targets_rejection(&self) -> Option<&crate::ResourceTargetsRejection> {
+        self.resource_targets_rejection.as_deref()
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
@@ -4541,6 +4590,22 @@ impl RuntimeReceipt {
             return Err(RuntimeContractError::new(
                 "invalid_resource_declaration_receipt",
             ));
+        }
+        if let Some(rejection) = &self.resource_targets_rejection {
+            if self.state != RuntimeReceiptState::Denied
+                || self.terminal.is_some()
+                || self.result.is_some()
+                || self
+                    .error
+                    .as_ref()
+                    .is_none_or(|error| error.code != RuntimeErrorCode::InvalidRequest)
+                || self.resource_declaration.is_some()
+            {
+                return Err(RuntimeContractError::new(
+                    "invalid_resource_targets_receipt",
+                ));
+            }
+            rejection.validate()?;
         }
         if let Some(RuntimeResult::LeaseGranted { token } | RuntimeResult::LeaseRenewed { token }) =
             &self.result
@@ -4760,6 +4825,20 @@ impl RuntimeReceipt {
             Some(RuntimeResult::ProposalPromoted { promotion }) => promotion
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_proposal_promotion"))?,
+            Some(RuntimeResult::ResourceTargetsApplied { applied }) => {
+                if self.state != RuntimeReceiptState::Completed
+                    || self.terminal
+                        != Some(TerminalEvent {
+                            sequence: applied.version,
+                            event_id: applied.event_id,
+                        })
+                {
+                    return Err(RuntimeContractError::new(
+                        "invalid_resource_targets_receipt",
+                    ));
+                }
+                applied.validate()?;
+            }
             _ => {}
         }
         Ok(())

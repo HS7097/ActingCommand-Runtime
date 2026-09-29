@@ -529,7 +529,7 @@ fn pool_fact<'a>(pool: &PoolSpec, facts: &'a EvaluationFacts) -> Option<&'a Obse
     })
 }
 
-fn project_time_validity(
+pub(crate) fn project_time_validity(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     time: EvaluationTime,
@@ -2043,7 +2043,7 @@ pub fn activity_window_at(
     Ok(None)
 }
 
-const fn activity_scope_specificity(scope: &ScopeSelector) -> u8 {
+pub(crate) const fn activity_scope_specificity(scope: &ScopeSelector) -> u8 {
     match scope {
         ScopeSelector::Instance { .. } => 3,
         ScopeSelector::Server { .. } => 2,

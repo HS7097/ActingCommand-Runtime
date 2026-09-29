@@ -183,6 +183,7 @@ mod read_events;
 mod recovery_ladder;
 mod requests;
 mod resource_close;
+mod resource_targets;
 mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;

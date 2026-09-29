@@ -42,6 +42,9 @@ pub fn validate_catalog_declaration(
 ) -> Result<(), Box<CatalogDiagnostic>> {
     let (version, catalog, source_map) = match kind {
         SchedulingDocumentKind::Selection => return parse_selection_document(source).map(|_| ()),
+        SchedulingDocumentKind::ResourceTargets => {
+            return parse_document::<crate::ResourceTargetsDocument>(source, kind).map(|_| ());
+        }
         SchedulingDocumentKind::Tasks => {
             let parsed = parse_document::<crate::TasksDocument>(source, kind)?;
             (

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::facts::FactPublicationPurpose;
 use super::*;
 use crate::ipc::{FrameRead, read_frame, write_frame};
 use std::net::TcpStream;
@@ -114,6 +115,18 @@ impl HostShared {
                         projection,
                     )?
                     .with_resource_declaration(rejection, rejected)
+                    .map_err(|_| receipt_error());
+                }
+                // Workflow #308 RT-S1a: a refused resource target document is answered with
+                // its field position and records nothing.
+                if let Some(rejection) = failure.error.resource_targets_rejection().cloned() {
+                    return runtime_error_receipt(
+                        request,
+                        failure.state,
+                        failure.terminal,
+                        projection,
+                    )?
+                    .with_resource_targets_rejection(rejection)
                     .map_err(|_| receipt_error());
                 }
                 runtime_error_receipt(request, failure.state, failure.terminal, projection)
@@ -408,7 +421,9 @@ impl HostShared {
                             records: vec![record.clone()],
                         },
                         Some(validated),
+                        FactPublicationPurpose::Ordinary,
                     )
+                    .map(|publication| publication.event_id)
                     .map_err(|error| {
                         if error.is_fatal() {
                             RequestFailure::poison_without_terminal(error)
@@ -424,7 +439,12 @@ impl HostShared {
             }
             RuntimeOperation::PublishFacts { observation } => {
                 let event_id = self
-                    .publish_facts(observation.clone(), Some(validated))
+                    .publish_facts(
+                        observation.clone(),
+                        Some(validated),
+                        FactPublicationPurpose::Ordinary,
+                    )
+                    .map(|publication| publication.event_id)
                     .map_err(|error| {
                         if error.is_fatal() {
                             RequestFailure::poison_without_terminal(error)
@@ -496,6 +516,9 @@ impl HostShared {
             }
             RuntimeOperation::CompileProposal { proposal } => self.compile_proposal(proposal),
             RuntimeOperation::PromoteProposal { proposal } => self.promote_proposal(proposal),
+            RuntimeOperation::ApplyResourceTargets { document_json } => {
+                self.apply_resource_targets(validated, document_json)
+            }
         }
     }
 }

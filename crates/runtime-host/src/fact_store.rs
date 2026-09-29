@@ -7,7 +7,7 @@ use actingcommand_contract::{
     EventActor, EventId, EventPayload, EventQuery, EventType, FactContent,
     FactInvalidationEventData, FactPayload, FactRecord, FactScalar as ContractFactScalar,
     FactScope, FactValue as ContractFactValue, InstanceFactContext, InstanceFactSnapshot,
-    RuntimeErrorCode, priority_offset_task_id,
+    RESOURCE_TARGETS_FACT_KEY, RuntimeErrorCode, priority_offset_task_id,
 };
 use actingcommand_ledger::{
     GlobalLedger, LedgerTransactionWork, PersistedEvent, TransactionStateObservation,
@@ -1182,6 +1182,18 @@ impl InstanceFactStore {
             .map(|stored| &stored.record)
     }
 
+    /// The active record under exactly this scope and key with the sequence and id of the
+    /// `fact.published` event that carried it (Workflow #308 RT-S1a).
+    pub(crate) fn active_revision(
+        &self,
+        scope: &FactScope,
+        key: &str,
+    ) -> Option<(&FactRecord, u64, EventId)> {
+        self.active
+            .get(&(scope.clone(), key.to_owned()))
+            .map(|stored| (&stored.record, stored.sequence, stored.event_id))
+    }
+
     /// The active record for `key` that applies to `context`, the most specific scope first
     /// (instance over server over game); `None` when no active record applies.
     pub(crate) fn resolve_active(
@@ -1272,6 +1284,19 @@ impl InstanceFactStore {
         conflict_disposition: PolicyFactConflictDisposition,
         operation: &'static str,
     ) -> RuntimeHostResult<EvaluationFacts> {
+        // Workflow #308 RT-S1a: a resource target policy is written only by its formal entry
+        // into the store; neither the configuration nor a forward caller may supply one.
+        if facts
+            .facts
+            .iter()
+            .any(|fact| fact.fact_key == RESOURCE_TARGETS_FACT_KEY)
+        {
+            return Err(RuntimeHostError::request(
+                "resource_targets_key_reserved",
+                operation,
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
         let mut projected = facts.clone();
         let contexts = projected
             .instances

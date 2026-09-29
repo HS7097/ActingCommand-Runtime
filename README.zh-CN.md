@@ -190,6 +190,7 @@ actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--inst
 actingctl request-shutdown --state-root <state-root>
 actingctl request-shutdown --state-root <state-root> --wait 60     # 随后等待（1..=3600 秒）直到 owner 记录关闭且进程退出；只读
 actingctl agent-publish-facts --state-root <state-root> --record-file <observation.json>     # Agent/Adapter 来源：发布一份有界事实观测
+actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter 来源：应用一份实例资源目标策略（contracts/resource-targets.md）；成功打印 {"applied": ...}，被拒时打印带字段位置的回执并以非零退出
 
 # 只读取证（同一状态根）
 actingledger --state-root <state-root> open

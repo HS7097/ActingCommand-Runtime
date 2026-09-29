@@ -74,6 +74,10 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) resource_declaration:
         Option<Box<actingcommand_contract::ResourceDeclarationRejection>>,
     pub(crate) resource_declaration_event: Option<actingcommand_contract::TerminalEvent>,
+    /// The field-positioned rejection of an `ApplyResourceTargets` document (Workflow #308
+    /// RT-S1a); its receipt carries it and nothing is recorded.
+    pub(crate) resource_targets_rejection:
+        Option<Box<actingcommand_contract::ResourceTargetsRejection>>,
 }
 
 impl PartialEq for RuntimeHostError {
@@ -93,6 +97,8 @@ impl PartialEq for RuntimeHostError {
             && self.lifecycle.resource_declaration == other.lifecycle.resource_declaration
             && self.lifecycle.resource_declaration_event
                 == other.lifecycle.resource_declaration_event
+            && self.lifecycle.resource_targets_rejection
+                == other.lifecycle.resource_targets_rejection
             && self.lifecycle.incomplete_device_diagnostic_summary
                 == other.lifecycle.incomplete_device_diagnostic_summary
             && self.lifecycle.owner_probe == other.lifecycle.owner_probe
@@ -272,6 +278,26 @@ impl RuntimeHostError {
         &self,
     ) -> Option<&actingcommand_contract::ResourceDeclarationRejection> {
         self.lifecycle.resource_declaration.as_deref()
+    }
+
+    pub fn resource_targets_rejection(
+        &self,
+    ) -> Option<&actingcommand_contract::ResourceTargetsRejection> {
+        self.lifecycle.resource_targets_rejection.as_deref()
+    }
+
+    /// A refused `ApplyResourceTargets` document: non-fatal `InvalidRequest`, host code
+    /// `resource_targets_rejected`, carrying the field-positioned rejection.
+    pub(crate) fn resource_targets_rejected(
+        rejection: actingcommand_contract::ResourceTargetsRejection,
+    ) -> Self {
+        let mut error = Self::request(
+            "resource_targets_rejected",
+            "apply_resource_targets",
+            RuntimeErrorCode::InvalidRequest,
+        );
+        error.lifecycle.resource_targets_rejection = Some(Box::new(rejection));
+        error
     }
 
     pub(crate) fn into_fatal(mut self) -> Self {

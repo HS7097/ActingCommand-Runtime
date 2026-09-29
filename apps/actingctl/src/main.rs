@@ -82,6 +82,24 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     } else {
         None
     };
+    // Workflow #308 RT-S1a: the policy document is read bounded and checked as UTF-8 only;
+    // the Runtime parses and checks its content.
+    let resource_targets = if let Command::AgentApplyResourceTargets { policy_file } = &command {
+        let mut bytes = Vec::new();
+        std::fs::File::open(policy_file)
+            .map_err(|_| ActingctlError::ResourceTargetsFile)?
+            .take(actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ActingctlError::ResourceTargetsFile)?;
+        if bytes.is_empty()
+            || bytes.len() > actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
+        {
+            return Err(ActingctlError::ResourceTargetsFile);
+        }
+        Some(String::from_utf8(bytes).map_err(|_| ActingctlError::ResourceTargetsFile)?)
+    } else {
+        None
+    };
     let (actor, source) = command.origin();
     let client = RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
         .map_err(ActingctlError::runtime)?;
@@ -91,6 +109,16 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         Command::AgentPublishFacts { .. } => Ok(serde_json::json!({
             "event_id": client.publish_facts(observation.ok_or(ActingctlError::FactRecord)?).map_err(ActingctlError::runtime)?,
         })),
+        // A refused policy prints the Runtime's receipt, whose error exits non-zero.
+        Command::AgentApplyResourceTargets { .. } => match client
+            .apply_resource_targets(resource_targets.ok_or(ActingctlError::ResourceTargetsFile)?)
+        {
+            Ok(applied) => Ok(serde_json::json!({ "applied": applied })),
+            Err(error) => match error.received_receipt() {
+                Some(receipt) => Ok(serde_json::json!({ "receipt": receipt })),
+                None => return Err(ActingctlError::runtime(error)),
+            },
+        },
         // One manual priority offset (Workflow #308 slice 4a-2) through the ordinary fact
         // publication, with this CLI's Cli/Cli origin.
         Command::TaskOffset {
@@ -346,6 +374,11 @@ enum Command {
     AgentPublishFacts {
         record_file: PathBuf,
     },
+    /// `agent-apply-resource-targets --policy-file <path>`: one resource target policy
+    /// through the Runtime's formal entry (Workflow #308 RT-S1a).
+    AgentApplyResourceTargets {
+        policy_file: PathBuf,
+    },
     /// `task-offset <task_id> <offset_milli> [--instance <alias>]`.
     TaskOffset {
         task_id: String,
@@ -419,6 +452,7 @@ impl Invocation {
         let mut program = false;
         let mut config = false;
         let mut record_file = None;
+        let mut policy_file = None;
         let mut shutdown_wait = None;
         let mut pause_reason = None;
         let mut drain_timeout_ms = None;
@@ -463,6 +497,11 @@ impl Invocation {
             match flag {
                 "--record-file" if command == "agent-publish-facts" && record_file.is_none() => {
                     record_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
+                }
+                "--policy-file"
+                    if command == "agent-apply-resource-targets" && policy_file.is_none() =>
+                {
+                    policy_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
                 "--wait" if command == "request-shutdown" && shutdown_wait.is_none() => {
                     let seconds = require_u64(&arguments, &mut index)?;
@@ -544,6 +583,22 @@ impl Invocation {
                 }
                 Command::AgentPublishFacts {
                     record_file: record_file.ok_or(ActingctlError::Usage)?,
+                }
+            }
+            "agent-apply-resource-targets" => {
+                if arguments
+                    .iter()
+                    .skip(1)
+                    .filter_map(|argument| argument.to_str())
+                    .any(|argument| {
+                        argument.starts_with("--")
+                            && !matches!(argument, "--state-root" | "--policy-file")
+                    })
+                {
+                    return Err(ActingctlError::Usage);
+                }
+                Command::AgentApplyResourceTargets {
+                    policy_file: policy_file.ok_or(ActingctlError::Usage)?,
                 }
             }
             "task-offset" => {
@@ -648,7 +703,10 @@ impl Invocation {
 
 impl Command {
     const fn origin(&self) -> (EventActor, EventSource) {
-        if matches!(self, Self::AgentPublishFacts { .. }) {
+        if matches!(
+            self,
+            Self::AgentPublishFacts { .. } | Self::AgentApplyResourceTargets { .. }
+        ) {
             (EventActor::Agent, EventSource::Adapter)
         } else {
             (EventActor::Cli, EventSource::Cli)
@@ -665,6 +723,7 @@ impl Command {
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
                 | Self::AgentPublishFacts { .. }
+                | Self::AgentApplyResourceTargets { .. }
                 | Self::SelfCheck { .. }
         )
     }
@@ -699,6 +758,9 @@ enum ActingctlError {
     Runtime(actingcommand_runtime_client::RuntimeClientError),
     Package,
     FactRecord,
+    /// `agent-apply-resource-targets`: the policy file is unreadable, empty, larger than the
+    /// document bound or not UTF-8.
+    ResourceTargetsFile,
     InstanceUnknown,
     /// `task-offset` without `--instance`: the registered instances do not name exactly one
     /// configured game.
@@ -731,6 +793,7 @@ impl fmt::Display for ActingctlError {
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
+            Self::ResourceTargetsFile => formatter.write_str("resource_targets_file_invalid: the policy file is unreadable, empty, larger than 65536 bytes or not UTF-8"),
             Self::InstanceUnknown => formatter.write_str("instance_unknown: the runtime status lists no instance with that alias"),
             Self::TaskOffsetScopeAmbiguous => formatter.write_str("task_offset_scope_ambiguous: the registered instances do not name exactly one configured game; pass --instance <alias>"),
             Self::PriorityOffsetInvalid => formatter.write_str("priority_offset_invalid: the task identifier cannot form a priority offset fact"),

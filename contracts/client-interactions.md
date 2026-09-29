@@ -206,6 +206,12 @@ dispatched request fails and absent on earlier refusals and the fatal-state repl
 `host code <code> during <operation>`, and a client built before these fields
 cannot decode a receipt that carries them (`deny_unknown_fields`).
 
+A refused `ApplyResourceTargets` receipt (Denied + `InvalidRequest`, host code
+`resource_targets_rejected`, no terminal) also carries the additive field
+`resource_targets_rejection { field_path, line, column, reason }`
+(`RuntimeReceipt::resource_targets_rejection()`, `contracts/resource-targets.md`); it appears
+on no other receipt.
+
 `committed_receipt()` keeps its original narrower eligibility and consumers:
 contained-task/shutdown failures with a terminal, the material failure receipt
 carried by the material-read contract, and the original after-commit projection

@@ -19,6 +19,10 @@ pub const MAX_FACT_OBSERVATION_BYTES: usize = 512 * 1024;
 /// `session.task.<task_id>.priority_offset` and holds the offset in milli as an integer.
 pub const PRIORITY_OFFSET_KEY_PREFIX: &str = "session.task.";
 pub const PRIORITY_OFFSET_KEY_SUFFIX: &str = ".priority_offset";
+/// An instance's resource target policy (Workflow #308 RT-S1a): one instance-scoped inline
+/// record-list fact under this key, written only by `ApplyResourceTargets`; an ordinary fact
+/// publication or a configured or caller-supplied fact of this key is refused.
+pub const RESOURCE_TARGETS_FACT_KEY: &str = "session.resource_targets";
 
 /// The `<task_id>` of a `session.task.<task_id>.priority_offset` key; `None` for any other key.
 /// The task identifier's own charset is checked by the Runtime when the offset is published.
