@@ -222,6 +222,9 @@ The sole mutable-state owner and executable SQLite schema live in:
 Runtime reports, ledgers, mutable state, and release pointers live under the Runtime state root;
 they are never written into resource repositories. Release sets pair Runtime, UI, and external
 resource versions as immutable generations before one atomic pointer transition.
+A `release_id` is the SHA-256 of the frozen release-set v2 identity encoding, computed the same
+way on write and on read (Workflow #191 B1-S1): an additive field never changes a stored id, and
+a field that must join the identity needs a new release-set schema version.
 
 Runtime-domain crates (`crates/*`, `providers/*`) do not write to stderr: diagnostics go to the
 ledger as facts and artifacts, and failures return as explicit error values. The process shells

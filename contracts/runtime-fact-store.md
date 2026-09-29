@@ -49,11 +49,14 @@ Its `validate` checks one part: it rejects a foreign schema version
 (`runtime_fact_schema_version_mismatch`), a zero ledger position
 (`runtime_fact_ledger_position_invalid`), a `part` outside `1..=parts`
 (`runtime_fact_snapshot_part_invalid`), more than 16 384 records
-(`runtime_fact_snapshot_too_large`), any invalid record, and a serialized
-part larger than `MAX_RUNTIME_FACT_SNAPSHOT_BYTES` — the same 512 KiB bound
-one `fact.observed` event may carry — with
-`runtime_fact_snapshot_payload_too_large`. A store larger than one part is
-sealed as several parts (see "Periodic snapshot"), never truncated.
+(`runtime_fact_snapshot_too_large`), and any invalid record; it is structural
+only. A serialized part larger than `MAX_RUNTIME_FACT_SNAPSHOT_BYTES` — the
+same 512 KiB bound one `fact.observed` event may carry — is a write-side rule:
+`validate_for_append` rejects it with `runtime_fact_snapshot_payload_too_large`
+when a part is sealed and again in `EventDraft::sanitize`. A decoded part is
+never re-serialized for validation (Workflow #191 B1-S1), so a part sealed by an
+older Runtime stays readable after an additive field. A store larger than one
+part is sealed as several parts (see "Periodic snapshot"), never truncated.
 
 ## Store
 
@@ -185,7 +188,8 @@ under one `fact_write_gate` hold: it reads the ledger's latest sequence and the
 clock, builds the snapshot, splits its records (in store order, greedily by
 serialized size) into parts of at most 512 KiB serialized, all with
 `snapshot_id` = that sequence and the same `parts` (an empty store is one empty
-part), validates every part (the size, part and position codes above surface
+part), checks every part with `validate_for_append` (the size, part and
+position codes above surface
 here as fatal host errors, before anything is appended), appends one
 `runtime.fact_snapshot` per part in part order, and clears the dirty flag only
 once every part is appended. A failed part append is fatal like any failed

@@ -831,9 +831,10 @@ impl HostShared {
             let sealed = lock(&self.runtime_facts, "append_runtime_fact_snapshot")?
                 .snapshot(ledger_position, taken_at_unix_ms);
             let parts = split_runtime_fact_snapshot(sealed)?;
-            // The typed size and position codes surface here; sanitization would fold them.
+            // The typed size and position codes surface here as fatal host errors; sanitization
+            // would report them as a `LedgerFailure` under `sanitize_runtime_event`.
             for part in &parts {
-                part.validate().map_err(|error| {
+                part.validate_for_append().map_err(|error| {
                     RuntimeHostError::fatal(
                         error.code(),
                         "append_runtime_fact_snapshot",
@@ -890,7 +891,7 @@ impl HostShared {
 /// serialized bytes (Workflow #308 5d-1): records in store order, greedily, a new part
 /// starting when the next record would not fit; every part carries the sealed identity with
 /// its own `part` and the shared `parts`. An empty store is one empty part; a record too
-/// large for any part forms a part of its own, which `validate` then refuses.
+/// large for any part forms a part of its own, which `validate_for_append` then refuses.
 fn split_runtime_fact_snapshot(
     sealed: RuntimeFactSnapshot,
 ) -> RuntimeHostResult<Vec<RuntimeFactSnapshot>> {

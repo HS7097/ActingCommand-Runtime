@@ -495,6 +495,8 @@ impl EventDraft {
         }
         let payload = self.payload.sanitize(fingerprinter)?;
         payload.validate()?;
+        // Workflow #191 B1-S1: encoding-measured bounds, on the write side only.
+        payload.validate_write_bounds()?;
         if let EventPayload::Task(super::TaskPayload::Semantic(semantic)) = &payload
             && let super::TaskSemanticFact::GeometryObserved { observation } = semantic.fact()
             && (self.origin.actor() != EventActor::Runtime

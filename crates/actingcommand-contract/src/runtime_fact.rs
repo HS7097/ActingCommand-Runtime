@@ -366,8 +366,8 @@ const fn first_snapshot_part() -> u16 {
 
 impl RuntimeFactSnapshot {
     /// Checks the schema identity, the ledger position, `1 <= part <= parts`, the record
-    /// bound, every record, and the serialized size one ledger event may carry; the bounds
-    /// apply to this part.
+    /// bound, and every record. Read-safe: never re-serializes, so a part sealed by an older
+    /// Runtime stays valid after an additive field (Workflow #191 B1-S1).
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.schema_version != RUNTIME_FACT_SCHEMA_VERSION {
             return Err(SanitizationError::new(
@@ -395,7 +395,14 @@ impl RuntimeFactSnapshot {
         }
         self.records
             .iter()
-            .try_for_each(RuntimeFactRecord::validate)?;
+            .try_for_each(RuntimeFactRecord::validate)
+    }
+
+    /// [`Self::validate`], then the serialized size one ledger event may carry, measured on
+    /// the encoding about to be stored. Write side only (sealing a part,
+    /// `EventPayload::validate_write_bounds`); never call it on a decoded record.
+    pub fn validate_for_append(&self) -> Result<(), SanitizationError> {
+        self.validate()?;
         if serde_json::to_vec(self)
             .map_err(|_| SanitizationError::new("invalid_runtime_fact_snapshot", "records"))?
             .len()

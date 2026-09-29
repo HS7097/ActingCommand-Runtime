@@ -85,6 +85,9 @@ pub struct FactObservation {
 }
 
 impl FactObservation {
+    /// Measures the current encoding: write side only (publish requests, drafts,
+    /// `EventPayload::validate_write_bounds`); a decoded `fact.published` is checked with the
+    /// structural `validate_fact_observation` (Workflow #191 B1-S1).
     pub fn validate(&self) -> Result<(), SanitizationError> {
         validate_fact_observation(self.records.iter())?;
         if serde_json::to_vec(self)

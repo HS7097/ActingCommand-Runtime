@@ -397,24 +397,61 @@ impl ReleaseTransitionData {
     }
 }
 
+/// Workflow #191 B1-S1: the release identity is frozen at release-set v2 — a hand-written
+/// projection of borrowed fields in fixed order, byte-identical to the v2 encoding. It is
+/// recomputed on write and on read with this same projection, so a serde field added to
+/// either type never changes a stored id. The exhaustive patterns stop compiling when a
+/// field is added: a field that joins the identity needs a new schema version and its own
+/// encoder; any other field is named here as `field: _`.
 fn release_id_for(value: &RuntimeReleaseSet) -> Result<String, SanitizationError> {
     #[derive(Serialize)]
-    struct Identity<'a> {
+    struct ResourceIdentityV2<'a> {
+        resource_id: &'a str,
+        version: &'a str,
+        content_sha256: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct IdentityV2<'a> {
         schema_version: &'a str,
         runtime_version: &'a str,
         runtime_content_sha256: &'a str,
         ui_version: &'a str,
         ui_content_sha256: &'a str,
-        resources: &'a [ReleaseResourceVersion],
+        resources: Vec<ResourceIdentityV2<'a>>,
     }
 
-    let bytes = serde_json::to_vec(&Identity {
-        schema_version: &value.schema_version,
-        runtime_version: &value.runtime_version,
-        runtime_content_sha256: &value.runtime_content_sha256,
-        ui_version: &value.ui_version,
-        ui_content_sha256: &value.ui_content_sha256,
-        resources: &value.resources,
+    let RuntimeReleaseSet {
+        schema_version,
+        release_id: _,
+        runtime_version,
+        runtime_content_sha256,
+        ui_version,
+        ui_content_sha256,
+        resources,
+    } = value;
+    let resources = resources
+        .iter()
+        .map(|resource| {
+            let ReleaseResourceVersion {
+                resource_id,
+                version,
+                content_sha256,
+            } = resource;
+            ResourceIdentityV2 {
+                resource_id,
+                version,
+                content_sha256,
+            }
+        })
+        .collect();
+    let bytes = serde_json::to_vec(&IdentityV2 {
+        schema_version,
+        runtime_version,
+        runtime_content_sha256,
+        ui_version,
+        ui_content_sha256,
+        resources,
     })
     .map_err(|_| SanitizationError::new("release_set_encode_failed", "release_set"))?;
     Ok(format!("release:{:x}", Sha256::digest(bytes)))
