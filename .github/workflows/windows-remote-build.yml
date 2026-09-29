@@ -139,6 +139,195 @@ jobs:
             throw 'Windows artifact tooling tests failed'
           }
 
+      - name: Open the previous published build's state root
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          # H3: the newest umbrella build-* pre-release whose Runtime commit is a strict
+          # ancestor of this source writes a fresh state root (empty instances); this
+          # build's actingd must open it, shut down cleanly, and actingledger must read it.
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $umbrella = 'HS7097/ActingCommand'
+          $h3Root = Join-Path $env:RUNNER_TEMP 'h3'
+          $stateRoot = Join-Path $h3Root 'state'
+          $configPath = Join-Path $h3Root 'actingd.config.json'
+          $newDir = Join-Path $PWD 'target\x86_64-pc-windows-msvc\release'
+          New-Item -ItemType Directory -Path $h3Root -Force | Out-Null
+          $daemons = [Collections.Generic.List[object]]::new()
+
+          function Start-H3Daemon([string] $Label, [string] $Directory, [string] $Code) {
+            $out = Join-Path $h3Root "$Label.out.log"
+            $err = Join-Path $h3Root "$Label.err.log"
+            $process = Start-Process -FilePath (Join-Path $Directory 'actingcommand-actingd.exe') `
+              -ArgumentList @('--config', "`"$configPath`"") -NoNewWindow -PassThru `
+              -RedirectStandardOutput $out -RedirectStandardError $err
+            $null = $process.Handle
+            $daemons.Add([pscustomobject]@{ Label = $Label; Process = $process; Out = $out; Err = $err })
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            while ([DateTime]::UtcNow -lt $deadline) {
+              $ready = @(Get-Content -LiteralPath $out -ErrorAction SilentlyContinue |
+                Where-Object { $_ -cmatch '^actingd ready pid=\d+ host=127\.0\.0\.1 port=\d+$' })
+              if ($ready.Count -eq 1) {
+                Write-Host "h3 $Label ready line: $($ready[0])"
+                return $process
+              }
+              if ($process.HasExited) { break }
+              Start-Sleep -Milliseconds 250
+            }
+            throw "${Code}: $Label actingd printed no ready line within 60 s (exited=$($process.HasExited))"
+          }
+
+          # Returns stdout; a non-zero exit throws the code with stdout and stderr.
+          function Invoke-H3Checked([string] $Code, [string] $Exe, [string[]] $Arguments) {
+            $stderr = Join-Path $h3Root 'command.err.log'
+            $text = (& $Exe @Arguments 2> $stderr | Out-String)
+            $exit = $LASTEXITCODE
+            if ($exit -ne 0) {
+              $detail = Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue
+              throw "${Code}: $([IO.Path]::GetFileName($Exe)) $($Arguments -join ' ') exited $exit`n$text$detail"
+            }
+            return $text
+          }
+
+          # status, request-shutdown --wait 60 (completed), then exit 0 within 30 s.
+          function Stop-H3Daemon($Process, [string] $Label, [string] $Directory, [string] $StatusCode, [string] $ShutdownCode) {
+            $ctl = Join-Path $Directory 'actingctl.exe'
+            $status = Invoke-H3Checked $StatusCode $ctl @('status', '--state-root', $stateRoot)
+            Write-Host "h3 $Label actingctl status: exit 0 ($($status.Length) bytes)"
+            $text = Invoke-H3Checked $ShutdownCode $ctl @('request-shutdown', '--state-root', $stateRoot, '--wait', '60')
+            Write-Host "h3 $Label request-shutdown: $($text.Trim())"
+            if (($text | ConvertFrom-Json).shutdown.state -cne 'completed') {
+              throw "${ShutdownCode}: $Label request-shutdown did not report completed"
+            }
+            if (-not $Process.WaitForExit(30000)) {
+              throw "${ShutdownCode}: $Label actingd did not exit within 30 s after shutdown"
+            }
+            if ($Process.ExitCode -ne 0) {
+              throw "${ShutdownCode}: $Label actingd exited $($Process.ExitCode)"
+            }
+            Write-Host "h3 $Label actingd exited 0"
+          }
+
+          try {
+            # 1. The newest build-* pre-release whose runtime_sha is a strict ancestor of this source.
+            $listing = & gh release list --repo $umbrella --exclude-drafts --limit 30 --json tagName,createdAt,publishedAt
+            if ($LASTEXITCODE -ne 0) {
+              throw "h3_previous_release_missing: gh release list exited $LASTEXITCODE"
+            }
+            $releases = @(($listing | Out-String | ConvertFrom-Json) |
+              Where-Object { $_.tagName -cmatch '\Abuild-r[0-9a-f]{7}-u[0-9a-f]{7}\z' } |
+              Sort-Object -Property publishedAt, createdAt -Descending)
+            $selected = $null
+            foreach ($release in $releases) {
+              $dir = Join-Path $h3Root $release.tagName
+              New-Item -ItemType Directory -Path $dir -Force | Out-Null
+              & gh release download $release.tagName --repo $umbrella --pattern 'MEMBERS.json' --dir $dir --clobber
+              if ($LASTEXITCODE -ne 0) {
+                throw "h3_previous_release_missing: MEMBERS.json of $($release.tagName) not downloaded (exit $LASTEXITCODE)"
+              }
+              $runtimeSha = [string](Get-Content -LiteralPath (Join-Path $dir 'MEMBERS.json') -Raw |
+                ConvertFrom-Json).runtime_sha
+              if ($runtimeSha -cnotmatch '\A[0-9a-f]{40}\z') {
+                throw "h3_previous_release_unverified: $($release.tagName) MEMBERS.json runtime_sha is not a full SHA"
+              }
+              $compare = (& gh api "repos/$env:GITHUB_REPOSITORY/compare/$runtimeSha...$env:SOURCE_SHA" --jq .status | Out-String).Trim()
+              if ($LASTEXITCODE -ne 0) {
+                throw "h3_previous_release_missing: compare $runtimeSha...$env:SOURCE_SHA exited $LASTEXITCODE"
+              }
+              Write-Host "h3 candidate $($release.tagName) runtime_sha=$runtimeSha compare=$compare"
+              if ($compare -ceq 'ahead') {
+                $selected = [pscustomobject]@{ Tag = $release.tagName; RuntimeSha = $runtimeSha; Dir = $dir }
+                break
+              }
+            }
+            if ($null -eq $selected) {
+              throw "h3_previous_release_missing: no build-* release has a runtime_sha that is a strict ancestor of $env:SOURCE_SHA"
+            }
+            Write-Host "h3 selected $($selected.Tag) runtime_sha=$($selected.RuntimeSha) compare=ahead"
+
+            # 2. The Runtime zip against SHA256SUMS, then every file against its BUILD-MANIFEST.json.
+            $zipName = "actingcommand-runtime-$($selected.RuntimeSha).zip"
+            & gh release download $selected.Tag --repo $umbrella --pattern $zipName --pattern 'SHA256SUMS' --dir $selected.Dir --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "h3_previous_release_unverified: $zipName or SHA256SUMS not downloaded (exit $LASTEXITCODE)"
+            }
+            $sums = @(Get-Content -LiteralPath (Join-Path $selected.Dir 'SHA256SUMS') |
+              Where-Object { $_ -cmatch "\A[0-9a-f]{64} [ *]$([regex]::Escape($zipName))\z" })
+            $zipPath = Join-Path $selected.Dir $zipName
+            if ($sums.Count -ne 1 -or
+                $sums[0].Substring(0, 64) -cne (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()) {
+              throw "h3_previous_release_unverified: $zipName does not match exactly one SHA256SUMS line"
+            }
+            $oldDir = Join-Path $h3Root 'previous'
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $oldDir
+            $manifest = Get-Content -LiteralPath (Join-Path $oldDir 'BUILD-MANIFEST.json') -Raw | ConvertFrom-Json
+            if ($manifest.repository -cne $env:GITHUB_REPOSITORY -or $manifest.commit_sha -cne $selected.RuntimeSha) {
+              throw "h3_previous_release_unverified: BUILD-MANIFEST.json names $($manifest.repository)@$($manifest.commit_sha)"
+            }
+            $listed = @($manifest.files | ForEach-Object { [string]$_.path })
+            foreach ($required in @('actingcommand-actingd.exe', 'actingctl.exe', 'actingd.config.example.json')) {
+              if ($listed -cnotcontains $required) {
+                throw "h3_previous_release_unverified: BUILD-MANIFEST.json does not list $required"
+              }
+            }
+            foreach ($file in $manifest.files) {
+              $path = Join-Path $oldDir ([string]$file.path)
+              if ([string]$file.path -cnotmatch '\A[A-Za-z0-9._-]+\z' -or
+                  -not (Test-Path -LiteralPath $path -PathType Leaf) -or
+                  (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$file.sha256) {
+                throw "h3_previous_release_unverified: $($file.path) does not match BUILD-MANIFEST.json"
+              }
+            }
+            Write-Host "h3 verified $zipName (SHA256SUMS, BUILD-MANIFEST.json, $($listed.Count) files)"
+
+            # 3. The release's example configuration with a fresh state root and salt; no instances.
+            $config = Get-Content -LiteralPath (Join-Path $oldDir 'actingd.config.example.json') -Raw | ConvertFrom-Json
+            if (@($config.instances).Count -ne 0) {
+              throw "h3_previous_release_unverified: the example configuration declares instances"
+            }
+            $salt = [byte[]]::new(32)
+            [Security.Cryptography.RandomNumberGenerator]::Fill($salt)
+            $config.state_root = $stateRoot
+            $config.secret_fingerprint_salt = [Convert]::ToHexString($salt).ToLowerInvariant()
+            [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+            # 4. The previous build writes the root.
+            $previous = Start-H3Daemon 'previous' $oldDir 'h3_previous_daemon_not_ready'
+            Stop-H3Daemon $previous 'previous' $oldDir 'h3_previous_daemon_not_ready' 'h3_previous_shutdown_failed'
+
+            # 5. This build opens it; then this build's actingledger reads it.
+            $current = Start-H3Daemon 'new' $newDir 'h3_new_daemon_open_failed'
+            Stop-H3Daemon $current 'new' $newDir 'h3_new_daemon_open_failed' 'h3_new_shutdown_failed'
+            $ledger = Join-Path $newDir 'actingledger.exe'
+            $events = Invoke-H3Checked 'h3_new_ledger_read_failed' $ledger @('--state-root', $stateRoot, 'events', '--limit', '10')
+            $report = $events | ConvertFrom-Json
+            $through = $report.data.through_sequence
+            if ($report.command -cne 'events' -or -not ($through -is [long] -or $through -is [int]) -or $through -lt 1) {
+              throw "h3_new_ledger_read_failed: events reported no positive through_sequence"
+            }
+            Write-Host "h3 actingledger events --limit 10: exit 0, through_sequence=$through`n$($events.Trim())"
+            $facts = Invoke-H3Checked 'h3_new_ledger_read_failed' $ledger @('--state-root', $stateRoot, 'facts', '--at', "$through")
+            Write-Host "h3 actingledger facts --at ${through}: exit 0`n$($facts.Trim())"
+          } catch {
+            foreach ($daemon in $daemons) {
+              foreach ($log in @($daemon.Out, $daemon.Err)) {
+                Write-Host "---- tail of $log"
+                Get-Content -LiteralPath $log -Tail 40 -ErrorAction SilentlyContinue | Write-Host
+              }
+            }
+            throw
+          } finally {
+            foreach ($daemon in $daemons) {
+              if (-not $daemon.Process.HasExited) {
+                Write-Host "h3 stopping $($daemon.Label) actingd pid $($daemon.Process.Id) after failure"
+                Stop-Process -Id $daemon.Process.Id -Force -ErrorAction Continue
+              }
+            }
+          }
+
       - name: Stage exact-SHA artifacts and manifests
         id: stage
         shell: pwsh
