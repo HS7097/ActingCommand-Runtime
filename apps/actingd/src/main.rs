@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::error::Error;
 use std::fmt;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Condvar, Mutex};
@@ -222,15 +223,25 @@ fn execute_policy_cycle(
             return Ok(PolicyCycleExecution {
                 cycle,
                 recompute_wakes,
+                yielded_intents: 0,
             });
         }
         return Err(ActingdError::process(
             "policy_pending_dispatch_without_evaluation",
         ));
     };
-    for intent in &cycle.pending_dispatch_intents {
-        if started.elapsed() >= MAX_POLICY_CYCLE_DURATION {
-            return Err(ActingdError::process("policy_cycle_duration_exceeded"));
+    let mut yielded_intents = 0;
+    for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
+        if policy_cycle_budget_exhausted(index, started.elapsed()) {
+            // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
+            yielded_intents = cycle.pending_dispatch_intents.len() - index;
+            writeln!(
+                std::io::stdout().lock(),
+                "actingd policy_cycle_yielded attempted={index} remaining={yielded_intents} elapsed_ms={}",
+                started.elapsed().as_millis()
+            )
+            .map_err(|_| ActingdError::process("policy_cycle_yield_report_failed"))?;
+            break;
         }
         let reason_chain = evaluation
             .reason_chains
@@ -307,12 +318,22 @@ fn execute_policy_cycle(
     Ok(PolicyCycleExecution {
         cycle,
         recompute_wakes,
+        yielded_intents,
     })
+}
+
+/// Workflow #191 A1: whether the cycle stops before its pending intent at `index`. Every cycle
+/// attempts its first intent, so each cycle makes progress; past the budget a later intent ends
+/// the cycle and the driver re-evaluates at once.
+fn policy_cycle_budget_exhausted(index: usize, elapsed: Duration) -> bool {
+    index > 0 && elapsed >= MAX_POLICY_CYCLE_DURATION
 }
 
 struct PolicyCycleExecution {
     cycle: PolicyCycle,
     recompute_wakes: Vec<PolicyRecomputeWake>,
+    /// Pending intents not yet attempted when the cycle reached its budget.
+    yielded_intents: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1112,6 +1133,9 @@ fn drive_policy(
     for wake in initial_cycle.recompute_wakes {
         control.notify_recompute(wake)?;
     }
+    if initial_cycle.yielded_intents > 0 {
+        control.notify(PolicyTrigger::FactsChanged)?;
+    }
     loop {
         match control.wait(Duration::ZERO)? {
             PolicyDriverWake::Shutdown => return Ok(()),
@@ -1224,6 +1248,9 @@ fn apply_policy_cycle_result(
                 }
                 for wake in execution.recompute_wakes {
                     control.notify_recompute(wake)?;
+                }
+                if execution.yielded_intents > 0 {
+                    control.notify(PolicyTrigger::FactsChanged)?;
                 }
                 Ok(())
             })();

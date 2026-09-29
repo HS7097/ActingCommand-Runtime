@@ -490,6 +490,6 @@ impl CatalogStore {
                 "project_policy_catalog",
             ));
         }
-        Ok(Some(loaded))
+        Ok(Some(LoadedCatalog::clone(&loaded)))
     }
 }

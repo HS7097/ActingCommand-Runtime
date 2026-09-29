@@ -111,9 +111,10 @@ for a root beyond the default limits; such a root needs
 `RuntimeHost::maintain_ledger` with explicit limits (at most 1,000,000 events,
 4 GiB, 600 seconds). The CLI takes no limit options. Later startup steps keep
 their own bounds: instance-fact and agent-dispatch recovery each query the full
-history from the writer within its 10 second command timeout, and a restart with
-more than 16,384 completed policy runs fails with
-`policy_scheduling_outcome_capacity_exceeded`.
+history from the writer within its 10 second command timeout, and a restart
+fails with `policy_scheduling_outcome_capacity_exceeded` when more than 16,384
+distinct (catalog task, instance) pairs have a completed policy run that
+references outcome keys; only each pair's latest completed run is re-verified.
 
 ## Portable evidence
 
