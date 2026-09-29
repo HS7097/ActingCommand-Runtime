@@ -161,6 +161,10 @@ checks an already verified opaque fact synchronously inside the same owner's
 borrowed transaction. It authenticates the ledger metadata/format, the exact
 sequence's stored bytes by hash/tag and predecessor hash, and compares the fact's
 identity, index columns, link row and ordered artifact metadata with that row.
+It also binds the fact's payload and schema version to the stored record: equal
+canonical bytes pass; otherwise the strictly decoded stored record must equal the
+fact's record structurally (`ledger_record_mismatch` if not). A rejection never
+comes from re-serialization alone.
 Missing or inconsistent rows and a different Database identity fail explicitly.
 The caller retains transaction/rollback ownership. The check does not acquire a
 Database lock, send a writer command, commit, append or read artifact bytes. It is
@@ -307,9 +311,13 @@ original identity/type/origin/links/schema and ordered artifact fields; the same
 serializers and SQL column extraction preserve string/null handling and ordered-u64
 values. Decoding stays strict and the decoded record is not re-serialized for
 comparison, so an additive `serde(default)` field on a persisted contract structure
-does not affect the readability of an existing ledger's rows. (A Segment cutover
-marker's imported-prefix digests are still recomputed from the decoded prefix
-records.) A hash, tag or index-column mismatch remains a fatal
+does not affect the readability of an existing ledger's rows. A Segment cutover's
+imported-prefix content digest and source head digest are computed over the stored
+prefix bytes (the same length-prefixed algorithm the import records over its
+write-side canonical bytes) and compared only after every row, relation and the meta
+row are authenticated. The cutover marker is authenticated as its stored text under
+the keyed meta tag, plus strict decoding and record validation; its decoded record is
+not re-encoded. A hash, tag or index-column mismatch remains a fatal
 `ledger_record_mismatch`.
 
 Segment recovery validates strict typed records, schemas, sequence continuity,
@@ -540,9 +548,10 @@ performance monitor and Business/Drain admission retain their own committed-fact
 ## Release source references
 
 Release State persists a versioned `ReleaseLedgerSourceReference` containing the original
-event identity, sequence and canonical-record digest. `capture_release_source_reference`
-checks the opaque fact against the same borrowed RuntimeDatabase transaction before
-generating the locator. Deserialization confers no fact authority. Each later
+event identity, sequence and `record_sha256`, the record hash of the authenticated stored
+row. `capture_release_source_reference` checks the opaque fact against that row in the
+same borrowed RuntimeDatabase transaction and takes the row's stored hash; it does not
+re-serialize the fact. Deserialization confers no fact authority. Each later
 `verify_release_source_reference` checks the original record, native typed metadata,
 canonical hash/tag, predecessor, indexed fields, links and ordered artifact metadata in
 the caller's transaction. The returned opaque relationship exposes the original origin,
