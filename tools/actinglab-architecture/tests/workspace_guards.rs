@@ -3532,6 +3532,7 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
     (
         &[
             "AgentSessionStatus",
+            "ApplyResourceTargets",
             "AssessPredictiveMaintenance",
             "CompileProposal",
             "PrepareStrategicReport",
@@ -4278,6 +4279,10 @@ const PLANNING_ENVELOPE_SITES: &[(&str, EnvelopeResponsibility)] = &[
         EnvelopeResponsibility::Source,
     ),
     (
+        "crates/policy/src/resource_targets.rs::parse_resource_targets -> CatalogDocumentSource::new(_, _)",
+        EnvelopeResponsibility::Source,
+    ),
+    (
         "crates/runtime-client/src/client.rs::PredictiveMaintenanceRequest::new -> encode_policy_document(RuntimePlanningDocumentKind::MaintenanceTrendPolicy, _, \"build_predictive_maintenance_request\")",
         EnvelopeResponsibility::Construct,
     ),
@@ -4972,6 +4977,7 @@ const HOST_SPLIT: &[HostModule] = &[
         &["HostShared", "OperationSuccess", "RuntimeRunLinks"],
     ),
     host_module("resource_close", &["HostShared"]),
+    host_module("resource_targets", &["HostShared"]),
     host_module("runtime_facts", &["HostShared"]),
     host_module("saved_artifact_ocr", &["HostShared"]),
     host_module("signatures", &["HostShared"]),

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::fact_store::{priority_offset_milli, valid_priority_offset_task_id};
-use actingcommand_contract::priority_offset_task_id;
+use actingcommand_contract::{RESOURCE_TARGETS_FACT_KEY, priority_offset_task_id};
 
 /// `source_detector` of the three configuration-seeded policy instance facts.
 const POLICY_INSTANCE_SEED_DETECTOR: &str = "runtime.policy-configuration";
@@ -41,6 +41,26 @@ fn policy_instance_seed_digest(
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+/// Which entry publishes an observation (Workflow #308 RT-S1a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FactPublicationPurpose {
+    /// `PublishFact` / `PublishFacts` and the Runtime's own publications; never the resource
+    /// target policy key.
+    Ordinary,
+    /// `ApplyResourceTargets`: exactly one instance-scoped `session.resource_targets` record.
+    ResourceTargets,
+}
+
+/// Where one publication landed: the event that holds its records, the sequence of the
+/// record active before it (resource target policies only) and whether nothing was appended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FactPublication {
+    pub(super) event_id: EventId,
+    pub(super) sequence: u64,
+    pub(super) previous_version: Option<u64>,
+    pub(super) replayed: bool,
+}
+
 impl HostShared {
     pub(super) fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
         self.publish_facts(
@@ -48,7 +68,9 @@ impl HostShared {
                 records: vec![record],
             },
             None,
+            FactPublicationPurpose::Ordinary,
         )
+        .map(|publication| publication.event_id)
     }
 
     /// Seeds the policy instance facts from the configured policy inputs (Workflow #313
@@ -175,8 +197,38 @@ impl HostShared {
         &self,
         observation: actingcommand_contract::FactObservation,
         source_request: Option<&ValidatedRuntimeRequest<'_>>,
-    ) -> RuntimeHostResult<EventId> {
-        let result: RuntimeHostResult<EventId> = (|| {
+        purpose: FactPublicationPurpose,
+    ) -> RuntimeHostResult<FactPublication> {
+        let result: RuntimeHostResult<FactPublication> = (|| {
+            // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
+            match purpose {
+                FactPublicationPurpose::Ordinary => {
+                    if observation
+                        .records
+                        .iter()
+                        .any(|record| record.key == RESOURCE_TARGETS_FACT_KEY)
+                    {
+                        return Err(RuntimeHostError::request(
+                            "resource_targets_formal_entry_required",
+                            "publish_facts",
+                            RuntimeErrorCode::InvalidRequest,
+                        ));
+                    }
+                }
+                FactPublicationPurpose::ResourceTargets => {
+                    if !matches!(
+                        observation.records.as_slice(),
+                        [record] if record.key == RESOURCE_TARGETS_FACT_KEY
+                            && matches!(record.scope, FactScope::Instance { .. })
+                    ) {
+                        return Err(RuntimeHostError::fatal(
+                            "resource_targets_record_invalid",
+                            "publish_facts",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ));
+                    }
+                }
+            }
             // A priority offset (Workflow #308 slice 4a-2) names a task of the scheduling
             // identifier charset, holds an inline integer within ±1 000 000 milli, and is never
             // invalidated by events (its lifetime is the publisher's TTL).
@@ -193,16 +245,17 @@ impl HostShared {
                     ));
                 }
             }
-            // An offset-only observation keeps its request's origin on the `fact.published`
-            // event, so the ledger shows who set the offset; every other publication stays a
-            // Runtime fact-store event.
+            // An offset-only observation and a resource target policy keep their request's
+            // origin on the `fact.published` event, so the ledger shows who set them; every
+            // other publication stays a Runtime fact-store event.
             let (event_source, event_actor) = match source_request {
                 Some(request)
-                    if !observation.records.is_empty()
-                        && observation
-                            .records
-                            .iter()
-                            .all(|record| priority_offset_task_id(&record.key).is_some()) =>
+                    if purpose == FactPublicationPurpose::ResourceTargets
+                        || (!observation.records.is_empty()
+                            && observation
+                                .records
+                                .iter()
+                                .all(|record| priority_offset_task_id(&record.key).is_some())) =>
                 {
                     (request.source(), request.actor())
                 }
@@ -210,12 +263,53 @@ impl HostShared {
             };
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
             self.synchronize_fact_store_under_gate()?;
-            if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_observation(
+            let now = self.clock.sample()?.unix_ms;
+            // A resource target policy equal to the active, unexpired one is a replay: the
+            // active revision answers and nothing is appended.
+            let mut previous_version = None;
+            if purpose == FactPublicationPurpose::ResourceTargets {
+                let record = &observation.records[0];
+                let facts = lock(&self.facts, "publish_fact")?;
+                if let Some((active, sequence, event_id)) =
+                    facts.active_revision(&record.scope, &record.key)
+                {
+                    if active.resource_bundle_hash == record.resource_bundle_hash
+                        && !active.is_expired(now)
+                    {
+                        return Ok(FactPublication {
+                            event_id,
+                            sequence,
+                            previous_version: Some(sequence),
+                            replayed: true,
+                        });
+                    }
+                    previous_version = Some(sequence);
+                }
+            }
+            let preview = lock(&self.facts, "publish_fact")?.preview_observation(
                 &observation,
-                self.clock.sample()?.unix_ms,
+                now,
                 &self.ledger,
-            )? {
-                return Ok(event_id);
+            )?;
+            if let Some(event_id) = preview {
+                let record = &observation.records[0];
+                let facts = lock(&self.facts, "publish_fact")?;
+                let (_, sequence, _) = facts
+                    .active_revision(&record.scope, &record.key)
+                    .filter(|(_, _, active_event)| *active_event == event_id)
+                    .ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            "fact_publication_sequence_missing",
+                            "publish_facts",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+                return Ok(FactPublication {
+                    event_id,
+                    sequence,
+                    previous_version: Some(sequence),
+                    replayed: true,
+                });
             }
             let scope = &observation.records[0].scope;
             let inputs = lock(&self.policy_inputs, "bind_fact_scope")?;
@@ -264,7 +358,12 @@ impl HostShared {
                 payload,
             )?;
             self.synchronize_fact_store_under_gate()?;
-            Ok(*event.event_id())
+            Ok(FactPublication {
+                event_id: *event.event_id(),
+                sequence: event.sequence(),
+                previous_version,
+                replayed: false,
+            })
         })();
         if let Err(error) = &result
             && error.is_fatal()

@@ -43,7 +43,7 @@
       "type": "object",
       "required": ["document", "source_uri", "line", "column"],
       "properties": {
-        "document": { "enum": ["tasks", "pools", "activity", "timeline", "selection"] },
+        "document": { "enum": ["tasks", "pools", "activity", "timeline", "selection", "resource_targets"] },
         "source_uri": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "line": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "column": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }

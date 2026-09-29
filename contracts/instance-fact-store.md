@@ -310,6 +310,34 @@ plane status (`RuntimeInstanceStatus.game_id`) names the game of each
 instance's configured policy identity; it is absent when the host runs without
 policy inputs.
 
+## Resource target policy facts
+
+Workflow #308 RT-S1a stores an instance's resource target policy as the instance fact
+`session.resource_targets` (`contracts/resource-targets.md`).
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `session.resource_targets` | `record_list`: a `policy` header, `target` rows and `task` rows | `instance` only |
+
+**Formal entry.** Only `ApplyResourceTargets` writes it, through `publish_facts` with the
+request's origin (source `adapter`, actor `agent`) on the `fact.published` event. An ordinary
+`PublishFact` / `PublishFacts` record of this key is refused before the fact write gate as the
+non-fatal `resource_targets_formal_entry_required`. A configured policy input fact or a
+forward projection caller's fact of this key is refused as `resource_targets_key_reserved`:
+configured, it fails every authoritative projection (and so the daemon's first evaluation).
+
+**Replay.** Under the fact write gate, after the store is synchronized, a policy whose
+`resource_bundle_hash` (the policy's SHA-256 hex) equals the active, unexpired record's appends
+nothing and answers the active revision (`FactPublication { replayed: true }`); otherwise the
+active record's sequence is the new policy's `previous_version`.
+`InstanceFactStore::active_revision(scope, key)` reads the active record with the sequence and
+id of its event.
+
+**Projection.** The key is not excluded from the overlay: an unexpired or expired policy is an
+ordinary overlaid fact, so it reaches `EvaluationFacts.facts`, the combined
+`fact_snapshot_id`, admission staleness and forward projections. It takes one of the 256
+active fact identities per instance. The S1a evaluator does not read it.
+
 ## Reading the seeds
 
 The per-instance read (`actingctl facts` without `--program`) is not built.
