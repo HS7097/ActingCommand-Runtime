@@ -172,7 +172,7 @@ impl fmt::Debug for PersistedEvent {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StoredEventRecord {
     schema_version: String,
@@ -189,7 +189,7 @@ pub(crate) struct StoredEventRecord {
     artifacts: Vec<StoredArtifactRecord>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredArtifactRecord {
     artifact_id: ArtifactId,
