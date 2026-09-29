@@ -137,13 +137,16 @@ The fixed stages are `admission` (original bounds and initial budget check),
 `connection`, `with_connection`, `begin_transaction`, `read_snapshot`,
 `verify_snapshot`, `prepare_events`, `select_sequences`, `project_page`, `commit`
 and `rollback`. `with_connection` ends before the original connection guard drops.
-Verification includes the original prefix lookup and fixed boundary checks;
-preparation consumes the writer's verified prefix plus the tail authenticated in
-this read transaction, both under the same head/boundary re-check (a fallback or
-offline read consumes its fully authenticated snapshot instead), and retains its
-original per-item budget checks and retention annotation; page projection
-includes index creation and its original final budget check. Only the original
-explicit transaction calls can complete commit/rollback observations.
+Verification includes the original prefix lookup and fixed boundary checks. On a
+Runtime read it also applies each authenticated tail row to the writer prefix's
+retention and event indexes; a fallback full read rebuilds the prefix with both
+indexes within verification. Preparation then borrows the prefix's metadata and
+indexes without copying, annotating or re-deriving them. A read whose prefix
+extends past the writer head, and offline or read-only reads, consume their fully
+authenticated snapshot and retain the original per-item budget checks and
+retention annotation. Page projection includes index creation where an index is
+created, and its original final budget check. Only the original explicit
+transaction calls can complete commit/rollback observations.
 
 The same command's scale observations use already available snapshot byte and
 row counts, original bounds and returned sizes. Unknown or overflowing values
@@ -154,8 +157,9 @@ existing TaskTiming snapshot/terminal or permitted lifecycle carrier, with no
 additional event, diagnostic channel or command history. The writer keeps a
 verified prefix seeded by its full verification at open; each Runtime-source read
 re-checks the head and boundary rows and verifies only the tail after that prefix,
-and any mismatch falls back to the full read and verification with the same error
-codes. Offline and read-only snapshots still verify everything. The physical read
+extending the prefix's retention and event indexes with the same rows, and any
+mismatch or tail failure discards the prefix with both indexes and falls back to
+the full read and verification with the same error codes. Offline and read-only snapshots still verify everything. The physical read
 transaction, selection, projection, replies and all limits retain their original
 behavior.
 

@@ -292,9 +292,12 @@ its 1024-event bound. An empty match retains the verified global snapshot positi
 Within one SQLite verification call, the private result retains the original stored
 records and the metadata already constructed and structurally validated for each
 record. It is returned only after all rows, relations, head and migration-marker
-checks succeed. Query preparation consumes that metadata after the requested
-prefix/hash check, retaining its per-item budget checks and retention annotation.
-The original records are released inside the preparation observation boundary.
+checks succeed. Offline and read-only query preparation consumes that metadata
+after the requested prefix/hash check, retaining its per-item budget checks and
+retention annotation. A Runtime query borrows the writer prefix built from this
+metadata instead; its retention and event indexes advance only with rows that
+the read transaction authenticated (Workflow #191 C). The original records are
+released before preparation uses the metadata.
 Metadata opening uses the same authenticated result; recovery and schema upgrade
 continue to consume the original records. These representations belong only to
 the current call and confer no artifact availability capability.
@@ -459,7 +462,9 @@ in a Lab-related scope, or newly linked Lab scopes restore the protection; old
 release evidence cannot cover them. Missing or ambiguous coverage keeps the
 material. Intent admission and reconstruction perform the same check at the
 sealed Intent prefix; later releases never supply earlier permission. These
-indexes have no separate durable store.
+indexes have no separate durable store. The Runtime SQLite view prefix holds an
+in-memory copy advanced with its authenticated tail and discarded with it; it has
+no separate durable store either.
 
 Current CaptureSummary pin reasons have no Lab-only variant: all existing summary
 pin evidence remains permanent, along with Warning/direct/nearest-frame,

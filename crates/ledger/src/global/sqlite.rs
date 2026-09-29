@@ -1074,17 +1074,14 @@ impl SqliteViewSnapshot {
         let mut slot = cache.take();
         let resolved = (|| {
             let (bytes, prefix) = self.refresh_artifact_prefix(&mut slot, budget)?;
-            let retention = super::retention::RetentionIndex::from_events_checked(
-                &prefix.metadata,
-                &mut |count| check_read_budget(budget, bytes, count),
-            )?;
+            // Workflow #191 C: the prefix's own retention index, advanced with its tail.
             let resolved = super::evidence::resolve_artifact_from_events(
                 &prefix.metadata,
                 selection,
                 prefix.through,
                 true,
                 deadline,
-                Some(&retention),
+                Some(&prefix.retention),
             )?;
             check_read_budget(budget, bytes, prefix.metadata.len())?;
             Ok(resolved)
@@ -1101,8 +1098,8 @@ impl SqliteViewSnapshot {
         slot: &'a mut Option<VerifiedPrefix>,
         budget: ReadBudget,
     ) -> GlobalLedgerResult<(u64, &'a VerifiedPrefix)> {
-        if let Some(mut prefix) = slot.take()
-            && let Ok(bytes) = self.read_artifact_tail(&mut prefix, budget)
+        if let Some(prefix) = slot.take()
+            && let Ok((bytes, prefix)) = self.read_artifact_tail(prefix, budget)
         {
             return Ok((bytes, slot.insert(prefix)));
         }
@@ -1127,14 +1124,24 @@ impl SqliteViewSnapshot {
                 "resolve_ledger_artifact",
             ));
         }
-        Ok((bytes, slot.insert(VerifiedPrefix::from(verified))))
+        let VerifiedSnapshotRecords {
+            records,
+            metadata,
+            head_hash,
+            marker,
+        } = verified;
+        drop(records);
+        let prefix = VerifiedPrefix::build(marker, metadata, head_hash, &mut |count| {
+            check_read_budget(budget, bytes, count)
+        })?;
+        Ok((bytes, slot.insert(prefix)))
     }
 
     fn read_artifact_tail(
         &self,
-        prefix: &mut VerifiedPrefix,
+        prefix: VerifiedPrefix,
         budget: ReadBudget,
-    ) -> GlobalLedgerResult<u64> {
+    ) -> GlobalLedgerResult<(u64, VerifiedPrefix)> {
         check_read_budget(budget, 0, 0)?;
         let (boundary, raw) = {
             let mut connection = self.database.connection("read_sqlite_snapshot")?;
@@ -1148,14 +1155,14 @@ impl SqliteViewSnapshot {
             read
         };
         let bytes = raw.bytes;
-        prefix.verify_tail(
+        let (prefix, _) = prefix.verify_tail(
             &self.database,
             boundary,
             raw,
             self.through_sequence,
             self.head_hash.as_deref(),
         )?;
-        Ok(bytes)
+        Ok((bytes, prefix))
     }
 
     pub(super) fn project_view_page(
@@ -1242,91 +1249,88 @@ impl SqliteViewSnapshot {
                     value.verify_snapshot.finish(Instant::now(), true);
                     value.prepare_events.begin(Instant::now());
                 }
-                let metadata = match verified {
-                    // Release the original records inside the preparation boundary;
-                    // the metadata is from this same fully authenticated snapshot.
-                    ViewMetadata::Full(VerifiedSnapshotRecords {
-                        records, metadata, ..
-                    }) => {
-                        drop(records);
-                        metadata
+                match verified {
+                    // Workflow #191 C: the writer's prefix, authenticated through this same
+                    // snapshot and ending at it, is borrowed with its own indexes.
+                    ViewMetadata::Prefix(prefix) if prefix.through == self.through_sequence => {
+                        let events = &prefix.metadata[..];
+                        if let Some(value) = observation {
+                            value.prepared_events = LedgerProjectViewCount::from_len(events.len());
+                        }
+                        check_read_budget(self.budget, bytes, events.len())?;
+                        if let Some(value) = observation {
+                            value.prepare_events.finish(Instant::now(), true);
+                        }
+                        self.select_and_project(
+                            &transaction,
+                            events,
+                            Some(&prefix.indexes),
+                            Some(&prefix.retention),
+                            bytes,
+                            query,
+                            profile,
+                            request,
+                            snapshot,
+                            after,
+                            observation,
+                        )
                     }
-                    // The writer's prefix, authenticated through this same snapshot.
-                    ViewMetadata::Prefix(prefix) => prefix
-                        .metadata
-                        .iter()
-                        .take_while(|event| event.sequence() <= self.through_sequence)
-                        .cloned()
-                        .collect(),
-                };
-                let mut events = Vec::new();
-                if let Some(value) = observation {
-                    value.prepared_events = LedgerProjectViewCount::from_len(events.len());
-                }
-                for event in metadata
-                    .into_iter()
-                    .take_while(|event| event.sequence() <= self.through_sequence)
-                {
-                    check_read_budget(self.budget, bytes, events.len() + 1)?;
-                    events.push(event);
-                    if let Some(value) = observation {
-                        value.prepared_events = LedgerProjectViewCount::from_len(events.len());
+                    verified => {
+                        let metadata = match verified {
+                            // Release the original records inside the preparation boundary;
+                            // the metadata is from this same fully authenticated snapshot.
+                            ViewMetadata::Full(VerifiedSnapshotRecords {
+                                records,
+                                metadata,
+                                ..
+                            }) => {
+                                drop(records);
+                                metadata
+                            }
+                            // The writer's prefix, authenticated through this same snapshot.
+                            ViewMetadata::Prefix(prefix) => prefix
+                                .metadata
+                                .iter()
+                                .take_while(|event| event.sequence() <= self.through_sequence)
+                                .cloned()
+                                .collect(),
+                        };
+                        let mut events = Vec::new();
+                        if let Some(value) = observation {
+                            value.prepared_events = LedgerProjectViewCount::from_len(events.len());
+                        }
+                        for event in metadata
+                            .into_iter()
+                            .take_while(|event| event.sequence() <= self.through_sequence)
+                        {
+                            check_read_budget(self.budget, bytes, events.len() + 1)?;
+                            events.push(event);
+                            if let Some(value) = observation {
+                                value.prepared_events =
+                                    LedgerProjectViewCount::from_len(events.len());
+                            }
+                        }
+                        super::retention::annotate_metadata_checked(&mut events, |count| {
+                            check_read_budget(self.budget, bytes, count)
+                        })?;
+                        if let Some(value) = observation {
+                            value.prepare_events.finish(Instant::now(), true);
+                        }
+                        self.select_and_project(
+                            &transaction,
+                            &events,
+                            None,
+                            None,
+                            bytes,
+                            query,
+                            profile,
+                            request,
+                            snapshot,
+                            after,
+                            observation,
+                        )
                     }
                 }
-                super::retention::annotate_metadata_checked(&mut events, |count| {
-                    check_read_budget(self.budget, bytes, count)
-                })?;
-                if let Some(value) = observation {
-                    value.prepare_events.finish(Instant::now(), true);
-                }
-                let selection_limit = usize::from(request.limit()) + 1;
-                if let Some(value) = observation {
-                    value.selection_limit = LedgerProjectViewCount::from_len(selection_limit);
-                    value.select_sequences.begin(Instant::now());
-                }
-                let selected = views::select_sequences(
-                    &transaction,
-                    &events,
-                    query,
-                    after,
-                    snapshot,
-                    selection_limit,
-                    self.budget,
-                );
-                if let Some(value) = observation {
-                    value
-                        .select_sequences
-                        .finish(Instant::now(), selected.is_ok());
-                }
-                let sequences = selected?;
-                if let Some(value) = observation {
-                    value.selected_sequences = LedgerProjectViewCount::from_len(sequences.len());
-                    value.project_page.begin(Instant::now());
-                }
-                let indexes = EventIndexes::from_events(&events);
-                let page = indexes.project_view_page(
-                    &events,
-                    query,
-                    profile,
-                    request,
-                    LedgerReadScope {
-                        source: self.source,
-                        material_read: LedgerMaterialReadState::NotRequested,
-                        scanned_through_position: self.through_sequence,
-                        read_complete: true,
-                        limits: Vec::new(),
-                    },
-                    super::projection::PageSelection {
-                        through_sequence: self.through_sequence,
-                        sequences: Some(&sequences),
-                        retention: None,
-                    },
-                )?;
-                check_read_budget(self.budget, bytes, events.len())?;
-                if let Some(value) = observation {
-                    value.project_page.finish(Instant::now(), true);
-                }
-                Ok(page)
             })();
             if let Some(value) = observation
                 && result.is_err()
@@ -1384,6 +1388,80 @@ impl SqliteViewSnapshot {
         completed
     }
 
+    /// Workflow #191 C: the original selection and projection of one view read over
+    /// `events`. Without `indexes`, page projection creates them from `events` as before.
+    #[allow(clippy::too_many_arguments)]
+    fn select_and_project(
+        &self,
+        connection: &Connection,
+        events: &[LedgerEventMetadata],
+        indexes: Option<&EventIndexes>,
+        retention: Option<&super::retention::RetentionIndex>,
+        bytes: u64,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+        snapshot: u64,
+        after: u64,
+        observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        let selection_limit = usize::from(request.limit()) + 1;
+        if let Some(value) = observation {
+            value.selection_limit = LedgerProjectViewCount::from_len(selection_limit);
+            value.select_sequences.begin(Instant::now());
+        }
+        let selected = views::select_sequences(
+            connection,
+            events,
+            query,
+            after,
+            snapshot,
+            selection_limit,
+            self.budget,
+        );
+        if let Some(value) = observation {
+            value
+                .select_sequences
+                .finish(Instant::now(), selected.is_ok());
+        }
+        let sequences = selected?;
+        if let Some(value) = observation {
+            value.selected_sequences = LedgerProjectViewCount::from_len(sequences.len());
+            value.project_page.begin(Instant::now());
+        }
+        let created;
+        let indexes = match indexes {
+            Some(indexes) => indexes,
+            None => {
+                created = EventIndexes::from_events(events);
+                &created
+            }
+        };
+        let page = indexes.project_view_page(
+            events,
+            query,
+            profile,
+            request,
+            LedgerReadScope {
+                source: self.source,
+                material_read: LedgerMaterialReadState::NotRequested,
+                scanned_through_position: self.through_sequence,
+                read_complete: true,
+                limits: Vec::new(),
+            },
+            super::projection::PageSelection {
+                through_sequence: self.through_sequence,
+                sequences: Some(&sequences),
+                retention,
+            },
+        )?;
+        check_read_budget(self.budget, bytes, events.len())?;
+        if let Some(value) = observation {
+            value.project_page.finish(Instant::now(), true);
+        }
+        Ok(page)
+    }
+
     /// The read_snapshot/verify_snapshot stages of one view read, returning the bytes
     /// read. Without a writer prefix (`slot`) this is the original full read. A writer
     /// prefix is extended by its tail only; any tail failure discards it and repeats the
@@ -1398,16 +1476,29 @@ impl SqliteViewSnapshot {
             let (bytes, verified) = self.verify_view_full(connection, observation)?;
             return Ok((bytes, ViewMetadata::Full(verified)));
         };
-        if let Some(mut prefix) = slot.take()
-            && let Ok(bytes) = self.verify_view_tail(connection, &mut prefix, observation)
+        if let Some(prefix) = slot.take()
+            && let Ok((bytes, prefix)) = self.verify_view_tail(connection, prefix, observation)
         {
             return Ok((bytes, ViewMetadata::Prefix(slot.insert(prefix))));
         }
         let (bytes, verified) = self.verify_view_full(connection, observation)?;
-        Ok((
-            bytes,
-            ViewMetadata::Prefix(slot.insert(VerifiedPrefix::from(verified))),
-        ))
+        let VerifiedSnapshotRecords {
+            records,
+            metadata,
+            head_hash,
+            marker,
+        } = verified;
+        drop(records);
+        // Workflow #191 C: the full fallback rebuilds both prefix indexes within verification.
+        let built = VerifiedPrefix::build(marker, metadata, head_hash, &mut |count| {
+            check_read_budget(self.budget, bytes, count)
+        });
+        if let Some(value) = observation
+            && built.is_err()
+        {
+            value.verify_snapshot.finish(Instant::now(), false);
+        }
+        Ok((bytes, ViewMetadata::Prefix(slot.insert(built?))))
     }
 
     fn verify_view_full(
@@ -1463,9 +1554,9 @@ impl SqliteViewSnapshot {
     fn verify_view_tail(
         &self,
         connection: &Connection,
-        prefix: &mut VerifiedPrefix,
+        prefix: VerifiedPrefix,
         observation: &mut Option<LedgerProjectViewObservation>,
-    ) -> GlobalLedgerResult<u64> {
+    ) -> GlobalLedgerResult<(u64, VerifiedPrefix)> {
         if let Some(value) = observation {
             value.read_snapshot.begin(Instant::now());
         }
@@ -1485,13 +1576,13 @@ impl SqliteViewSnapshot {
         );
         if let Some(value) = observation {
             match &verified {
-                Ok(records) => {
+                Ok((_, records)) => {
                     value.verified_records = LedgerProjectViewCount::from_len(*records);
                 }
                 Err(_) => value.verify_snapshot.finish(Instant::now(), false),
             }
         }
-        verified.map(|_| bytes)
+        verified.map(|(prefix, _)| (bytes, prefix))
     }
 }
 
@@ -1517,33 +1608,37 @@ enum ViewMetadata<'a> {
 /// writer's open or a later Runtime read. A Runtime read trusts it only after its
 /// boundary row and the head row still match, and reads and authenticates just the
 /// rows after it. Offline and read-only snapshots never use one.
+/// Workflow #191 C: its retention and event indexes are derived only from this prefix's
+/// metadata (SQLite rows), advance with it, and are discarded with it on any error.
 struct VerifiedPrefix {
     through: u64,
     head_hash: Option<String>,
     marker: SqliteMarker,
     ids: BTreeSet<EventId>,
     metadata: Vec<LedgerEventMetadata>,
-}
-
-impl From<VerifiedSnapshotRecords> for VerifiedPrefix {
-    fn from(verified: VerifiedSnapshotRecords) -> Self {
-        Self::new(verified.marker, verified.metadata, verified.head_hash)
-    }
+    retention: super::retention::RetentionIndex,
+    indexes: EventIndexes,
 }
 
 impl VerifiedPrefix {
-    fn new(
+    /// Workflow #191 C: builds both indexes once over the fully authenticated metadata.
+    fn build(
         marker: SqliteMarker,
         metadata: Vec<LedgerEventMetadata>,
         head_hash: Option<String>,
-    ) -> Self {
-        Self {
+        check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
+    ) -> GlobalLedgerResult<Self> {
+        let (retention, indexes) =
+            super::retention::RetentionIndex::from_events_with_indexes_checked(&metadata, check)?;
+        Ok(Self {
             through: metadata.last().map_or(0, LedgerEventRead::sequence),
             head_hash,
             marker,
             ids: metadata.iter().map(|event| *event.event_id()).collect(),
             metadata,
-        }
+            retention,
+            indexes,
+        })
     }
 
     /// Reads the head row, this prefix's boundary hash and only the rows after it.
@@ -1611,15 +1706,17 @@ impl VerifiedPrefix {
 
     /// Authenticates the tail with the checks of `verify_snapshot_records`, continuing
     /// the chain from this prefix, then the requested snapshot boundary, and appends
-    /// it. Returns the number of records verified. After an error, discard the prefix.
+    /// it. Returns the number of records verified. Workflow #191 C: extends the
+    /// prefix's retention and event indexes with each verified row; an error consumes
+    /// the prefix.
     fn verify_tail(
-        &mut self,
+        mut self,
         database: &RuntimeDatabase,
         boundary: Vec<SqlRow>,
         raw: RawSnapshot,
         through_sequence: u64,
         head_hash: Option<&str>,
-    ) -> GlobalLedgerResult<usize> {
+    ) -> GlobalLedgerResult<(Self, usize)> {
         let mismatch = || failure("ledger_snapshot_boundary_mismatch", "verify_ledger_prefix");
         let expected_format = if self.marker.state == "ready" {
             FORMAL_FORMAT_VERSION
@@ -1671,10 +1768,15 @@ impl VerifiedPrefix {
             return Err(mismatch());
         }
         let verified = rows.metadata.len();
-        self.metadata.extend(rows.metadata);
+        for (index, event) in rows.metadata.into_iter().enumerate() {
+            check_read_budget(raw.budget, raw.bytes, index + 1)?;
+            self.retention
+                .step(&mut self.indexes, &self.metadata, &event)?;
+            self.metadata.push(event);
+        }
         self.through = head;
         self.head_hash = chain_hash;
-        Ok(verified)
+        Ok((self, verified))
     }
 }
 
@@ -2072,14 +2174,18 @@ where
 {
     let budget = raw.budget;
     let bytes = raw.bytes;
-    let verified = verify_snapshot_records(database, raw)?;
-    let events = super::retention::restore_records(verified.records, verifier, |count| {
-        check_read_budget(budget, bytes, count)
-    })?;
-    Ok((
-        events,
-        VerifiedPrefix::new(verified.marker, verified.metadata, verified.head_hash),
-    ))
+    let VerifiedSnapshotRecords {
+        records,
+        metadata,
+        head_hash,
+        marker,
+    } = verify_snapshot_records(database, raw)?;
+    let mut check = |count| check_read_budget(budget, bytes, count);
+    // Workflow #191 C: one retention build serves both the restore and the view prefix.
+    let prefix = VerifiedPrefix::build(marker, metadata, head_hash, &mut check)?;
+    let events =
+        super::retention::restore_records_with(&prefix.retention, records, verifier, check)?;
+    Ok((events, prefix))
 }
 
 /// Returned only after complete row, relation, head and marker authentication.
