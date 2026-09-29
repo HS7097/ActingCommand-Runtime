@@ -89,7 +89,7 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
     assert!(reset_json["events"].is_array());
     assert_eq!(
         support::backend_events(root.path()),
-        ["capture_open", "capture", "open", "reset",]
+        ["capture_open", "capture", "open", "reset"]
     );
     runtime.assert_alive();
     runtime.stop_clean();
@@ -241,7 +241,7 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
     assert_eq!(output["receipt"]["result"]["executed_steps"], 1);
     assert_eq!(
         support::backend_events(root.path()),
-        ["capture_open", "capture", "open", "tap", "capture",]
+        ["capture_open", "capture", "open", "tap", "capture"]
     );
     runtime.assert_alive();
     runtime.stop_clean();
@@ -400,7 +400,7 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
     );
     assert_eq!(
         support::backend_events(root.path()),
-        ["capture_open", "capture", "open", "tap", "capture",]
+        ["capture_open", "capture", "open", "tap", "capture"]
     );
     drop(ledger_client);
     runtime.assert_alive();
