@@ -1586,7 +1586,8 @@ pub(super) fn recover_authoritative_policy_outcomes(
     policy: &PolicyHost,
     ledger: &GlobalLedger,
 ) -> RuntimeHostResult<BTreeMap<(String, String), AuthoritativeSchedulingOutcome>> {
-    let mut completed = policy.completed_policy_runs(MAX_AUTHORITATIVE_POLICY_OUTCOMES)?;
+    // Workflow #191 A2 / #330 H1: only each pair's latest completed run decides its outcome.
+    let mut completed = policy.latest_completed_policy_runs(MAX_AUTHORITATIVE_POLICY_OUTCOMES)?;
     completed.sort_by_key(|run| run.completion_sequence);
     let ledger_position = ledger
         .latest_sequence()
