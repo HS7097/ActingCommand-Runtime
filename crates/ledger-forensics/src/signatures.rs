@@ -48,8 +48,9 @@ pub fn replay_signatures_read_only(
     let catalog_snapshot = open(&request.catalog_state_root)?;
     let input = SignaturePrefix::from_evidence(&input_snapshot, request.input_through)
         .map_err(map_ledger_error)?;
-    let catalog_prefix = SignaturePrefix::from_evidence(&catalog_snapshot, request.catalog_through)
-        .map_err(map_ledger_error)?;
+    let catalog_prefix =
+        SignaturePrefix::catalog_from_evidence(&catalog_snapshot, request.catalog_through)
+            .map_err(map_ledger_error)?;
     let catalog = SignatureCatalog::from_prefix(&catalog_prefix);
     let page = replay_signatures(&input, &catalog, &request.page).map_err(map_ledger_error)?;
     Ok(ForensicOutput::Machine(ForensicReport::Signatures(
