@@ -6554,10 +6554,9 @@ fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError>
                     "scope_instances",
                 ));
             }
-            let observation = crate::FactObservation {
-                records: value.records().cloned().collect(),
-            };
-            observation.validate()
+            // The 512 KiB observation bound measures the current encoding: a write-side rule
+            // that `EventPayload::validate_write_bounds` checks (Workflow #191 B1-S1).
+            Ok(())
         }
         FactPayload::Invalidated(value) if value.action == EventAction::FactInvalidate => {
             validate_fact_invalidation(&value.invalidation)
@@ -10848,6 +10847,23 @@ impl EventPayload {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Workflow #191 B1-S1: bounds that measure the current encoding — a `runtime.fact_snapshot`
+    /// part and a `fact.published` observation, each at most 512 KiB. Write side only:
+    /// `EventDraft::sanitize` calls it right after `validate`. A decoded record is never
+    /// re-serialized for a bound, so an additive field cannot invalidate a stored record.
+    pub(crate) fn validate_write_bounds(&self) -> Result<(), SanitizationError> {
+        match self {
+            Self::Runtime(RuntimePayload::FactSnapshot(value)) => {
+                value.snapshot.validate_for_append()
+            }
+            Self::Fact(FactPayload::Published(value)) => crate::FactObservation {
+                records: value.records().cloned().collect(),
+            }
+            .validate(),
+            _ => Ok(()),
+        }
     }
 
     pub fn public_projection(&self) -> PublicEventPayload {
