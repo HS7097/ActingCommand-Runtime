@@ -154,7 +154,6 @@
 <text x="1220.0" y="609.3" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">确SHA构建）。</text>
 <polyline points="268.0,195.0 280.0,195.0 280.0,193.4 300.0,193.4" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
 <polyline points="268.0,305.0 280.0,305.0 280.0,228.2 300.0,228.2" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
-<polyline points="268.0,415.0 280.0,415.0 280.0,262.9 300.0,262.9" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
 <polyline points="268.0,525.0 286.0,525.0 286.0,421.0 300.0,421.0" fill="none" stroke="#8045ac" stroke-width="1.60" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ah-purple)"/>
 <rect x="159.0" y="583.2" width="74.0" height="14.8" rx="3" ry="3" fill="#ffffff" stroke="none" stroke-width="0.00"/>
 <text x="196.0" y="592.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="9.8" fill="#8045ac" text-anchor="middle" font-weight="bold">经 runtime API</text>
