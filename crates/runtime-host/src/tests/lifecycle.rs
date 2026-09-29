@@ -34,8 +34,10 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
     ]);
     let host = RuntimeHost::start(config(&root), Arc::new(provider)).expect("host");
     let mut client = TestClient::connect(&host);
+    let mut business_leases = Vec::new();
     for alias in ["node.a", "node.b", "node.c"] {
         let (_, token) = client.acquire(alias);
+        business_leases.push(token.lease_id());
         let request = client.request(RuntimeOperation::Input {
             frame: None,
             token,
@@ -113,7 +115,13 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
     );
     let releases = events
         .iter()
-        .filter(|event| event.event_type() == EventType::LeaseReleased)
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event
+                    .links()
+                    .lease_id()
+                    .is_none_or(|lease| !business_leases.contains(lease))
+        })
         .collect::<Vec<_>>();
     assert!(releases.len() <= 1);
     assert!(
@@ -483,7 +491,7 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     ));
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     assert_eq!(
         event_types_for_correlation(&mut client, correlation_id),
         vec![
@@ -604,7 +612,7 @@ fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     assert_eq!(replayed, first);
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     assert_eq!(
         event_types_for_request(&host, &ids, connection, request.request_id()).len(),
         14

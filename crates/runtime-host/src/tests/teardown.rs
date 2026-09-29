@@ -2,9 +2,11 @@
 
 use super::*;
 
-// Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
+// Task Contract: Workflow #257 / C1B9, rewritten for Workflow #191 H (the device session
+// belongs to the instance: a task end keeps it, the Host close closes it). Test class:
+// specification criterion.
 #[test]
-fn task_teardown_precedes_terminal_and_lease_release() {
+fn task_end_keeps_instance_session_until_host_close() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("resource-close-order-task.zip");
     let bytes = neutral_contained_task_package(true);
@@ -33,31 +35,32 @@ fn task_teardown_precedes_terminal_and_lease_release() {
     let receipt = client.send(&request);
 
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
-    let events = projected_events(
-        &mut client,
-        EventQuery {
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 0);
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
             correlation_id: Some(correlation_id),
             ..EventQuery::default()
-        },
-    );
-    let resource_close = events
-        .iter()
-        .find(|event| event.event_type == EventType::RuntimeLifecycleObserved)
-        .expect("resource close lifecycle");
+        })
+        .expect("query task events");
+    assert!(!events.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
+            if matches!(payload.phase(), actingcommand_contract::RuntimeLifecyclePhase::ResourceQuiescence { .. })
+    )));
     let task_terminal = events
         .iter()
-        .find(|event| event.event_type == EventType::TaskCompleted)
+        .find(|event| event.event_type() == EventType::TaskCompleted)
         .expect("task terminal");
     let lease_release = events
         .iter()
-        .find(|event| event.event_type == EventType::LeaseReleased)
+        .find(|event| event.event_type() == EventType::LeaseReleased)
         .expect("lease release");
-    assert!(resource_close.sequence < task_terminal.sequence);
-    assert!(task_terminal.sequence < lease_release.sequence);
+    assert!(task_terminal.sequence() < lease_release.sequence());
     drop(client);
     host.close().expect("close host");
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
 }
 
 // Task Contract: Workflow #257 / READ-SESSION-CLOSE-v1. Test class: Defect regression.
@@ -77,6 +80,7 @@ fn readonly_sessions_close_through_real_resource_leases_without_input() {
         let host = host_with_state(&root, "node.a", Arc::clone(&state));
         let mut client = TestClient::connect(&host);
         let business_lease = (mode == 2).then(|| client.acquire("node.a").1);
+        let business_lease_id = business_lease.as_ref().map(|token| token.lease_id());
         let observe = client.request(RuntimeOperation::ObserveReadonly {
             instance_alias: "node.a".into(),
         });
@@ -100,7 +104,7 @@ fn readonly_sessions_close_through_real_resource_leases_without_input() {
                 client.send(&release).state(),
                 RuntimeReceiptState::Completed
             );
-            assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+            assert_eq!(state.capture_close_count.load(Ordering::Acquire), 0);
             let observe = client.request(RuntimeOperation::ObserveReadonly {
                 instance_alias: "node.a".into(),
             });
@@ -114,10 +118,7 @@ fn readonly_sessions_close_through_real_resource_leases_without_input() {
         assert!(host.fatal_error().expect("health").is_none());
         drop(client);
         host.close().expect("owned read resources close normally");
-        assert_eq!(
-            state.capture_close_count.load(Ordering::Acquire),
-            if mode == 2 { 2 } else { 1 }
-        );
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
         assert_eq!(
             state.unfenced_capture_close_count.load(Ordering::Acquire),
             0
@@ -154,6 +155,9 @@ fn readonly_sessions_close_through_real_resource_leases_without_input() {
                         && event.links().lease_id() == grant.links().lease_id()
                 })
                 .expect("real lease released");
+            if grant.links().lease_id() == business_lease_id.as_ref() {
+                continue;
+            }
             assert!(events.iter().any(|event| {
                 grant.sequence() < event.sequence() && event.sequence() < released.sequence()
                     && matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
@@ -236,16 +240,26 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
         let mut client = TestClient::connect(&host);
         client.set_receipt_read_timeout();
+        let request = client.request(RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ));
+        // Workflow #191 H: the task end keeps the session; the teardown is the operator's
+        // explicit reconnect, which closes the kept session first.
+        assert_eq!(
+            client.send(&request).state(),
+            RuntimeReceiptState::Completed
+        );
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 0);
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();
         let request = client.request_with_correlation(
             correlation,
-            RuntimeOperation::run_contained_task(
-                "neutral.instance",
-                client.ids.mint_holder_id().expect("holder"),
-                ContainedTaskRequest::new(package.display().to_string(), expected)
-                    .expect("task request"),
-            ),
+            RuntimeOperation::SelfCheckInstance {
+                instance_alias: "neutral.instance".into(),
+            },
         );
 
         let failed = client.send(&request);

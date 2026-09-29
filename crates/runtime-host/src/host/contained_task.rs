@@ -2611,14 +2611,34 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             self.geometry_operation_deadline()?,
                             &|| host.fatal.is_shutdown_requested(),
                         );
-                        if probe.is_err_and(|probe| {
-                            probe.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
-                        }) {
-                            host.invalidate_adb_baseline(self.token.instance_id())?;
-                            runtime_error = RuntimeHostError::adb_unreachable_capture(
-                                "run_contained_task_capture",
-                                &error,
-                            );
+                        match probe {
+                            Err(probe)
+                                if probe.resource_quiescence()
+                                    != Some(ResourceQuiescence::Unconfirmed) =>
+                            {
+                                host.invalidate_adb_baseline(self.token.instance_id())?;
+                                runtime_error = RuntimeHostError::adb_unreachable_capture(
+                                    "run_contained_task_capture",
+                                    &error,
+                                );
+                            }
+                            // Workflow #191 H: the first capture failed on a session kept from
+                            // an earlier lease (no open in this capture) while adbd answers: the
+                            // idle session went stale. It is closed above; the task fails
+                            // nonfatal and the next capture opens a new session.
+                            Ok(())
+                                if error.code() == "capture_backend_operation_failed"
+                                    && error
+                                        .failure_context()
+                                        .backend_open_observations()
+                                        .is_empty() =>
+                            {
+                                runtime_error = RuntimeHostError::reused_session_capture(
+                                    "run_contained_task_capture",
+                                    &error,
+                                );
+                            }
+                            _ => {}
                         }
                     }
                     let payload = CapturePayloadDraft::failed_with_causes(
@@ -6020,7 +6040,9 @@ impl HostShared {
                 )
                 .with_task_id(draft.task_id)
                 .with_run_id(draft.run_id);
-            let connection_id = lock(&self.scheduler, "read_task_lease_connection")?
+            // The task's lease is still current when its terminal is written. Workflow #191 H: the
+            // device session stays with the instance; the lease end closes one that must close.
+            let _task_connection = lock(&self.scheduler, "read_task_lease_connection")?
                 .connection_for_token(token)
                 .map_err(|error| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
@@ -6028,7 +6050,6 @@ impl HostShared {
                         &error,
                     ))
                 })?;
-            self.close_instance_resources(token, connection_id, links.clone())?;
             let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
                 .map_err(RequestFailure::poison_without_terminal)?;
             let chain_events = self

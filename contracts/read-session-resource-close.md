@@ -44,8 +44,9 @@ Readonly, monitor and contained-task capture failures share this close path unde
 the instance admission mutex. They can reuse a current business lease only when
 its existing close checks permit it. That lease remains with its original cleanup
 owner. A dedicated close lease is released by the same Host cleanup implementation.
-An instance scheduling pause hands its device back through this path without reusing a
-lease (`scheduling-pause.md`, stage (c)); its dedicated close lease is released with
+An instance scheduling pause closes the session through this path, without reusing a
+lease, only for an instance outside the multi-Nemu gate (`scheduling-pause.md`, stage (c);
+"Device session lifetime" below); its dedicated close lease is released with
 `LeaseReleaseReason::InstancePaused`, which names no transfer, where the other callers
 release with `HostShutdown`.
 The dedicated preparation lease of the connection preparation phase (`runtime-fact-store.md`,
@@ -54,9 +55,12 @@ which names no transfer either (Workflow #191 h2; `lease.released` carries no re
 The primary capture failure and any actual cleanup cause retain their existing
 typed GlobalLedger representation.
 
-An earlier fatal does not skip other instances' permitted cleanup. An expired or
-otherwise invalid lease, an unresolved destructive step, or an unconfirmed native
-close retains failure and owner protection. Final Kernel shutdown aggregates cached
+An earlier fatal does not skip other instances' permitted cleanup. A close attempted
+under an expired or otherwise invalid lease, an unresolved destructive step, or an
+unconfirmed native close retains failure and owner protection. The end of an expired
+lease attempts no close (Workflow #191 H): it keeps the session and forgets its input
+frames, as for no session, and only a session that must close fails as before. Final
+Kernel shutdown aggregates cached
 unconfirmed causes and retains any session whose close authority was not established;
 it cannot retry that session through a local-only native close. The first native
 close result remains stable.
@@ -69,6 +73,58 @@ continue to fail explicitly; a successful sibling close cannot clear that state.
 Resource quiescence has the existing Runtime-owned resource boundary described in
 `nemu-owned-resource-close.md`. SDK global state and a real-device recovery remain
 outside CI's proof.
+
+## Device session lifetime (Workflow #191 H)
+
+An instance's device session belongs to the instance, not to a lease: once open it
+stays open until an external command disconnects it (owner ruling 2026-09-29). There
+is no idle timeout, and a pause is not a disconnect. A task terminal, an explicit
+release, a cleanup (disconnect, expiry, backend failure, preemption, Host shutdown) and
+a lease transfer keep the session and only forget its input frames: the kept session
+drops its pending and committed input frame, so the next holder starts from its own
+capture, exactly as after a close. Keeping a session writes no event; a later task
+shows no `backend.open_observed` and the same `session_generation`.
+
+A real close, with its unchanged `ResourceQuiescence` proof, happens only:
+
+- on an external disconnect or reconnect command: emulator `stop`, `start` and
+  `restart` (the control path closes first; after `start` / `restart` the preparation
+  phase reopens and keeps the session, after `stop` nothing reopens it), `SelfCheckInstance`
+  and an instance `ResumeScheduling` (the preparation phase closes the kept session and
+  reopens it), and the Host close, whose second pass closes every remaining session
+  under a dedicated close lease (its first pass ends the active leases, keeping their
+  sessions, including a lease that has already expired);
+- when the session itself must close: its worker stopped or retains its backends
+  after a failure (an application-lifecycle failure, a lost geometry reply), a close
+  is in progress, or an unconfirmed close result is cached; the lease end then closes
+  it under that lease, still under the admission guard and before the release;
+- on a capture or input failure, closed at once as before;
+- for an instance outside the multi-Nemu gate: while two or more registered instances
+  use Nemu (`nemu_ipc` or an automatic choice for capture or input), each of them
+  closes its session at every lease end, preparation phase and instance pause exactly
+  as before this change. Two Nemu sessions cannot stay open together; a registration
+  without a device configuration (a fixture) keeps its session.
+
+A lease end with a destructive step still in flight fails fatally
+(`destructive_state_mismatch`, operation `end_lease_device_use`), except an expiry,
+which the scheduler defers under the step. The Kernel closes one instance's session
+outside its registry lock, so another instance's capture never waits for it; the
+closing instance still counts as owning resources, and an operation on it meanwhile is
+refused at once with the fatal `execution_session_close_in_progress` (the Host's
+admission guard and the step checks make that unreachable). A Kernel close that meets
+a close in progress reports that instance unconfirmed.
+
+A contained task's first capture that fails with `capture_backend_operation_failed` on
+a session kept from an earlier lease (no backend open in that capture) while the ADB
+baseline probe answers is a stale idle session: it is closed as every capture failure
+is, the task fails nonfatal (`CaptureFailed`, `task.failed` Warning) and the next
+capture opens a new session. The same failure on a newly opened backend stays fatal.
+
+A kept session keeps the owner journal's `InUse` disposition across leases;
+`ConfirmedClosed` is written when every instance is closed. The retention of frames
+captured without a lease (read-only observe, capture sequence, monitor) therefore
+waits for the instance's next disconnect or reconnect command, or for a clean
+restart's proven import.
 
 ## Input and application-lifecycle writes take a FencedWrite
 

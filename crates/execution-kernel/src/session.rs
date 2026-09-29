@@ -16,6 +16,7 @@ use actingcommand_device::{
     segmented_swipe_capability_error,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
@@ -201,6 +202,10 @@ enum SessionCommand {
         reference: InputFrameReference,
         response: SyncSender<ExecutionKernelResult<InputFrameContext>>,
     },
+    /// Workflow #191 H: a lease end keeps the session and drops its input frames.
+    ForgetInputFrames {
+        response: SyncSender<ExecutionKernelResult<()>>,
+    },
     ObserveGeometry {
         deadline: Instant,
         response: SyncSender<ExecutionKernelResult<CaptureGeometryObservation>>,
@@ -272,6 +277,9 @@ struct SessionState {
 pub struct ExecutionSession {
     resolved: ResolvedExecutionInstance,
     state: Mutex<SessionState>,
+    /// Workflow #191 H: set once the worker has stopped or holds its backends for the owner's
+    /// close after a failure; such a session is closed, never kept, at a lease end.
+    needs_close: Arc<AtomicBool>,
 }
 
 impl ExecutionSession {
@@ -282,17 +290,20 @@ impl ExecutionSession {
         generation: u64,
     ) -> ExecutionKernelResult<Self> {
         let (sender, receiver) = mpsc::sync_channel(SESSION_CHANNEL_CAPACITY);
+        let needs_close = Arc::new(AtomicBool::new(false));
+        let worker_needs_close = Arc::clone(&needs_close);
         let join = thread::Builder::new()
             .name("actingcommand-execution-session".to_string())
             .spawn(move || {
                 let mut backends = SessionBackends::Pending;
-                match catch_unwind(AssertUnwindSafe(|| {
+                let result = match catch_unwind(AssertUnwindSafe(|| {
                     run_session(
                         provider,
                         instance_alias,
                         receiver,
                         &mut backends,
                         generation,
+                        &worker_needs_close,
                     )
                 })) {
                     Ok(result) => result,
@@ -302,7 +313,9 @@ impl ExecutionSession {
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     )),
-                }
+                };
+                worker_needs_close.store(true, Ordering::Release);
+                result
             })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_spawn_failed"))?;
         Ok(Self {
@@ -313,11 +326,17 @@ impl ExecutionSession {
                 closed: false,
                 close_result: None,
             }),
+            needs_close,
         })
     }
 
     pub const fn resolved(&self) -> &ResolvedExecutionInstance {
         &self.resolved
+    }
+
+    /// Workflow #191 H: the worker has stopped or retained its backends after a failure.
+    pub(crate) fn needs_close(&self) -> bool {
+        self.needs_close.load(Ordering::Acquire)
     }
 
     pub fn input(&self, action: InputAction, step: Arc<FencedWrite>) -> ExecutionKernelResult<()> {
@@ -484,6 +503,31 @@ impl ExecutionSession {
             reference,
             response,
         })
+    }
+
+    /// Workflow #191 H: drops the pending and committed input frames of a kept session.
+    pub(crate) fn forget_input_frames(&self) -> ExecutionKernelResult<()> {
+        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        ensure_open(&state)?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sent = state
+            .sender
+            .as_ref()
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .send(SessionCommand::ForgetInputFrames { response })
+            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+        if let Err(error) = sent {
+            return finish_after_result(&mut state, Err(error));
+        }
+        match receiver.recv() {
+            Ok(result) => result,
+            Err(_) => finish_after_result(
+                &mut state,
+                Err(ExecutionKernelError::fatal(
+                    "execution_session_response_lost",
+                )),
+            ),
+        }
     }
 
     fn frame_request(
@@ -781,6 +825,7 @@ fn run_session(
     receiver: Receiver<SessionCommand>,
     backends: &mut SessionBackends,
     generation: u64,
+    needs_close: &AtomicBool,
 ) -> ExecutionKernelResult<()> {
     let mut pending_frame: Option<InputFrameContext> = None;
     let mut committed_frame: Option<InputFrameContext> = None;
@@ -815,6 +860,8 @@ fn run_session(
                 let context = match result {
                     Ok(context) => context,
                     Err(error) => {
+                        // Workflow #191 H: marked first; the Host may end the lease on this reply.
+                        needs_close.store(true, Ordering::Release);
                         if response.send(Err(error.clone())).is_err() {
                             return Err(close_after_failure(
                                 backends.take(),
@@ -828,6 +875,7 @@ fn run_session(
                         }
                         return close_retained_after_failure(
                             &receiver,
+                            needs_close,
                             backends,
                             error,
                             ResourceCloseOrder::InputFirst,
@@ -876,6 +924,8 @@ fn run_session(
                         )
                     })?,
                     Err(error) => {
+                        // Workflow #191 H: marked first; the Host may end the lease on this reply.
+                        needs_close.store(true, Ordering::Release);
                         if response.send(Err(error.clone())).is_err() {
                             return Err(close_after_failure(
                                 backends.take(),
@@ -889,6 +939,7 @@ fn run_session(
                         }
                         return close_retained_after_failure(
                             &receiver,
+                            needs_close,
                             backends,
                             error,
                             ResourceCloseOrder::CaptureFirst,
@@ -923,6 +974,8 @@ fn run_session(
                         )
                     })?,
                     Err(error) => {
+                        // Workflow #191 H: marked first; the Host may end the lease on this reply.
+                        needs_close.store(true, Ordering::Release);
                         if response.send(Err(error.clone())).is_err() {
                             return Err(close_after_failure(
                                 backends.take(),
@@ -936,6 +989,7 @@ fn run_session(
                         }
                         return close_retained_after_failure(
                             &receiver,
+                            needs_close,
                             backends,
                             error,
                             ResourceCloseOrder::CaptureFirst,
@@ -984,6 +1038,18 @@ fn run_session(
                     ));
                 }
             }
+            SessionCommand::ForgetInputFrames { response } => {
+                pending_frame = None;
+                committed_frame = None;
+                if response.send(Ok(())).is_err() {
+                    return Err(close_after_failure(
+                        backends.take(),
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ResourceCloseOrder::CaptureFirst,
+                        DeviceCloseAuthority::LocalOnly,
+                    ));
+                }
+            }
             SessionCommand::ObserveGeometry { deadline, response } => {
                 let result = (|| {
                     geometry_remaining(deadline)?;
@@ -1017,6 +1083,7 @@ fn run_session(
                     // Preserve backend errors and unexpected reply loss for the owner's Close.
                     let cleanup = close_retained_after_failure(
                         &receiver,
+                        needs_close,
                         backends,
                         primary.clone(),
                         ResourceCloseOrder::CaptureFirst,
@@ -1053,6 +1120,8 @@ fn run_session(
                 };
                 if let Err(error) = invalidation {
                     drop(step);
+                    // Workflow #191 H: marked first; the Host may end the lease on this reply.
+                    needs_close.store(true, Ordering::Release);
                     if response.send(Err(error.clone())).is_err() {
                         return Err(close_after_failure(
                             backends.take(),
@@ -1066,6 +1135,7 @@ fn run_session(
                     }
                     return close_retained_after_failure(
                         &receiver,
+                        needs_close,
                         backends,
                         error,
                         ResourceCloseOrder::CaptureFirst,
@@ -1078,6 +1148,8 @@ fn run_session(
                     });
                 drop(step);
                 if let Err(error) = result {
+                    // Workflow #191 H: marked first; the Host may end the lease on this reply.
+                    needs_close.store(true, Ordering::Release);
                     if response.send(Err(error.clone())).is_err() {
                         return Err(close_after_failure(
                             backends.take(),
@@ -1091,6 +1163,7 @@ fn run_session(
                     }
                     return close_retained_after_failure(
                         &receiver,
+                        needs_close,
                         backends,
                         error,
                         ResourceCloseOrder::CaptureFirst,
@@ -1143,14 +1216,37 @@ fn run_session(
 
 fn close_retained_after_failure(
     receiver: &Receiver<SessionCommand>,
+    needs_close: &AtomicBool,
     backends: &mut SessionBackends,
     primary: ExecutionKernelError,
     order: ResourceCloseOrder,
 ) -> ExecutionKernelResult<()> {
+    needs_close.store(true, Ordering::Release);
     // Keep the actual backends here until the Host chooses close admission.
     let mut geometry_response_lost = false;
     loop {
         match receiver.recv() {
+            // Workflow #191 H: handled here explicitly; the catch-all below would close the
+            // backends locally and bypass the Host's fenced close.
+            Ok(SessionCommand::ForgetInputFrames { response }) => {
+                if response
+                    .send(Err(ExecutionKernelError::device(
+                        "execution_session_close_pending",
+                        &DeviceError::transient(
+                            "input frames are unavailable while their owner closes the session",
+                        ),
+                    )))
+                    .is_ok()
+                {
+                    continue;
+                }
+                return Err(close_after_failure(
+                    backends.take(),
+                    primary,
+                    order,
+                    DeviceCloseAuthority::LocalOnly,
+                ));
+            }
             Ok(
                 SessionCommand::CommitFrame { response, .. }
                 | SessionCommand::ResolveFrame { response, .. },

@@ -208,7 +208,7 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
         panic!("expected preempted lease");
     };
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     let events = host
         .query_persisted_events_for_test(EventQuery::default())
         .expect("authoritative preemption events");
@@ -216,24 +216,11 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
         .iter()
         .find(|event| event.event_type() == EventType::InputCommitted)
         .expect("durable input");
-    let closed = events
-        .iter()
-        .find(|event| matches!(
-            event.payload(),
-            EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
-                if matches!(payload.phase(), actingcommand_contract::RuntimeLifecyclePhase::ResourceQuiescence {
-                    quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
-                    owner_disposition: actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed,
-                    ..
-                })
-        ))
-        .expect("confirmed resource quiescence");
     let transferred = events
         .iter()
         .find(|event| event.event_type() == EventType::LeaseTransferred)
         .expect("durable transfer");
-    assert!(input.sequence() < closed.sequence());
-    assert!(closed.sequence() < transferred.sequence());
+    assert!(input.sequence() < transferred.sequence());
     assert!(host.fatal_error().expect("runtime health").is_none());
     assert_input_denied(&mut first, old_token, RuntimeErrorCode::LeaseMismatch);
     assert_eq!(

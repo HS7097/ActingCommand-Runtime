@@ -4,7 +4,109 @@ use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::*;
 use actingcommand_contract::SchedulingResumeSelfCheck;
 
+/// How a lease end treats the instance's device session (Workflow #191 H).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LeaseDeviceEnd {
+    Keep,
+    Expiry,
+}
+
 impl HostShared {
+    /// Workflow #191 H: the device session belongs to the instance, not to the lease. The caller
+    /// holds the instance admission guard. A kept session forgets its input frames, so the next
+    /// holder starts from its own capture, as after a close. A session that must be closed, or
+    /// one outside the multi-Nemu gate (`keeps_device_session`), is closed as before.
+    pub(super) fn end_lease_device_use(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        end: LeaseDeviceEnd,
+    ) -> Result<(), RequestFailure> {
+        let instance_id = token.instance_id();
+        let needs_close = self
+            .execution
+            .session_needs_close(instance_id)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "inspect_lease_end_session",
+                    &error,
+                ))
+            })?;
+        if needs_close
+            || !self
+                .keeps_device_session(instance_id)
+                .map_err(RequestFailure::poison_without_terminal)?
+        {
+            return self.close_instance_resources(token, connection_id, EventLinksDraft::default());
+        }
+        let step_active = lock(&self.scheduler, "read_lease_end_step")?
+            .active_lease(instance_id)
+            .is_some_and(|active| active.token() == token && active.destructive_step_active());
+        if step_active {
+            // The scheduler defers an expiry under an in-flight step (`cleanup_token_inner`).
+            if end == LeaseDeviceEnd::Expiry {
+                return Ok(());
+            }
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::scheduler(
+                    "end_lease_device_use",
+                    &SchedulerError::DestructiveStateMismatch,
+                ),
+            ));
+        }
+        if !self
+            .execution
+            .has_owned_resources(instance_id)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "inspect_execution_session",
+                    &error,
+                ))
+            })?
+        {
+            self.record_owner_resource_close()?;
+            return Ok(());
+        }
+        self.execution
+            .forget_input_frames(instance_id)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "forget_lease_input_frames",
+                    &error,
+                ))
+            })
+    }
+
+    /// Workflow #191 H (the multi-Nemu gate): whether `instance_id` keeps its device session
+    /// across lease ends, preparation and pause. Two Nemu sessions cannot stay open together (the
+    /// vendor stdio redirection and its lock are process-wide, the DLL is shared), so while two or
+    /// more registered instances use Nemu (`nemu_ipc` or an automatic choice for capture or
+    /// input) each of them closes its session at every lease end as before. Every other
+    /// instance keeps it, as does a registration without a device configuration (a fixture).
+    pub(super) fn keeps_device_session(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        let registered = lock(&self.registered_instances, "read_device_session_gate")?
+            .values()
+            .map(|instance| (instance.instance_id, instance.instance_alias.clone()))
+            .collect::<Vec<_>>();
+        let mut nemu_instances = 0usize;
+        let mut uses_nemu = false;
+        for (registered_id, instance_alias) in registered {
+            let resolved = self.execution.resolve(&instance_alias).map_err(|error| {
+                RuntimeHostError::execution("resolve_device_session_gate", &error)
+            })?;
+            let nemu = resolved.configuration().is_some_and(|configuration| {
+                [&configuration.capture_backend, &configuration.input_backend]
+                    .into_iter()
+                    .any(|backend| matches!(backend.as_str(), "nemu_ipc" | "auto" | "auto-fastest"))
+            });
+            if nemu {
+                nemu_instances = nemu_instances.saturating_add(1);
+                uses_nemu |= registered_id == instance_id;
+            }
+        }
+        Ok(!(uses_nemu && nemu_instances >= 2))
+    }
+
     pub(super) fn cleanup_composite_failure(
         &self,
         token: LeaseToken,
@@ -448,8 +550,10 @@ impl HostShared {
     // `ExecutionKernel::open_instance_backends` (a Nemu pair once) so the opens cover every
     // required entry, records the opens exactly as every open is recorded
     // (`backend.open_observed`, the `backend.selfcheck.*` facts, one `device.self_check` status
-    // hint per entry and the policy availability they gate), then closes the session and
-    // releases the lease. It sends no input and keeps no frame. A failing step is recorded and
+    // hint per entry and the policy availability they gate), then releases the lease and keeps
+    // the session open for the instance's next leases (Workflow #191 H; a failed open, or an
+    // instance outside the multi-Nemu gate, closes it first). It sends no input and keeps no
+    // frame. A failing step is recorded and
     // leaves the instance unavailable; nothing is retried except, once, a daemon start's lease
     // refused by the takeover cooldown (Workflow #191 h2). Only a fatal failure (a ledger append,
     // an unconfirmed close) is returned.
@@ -612,9 +716,10 @@ impl HostShared {
             }
         };
         // Workflow #191 h3: the preparation phase starts from a closed session. A session a
-        // lease-free path retained (a read-only observe keeps its capture open, sc2) is closed
-        // first through the fenced close path, so the opens below are complete and the
-        // self-check covers every required entry. A failed close skips the opens and ends the
+        // lease-free path retained (a read-only observe keeps its capture open, sc2) or an
+        // earlier lease kept (Workflow #191 H) is closed first through the fenced close path, so
+        // the opens below are complete and the self-check covers every required entry: a
+        // reconnect is a disconnect and a connect. A failed close skips the opens and ends the
         // phase as a failed final close does.
         let retained_close = if self
             .execution
@@ -634,6 +739,7 @@ impl HostShared {
             )),
             Err(_) => None,
         };
+        let open_failed = matches!(opened, Some(Err(_)));
         let (observations, mut failure_code) = match opened {
             None => (Vec::new(), None),
             Some(Ok(observations)) => {
@@ -658,10 +764,14 @@ impl HostShared {
                 )
             }
         };
-        // Releasing the preparation lease closes the session; the self-check facts stay. The
-        // lease is released only once the close is confirmed, as for every dedicated close
-        // lease; its queue is empty (checked at the grant, and the admission guard is held).
+        // Workflow #191 H: a session opened here stays open for the instance's next leases (the
+        // preparation lease's release keeps it, `end_lease_device_use`). A failed open, or an
+        // instance outside the multi-Nemu gate, closes the session before the release as before;
+        // the self-check facts stay. The lease is released only once any close is confirmed, as
+        // for every dedicated close lease; its queue is empty (checked at the grant, and the
+        // admission guard is held).
         let closed = match retained_close {
+            Ok(()) if !open_failed && self.keeps_device_session(instance_id)? => Ok(()),
             Ok(()) => self
                 .close_instance_resources_result(&token, connection_id, links.clone())
                 .map_err(|failure| *failure.error)?,

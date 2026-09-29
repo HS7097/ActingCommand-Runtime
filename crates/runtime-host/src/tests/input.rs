@@ -205,7 +205,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let receipt = client.send(&release);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     assert_eq!(client.send(&release), receipt);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);

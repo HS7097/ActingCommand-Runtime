@@ -404,6 +404,21 @@ impl RuntimeHostError {
         result
     }
 
+    /// A contained task's first capture failed on a device session kept from an earlier lease
+    /// while the ADB baseline answers (Workflow #191 H): the idle session went stale. The kernel
+    /// code stays, projected as a nonfatal `CaptureFailed`; an unconfirmed close stays fatal.
+    pub(crate) fn reused_session_capture(
+        operation: &'static str,
+        error: &ExecutionKernelError,
+    ) -> Self {
+        let mut result = Self::execution(operation, error);
+        if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed) {
+            *result.projection =
+                RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
+        }
+        result
+    }
+
     pub(crate) fn state(error: &RuntimeStateError) -> Self {
         if error.is_fatal() {
             Self::fatal(

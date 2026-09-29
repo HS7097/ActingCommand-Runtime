@@ -65,6 +65,40 @@ impl VendorStdioSession {
             .snapshot()
     }
 
+    /// Workflow #191 H: ends one native call's capture. The process standard streams are
+    /// restored and the process-level stdio lock is released; the capture files stay open for
+    /// the next `resume`. A failed restore keeps the lock and is the session's cached failure.
+    pub(crate) fn suspend(&mut self) -> DeviceResult<()> {
+        self.guard
+            .as_mut()
+            .ok_or_else(|| crate::DeviceError::fatal("vendor stdio session is closed"))?
+            .suspend()?;
+        self.lock.take();
+        Ok(())
+    }
+
+    /// Workflow #191 H: starts one native call's capture: takes the process-level stdio lock and
+    /// redirects the standard streams to this session's capture files again. A resumed session
+    /// resumes nothing. A redirection that fails is undone at once; the lock is released unless
+    /// that undo failed too.
+    pub(crate) fn resume(&mut self) -> DeviceResult<()> {
+        let guard = self
+            .guard
+            .as_mut()
+            .ok_or_else(|| crate::DeviceError::fatal("vendor stdio session is closed"))?;
+        if self.lock.is_some() {
+            return guard.resume();
+        }
+        let lock = stdio_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let result = guard.resume();
+        if !guard.is_suspended() {
+            self.lock = Some(lock);
+        }
+        result
+    }
+
     pub(crate) fn finish(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
         if let Some(result) = &self.close_result {
             return result.clone();
@@ -143,6 +177,14 @@ impl VendorStdioSession {
 
     pub(crate) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
         Ok(VendorStdioCapture::default())
+    }
+
+    pub(crate) fn suspend(&mut self) -> DeviceResult<()> {
+        Ok(())
+    }
+
+    pub(crate) fn resume(&mut self) -> DeviceResult<()> {
+        Ok(())
     }
 
     pub(crate) fn finish(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
@@ -225,11 +267,70 @@ mod imp {
         stderr_win32_redirected: bool,
         restore_result: Option<DeviceResult<()>>,
         finish_result: Option<DeviceResult<VendorStdioCapture>>,
+        /// Workflow #191 H: the standard targets are restored between two native calls.
+        suspended: bool,
+        /// Workflow #191 H: while a later resume/suspend cycle records into its own context,
+        /// the owner context waits here. A failed cycle keeps its own context as `facts`.
+        owner_facts: Option<VendorStdioFacts>,
     }
 
     impl RedirectGuard {
         pub(super) fn facts(&self) -> &VendorStdioFacts {
             &self.facts
+        }
+
+        pub(super) const fn is_suspended(&self) -> bool {
+            self.suspended
+        }
+
+        /// Workflow #191 H: restores the standard targets after one native call; the saved and
+        /// capture descriptors stay open. The first cycle records into the owner context (the
+        /// complete successful path keeps its 32 steps); a later cycle's steps are dropped with
+        /// its context once it completes.
+        pub(super) fn suspend(&mut self) -> DeviceResult<()> {
+            if self.suspended {
+                return Ok(());
+            }
+            self.restore_targets()?;
+            self.suspended = true;
+            if let Some(owner) = self.owner_facts.take() {
+                self.facts = owner;
+            }
+            Ok(())
+        }
+
+        /// Workflow #191 H: installs the capture targets again before one native call. The cycle
+        /// records into its own context, not into the bounded owner context. A failed install
+        /// is restored at once, as at acquisition; its steps travel with the error.
+        pub(super) fn resume(&mut self) -> DeviceResult<()> {
+            if let Some(Err(error)) = &self.restore_result {
+                return Err(error.clone());
+            }
+            if self.restored || self.finish_result.is_some() {
+                return Err(DeviceError::fatal("vendor stdio session is closed"));
+            }
+            if !self.suspended {
+                return Ok(());
+            }
+            self.owner_facts = Some(std::mem::replace(&mut self.facts, VendorStdioFacts::new()));
+            if let Err(error) = self.install() {
+                let error = match self.restore_targets() {
+                    Ok(()) => {
+                        let error =
+                            error.with_vendor_stdio_facts(std::sync::Arc::new(self.facts.clone()));
+                        if let Some(owner) = self.owner_facts.take() {
+                            self.facts = owner;
+                        }
+                        error
+                    }
+                    Err(cleanup) => error
+                        .merge_resource_cleanup(cleanup)
+                        .with_vendor_stdio_facts(std::sync::Arc::new(self.facts.clone())),
+                };
+                return Err(error);
+            }
+            self.suspended = false;
+            Ok(())
         }
 
         pub(super) fn new() -> DeviceResult<Self> {
@@ -327,6 +428,8 @@ mod imp {
                 stderr_win32_redirected: false,
                 restore_result: None,
                 finish_result: None,
+                suspended: false,
+                owner_facts: None,
             };
             if let Err(mut error) = guard.install() {
                 if let Err(cleanup) = guard.finish() {
@@ -471,7 +574,53 @@ mod imp {
             result
         }
 
+        /// The final restore: the standard targets (unless a suspend restored them already),
+        /// then the saved descriptors.
         fn restore(&mut self) -> DeviceResult<()> {
+            if let Some(result) = &self.restore_result {
+                return result.clone();
+            }
+            self.suspend()?;
+            let mut failure = None;
+            for result in [
+                close_fd(
+                    self.saved_stdout,
+                    "saved stdout",
+                    StdioReference::SavedStdout,
+                    StdioPhase::Restore,
+                    &mut self.facts,
+                ),
+                close_fd(
+                    self.saved_stderr,
+                    "saved stderr",
+                    StdioReference::SavedStderr,
+                    StdioPhase::Restore,
+                    &mut self.facts,
+                ),
+            ] {
+                if let Err(error) = result {
+                    merge_close_failure(
+                        &mut failure,
+                        resource_close_error(
+                            error,
+                            DeviceResourceKind::FileDescriptor,
+                            DeviceResourceClosePhase::FileDescriptorClose,
+                        ),
+                    );
+                }
+            }
+            if let Some(error) = failure {
+                self.restore_result = Some(Err(error.clone()));
+                return Err(error);
+            }
+            self.restored = true;
+            self.restore_result = Some(Ok(()));
+            Ok(())
+        }
+
+        /// Restores the standard targets this session redirected. Workflow #191 H: it runs after
+        /// every native call (`suspend`); a failure is cached as the session's restore result.
+        fn restore_targets(&mut self) -> DeviceResult<()> {
             if let Some(result) = &self.restore_result {
                 return result.clone();
             }
@@ -591,39 +740,6 @@ mod imp {
                 self.restore_result = Some(Err(error.clone()));
                 return Err(error);
             }
-            for result in [
-                close_fd(
-                    self.saved_stdout,
-                    "saved stdout",
-                    StdioReference::SavedStdout,
-                    StdioPhase::Restore,
-                    &mut self.facts,
-                ),
-                close_fd(
-                    self.saved_stderr,
-                    "saved stderr",
-                    StdioReference::SavedStderr,
-                    StdioPhase::Restore,
-                    &mut self.facts,
-                ),
-            ] {
-                if let Err(error) = result {
-                    merge_close_failure(
-                        &mut failure,
-                        resource_close_error(
-                            error,
-                            DeviceResourceKind::FileDescriptor,
-                            DeviceResourceClosePhase::FileDescriptorClose,
-                        ),
-                    );
-                }
-            }
-            if let Some(error) = failure {
-                self.restore_result = Some(Err(error.clone()));
-                return Err(error);
-            }
-            self.restored = true;
-            self.restore_result = Some(Ok(()));
             Ok(())
         }
     }

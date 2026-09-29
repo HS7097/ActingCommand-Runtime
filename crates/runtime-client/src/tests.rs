@@ -2676,7 +2676,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     assert!(!client.status().expect("released status").instances()[0].lease_active());
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     let target = client.runtime_info().shutdown_target();
     let started = Instant::now();
     let accepted = loop {
@@ -2737,9 +2737,10 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
         .expect("delayed direct release");
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     drop(client);
     host.close().expect("close delayed input host");
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -3581,7 +3582,7 @@ fn safe_reset_uses_one_runtime_request_and_returns_ledger_projection() {
     ));
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     assert_eq!(
         output.events().last().map(|event| event.event_type),
         Some(EventType::LeaseReleased)
@@ -3721,7 +3722,7 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     ));
     proxy.close().expect("close proxy");
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);

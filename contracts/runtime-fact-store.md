@@ -494,11 +494,15 @@ internal). For one physical instance, under its admission guard:
    `backend.selfcheck.<entry>.*` facts, one `device.self_check` per entry and
    the availability they decide. A failed open is recorded the same way with
    its failure report.
-3. **Close and release.** The session is closed through the fenced close path
-   and, once the close is confirmed, the preparation lease is released
-   (`lease.released`); the self-check facts stay. A failed close is recorded by
-   the close path and withdraws availability; an unconfirmed one is fatal, as
-   on every close path.
+3. **Keep and release.** When the self-check passed its opens, the session
+   stays open for the instance's next leases (Workflow #191 H: the session
+   belongs to the instance and only an external command disconnects it) and the
+   preparation lease is released (`lease.released`). After a failed open, or for
+   an instance outside the multi-Nemu gate (`read-session-resource-close.md`,
+   "Device session lifetime"), the session is first closed through the fenced
+   close path and the lease is released once the close is confirmed. The
+   self-check facts stay. A failed close is recorded by the close path and
+   withdraws availability; an unconfirmed one is fatal, as on every close path.
 
 Nothing is sent to the device and nothing is retried but the daemon start's
 cooldown retry (below). The phase answers the

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::resource_close::LeaseDeviceEnd;
 use super::*;
 
 #[cfg(test)]
@@ -830,11 +831,9 @@ impl HostShared {
                 audit_endpoint(context.instance.audit_endpoint()),
             ),
         )?;
-        self.close_instance_resources(
-            &from,
-            prepared.from_connection_id(),
-            EventLinksDraft::default(),
-        )?;
+        // Workflow #191 H: the device session stays with the instance across the transfer; a
+        // Ready transfer has no step in flight.
+        self.end_lease_device_use(&from, prepared.from_connection_id(), LeaseDeviceEnd::Keep)?;
         let transferred = self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,
@@ -1412,7 +1411,7 @@ impl HostShared {
         let instance_guard = self.instance_guard(token.instance_id())?;
         let _admission = lock(&instance_guard, "lock_instance_admission")?;
         self.expire_queued_for_instance(token.instance_id())?;
-        self.close_instance_resources(token, connection_id, EventLinksDraft::default())?;
+        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)?;
         let transfer = lock(&self.scheduler, "prepare_release_transfer")?
             .prepare_transfer(
                 token,
@@ -1778,7 +1777,14 @@ impl HostShared {
         };
         self.expire_queued_for_instance(token.instance_id())
             .map_err(|failure| *failure.error)?;
-        self.close_instance_resources(token, connection_id, EventLinksDraft::default())
+        // Workflow #191 H: every lease end keeps the instance's session, a HostShutdown too (the
+        // Host close's second pass closes it under a dedicated close lease).
+        let end = if reason == LeaseReleaseReason::Expired {
+            LeaseDeviceEnd::Expiry
+        } else {
+            LeaseDeviceEnd::Keep
+        };
+        self.end_lease_device_use(token, connection_id, end)
             .map_err(|failure| *failure.error)?;
         let transfer_reason = match reason {
             LeaseReleaseReason::Disconnect => Some(LeaseTransferReason::Disconnect),

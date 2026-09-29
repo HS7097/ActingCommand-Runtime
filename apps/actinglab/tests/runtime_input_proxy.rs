@@ -2950,7 +2950,7 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
         Some(actingcommand_contract::RuntimeResult::InputCommitted { .. })
     ));
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
@@ -3034,7 +3034,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     assert!(result_path.is_file());
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert!(state.captures.load(Ordering::Acquire) >= 2);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     assert!(
         !adb_marker.exists(),
         "ActingLab invoked a local ADB backend"
