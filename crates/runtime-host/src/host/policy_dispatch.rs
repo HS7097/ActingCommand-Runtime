@@ -280,6 +280,9 @@ pub(super) fn scheduling_resume_selfcheck(
 struct PolicyAdmissionAppender<'a> {
     ledger: &'a GlobalLedger,
     initial_fact_gate: RefCell<Option<MutexGuard<'a, ()>>>,
+    // Workflow #191 U5-F1: the events this admission appended (at most the intent and its
+    // outcome), which the admission applies to the policy projection itself.
+    appended: RefCell<Vec<PersistedEvent>>,
 }
 
 impl<'a> PolicyAdmissionAppender<'a> {
@@ -287,7 +290,14 @@ impl<'a> PolicyAdmissionAppender<'a> {
         Self {
             ledger,
             initial_fact_gate: RefCell::new(Some(initial_fact_gate)),
+            appended: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The appended events; consuming the appender also releases the fact write gate it still
+    /// holds when the intent append failed.
+    fn into_appended(self) -> Vec<PersistedEvent> {
+        self.appended.into_inner()
     }
 }
 
@@ -298,6 +308,7 @@ impl EventAppender for PolicyAdmissionAppender<'_> {
     ) -> actingcommand_ledger::GlobalLedgerResult<PersistedEvent> {
         let event = self.ledger.append_durable(draft)?;
         self.initial_fact_gate.borrow_mut().take();
+        self.appended.borrow_mut().push(event.clone());
         Ok(event)
     }
 }
@@ -1091,10 +1102,12 @@ impl HostShared {
             let event = self.events.sanitize(event)?;
             let plan = CriticalEventPlan::new(CriticalOperation::PolicyDispatch, event)
                 .map_err(|_| critical_plan_error())?;
+            // Workflow #191 U5-F1: the policy guard is taken after the outcome gate and held
+            // from here across the intent append, the lease and the outcome append until both
+            // events are applied (lock order: policy_outcome_gate -> policy -> fact_write_gate).
+            let outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
+            let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
             let (outcome_keys, current_facts, fact_gate) = {
-                let _outcome_gate =
-                    lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-                let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
                 let outcome_keys = policy.outcome_key_snapshot()?;
                 if outcome_keys.generation.as_ref().is_none_or(|generation| {
                     generation.catalog_hash() != intent.catalog_hash
@@ -1119,6 +1132,7 @@ impl HostShared {
                     )?;
                 (outcome_keys, current_facts, fact_gate)
             };
+            drop(outcome_gate);
             if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
                 return Err(policy_admission_request(
                     "policy_facts_stale",
@@ -1163,15 +1177,6 @@ impl HostShared {
                                 error: RequestFailure::poison_without_terminal(ledger_error(
                                     "read_policy_ledger_position",
                                 )),
-                                effect: EffectDisposition::NotPerformed,
-                            };
-                        }
-                    };
-                    let mut policy = match lock(&self.policy, "validate_policy_dispatch") {
-                        Ok(policy) => policy,
-                        Err(error) => {
-                            return CriticalActionReport::Failed {
-                                error: RequestFailure::poison_without_terminal(error),
                                 effect: EffectDisposition::NotPerformed,
                             };
                         }
@@ -1346,7 +1351,56 @@ impl HostShared {
                         })
                 },
             );
-            if let Err(refresh) = self.refresh_policy_dispatches() {
+            // Workflow #191 U5-F1: still under the policy guard, the admission applies its own
+            // intent and outcome; an append that returned an error re-aligns the projection
+            // with the whole ledger. Consuming the appender first releases a fact write gate
+            // an intent append failure left held.
+            let appended = appender.into_appended();
+            let applied = match &result {
+                // Whole-event equality, so the sequence and the event id match too.
+                Ok(receipt) => match appended.as_slice() {
+                    [intent, outcome]
+                        if intent == receipt.intent() && outcome == receipt.outcome() =>
+                    {
+                        policy.apply_admission_events(
+                            receipt.intent(),
+                            receipt.outcome(),
+                            Some(&receipt.value().2),
+                        )
+                    }
+                    _ => Err(policy_admission_fatal(
+                        "policy_admission_event_invalid",
+                        "apply_policy_admission_events",
+                    )),
+                },
+                Err(CriticalExecutionError::Action { outcome, .. }) => match appended.as_slice() {
+                    [intent, appended_outcome] if appended_outcome == outcome.as_ref() => {
+                        policy.apply_admission_events(intent, outcome, None)
+                    }
+                    _ => Err(policy_admission_fatal(
+                        "policy_admission_event_invalid",
+                        "apply_policy_admission_events",
+                    )),
+                },
+                Err(
+                    CriticalExecutionError::IntentAppend(_)
+                    | CriticalExecutionError::OutcomeUndurable { .. },
+                ) => policy.refresh_dispatches(&self.ledger),
+            };
+            let applied = match applied {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let error = if error.is_fatal() {
+                        error
+                    } else {
+                        error.into_fatal()
+                    };
+                    self.fatal.mark(error.clone())?;
+                    Err(error)
+                }
+            };
+            drop(policy);
+            if let Err(applied) = applied {
                 return Err(match result {
                     Err(CriticalExecutionError::Action { error, outcome, .. }) => {
                         rejection = Some((
@@ -1360,14 +1414,14 @@ impl HostShared {
                         ));
                         (*error.error).with_complete_failure(
                             crate::error::RuntimeFailureRelation::AdmissionRecord,
-                            refresh,
+                            applied,
                         )
                     }
                     Err(error) => critical_execution_error(&error).with_complete_failure(
                         crate::error::RuntimeFailureRelation::AdmissionRecord,
-                        refresh,
+                        applied,
                     ),
-                    Ok(_) => refresh,
+                    Ok(_) => applied,
                 });
             }
             match result {
@@ -1842,15 +1896,6 @@ impl HostShared {
                 !connections.is_empty()
             });
         Ok(())
-    }
-
-    pub(super) fn refresh_policy_dispatches(&self) -> RuntimeHostResult<()> {
-        let result =
-            lock(&self.policy, "recover_policy_dispatches")?.refresh_dispatches(&self.ledger);
-        if let Err(error) = &result {
-            self.fatal.mark(error.clone())?;
-        }
-        result
     }
 
     pub(super) fn pinned_policy_catalog(

@@ -761,6 +761,23 @@ fn instance_arbitration_ranks(
     ranks
 }
 
+/// The policy half of the Runtime host.
+///
+/// Dispatch projection (Workflow #191 U5-F1):
+/// - I-M: once the host is shared, whenever `HostShared.policy` is idle, `seen_dispatches`,
+///   `dispatch_order`, `pinned_dispatches` and `control` equal what `recover_dispatches` would
+///   rebuild from every policy dispatch event in the ledger. `eligibility`, `arbitration` and
+///   `confirmed_run_admissions` are memory-only and not part of it.
+/// - I-W: once the host is shared, code that appends a policy dispatch event (intent, admitted,
+///   rejected, completed, execution recorded) (a) takes `HostShared.policy` before the append
+///   and holds it until the event is applied; (b) applies the appended event with the checks
+///   recovery runs, and turns any apply error fatal and marks it before releasing the guard;
+///   (c) when the append itself returns an error, so the ledger may or may not hold the event,
+///   re-aligns the whole projection with `refresh_dispatches` inside the same guard, and
+///   treats a failed refresh as in (b).
+/// - Startup reconciliation runs before the host is shared and ends with a full refresh.
+/// - Hence a reader that reads ledger position N and then takes the guard sees every policy
+///   dispatch event up to N.
 pub(crate) struct PolicyHost {
     store: CatalogStore,
     active: Option<LoadedCatalog>,
@@ -1468,6 +1485,107 @@ impl PolicyHost {
         Ok(())
     }
 
+    /// Workflow #191 U5-F1: applies one admission's intent and its admitted or rejected outcome
+    /// right after both were appended, under the same `HostShared.policy` guard, with the
+    /// checks `recover_dispatches` runs on them (R1-R6, R11). `admitted` is the receipt the
+    /// admission already committed into `control`, so an admitted outcome is compared with it
+    /// instead of committing it again; a rejected outcome leaves `control` unchanged. Nothing
+    /// is written unless every check passes.
+    pub(crate) fn apply_admission_events(
+        &mut self,
+        intent: &PersistedEvent,
+        outcome: &PersistedEvent,
+        admitted: Option<&PolicyAdmissionRecord>,
+    ) -> RuntimeHostResult<()> {
+        let EventPayload::Policy(PolicyPayload::DispatchIntent(intent_payload)) = intent.payload()
+        else {
+            return Err(fatal(
+                "policy_admission_event_invalid",
+                "apply_policy_admission_events",
+            ));
+        };
+        let (decision_id, mut record) = self.seen_intent(intent, intent_payload)?;
+        let (outcome_payload, next) = match (outcome.payload(), admitted) {
+            (EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)), Some(_)) => {
+                (payload, DispatchLifecycle::Admitted)
+            }
+            (EventPayload::Policy(PolicyPayload::DispatchRejected(payload)), None) => {
+                (payload, DispatchLifecycle::Rejected)
+            }
+            _ => {
+                return Err(fatal(
+                    "policy_admission_event_invalid",
+                    "apply_policy_admission_events",
+                ));
+            }
+        };
+        if outcome_payload.decision_id() != decision_id {
+            return Err(fatal(
+                "policy_dispatch_intent_missing",
+                "apply_policy_admission_events",
+            ));
+        }
+        transition_record(
+            &mut record,
+            outcome_payload,
+            DispatchLifecycle::Intent,
+            next,
+            outcome.sequence(),
+        )?;
+        let pinned = match admitted {
+            Some(admitted) => {
+                let admission = outcome_payload.admission().ok_or_else(|| {
+                    fatal(
+                        "policy_dispatch_admission_missing",
+                        "apply_policy_admission_events",
+                    )
+                })?;
+                if admission != admitted {
+                    return Err(fatal(
+                        "policy_budget_receipt_mismatch",
+                        "apply_policy_admission_events",
+                    ));
+                }
+                record.admission = Some(admission.clone());
+                Some(
+                    self.store
+                        .load_generation(&record.data.catalog_hash)?
+                        .generation
+                        .clone(),
+                )
+            }
+            None => None,
+        };
+        check_seen_intent(
+            &self.seen_dispatches,
+            &self.dispatch_order,
+            &decision_id,
+            intent.sequence(),
+        )?;
+        if pinned.is_some() && self.pinned_dispatches.contains_key(&decision_id) {
+            return Err(fatal(
+                "policy_admission_event_invalid",
+                "apply_policy_admission_events",
+            ));
+        }
+        insert_seen_intent(
+            &mut self.seen_dispatches,
+            &mut self.dispatch_order,
+            decision_id.clone(),
+            record,
+            intent.sequence(),
+        )?;
+        if let Some(generation) = pinned {
+            self.pinned_dispatches.insert(decision_id, generation);
+        }
+        Ok(())
+    }
+
+    /// Rebuilds the dispatch projection from the whole ledger. Since Workflow #191 U5-F1 its
+    /// callers are startup reconciliation (`reconcile_policy_dispatches`), an admission whose
+    /// intent or outcome append returned an error, and an execution or completion append that
+    /// returned an error; each runs it under the guard it appended under.
+    /// `PolicyHost::open` calls `recover_dispatches` directly.
     pub(crate) fn refresh_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
         self.recover_dispatches(ledger)
     }
@@ -1846,9 +1964,38 @@ impl PolicyHost {
                 "complete_policy_dispatch",
             ));
         }
-        if self.pinned_dispatches.remove(decision_id).is_none() {
+        if !self.pinned_dispatches.contains_key(decision_id) {
             return Err(request(
                 "policy_dispatch_not_pinned",
+                "complete_policy_dispatch",
+            ));
+        }
+        // The completion gets the checks recovery runs on it (R5, R8; Workflow #191 U5-F1)
+        // before anything is written.
+        let EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)) = completion.payload()
+        else {
+            return Err(fatal(
+                "policy_dispatch_completion_incomplete",
+                "complete_policy_dispatch",
+            ));
+        };
+        if payload.decision_id() != decision_id {
+            return Err(fatal(
+                "policy_dispatch_completion_incomplete",
+                "complete_policy_dispatch",
+            ));
+        }
+        if event_data(payload)? != dispatch.data
+            || completion.sequence() <= dispatch.intent_sequence
+        {
+            return Err(fatal(
+                "policy_dispatch_lifecycle_invalid",
+                "complete_policy_dispatch",
+            ));
+        }
+        if payload.admission() != dispatch.admission.as_ref() {
+            return Err(fatal(
+                "policy_dispatch_completion_incomplete",
                 "complete_policy_dispatch",
             ));
         }
@@ -1859,7 +2006,7 @@ impl PolicyHost {
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        dispatch.completed_run = if catalog
+        let completed_run = if catalog
             .compiled()
             .referenced_outcome_keys(&dispatch.data.task_id)
             .is_empty()
@@ -1872,6 +2019,8 @@ impl PolicyHost {
                 execution,
             )?)
         };
+        self.pinned_dispatches.remove(decision_id);
+        dispatch.completed_run = completed_run;
         dispatch.completed_sequence = Some(completion.sequence());
         dispatch.lifecycle = DispatchLifecycle::Completed;
         Ok(())
@@ -1955,6 +2104,13 @@ impl PolicyHost {
         if dispatch.execution.is_some() {
             return Err(fatal(
                 "policy_execution_duplicate",
+                "commit_policy_execution_outcome",
+            ));
+        }
+        // Recovery accepts an execution only on an admitted dispatch (R9, Workflow #191 U5-F1).
+        if dispatch.lifecycle != DispatchLifecycle::Admitted {
+            return Err(fatal(
+                "policy_execution_lifecycle_invalid",
                 "commit_policy_execution_outcome",
             ));
         }
@@ -2059,6 +2215,31 @@ impl PolicyHost {
         Ok(())
     }
 
+    /// One intent event as recovery records it (R1, R2); shared by `recover_dispatches` and
+    /// `apply_admission_events` (Workflow #191 U5-F1).
+    fn seen_intent(
+        &self,
+        event: &PersistedEvent,
+        payload: &actingcommand_contract::PolicyDispatchPayload,
+    ) -> RuntimeHostResult<(String, SeenDispatch)> {
+        let data = event_data(payload)?;
+        self.store.load_generation(payload.catalog_hash())?;
+        Ok((
+            payload.decision_id().to_owned(),
+            SeenDispatch {
+                data,
+                admission: None,
+                execution: None,
+                completed_run: None,
+                intent_sequence: event.sequence(),
+                admitted_sequence: None,
+                rejected_sequence: None,
+                completed_sequence: None,
+                lifecycle: DispatchLifecycle::Intent,
+            },
+        ))
+    }
+
     fn recover_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
         let mut events = Vec::new();
         for event_type in [
@@ -2087,37 +2268,14 @@ impl PolicyHost {
             };
             match payload {
                 PolicyPayload::DispatchIntent(payload) => {
-                    let data = event_data(payload)?;
-                    self.store.load_generation(payload.catalog_hash())?;
-                    let record = SeenDispatch {
-                        data,
-                        admission: None,
-                        execution: None,
-                        completed_run: None,
-                        intent_sequence: event.sequence(),
-                        admitted_sequence: None,
-                        rejected_sequence: None,
-                        completed_sequence: None,
-                        lifecycle: DispatchLifecycle::Intent,
-                    };
-                    if seen_dispatches
-                        .insert(payload.decision_id().to_owned(), record)
-                        .is_some()
-                    {
-                        return Err(fatal(
-                            "policy_decision_identity_conflict",
-                            "recover_policy_dispatches",
-                        ));
-                    }
-                    if dispatch_order
-                        .insert(event.sequence(), payload.decision_id().to_owned())
-                        .is_some()
-                    {
-                        return Err(fatal(
-                            "policy_dispatch_sequence_conflict",
-                            "recover_policy_dispatches",
-                        ));
-                    }
+                    let (decision_id, record) = self.seen_intent(&event, payload)?;
+                    insert_seen_intent(
+                        &mut seen_dispatches,
+                        &mut dispatch_order,
+                        decision_id,
+                        record,
+                        event.sequence(),
+                    )?;
                 }
                 PolicyPayload::DispatchAdmitted(payload) => {
                     let dispatch = transition_dispatch(
@@ -2729,6 +2887,19 @@ fn transition_dispatch<'a>(
             "recover_policy_dispatches",
         ));
     };
+    transition_record(intent, payload, expected, next, sequence)?;
+    Ok(intent)
+}
+
+/// Moves one recorded dispatch from `expected` to `next` at `sequence` (R5); shared by
+/// `recover_dispatches` and `apply_admission_events` (Workflow #191 U5-F1).
+fn transition_record(
+    intent: &mut SeenDispatch,
+    payload: &actingcommand_contract::PolicyDispatchPayload,
+    expected: DispatchLifecycle,
+    next: DispatchLifecycle,
+    sequence: u64,
+) -> RuntimeHostResult<()> {
     if intent.data != event_data(payload)?
         || intent.lifecycle != expected
         || sequence <= intent.intent_sequence
@@ -2750,7 +2921,44 @@ fn transition_dispatch<'a>(
         }
     }
     intent.lifecycle = next;
-    Ok(intent)
+    Ok(())
+}
+
+/// A new intent must name a decision and a sequence recovery has not seen (R3, R4).
+fn check_seen_intent(
+    seen: &BTreeMap<String, SeenDispatch>,
+    order: &BTreeMap<u64, String>,
+    decision_id: &str,
+    sequence: u64,
+) -> RuntimeHostResult<()> {
+    if seen.contains_key(decision_id) {
+        return Err(fatal(
+            "policy_decision_identity_conflict",
+            "recover_policy_dispatches",
+        ));
+    }
+    if order.contains_key(&sequence) {
+        return Err(fatal(
+            "policy_dispatch_sequence_conflict",
+            "recover_policy_dispatches",
+        ));
+    }
+    Ok(())
+}
+
+/// Records a new intent once R3 and R4 pass; shared by `recover_dispatches` and
+/// `apply_admission_events` (Workflow #191 U5-F1).
+fn insert_seen_intent(
+    seen: &mut BTreeMap<String, SeenDispatch>,
+    order: &mut BTreeMap<u64, String>,
+    decision_id: String,
+    record: SeenDispatch,
+    sequence: u64,
+) -> RuntimeHostResult<()> {
+    check_seen_intent(seen, order, &decision_id, sequence)?;
+    order.insert(sequence, decision_id.clone());
+    seen.insert(decision_id, record);
+    Ok(())
 }
 
 fn completed_policy_run_identity(
