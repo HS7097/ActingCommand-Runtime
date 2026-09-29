@@ -17,6 +17,7 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 mod recovery;
@@ -290,20 +291,14 @@ impl Adb {
     }
 
     pub fn ensure_device(&self, serial: &str, connect_allowed: bool) -> DeviceResult<String> {
-        match self.get_state(serial) {
-            Ok(state) if state == "device" => Ok(state),
-            first_state => {
-                if !connect_allowed {
-                    return Err(device_state_error(serial, first_state, None));
-                }
-                let connect_result = self.connect(serial).map(|_| ());
-                let second_state = self.get_state(serial);
-                match second_state {
-                    Ok(state) if state == "device" => Ok(state),
-                    state => Err(device_state_error(serial, state, Some(connect_result))),
-                }
-            }
-        }
+        device_state_sequence(
+            serial,
+            connect_allowed,
+            &answered_device,
+            &|| true,
+            &mut |_, args| self.run(args),
+        )
+        .into_ensured(serial)
     }
 
     /// One baseline probe; every command shares the caller's deadline and stop condition.
@@ -338,41 +333,14 @@ impl Adb {
             }
             result
         };
-        let first =
-            run(&["-s", serial, "get-state"]).map(|output| output.stdout.trim().to_string());
-        if let Err(error) = &first
-            && error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
-        {
-            return Err(error.clone());
-        }
-        if first.as_ref().is_ok_and(|state| state == "device") {
-            return first;
-        }
-        if !connect_allowed || stopped() || Instant::now() >= deadline {
-            return Err(device_state_error(serial, first, None));
-        }
-        let connected = run(&["connect", serial]).map(|_| ());
-        if let Err(error) = &connected
-            && error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
-        {
-            return Err(error.clone());
-        }
-        if stopped() || Instant::now() >= deadline {
-            return Err(device_state_error(serial, first, Some(connected)));
-        }
-        let second =
-            run(&["-s", serial, "get-state"]).map(|output| output.stdout.trim().to_string());
-        match second {
-            Ok(state) if state == "device" => Ok(state),
-            Err(error) => {
-                let detail = format!(
-                    "ADB baseline initial_state={first:?}; connect={connected:?}; final_error={error}"
-                );
-                let severity = error.severity();
-                Err(error.with_severity_and_message(severity, detail))
-            }
-            state => Err(device_state_error(serial, state, Some(connected))),
-        }
+        let sequence = device_state_sequence(
+            serial,
+            connect_allowed,
+            &answered_device,
+            &|| !stopped() && Instant::now() < deadline,
+            &mut |_, args| run(args),
+        );
+        until_verdict(serial, sequence)
     }
 
     pub fn screen_size(&self, serial: &str) -> DeviceResult<String> {
@@ -460,13 +428,31 @@ impl Adb {
     }
 
     /// Read-only: the package name of the activity Android reports as resumed
-    /// (`dumpsys activity activities`, `topResumedActivity` first, then
-    /// `mResumedActivity` / `ResumedActivity`). `Ok(None)` means the command ran but no
-    /// resumed activity was reported (for example mid-transition); an error is an ADB
-    /// failure, never a parse outcome.
-    pub fn foreground_package(&self, serial: &str) -> DeviceResult<Option<String>> {
-        let output = self.run(&["-s", serial, "shell", "dumpsys", "activity", "activities"])?;
-        Ok(parse_foreground_package(&output.stdout))
+    /// (`dumpsys activity activities`, filtered on the device to the marker lines,
+    /// `topResumedActivity` first, then `mResumedActivity` / `ResumedActivity`). `Ok(None)`
+    /// means the command ran but no resumed activity was reported (for example
+    /// mid-transition); an error is an ADB failure, never a parse outcome.
+    ///
+    /// Workflow #191 E1: the transport is re-checked (get-state, one `adb connect` when
+    /// `connect_allowed`, get-state) only when the query itself fails, and the query runs
+    /// once more only when that connect brought adbd back to `device`. Every outcome is the
+    /// one the former `ensure_device`-then-query order gave.
+    pub fn foreground_package(
+        &self,
+        serial: &str,
+        connect_allowed: bool,
+    ) -> DeviceResult<Option<String>> {
+        foreground_with_recheck(
+            serial,
+            connect_allowed,
+            &mut || self.query_foreground_package(serial),
+            &mut |_, args| self.run(args),
+        )
+    }
+
+    fn query_foreground_package(&self, serial: &str) -> DeviceResult<Option<String>> {
+        let output = self.run(&["-s", serial, "shell", FOREGROUND_QUERY])?;
+        foreground_query_result(&output)
     }
 
     pub fn screencap(&self, serial: &str, timeout: Duration) -> DeviceResult<BinaryOutput> {
@@ -586,6 +572,190 @@ fn activity_record_package(record: &str) -> Option<String> {
         return Some(package.to_owned());
     }
     None
+}
+
+/// Workflow #191 E1: every line the parser can read (all three markers) plus dumpsys' own
+/// exit status, so "no marker" stays `Ok(None)` and a failed dumpsys stays an error.
+const FOREGROUND_QUERY: &str = "{ dumpsys activity activities; echo ac_dumpsys_rc=$?; } | grep -e topResumedActivity= -e ResumedActivity: -e ac_dumpsys_rc=";
+const FOREGROUND_STATUS: &str = "ac_dumpsys_rc=";
+
+/// The filtered query's verdict: the text before the last status marker is parsed, a
+/// missing or non-integer status and a non-zero dumpsys status are errors.
+fn foreground_query_result(output: &CommandOutput) -> DeviceResult<Option<String>> {
+    let bounded = |text: &str| {
+        let text = AdbRecoveryText::new(text);
+        format!("{:?} (truncated={})", text.text, text.truncated)
+    };
+    let Some((body, status)) = output.stdout.trim_end().rsplit_once(FOREGROUND_STATUS) else {
+        return Err(DeviceError::fatal(format!(
+            "adb foreground query returned no dumpsys status; stdout: {}; stderr: {}",
+            bounded(&output.stdout),
+            bounded(&output.stderr)
+        )));
+    };
+    match status.parse::<i32>() {
+        Ok(0) => Ok(parse_foreground_package(body)),
+        Ok(code) => Err(DeviceError::fatal(format!(
+            "dumpsys activity activities exited with status {code}; stderr: {}",
+            bounded(&output.stderr)
+        ))),
+        Err(error) => Err(DeviceError::fatal(format!(
+            "adb foreground query returned a non-integer dumpsys status ({error}); stdout: {}; stderr: {}",
+            bounded(&output.stdout),
+            bounded(&output.stderr)
+        ))),
+    }
+}
+
+/// Workflow #191 E1: the foreground query first; only a failed query re-checks the
+/// transport, and only a connect that brought adbd back to `device` repeats the query.
+fn foreground_with_recheck(
+    serial: &str,
+    connect_allowed: bool,
+    query: &mut dyn FnMut() -> DeviceResult<Option<String>>,
+    run: &mut dyn FnMut(DeviceStateStep, &[&str]) -> DeviceResult<CommandOutput>,
+) -> DeviceResult<Option<String>> {
+    let query_error = match query() {
+        Err(error)
+            if error.resource_quiescence() != Some(DeviceResourceQuiescence::Unconfirmed) =>
+        {
+            error
+        }
+        answered => return answered, // Ok, or Unconfirmed as is
+    };
+    let sequence = device_state_sequence(serial, connect_allowed, &answered_device, &|| true, run);
+    if answered_device(&sequence.first) {
+        // adbd answers: the query itself failed (formerly get-state ok, dumpsys failed).
+        return Err(query_error);
+    }
+    sequence.into_ensured(serial).map_err(|error| {
+        let severity = error.severity();
+        let message = format!(
+            "{}; foreground query failed first: {query_error}",
+            error.message()
+        );
+        error.with_severity_and_message(severity, message)
+    })?;
+    // One connect brought adbd back to `device`: the former order queried right here.
+    query()
+}
+
+/// Workflow #191 E3: the one get-state → connect → get-state transport check behind
+/// `ensure_device`, `ensure_device_until`, `foreground_package` and the fenced input
+/// recovery. A step whose child or pipe cleanup is unconfirmed ends the sequence.
+#[derive(Clone, Copy)]
+enum DeviceStateStep {
+    InitialState,
+    Connect,
+    ConnectedState,
+}
+
+struct DeviceStateSequence {
+    first: DeviceResult<CommandOutput>,
+    connect: Option<DeviceResult<CommandOutput>>,
+    second: Option<DeviceResult<CommandOutput>>,
+}
+
+/// Runs get-state; stops when `answered`, unconfirmed, connect is not allowed or
+/// `proceed` is false. Otherwise runs connect; stops when it is unconfirmed or `proceed`
+/// is false. Otherwise runs get-state again.
+fn device_state_sequence(
+    serial: &str,
+    connect_allowed: bool,
+    answered: &dyn Fn(&DeviceResult<CommandOutput>) -> bool,
+    proceed: &dyn Fn() -> bool,
+    run: &mut dyn FnMut(DeviceStateStep, &[&str]) -> DeviceResult<CommandOutput>,
+) -> DeviceStateSequence {
+    let get_state = ["-s", serial, "get-state"];
+    let mut sequence = DeviceStateSequence {
+        first: run(DeviceStateStep::InitialState, &get_state),
+        connect: None,
+        second: None,
+    };
+    let first = &sequence.first;
+    if answered(first) || unconfirmed(first).is_some() || !connect_allowed || !proceed() {
+        return sequence;
+    }
+    let connect = sequence
+        .connect
+        .insert(run(DeviceStateStep::Connect, &["connect", serial]));
+    if unconfirmed(connect).is_some() || !proceed() {
+        return sequence;
+    }
+    sequence.second = Some(run(DeviceStateStep::ConnectedState, &get_state));
+    sequence
+}
+
+impl DeviceStateSequence {
+    /// The `ensure_device` verdict: a first `device` answer, else the first unconfirmed
+    /// step as is, else the second answer, else `device_state_error`.
+    fn into_ensured(self, serial: &str) -> DeviceResult<String> {
+        if answered_device(&self.first) {
+            return trimmed_state(&self.first);
+        }
+        let steps = [
+            Some(&self.first),
+            self.connect.as_ref(),
+            self.second.as_ref(),
+        ];
+        if let Some(error) = steps.into_iter().flatten().find_map(unconfirmed) {
+            return Err(error.clone());
+        }
+        let last = self.second.as_ref().unwrap_or(&self.first);
+        if answered_device(last) {
+            return trimmed_state(last);
+        }
+        let connect = self.connect.map(|result| result.map(|_| ()));
+        Err(device_state_error(serial, trimmed_state(last), connect))
+    }
+}
+
+/// The `ensure_device_until` verdict, shaped as before Workflow #191 E3: a failed second
+/// get-state keeps its own error object under the baseline detail.
+fn until_verdict(serial: &str, sequence: DeviceStateSequence) -> DeviceResult<String> {
+    let first = trimmed_state(&sequence.first);
+    if first.as_ref().is_ok_and(|state| state == "device") {
+        return first;
+    }
+    let steps = [Some(&sequence.first), sequence.connect.as_ref()];
+    if let Some(error) = steps.into_iter().flatten().find_map(unconfirmed) {
+        return Err(error.clone());
+    }
+    let connected = sequence.connect.map(|result| result.map(|_| ()));
+    let Some(second) = sequence.second else {
+        return Err(device_state_error(serial, first, connected));
+    };
+    match (trimmed_state(&second), connected) {
+        (Ok(state), _) if state == "device" => Ok(state),
+        (Err(error), Some(connected)) => {
+            let detail = format!(
+                "ADB baseline initial_state={first:?}; connect={connected:?}; final_error={error}"
+            );
+            let severity = error.severity();
+            Err(error.with_severity_and_message(severity, detail))
+        }
+        (state, connected) => Err(device_state_error(serial, state, connected)),
+    }
+}
+
+fn answered_device(result: &DeviceResult<CommandOutput>) -> bool {
+    result
+        .as_ref()
+        .is_ok_and(|output| output.stdout.trim() == "device")
+}
+
+fn unconfirmed(result: &DeviceResult<CommandOutput>) -> Option<&DeviceError> {
+    result
+        .as_ref()
+        .err()
+        .filter(|error| error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed))
+}
+
+fn trimmed_state(result: &DeviceResult<CommandOutput>) -> DeviceResult<String> {
+    result
+        .as_ref()
+        .map(|output| output.stdout.trim().to_owned())
+        .map_err(DeviceError::clone)
 }
 
 fn device_state_error(
@@ -847,9 +1017,19 @@ fn run_raw_with_boundary(
                     None => expired,
                 });
             }
-            thread::sleep(boundary.map_or(Duration::from_millis(25), |(deadline, _)| {
-                Duration::from_millis(25).min(deadline.saturating_duration_since(Instant::now()))
-            }));
+            let mut wait = timeout.saturating_sub(started.elapsed());
+            if let Some((deadline, _)) = boundary {
+                // stopped() has no wake-up of its own: keep the 25 ms check period.
+                wait = wait
+                    .min(COMMAND_POLL_INTERVAL)
+                    .min(deadline.saturating_duration_since(Instant::now()));
+            }
+            wait_for_child_exit(&child, wait).map_err(|error| {
+                DeviceError::fatal(format!(
+                    "failed to wait for {name} {} process: {error}",
+                    args.join(" ")
+                ))
+            })?;
         }
     })();
     let (status, mut failure) = match execution {
@@ -914,38 +1094,97 @@ fn run_raw_with_boundary(
     })
 }
 
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Workflow #191 E2: blocks until the child exits or `wait` elapses; the caller's loop
+/// re-reads the exit through `try_wait`.
+#[cfg(windows)]
+fn wait_for_child_exit(child: &Child, wait: Duration) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    // Round up so a sub-millisecond remainder waits instead of spinning; never INFINITE.
+    let millis = u32::try_from(wait.as_nanos().div_ceil(1_000_000))
+        .map_or(u32::MAX - 1, |millis| millis.min(u32::MAX - 1));
+    // SAFETY: `child` owns the process handle for the whole call; waiting neither closes
+    // nor transfers it.
+    match unsafe { WaitForSingleObject(child.as_raw_handle(), millis) } {
+        WAIT_OBJECT_0 | WAIT_TIMEOUT => Ok(()),
+        other => Err(io::Error::other(format!(
+            "WaitForSingleObject returned {other:#x}: {}",
+            io::Error::last_os_error()
+        ))),
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_for_child_exit(_child: &Child, wait: Duration) -> io::Result<()> {
+    // Non-Windows keeps the 25 ms polling.
+    thread::sleep(wait.min(COMMAND_POLL_INTERVAL));
+    Ok(())
+}
+
+/// Workflow #191 E2: a pipe reader thread and its completion signal, so the owner wakes
+/// on completion instead of polling `is_finished`.
+struct PipeReader {
+    handle: JoinHandle<io::Result<Vec<u8>>>,
+    done: mpsc::Receiver<()>,
+}
+
+/// Sends the completion signal when the reader thread ends, also while a panic unwinds.
+/// The receiver is dropped only after the owner's join (the signal was sent before) or
+/// never (it is leaked with a forgotten reader), so the send cannot fail: this is the one
+/// ignored result of the executor and it hides no state.
+struct ReaderDone(mpsc::Sender<()>);
+
+impl Drop for ReaderDone {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
 fn spawn_pipe_reader(
-    mut reader: impl Read + Send + 'static,
+    reader: impl Read + Send + 'static,
     name: &'static str,
-) -> DeviceResult<JoinHandle<io::Result<Vec<u8>>>> {
+) -> DeviceResult<PipeReader> {
+    let (sender, done) = mpsc::channel();
     thread::Builder::new()
         .spawn(move || {
+            // Declared first, dropped last: the pipe handle is closed before the signal.
+            let _done = ReaderDone(sender);
+            let mut reader = reader;
             let mut bytes = Vec::new();
             reader.read_to_end(&mut bytes)?;
             Ok(bytes)
         })
+        .map(|handle| PipeReader { handle, done })
         .map_err(|error| DeviceError::fatal(format!("failed to start {name} pipe reader: {error}")))
 }
 
 fn join_pipe_reader(
-    reader: &mut Option<JoinHandle<io::Result<Vec<u8>>>>,
+    reader: &mut Option<PipeReader>,
     stream_name: &'static str,
     deadline: Instant,
     program: CommandProgram,
 ) -> DeviceResult<Vec<u8>> {
-    let Some(handle) = reader.as_ref() else {
+    let Some(pipe) = reader.as_ref() else {
         return Ok(Vec::new());
     };
-    while !handle.is_finished() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(5));
-    }
+    // The signal is sent just before the thread finishes, so the received signal, not
+    // `is_finished`, is what proves the reader closed its pipe.
+    let open = !pipe.handle.is_finished()
+        && matches!(
+            pipe.done
+                .recv_timeout(deadline.saturating_duration_since(Instant::now())),
+            Err(RecvTimeoutError::Timeout)
+        );
     let name = program.name;
     let backend = if stream_name == "stdout" {
         program.stdout_reader
     } else {
         program.stderr_reader
     };
-    if !handle.is_finished() {
+    if open {
         return Err(DeviceError::fatal(format!(
             "{name} {stream_name} reader remains open at close deadline"
         ))
@@ -962,6 +1201,7 @@ fn join_pipe_reader(
     reader
         .take()
         .expect("acquired reader")
+        .handle
         .join()
         .map_err(|_| DeviceError::fatal(format!("{name} {stream_name} reader thread panicked")))
         .and_then(|result| {
@@ -1429,12 +1669,14 @@ mod tests {
 
     #[test]
     fn join_pipe_reader_returns_fatal_error_when_reader_panics() {
-        let reader = thread::spawn(|| -> io::Result<Vec<u8>> {
+        let (sender, done) = mpsc::channel();
+        let handle = thread::spawn(|| -> io::Result<Vec<u8>> {
+            let _done = ReaderDone(sender);
             panic!("injected reader panic");
         });
 
         let err = join_pipe_reader(
-            &mut Some(reader),
+            &mut Some(PipeReader { handle, done }),
             "stdout",
             Instant::now() + Duration::from_secs(1),
             ADB_PROGRAM,
