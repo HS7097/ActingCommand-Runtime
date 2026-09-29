@@ -16,7 +16,7 @@
 
 # ActingCommand Runtime
 
-ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上执行多目标自动化。内核不含任何具体目标的身份：合约、默认值、基准与夹具都由守卫测试扫描，保证其保持中立（`tools/actinglab-architecture/tests/workspace_guards.rs:239`、`:333`）。全部目标知识以声明式资源包的形式存在于独立的资源仓，运行时只接受带哈希校验的密封包（`actingctl task-run` 要求 `--package`，并要求 `--expected-sha256` 或 `--package-ref` 二者之一）。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v2` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。所有边界失败关闭：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级。
+ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上执行多目标自动化。内核不含任何具体目标的身份：代码、合约、默认值与夹具都由守卫测试扫描，保证其保持中立（`tools/actinglab-architecture/tests/workspace_guards.rs:239`、`:333`）。全部目标知识以声明式资源包的形式存在于独立的资源仓，运行时只接受带哈希校验的密封包（`actingctl task-run` 要求 `--package`，并要求 `--expected-sha256` 或 `--package-ref` 二者之一）。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v2` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。所有边界失败关闭：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级。
 
 [CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / test） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · 许可 `AGPL-3.0-only` · [协作看板](https://github.com/HS7097/ActingCommand-Workflow) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI) · [历史归档](https://github.com/HS7097/ActingCommand-Legacy-Runtime)
 
