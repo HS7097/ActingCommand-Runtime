@@ -60,6 +60,20 @@ UTF-8 domain header `actingcommand.signature-prefix.v1\n` followed by each nativ
 requested and observed bounds, event count, digest and completeness. Limits fail
 explicitly; no truncated input is reported as complete.
 
+The input keeps this v1 prefix. The Host and B identify the catalog with a v2
+identity carrying `"scope": "catalog_events"`. It covers only
+`signature.registered` and `signature.retired` events through `observed`, the
+smaller of the requested bound and the snapshot head sequence. Its SHA-256 covers
+the UTF-8 header `actingcommand.signature-catalog.v2\n`, then
+`through=<bound>\nobserved=<observed>\n`, then each catalog `PersistedEvent`
+serialized by `serde_json` and a newline, in sequence order. `event_count` counts
+catalog events only, up to 16,384 events and 32 MiB; beyond them the request fails
+with `signature_catalog_event_limit` or `signature_catalog_byte_limit`. It is
+complete when the source is complete and `observed` equals the bound. Matched
+records written before this identity keep their v1 catalog identity without
+`scope` and remain valid. A cursor from an earlier build is rejected with
+`signature_cursor_snapshot_mismatch`; actinglab and actingd must be the same build.
+
 Pages contain at most 64 rows, ordered by source sequence then signature ID.
 Every row binds the source EventId/sequence and registration reference. Totals
 describe the entire bounded scan, while `row_offset`, returned rows and

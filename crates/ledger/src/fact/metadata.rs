@@ -221,4 +221,39 @@ impl LedgerEventMetadata {
     ) {
         self.artifact_evictions = proofs;
     }
+
+    /// Converts authenticated metadata into a fact. `Ok(None)` from `availability` leaves
+    /// that artifact Unrecorded; the retention read state is left for the caller to annotate.
+    pub(crate) fn into_event_with_artifact_availability(
+        self,
+        availability: &mut dyn FnMut(
+            &ProjectedArtifactReference,
+        )
+            -> Result<Option<ArtifactAvailability>, FactValidationError>,
+    ) -> Result<PersistedEvent, FactValidationError> {
+        let mut artifacts = Vec::with_capacity(self.artifacts.len());
+        for reference in self.artifacts {
+            artifacts.push(match availability(&reference)? {
+                Some(state) => LedgerArtifactReference::restored(reference, state)?,
+                None => LedgerArtifactReference::recorded(reference)?,
+            });
+        }
+        let event = PersistedEvent {
+            schema_version: self.schema_version,
+            event_id: self.event_id,
+            sequence: self.sequence,
+            timestamp_unix_ms: self.timestamp_unix_ms,
+            event_type: self.event_type,
+            severity: self.severity,
+            sensitivity: self.sensitivity,
+            origin: self.origin,
+            links: self.links,
+            payload_schema: self.payload_schema,
+            payload: self.payload,
+            artifacts,
+            artifact_evictions: artifact::ArtifactRetentionReadState::default(),
+        };
+        event.validate()?;
+        Ok(event)
+    }
 }

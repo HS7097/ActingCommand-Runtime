@@ -84,6 +84,14 @@ impl SignatureRegistrationRef {
     }
 }
 
+/// Which events a prefix identity covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignaturePrefixScope {
+    /// Only `signature.registered` and `signature.retired` events through the bound.
+    CatalogEvents,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignaturePrefixIdentity {
@@ -92,20 +100,36 @@ pub struct SignaturePrefixIdentity {
     pub event_count: usize,
     pub sha256: String,
     pub complete: bool,
+    /// Absent: the v1 ledger prefix from sequence 1. Records written without this key
+    /// read back as `None` and serialize without it, byte for byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<SignaturePrefixScope>,
 }
 
 impl SignaturePrefixIdentity {
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        if self.through_sequence == 0
-            || self.observed_through_sequence > self.through_sequence
-            || self.event_count > MAX_SIGNATURE_PREFIX_EVENTS
-            || self.event_count as u64 > self.observed_through_sequence
-            || (self.event_count == 0) != (self.observed_through_sequence == 0)
-            || !is_sha256(&self.sha256)
-            || self.complete
-                && (self.observed_through_sequence != self.through_sequence
-                    || self.event_count as u64 != self.through_sequence)
-        {
+        let invalid_prefix = match self.scope {
+            None => {
+                self.through_sequence == 0
+                    || self.observed_through_sequence > self.through_sequence
+                    || self.event_count > MAX_SIGNATURE_PREFIX_EVENTS
+                    || self.event_count as u64 > self.observed_through_sequence
+                    || (self.event_count == 0) != (self.observed_through_sequence == 0)
+                    || !is_sha256(&self.sha256)
+                    || self.complete
+                        && (self.observed_through_sequence != self.through_sequence
+                            || self.event_count as u64 != self.through_sequence)
+            }
+            Some(SignaturePrefixScope::CatalogEvents) => {
+                self.through_sequence == 0
+                    || self.observed_through_sequence > self.through_sequence
+                    || self.event_count > MAX_SIGNATURE_PREFIX_EVENTS
+                    || self.event_count as u64 > self.observed_through_sequence
+                    || !is_sha256(&self.sha256)
+                    || self.complete && self.observed_through_sequence != self.through_sequence
+            }
+        };
+        if invalid_prefix {
             return Err(invalid("signature_prefix"));
         }
         Ok(())
@@ -259,7 +283,8 @@ impl SignatureReplayPage {
             .checked_add(self.missing_fields_count)
             .filter(|value| *value <= maximum)
             .ok_or_else(|| invalid("signature_counts"))?;
-        if self.rows.len() > usize::from(MAX_SIGNATURE_PAGE_ROWS)
+        if self.input.scope.is_some()
+            || self.rows.len() > usize::from(MAX_SIGNATURE_PAGE_ROWS)
             || self.gaps.len() > 5
             || self
                 .gaps
