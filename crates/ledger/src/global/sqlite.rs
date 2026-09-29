@@ -47,7 +47,11 @@ const META_COLUMNS: &str = "singleton,schema_version,next_sequence,head_sequence
 type SqlRow = Vec<SqlValue>;
 type ReadBudget = Option<(u64, usize, Instant)>;
 
-/// Checks an already verified opaque fact against its rows in the caller's transaction.
+/// Checks an already verified opaque fact against its rows in the caller's transaction:
+/// the stored row is authenticated by hash, tag and predecessor, its index, link and
+/// artifact rows must match the fact, and so must its stored record (payload and schema
+/// version included): equal canonical bytes accept, otherwise the strictly decoded stored
+/// record must equal the fact's. Re-serialization alone never rejects a row.
 /// This synchronous read borrows the existing owner; it does not lock, commit, append,
 /// or read artifact bytes. Full-ledger recovery remains the source of the input fact.
 pub fn verify_transaction_event(
@@ -55,6 +59,15 @@ pub fn verify_transaction_event(
     transaction: &RuntimeTransaction<'_, '_>,
     event: &PersistedEvent,
 ) -> GlobalLedgerResult<()> {
+    verify_transaction_row(database, transaction, event).map(|_| ())
+}
+
+/// `verify_transaction_event`, returning the authenticated stored row's record hash.
+fn verify_transaction_row(
+    database: &RuntimeDatabase,
+    transaction: &RuntimeTransaction<'_, '_>,
+    event: &PersistedEvent,
+) -> GlobalLedgerResult<String> {
     const OPERATION: &str = "verify_transaction_event";
     if !transaction.belongs_to(database) {
         return Err(failure("ledger_transaction_owner_mismatch", OPERATION));
@@ -122,12 +135,8 @@ pub fn verify_transaction_event(
     let Some(SqlValue::Blob(stored)) = row.get(10) else {
         return Err(failure("ledger_record_mismatch", OPERATION));
     };
-    let projected = project_stored_bytes(
-        database,
-        &StoredEventRecord::from_event(event),
-        stored.clone(),
-        previous.as_deref(),
-    )?;
+    let expected = StoredEventRecord::from_event(event);
+    let projected = project_stored_bytes(database, &expected, stored.clone(), previous.as_deref())?;
     if *row != projected.event || (event.sequence() == head && projected.hash != *head_hash) {
         return Err(failure("ledger_record_mismatch", OPERATION));
     }
@@ -151,7 +160,22 @@ pub fn verify_transaction_event(
     if links != vec![projected.links] || artifacts != projected.artifacts {
         return Err(failure("ledger_index_mismatch", OPERATION));
     }
-    Ok(())
+    // Canonical bytes are a sufficient condition only; a non-canonical stored row (an
+    // older shape of the same value) is compared as its strictly decoded record.
+    let canonical = serde_json::to_vec(&expected).map_err(|error| {
+        GlobalLedgerError::json("event_serialization_failed", OPERATION, &error)
+    })?;
+    if canonical != *stored {
+        let value = serde_json::from_slice::<UniqueJsonValue>(stored)
+            .map_err(|error| GlobalLedgerError::json("corrupt_ledger_record", OPERATION, &error))?
+            .0;
+        let decoded: StoredEventRecord = serde_json::from_value(value)
+            .map_err(|error| GlobalLedgerError::json("corrupt_ledger_record", OPERATION, &error))?;
+        if decoded != expected {
+            return Err(failure("ledger_record_mismatch", OPERATION));
+        }
+    }
+    Ok(projected.hash)
 }
 
 #[derive(Clone)]
@@ -202,21 +226,24 @@ impl SqliteMarker {
                 let unique: UniqueJsonValue = serde_json::from_str(material).map_err(|error| {
                     GlobalLedgerError::json("invalid_cutover_marker", "read_cutover_marker", &error)
                 })?;
-                let record = serde_json::from_value(unique.0).map_err(|error| {
-                    GlobalLedgerError::json(
-                        "invalid_cutover_marker",
-                        "decode_cutover_marker",
-                        &error,
-                    )
-                })?;
-                let marker = Self::migrated(&record)?;
-                if marker.material.as_ref() != Some(material) {
-                    return Err(failure(
-                        "invalid_cutover_marker",
-                        "verify_cutover_marker_bytes",
-                    ));
+                let record: actingcommand_contract::LedgerMigrationRecord =
+                    serde_json::from_value(unique.0).map_err(|error| {
+                        GlobalLedgerError::json(
+                            "invalid_cutover_marker",
+                            "decode_cutover_marker",
+                            &error,
+                        )
+                    })?;
+                record
+                    .validate()
+                    .map_err(|error| failure(error.code(), "validate_cutover_marker"))?;
+                // The stored text is authoritative: the keyed meta tag covers these exact
+                // bytes, and the decoded record is never re-encoded for comparison.
+                Self {
+                    state: "ready",
+                    migration: Some(Box::new(record)),
+                    material: Some(material.clone()),
                 }
-                marker
             }
             _ => return Err(failure("invalid_cutover_marker", "read_cutover_marker")),
         };
@@ -235,19 +262,41 @@ impl SqliteMarker {
         }
         Ok(marker)
     }
+    /// Import side: the prefix identity is taken over the write-side canonical bytes that
+    /// the import is about to store.
     fn verify_events(&self, events: &[PersistedEvent]) -> GlobalLedgerResult<()> {
+        let prefix = match &self.migration {
+            Some(record) => {
+                let mut digest = super::migration::PrefixDigest::new();
+                for event in events {
+                    if digest.count() == record.source_event_count {
+                        break;
+                    }
+                    digest.push(&super::migration::canonical_record(event)?);
+                }
+                Some(digest.finish())
+            }
+            None => None,
+        };
         self.verify_records(
             &events
                 .iter()
                 .map(StoredEventRecord::from_event)
                 .collect::<Vec<_>>(),
+            prefix.as_ref(),
         )
     }
-    fn verify_records(&self, events: &[StoredEventRecord]) -> GlobalLedgerResult<()> {
+    /// `prefix` is the identity of the first `source_event_count` records' bytes: the stored
+    /// blobs on verification, the write-side canonical bytes on import.
+    fn verify_records(
+        &self,
+        events: &[StoredEventRecord],
+        prefix: Option<&super::migration::PrefixIdentity>,
+    ) -> GlobalLedgerResult<()> {
         if let Some(record) = &self.migration {
             let prefix_length = usize::try_from(record.source_event_count)
                 .map_err(|_| failure("migration_prefix_invalid", "verify_cutover_prefix"))?;
-            let prefix = events
+            events
                 .get(..prefix_length)
                 .ok_or_else(|| failure("migration_prefix_missing", "verify_cutover_prefix"))?;
             let completion = events
@@ -259,19 +308,14 @@ impl SqliteMarker {
                 ) => payload.migration(),
                 _ => None,
             };
-            let head = prefix
-                .last()
-                .map(super::migration::canonical_stored_record)
-                .transpose()?
-                .map_or_else(
-                    || actingcommand_runtime_database::digest(&[]),
-                    |bytes| actingcommand_runtime_database::digest(&bytes),
-                );
+            let Some(prefix) = prefix.filter(|prefix| prefix.count == record.source_event_count)
+            else {
+                return Err(failure("migration_prefix_missing", "verify_cutover_prefix"));
+            };
             if completion.sequence() != record.cutover_sequence
                 || payload_record != Some(record.as_ref())
-                || super::migration::canonical_stored_digest(prefix)?
-                    != record.imported_content_sha256
-                || head != record.source_head_sha256
+                || prefix.content_sha256 != record.imported_content_sha256
+                || prefix.head_sha256 != record.source_head_sha256
             {
                 return Err(failure(
                     "migration_prefix_mismatch",
@@ -2064,6 +2108,22 @@ fn verify_snapshot_records(
             "verify_database_format",
         ));
     }
+    // The migrated prefix identity over the stored bytes, before the rows are consumed. It
+    // is compared only after every row, relation and the meta row are authenticated; a
+    // non-Blob row stops the walk and is reported by the row checks below.
+    let prefix = marker.migration.as_ref().map(|record| {
+        let mut digest = super::migration::PrefixDigest::new();
+        for row in &raw.events {
+            if digest.count() == record.source_event_count {
+                break;
+            }
+            let Some(SqlValue::Blob(bytes)) = row.get(10) else {
+                break;
+            };
+            digest.push(bytes);
+        }
+        digest.finish()
+    });
     let mut ids = BTreeSet::new();
     let mut next = 1;
     let mut head_hash: Option<String> = None;
@@ -2095,7 +2155,7 @@ fn verify_snapshot_records(
     {
         return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
     }
-    marker.verify_records(&events)?;
+    marker.verify_records(&events, prefix.as_ref())?;
     Ok(VerifiedSnapshotRecords {
         records: events,
         metadata,

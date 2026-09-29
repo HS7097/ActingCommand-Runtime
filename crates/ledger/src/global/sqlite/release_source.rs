@@ -86,7 +86,8 @@ impl fmt::Debug for VerifiedReleaseLedgerSource {
     }
 }
 
-/// Captures the original canonical identity after checking the fact in this same transaction.
+/// Captures the authenticated stored row's record hash after checking the fact against
+/// that row in this same transaction.
 pub fn capture_release_source_reference(
     database: &RuntimeDatabase,
     transaction: &RuntimeTransaction<'_, '_>,
@@ -94,13 +95,12 @@ pub fn capture_release_source_reference(
 ) -> GlobalLedgerResult<ReleaseLedgerSourceReference> {
     require_owner(database, transaction)?;
     require_release_payload(event.payload())?;
-    verify_transaction_event(database, transaction, event)?;
-    let bytes = super::super::migration::canonical_record(event)?;
+    let record_sha256 = verify_transaction_row(database, transaction, event)?;
     Ok(ReleaseLedgerSourceReference {
         schema_version: SOURCE_SCHEMA.to_owned(),
         event_id: *event.event_id(),
         sequence: event.sequence(),
-        record_sha256: format!("sha256:{:x}", Sha256::digest(&bytes)),
+        record_sha256,
     })
 }
 

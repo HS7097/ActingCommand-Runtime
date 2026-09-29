@@ -195,12 +195,7 @@ impl LedgerMaintenance {
             ));
         }
         let events = snapshot.events().to_vec();
-        let content = canonical_digest(&events)?;
-        let head = events
-            .last()
-            .map(canonical_record)
-            .transpose()?
-            .map_or_else(|| digest(&[]), |bytes| digest(&bytes));
+        let prefix = canonical_digest(&events)?;
         let identity = LedgerSourceIdentity {
             source_sha256: digest(&serde_json::to_vec(&before).map_err(|error| {
                 GlobalLedgerError::json(
@@ -212,8 +207,8 @@ impl LedgerMaintenance {
             event_count: events.len() as u64,
             first_sequence: events.first().map_or(0, PersistedEvent::sequence),
             last_sequence: events.last().map_or(0, PersistedEvent::sequence),
-            head_sha256: head,
-            content_sha256: content,
+            head_sha256: prefix.head_sha256,
+            content_sha256: prefix.content_sha256,
             files: before,
         };
         Ok(FrozenLedgerSource {
@@ -367,34 +362,62 @@ impl LedgerMaintenance {
     }
 }
 
+/// Write side only: the canonical bytes that append and import store for a fact.
 pub(super) fn canonical_record(event: &PersistedEvent) -> GlobalLedgerResult<Vec<u8>> {
-    canonical_stored_record(&crate::fact::StoredEventRecord::from_event(event))
-}
-pub(super) fn canonical_stored_record(
-    record: &crate::fact::StoredEventRecord,
-) -> GlobalLedgerResult<Vec<u8>> {
-    serde_json::to_vec(record).map_err(|error| {
+    serde_json::to_vec(&crate::fact::StoredEventRecord::from_event(event)).map_err(|error| {
         GlobalLedgerError::json("migration_record_invalid", "encode_import_record", &error)
     })
 }
-pub(super) fn canonical_digest(events: &[PersistedEvent]) -> GlobalLedgerResult<String> {
-    canonical_stored_digest(
-        &events
-            .iter()
-            .map(crate::fact::StoredEventRecord::from_event)
-            .collect::<Vec<_>>(),
-    )
-}
-pub(super) fn canonical_stored_digest(
-    events: &[crate::fact::StoredEventRecord],
-) -> GlobalLedgerResult<String> {
-    let mut hash = Sha256::new();
+/// The source identity: a `PrefixDigest` over the write-side canonical bytes.
+pub(super) fn canonical_digest(events: &[PersistedEvent]) -> GlobalLedgerResult<PrefixIdentity> {
+    let mut prefix = PrefixDigest::new();
     for event in events {
-        let bytes = canonical_stored_record(event)?;
-        hash.update((bytes.len() as u64).to_be_bytes());
-        hash.update(bytes);
+        prefix.push(&canonical_record(event)?);
     }
-    Ok(format!("sha256:{:x}", hash.finalize()))
+    Ok(prefix.finish())
+}
+
+/// Record count, content digest and last-record digest of a ledger prefix.
+pub(super) struct PrefixIdentity {
+    pub(super) count: u64,
+    pub(super) content_sha256: String,
+    pub(super) head_sha256: String,
+}
+
+/// Each record's length (u64 big-endian) and bytes into one SHA-256 (`sha256:{hex}`), and
+/// `digest` of the last record (`digest(&[])` for an empty prefix). The import side passes
+/// the write-side canonical bytes; verification passes the stored blobs as read. A decoded
+/// record is never re-encoded for this identity.
+pub(super) struct PrefixDigest {
+    hash: Sha256,
+    count: u64,
+    head: Option<String>,
+}
+
+impl PrefixDigest {
+    pub(super) fn new() -> Self {
+        Self {
+            hash: Sha256::new(),
+            count: 0,
+            head: None,
+        }
+    }
+    pub(super) fn push(&mut self, bytes: &[u8]) {
+        self.hash.update((bytes.len() as u64).to_be_bytes());
+        self.hash.update(bytes);
+        self.count += 1;
+        self.head = Some(digest(bytes));
+    }
+    pub(super) fn count(&self) -> u64 {
+        self.count
+    }
+    pub(super) fn finish(self) -> PrefixIdentity {
+        PrefixIdentity {
+            count: self.count,
+            content_sha256: format!("sha256:{:x}", self.hash.finalize()),
+            head_sha256: self.head.unwrap_or_else(|| digest(&[])),
+        }
+    }
 }
 fn failure(code: &'static str, operation: &'static str) -> GlobalLedgerError {
     GlobalLedgerError::fatal(code, operation)
