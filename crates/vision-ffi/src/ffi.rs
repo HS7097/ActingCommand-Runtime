@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::artifacts::FastDeployPpocrInvokeRequestView;
 use crate::{
     CudaDeviceIdentity, CudaDeviceInventory, FastDeployPpocrArtifacts,
-    FastDeployPpocrInvokeRequest, FastDeployPpocrInvokeResponse, NnClassificationResult, NnEngine,
-    NnInferenceRequest, OcrEngine, OcrInferenceOutput, OcrInferenceRequest, OcrInferenceResult,
-    OcrInvocationId, OcrSessionBinding, OcrSessionId, OnnxExecutionProvider, OnnxRuntimeArtifacts,
-    OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
-    VisionProviderArtifactManifest,
+    FastDeployPpocrInvokeResponse, NnClassificationResult, NnEngine, NnInferenceRequest,
+    OCR_PROVIDER_REQUEST_SCHEMA_VERSION, OcrEngine, OcrInferenceOutput, OcrInferenceRequest,
+    OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrSessionBinding, OcrSessionId,
+    OnnxExecutionProvider, OnnxRuntimeArtifacts, OnnxRuntimeInvokeRequest, VisionFfiError,
+    VisionFfiErrorCode, VisionFfiResult, VisionProviderArtifactManifest,
 };
 use libloading::Library;
 use serde::{Serialize, de::DeserializeOwned};
@@ -863,22 +864,35 @@ pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> Vision
 
 impl OcrEngine for FastDeployPpocrBackend {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
-        self.read_text_with_attestation(request)
-            .map(|output| output.result)
+        self.read_text_view(request.view())
     }
 
     fn read_text_with_attestation(
         &mut self,
         request: OcrInferenceRequest,
     ) -> VisionFfiResult<OcrInferenceOutput> {
+        self.read_text_with_attestation_view(request.view())
+    }
+
+    fn read_text_view(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+    ) -> VisionFfiResult<OcrInferenceResult> {
+        self.read_text_with_attestation_view(request)
+            .map(|output| output.result)
+    }
+
+    fn read_text_with_attestation_view(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+    ) -> VisionFfiResult<OcrInferenceOutput> {
         request.validate()?;
-        let validation_request = request.clone();
         let Some(artifacts) = &self.artifacts else {
             let (mut result, diagnostics): (OcrInferenceResult, _) =
                 invoke_ppocr_json(self.read_text_json, self.free_buffer, &request)?;
             result.ppocr_diagnostics = diagnostics;
             result
-                .validate(&validation_request)
+                .validate_for(request)
                 .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidResponse,
@@ -895,13 +909,14 @@ impl OcrEngine for FastDeployPpocrBackend {
             )
         })?;
         let invocation_id = next_invocation_id()?;
-        let envelope = FastDeployPpocrInvokeRequest::new(
-            invocation_id.clone(),
-            session.as_ref().clone(),
+        let envelope = FastDeployPpocrInvokeRequestView {
+            schema_version: OCR_PROVIDER_REQUEST_SCHEMA_VERSION,
+            invocation_id: &invocation_id,
+            session: session.as_ref(),
             request,
-            artifacts.clone(),
-            self.node_placement_diagnostic.clone(),
-        );
+            artifacts,
+            node_placement_diagnostic: self.node_placement_diagnostic.as_deref(),
+        };
         envelope.validate()?;
         let (mut response, diagnostics): (FastDeployPpocrInvokeResponse, _) =
             invoke_ppocr_json(self.read_text_json, self.free_buffer, &envelope)?;
@@ -911,12 +926,9 @@ impl OcrEngine for FastDeployPpocrBackend {
             .map_err(|error| {
                 error.with_ppocr_diagnostics(response.result.ppocr_diagnostics.clone())
             })?;
-        response
-            .result
-            .validate(&validation_request)
-            .map_err(|error| {
-                error.with_ppocr_diagnostics(response.result.ppocr_diagnostics.clone())
-            })?;
+        response.result.validate_for(request).map_err(|error| {
+            error.with_ppocr_diagnostics(response.result.ppocr_diagnostics.clone())
+        })?;
         Ok(OcrInferenceOutput {
             result: response.result,
             execution_attestation: Some(response.attestation),

@@ -179,6 +179,51 @@ impl VisionFrame {
             self.pixels.len(),
         )
     }
+
+    pub fn view(&self) -> VisionFrameView<'_> {
+        VisionFrameView {
+            width: self.width,
+            height: self.height,
+            pixel_format: self.pixel_format,
+            pixels: &self.pixels,
+        }
+    }
+}
+
+/// Borrowed `VisionFrame`; serializes to the same bytes (same field names and order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct VisionFrameView<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: VisionPixelFormat,
+    #[serde(serialize_with = "base64_pixels::serialize")]
+    pub pixels: &'a [u8],
+}
+
+impl<'a> VisionFrameView<'a> {
+    pub fn new(
+        width: u32,
+        height: u32,
+        pixel_format: VisionPixelFormat,
+        pixels: &'a [u8],
+    ) -> VisionFfiResult<Self> {
+        validate_frame_pixels(width, height, pixel_format, pixels.len())?;
+        Ok(Self {
+            width,
+            height,
+            pixel_format,
+            pixels,
+        })
+    }
+
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        validate_frame_pixels(
+            self.width,
+            self.height,
+            self.pixel_format,
+            self.pixels.len(),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +259,30 @@ pub struct OcrInferenceRequest {
 
 impl OcrInferenceRequest {
     pub fn validate(&self) -> VisionFfiResult<()> {
+        self.view().validate()
+    }
+
+    pub fn view(&self) -> OcrInferenceRequestView<'_> {
+        OcrInferenceRequestView {
+            frame: self.frame.view(),
+            region: self.region,
+            languages: &self.languages,
+            timeout_ms: self.timeout_ms,
+        }
+    }
+}
+
+/// Borrowed `OcrInferenceRequest`; serializes to the same bytes (same field names and order).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct OcrInferenceRequestView<'a> {
+    pub frame: VisionFrameView<'a>,
+    pub region: VisionRect,
+    pub languages: &'a [String],
+    pub timeout_ms: u64,
+}
+
+impl OcrInferenceRequestView<'_> {
+    pub fn validate(&self) -> VisionFfiResult<()> {
         self.frame.validate()?;
         validate_rect(self.region, self.frame.width, self.frame.height)?;
         if self.languages.is_empty() {
@@ -245,6 +314,22 @@ impl OcrInferenceRequest {
         }
         Ok(())
     }
+
+    /// The only whole-frame copy left on the OCR path: for engines that implement
+    /// only the by-value `OcrEngine` methods.
+    pub fn to_request(&self) -> VisionFfiResult<OcrInferenceRequest> {
+        Ok(OcrInferenceRequest {
+            frame: VisionFrame::new(
+                self.frame.width,
+                self.frame.height,
+                self.frame.pixel_format,
+                self.frame.pixels.to_vec(),
+            )?,
+            region: self.region,
+            languages: self.languages.to_vec(),
+            timeout_ms: self.timeout_ms,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -273,6 +358,10 @@ pub struct OcrInferenceOutput {
 
 impl OcrInferenceResult {
     pub fn validate(&self, request: &OcrInferenceRequest) -> VisionFfiResult<()> {
+        self.validate_for(request.view())
+    }
+
+    pub fn validate_for(&self, request: OcrInferenceRequestView<'_>) -> VisionFfiResult<()> {
         if self.text.len() > MAX_OCR_TEXT_BYTES {
             return Err(invalid_response(format!(
                 "OCR text exceeds {MAX_OCR_TEXT_BYTES} bytes"
@@ -317,6 +406,22 @@ pub trait OcrEngine {
             result,
             execution_attestation: None,
         })
+    }
+
+    /// Borrowed request; the default copies once into the by-value method.
+    fn read_text_view(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+    ) -> VisionFfiResult<OcrInferenceResult> {
+        self.read_text(request.to_request()?)
+    }
+
+    /// Borrowed request; the default copies once into the by-value method.
+    fn read_text_with_attestation_view(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+    ) -> VisionFfiResult<OcrInferenceOutput> {
+        self.read_text_with_attestation(request.to_request()?)
     }
 }
 
@@ -541,7 +646,9 @@ mod base64_pixels {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&encode(pixels))
+        let encoded =
+            String::from_utf8(encode(pixels)).map_err(<S::Error as serde::ser::Error>::custom)?;
+        serializer.serialize_str(&encoded)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
@@ -552,24 +659,26 @@ mod base64_pixels {
         decode(&encoded).map_err(D::Error::custom)
     }
 
-    fn encode(bytes: &[u8]) -> String {
-        let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
-        for chunk in bytes.chunks(3) {
-            let b0 = chunk[0];
-            let b1 = chunk.get(1).copied().unwrap_or(0);
-            let b2 = chunk.get(2).copied().unwrap_or(0);
-            output.push(TABLE[(b0 >> 2) as usize] as char);
-            output.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
-            if chunk.len() > 1 {
-                output.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
-            } else {
-                output.push('=');
-            }
-            if chunk.len() > 2 {
-                output.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
-            } else {
-                output.push('=');
-            }
+    fn encode(bytes: &[u8]) -> Vec<u8> {
+        let mut output = vec![b'='; bytes.len().div_ceil(3) * 4];
+        let (whole, tail) = bytes.as_chunks::<3>();
+        for (&[b0, b1, b2], out) in whole.iter().zip(output.as_chunks_mut::<4>().0) {
+            *out = [
+                TABLE[(b0 >> 2) as usize],
+                TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize],
+                TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize],
+                TABLE[(b2 & 0b0011_1111) as usize],
+            ];
+        }
+        // The tail quartet keeps its '=' padding after the 2 or 3 encoded positions.
+        let out = &mut output[whole.len() * 4..];
+        if let [b0] = tail {
+            out[0] = TABLE[(b0 >> 2) as usize];
+            out[1] = TABLE[((b0 & 0b0000_0011) << 4) as usize];
+        } else if let [b0, b1] = tail {
+            out[0] = TABLE[(b0 >> 2) as usize];
+            out[1] = TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize];
+            out[2] = TABLE[((b1 & 0b0000_1111) << 2) as usize];
         }
         output
     }
