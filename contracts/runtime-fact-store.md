@@ -121,8 +121,12 @@ fact store:
    a change the ledger already holds, memory and ledger disagree: the host
    marks itself fatal with `runtime_fact_store_desync` and returns it.
 
-The store keeps no pending queue: the per-record append is the durability
-step. Anything not appended is gone with the process (iron rule 13).
+The store keeps no pending queue: the per-record append is the persistence
+step. An instance-scoped record is observational: it survives a process crash
+and becomes durable across power loss at the next durable commit; a
+Runtime-scoped record (the configuration inventory) is durable (see
+[Durability classes](ledger-store.md#durability-classes-workflow-191-i)).
+Anything not appended is gone with the process (iron rule 13).
 
 ## Startup replay
 
@@ -203,7 +207,8 @@ seal is attempted at most once every `RUNTIME_FACT_SNAPSHOT_INTERVAL_MS`
 is not spawned (no performance sample interval and frame retention disabled)
 or has exited (sampling stopped with retention disabled), periodic snapshots
 stop; durability then rests entirely on the per-record events, which is the
-rule anyway. The snapshot only shortens replay.
+rule anyway (instance-scoped records are observational, durable across power
+loss from the next durable commit). The snapshot only shortens replay.
 
 ## Read operation
 

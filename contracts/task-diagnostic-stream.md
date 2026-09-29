@@ -90,7 +90,9 @@ The same Ledger append reply transports process-local endpoints for `ledger_queu
 receipt through backend persist return, including validation/preparation), and
 `ledger_publication` (successful backend return through retention/index/event/
 statistics publication and original reply preparation). `ledger_durable` directly
-covers only that backend persist call inside persistence. An earlier store error
+covers only that backend persist call inside persistence; for an observational
+append that call contains no WAL sync (see
+[Durability classes](ledger-store.md#durability-classes-workflow-191-i)). An earlier store error
 ends persistence at store return; publication remains unentered. Channel creation,
 sender setup, response send/wakeup tails and post-reply delivery are outside these
 inner spans. No cumulative statistics subtraction supplies a missing endpoint.

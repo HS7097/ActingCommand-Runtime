@@ -16,12 +16,23 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const DATABASE_FILE: &str = "runtime-state.sqlite";
 pub const INTEGRITY_KEY_FILE: &str = "runtime-state.key";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Commit synchronization of the shared connection (Workflow #191 I).
+/// `Full` syncs the WAL on every commit and is the connection's standing level;
+/// `Normal` writes the commit without a sync and is only set by the Ledger around
+/// one observational event transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitSync {
+    Full,
+    Normal,
+}
 
 /// One physical connection shared by Runtime-owned typed facades.
 /// The enclosing Host OwnerGuard continues to arbitrate process ownership.
@@ -30,6 +41,8 @@ pub struct RuntimeDatabase {
     database_path: PathBuf,
     connection: Mutex<Connection>,
     integrity_key: Box<[u8]>,
+    /// Set while the connection may be below `Full`; left set when restoring failed.
+    sync_relaxed: AtomicBool,
 }
 
 /// Borrowed only for a trusted Runtime owner's work in the writer's transaction.
@@ -138,6 +151,7 @@ impl RuntimeDatabase {
             database_path,
             connection: Mutex::new(connection),
             integrity_key,
+            sync_relaxed: AtomicBool::new(false),
         })
     }
 
@@ -227,6 +241,7 @@ impl RuntimeDatabase {
             database_path,
             connection: Mutex::new(connection),
             integrity_key: integrity_key.into_boxed_slice(),
+            sync_relaxed: AtomicBool::new(false),
         })
     }
 
@@ -236,13 +251,17 @@ impl RuntimeDatabase {
 
     /// Internal owner access, held for the caller's complete operation/transaction.
     /// SQLite's busy timeout does not bound this Rust mutex acquisition.
+    /// A connection whose `Full` level could not be restored is refused.
     pub fn connection(
         &self,
         operation: &'static str,
     ) -> RuntimeDatabaseResult<MutexGuard<'_, Connection>> {
-        self.connection
+        let guard = self
+            .connection
             .lock()
-            .map_err(|_| failure("state_connection_poisoned", operation))
+            .map_err(|_| failure("state_connection_poisoned", operation))?;
+        self.require_full_sync(operation)?;
+        Ok(guard)
     }
 
     /// Error readback must not wait behind another owner of the connection.
@@ -250,10 +269,63 @@ impl RuntimeDatabase {
         &self,
         operation: &'static str,
     ) -> RuntimeDatabaseResult<MutexGuard<'_, Connection>> {
-        self.connection.try_lock().map_err(|error| match error {
+        let guard = self.connection.try_lock().map_err(|error| match error {
             std::sync::TryLockError::WouldBlock => failure("state_connection_busy", operation),
             std::sync::TryLockError::Poisoned(_) => failure("state_connection_poisoned", operation),
-        })
+        })?;
+        self.require_full_sync(operation)?;
+        Ok(guard)
+    }
+
+    /// Sets the commit synchronization of the connection behind the caller's
+    /// `connection()` guard, outside any transaction. For the Ledger only, around
+    /// one event transaction; it must restore `Full` before releasing the guard.
+    /// Each call prepares a fresh statement (SQLite applies `synchronous` while
+    /// preparing, so a cached statement would not change it) and reads the level
+    /// back. Every failure is `state_database_sync_config_failed`; a connection
+    /// left relaxed is refused to every later user (`state_database_sync_relaxed`).
+    pub fn set_commit_sync(
+        &self,
+        connection: &Connection,
+        sync: CommitSync,
+    ) -> RuntimeDatabaseResult<()> {
+        const OPERATION: &str = "set_commit_sync";
+        let (level, expected) = match sync {
+            CommitSync::Full => ("FULL", 2),
+            CommitSync::Normal => {
+                self.sync_relaxed.store(true, Ordering::SeqCst);
+                ("NORMAL", 1)
+            }
+        };
+        let sync_failure = |error: rusqlite::Error| {
+            failure("state_database_sync_config_failed", OPERATION).with_detail(
+                error.sqlite_error().map_or_else(
+                    || "sqlite=none".to_owned(),
+                    |error| format!("sqlite={}", error.extended_code),
+                ),
+            )
+        };
+        connection
+            .pragma_update(None, "synchronous", level)
+            .map_err(sync_failure)?;
+        let observed = connection
+            .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))
+            .map_err(sync_failure)?;
+        if observed != expected {
+            return Err(failure("state_database_sync_config_failed", OPERATION)
+                .with_detail(format!("readback={observed}")));
+        }
+        if sync == CommitSync::Full {
+            self.sync_relaxed.store(false, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    fn require_full_sync(&self, operation: &'static str) -> RuntimeDatabaseResult<()> {
+        if self.sync_relaxed.load(Ordering::SeqCst) {
+            return Err(failure("state_database_sync_relaxed", operation));
+        }
+        Ok(())
     }
 
     /// Does not acquire the connection lock; transactions may validate keyed rows.

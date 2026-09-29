@@ -84,6 +84,8 @@ and [GetProcessTimes](https://learn.microsoft.com/en-us/windows/win32/api/proces
 GlobalLedger's current writer owns an in-memory correlation identity, an
 `Instant` origin, successful commit count, committed-through sequence, cumulative
 write-and-sync nanoseconds and the writer-lifetime maximum of that duration.
+On the SQLite medium an observational event's commit contains no WAL sync (see
+[Durability classes](ledger-store.md#durability-classes-workflow-191-i)).
 The identity is informational and uses the existing identifier issuer. Counters
 start with this writer lifetime; reopening creates a new identity.
 
@@ -106,7 +108,8 @@ The optional `ledger_commits` field in `perf.summary` has `status: "available"`
 with a `window`, or `status: "unavailable"` with an explicit reason. Available
 windows bind one writer identity, start/end monotonic nanoseconds relative to
 that writer, first/last successful commit sequences, successful commit count,
-and the window's write-and-sync duration total. The maximum is explicitly named
+and the window's write-and-sync duration total, not split by durability class
+(observational commits in the window contain no WAL sync). The maximum is explicitly named
 `writer_lifetime_write_sync_max_ns`; it covers the writer lifetime at the end
 sample. The integer rate is
 `floor(successful_commits * 1_000_000_000_000 / window_nanoseconds)` in
