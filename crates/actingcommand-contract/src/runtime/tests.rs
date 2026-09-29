@@ -117,6 +117,7 @@ fn diagnostic_signatures_validate_typed_conditions_origins_and_prefixes() {
         event_count: 2,
         sha256: format!("sha256:{}", "a".repeat(64)),
         complete: true,
+        scope: None,
     };
     prefix.validate().unwrap();
     let mut invalid = prefix.clone();

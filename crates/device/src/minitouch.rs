@@ -881,6 +881,9 @@ fn verify_minitouch_device(
     connect_allowed: bool,
 ) -> DeviceResult<DeviceInfo> {
     let state = adb.ensure_device(serial, connect_allowed).map_err(|err| {
+        if err.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+            return err;
+        }
         DeviceError::transient(format!("target device {serial} is not available: {err}"))
     })?;
     if state != "device" {

@@ -17,8 +17,8 @@ impl HostShared {
             .ledger
             .latest_sequence()
             .map_err(signature_ledger_error)?;
-        let prefix =
-            SignaturePrefix::from_live(&self.ledger, through).map_err(signature_ledger_error)?;
+        let prefix = SignaturePrefix::catalog_from_live(&self.ledger, through)
+            .map_err(signature_ledger_error)?;
         Ok(SignatureCatalog::from_prefix(&prefix))
     }
 
@@ -91,8 +91,9 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         request: &RuntimeSignatureMatchRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let catalog_prefix = SignaturePrefix::from_live(&self.ledger, request.catalog_through)
-            .map_err(signature_ledger_error)?;
+        let catalog_prefix =
+            SignaturePrefix::catalog_from_live(&self.ledger, request.catalog_through)
+                .map_err(signature_ledger_error)?;
         let catalog = SignatureCatalog::from_prefix(&catalog_prefix);
         let root = Path::new(&request.input_state_root);
         let snapshot =

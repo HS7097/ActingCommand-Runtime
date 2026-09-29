@@ -126,6 +126,18 @@ Absent/Locked/unknown observations remain distinct from a closed owner.
 Forensics open/export, event/task/performance/stability reports and signature
 replay use this reader. SQLite reports its backend and completeness while Segment
 byte snapshots, repair counts and tail observations are explicitly not applicable.
+
+On an SQLite root, forensics open/events/chain/tail/repairs/performance open the
+ledger with the same record authentication but read no artifact material; open
+reports `artifact_material_complete` as `null`. Stability, task-evidence and export
+verify each artifact separately. Material failures enter `failures` and a gap
+without de-duplication: one damaged artifact appears once per referencing event at
+opening, without a source sequence, and again with its source sequence when a
+report projects it. Export fails with an error naming each failed artifact and
+withholds all content. One damaged artifact no longer fails the whole snapshot.
+Failed evictions and artifact identity conflicts remain fatal. Segment roots keep
+their existing behavior.
+
 Segment reports retain their original physical meaning. Saved-artifact OCR holds
 the source writer lock, rejects the target root, requires a complete closed
 source and valid through-sequence, and preserves exact artifact/capture causality.
