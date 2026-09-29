@@ -14,13 +14,43 @@ use actingcommand_runtime_database::RuntimeDatabase;
 pub struct GlobalLedgerEvidenceConfig {
     root: PathBuf,
     budget: Option<(u64, usize, Instant)>,
+    material: EvidenceMaterial,
+}
+/// How an SQLite opening treats referenced artifact material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvidenceMaterial {
+    /// Every unevicted artifact must verify, or the whole opening fails.
+    Required,
+    /// Each artifact is verified; a verifier `None` leaves only that artifact Unrecorded.
+    PerArtifact,
+    /// The verifier is never called.
+    NotRead,
 }
 impl GlobalLedgerEvidenceConfig {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
             budget: None,
+            material: EvidenceMaterial::Required,
         }
+    }
+    /// SQLite only: authenticates records exactly as the default opening, then verifies
+    /// each unevicted artifact separately. When the verifier returns `None`, that artifact
+    /// stays `ArtifactAvailability::Unrecorded` and the opening continues; the caller is
+    /// responsible for recording and reporting every `None` it returns. Segment roots still
+    /// scan all material as before. `GlobalLedgerEvidence::material_checked()` and
+    /// `Unrecorded` are the only external signals.
+    pub fn sqlite_material_per_artifact(mut self) -> Self {
+        self.material = EvidenceMaterial::PerArtifact;
+        self
+    }
+    /// SQLite only: authenticates records exactly as the default opening and never calls
+    /// the verifier; unevicted artifacts stay `ArtifactAvailability::Unrecorded` and
+    /// `GlobalLedgerEvidence::material_checked()` is false. Segment roots still scan all
+    /// material as before.
+    pub fn sqlite_material_not_read(mut self) -> Self {
+        self.material = EvidenceMaterial::NotRead;
+        self
     }
     pub fn with_budget(mut self, bytes: u64, events: usize, deadline: Instant) -> Self {
         self.budget = Some((bytes, events, deadline));
@@ -41,18 +71,27 @@ pub struct GlobalLedgerEvidence {
 enum EvidenceSource {
     Segment(Box<GlobalLedgerReadOnly>),
     Sqlite(Box<SqliteLedgerReadOnly>),
+    Records(Box<RecordEvidence>),
+}
+/// SQLite records authenticated by the metadata opening, with per-artifact material state.
+struct RecordEvidence {
+    events: Vec<PersistedEvent>,
+    indexes: projection::EventIndexes,
+    material_checked: bool,
 }
 impl GlobalLedgerEvidence {
     pub fn events(&self) -> &[PersistedEvent] {
         match &self.source {
             EvidenceSource::Segment(source) => source.events(),
             EvidenceSource::Sqlite(source) => source.events(),
+            EvidenceSource::Records(source) => &source.events,
         }
     }
     pub fn query(&self, query: &EventQuery) -> Vec<PersistedEvent> {
         match &self.source {
             EvidenceSource::Segment(source) => source.query(query),
             EvidenceSource::Sqlite(source) => source.query(query),
+            EvidenceSource::Records(source) => source.indexes.query(&source.events, query),
         }
     }
     pub fn query_page(
@@ -65,6 +104,17 @@ impl GlobalLedgerEvidence {
         match &self.source {
             EvidenceSource::Segment(source) => source.query_page(query, after, through, limit),
             EvidenceSource::Sqlite(source) => source.query_page(query, after, through, limit),
+            EvidenceSource::Records(source) => {
+                if !(1..=MAX_QUERY_PAGE_EVENTS).contains(&limit) || after > through {
+                    return Err(GlobalLedgerError::request(
+                        "invalid_query_page",
+                        "query_read_only_event_page",
+                    ));
+                }
+                Ok(source
+                    .indexes
+                    .query_page(&source.events, query, after, through, limit))
+            }
         }
     }
     pub fn latest_sequence(&self) -> u64 {
@@ -74,13 +124,22 @@ impl GlobalLedgerEvidence {
     pub fn segment(&self) -> Option<&GlobalLedgerReadOnly> {
         match &self.source {
             EvidenceSource::Segment(source) => Some(source),
-            EvidenceSource::Sqlite(_) => None,
+            EvidenceSource::Sqlite(_) | EvidenceSource::Records(_) => None,
         }
     }
     pub fn backend(&self) -> &'static str {
         match self.source {
             EvidenceSource::Segment(_) => "segment",
-            EvidenceSource::Sqlite(_) => "sqlite",
+            EvidenceSource::Sqlite(_) | EvidenceSource::Records(_) => "sqlite",
+        }
+    }
+    /// False only for an SQLite opening with `sqlite_material_not_read`, whose artifacts
+    /// were never verified. Otherwise every artifact without an eviction proof is either
+    /// Available or, with `sqlite_material_per_artifact`, Unrecorded after a verifier `None`.
+    pub fn material_checked(&self) -> bool {
+        match &self.source {
+            EvidenceSource::Segment(_) | EvidenceSource::Sqlite(_) => true,
+            EvidenceSource::Records(source) => source.material_checked,
         }
     }
     pub fn writer_metadata(&self) -> &GlobalLedgerWriterMetadataObservation {
@@ -453,11 +512,35 @@ impl GlobalLedger {
         if database_exists || key_exists {
             let database = RuntimeDatabase::open_existing(&config.root, true)?;
             if sqlite::has_schema(&database)? {
-                let source =
-                    SqliteLedgerReadOnly::open_formal(&database, config.budget, &mut verifier)?;
+                if config.material == EvidenceMaterial::Required {
+                    let source =
+                        SqliteLedgerReadOnly::open_formal(&database, config.budget, &mut verifier)?;
+                    let writer = read_only::read_writer_metadata(&ledger_root)?;
+                    return Ok(GlobalLedgerEvidence {
+                        source: EvidenceSource::Sqlite(Box::new(source)),
+                        writer,
+                    });
+                }
+                // The same record authentication, ready marker and eviction annotation as
+                // `open_metadata`; material is then restored one artifact at a time.
+                let (metadata, _view) = sqlite::open_metadata(Arc::new(database), config.budget)?;
+                let mut check = |count| read_only::check_read_budget(config.budget, 0, count);
+                let retention =
+                    retention::RetentionIndex::from_events_checked(&metadata, &mut check)?;
+                let material_checked = config.material == EvidenceMaterial::PerArtifact;
+                let mut material_verifier = material_checked.then_some(&mut verifier);
+                let mut events = Vec::with_capacity(metadata.len());
+                for event in metadata {
+                    check(events.len() + 1)?;
+                    events.push(retention.restore_metadata(event, &mut material_verifier)?);
+                }
                 let writer = read_only::read_writer_metadata(&ledger_root)?;
                 return Ok(GlobalLedgerEvidence {
-                    source: EvidenceSource::Sqlite(Box::new(source)),
+                    source: EvidenceSource::Records(Box::new(RecordEvidence {
+                        indexes: projection::EventIndexes::from_events(&events),
+                        events,
+                        material_checked,
+                    })),
                     writer,
                 });
             }
