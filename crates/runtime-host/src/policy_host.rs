@@ -820,7 +820,9 @@ impl PolicyHost {
     }
 
     pub(crate) fn load_generation(&self, hash: &str) -> RuntimeHostResult<LoadedCatalog> {
-        self.store.load_generation(hash)
+        self.store
+            .load_generation(hash)
+            .map(|loaded| LoadedCatalog::clone(&loaded))
     }
 
     pub(crate) fn active_generation(&self) -> Option<CatalogGeneration> {
@@ -1427,7 +1429,8 @@ impl PolicyHost {
         let catalog = self
             .store
             .load_generation(&seen.data.catalog_hash)?
-            .generation;
+            .generation
+            .clone();
         Ok(Some(PolicyDispatchAdmission::ReplaySuppressed {
             decision_id: intent.decision_id.clone(),
             catalog,
@@ -1634,24 +1637,42 @@ impl PolicyHost {
         );
     }
 
-    pub(crate) fn completed_policy_runs(
+    /// Workflow #191 A2 / #330 H1: each (catalog task, instance) pair's latest completed run.
+    /// A pair's authoritative outcome is decided by its latest run alone, the same result as the
+    /// online commit/clear sequence; the limit counts distinct pairs.
+    pub(crate) fn latest_completed_policy_runs(
         &self,
         limit: usize,
     ) -> RuntimeHostResult<Vec<CompletedPolicyRunIdentity>> {
-        let completed = self
+        let mut latest = BTreeMap::<(&str, &str), &CompletedPolicyRunIdentity>::new();
+        for run in self
             .seen_dispatches
             .values()
             .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Completed)
-            .filter_map(|dispatch| dispatch.completed_run.clone())
-            .take(limit.saturating_add(1))
-            .collect::<Vec<_>>();
-        if completed.len() > limit {
-            return Err(fatal(
-                "policy_scheduling_outcome_capacity_exceeded",
-                "recover_policy_scheduling_outcomes",
-            ));
+            .filter_map(|dispatch| dispatch.completed_run.as_ref())
+        {
+            let key = (run.catalog_task_id.as_str(), run.instance_alias.as_str());
+            match latest.get(&key) {
+                // A completion sequence is the completion event's own; equal means corruption.
+                Some(existing) if existing.completion_sequence == run.completion_sequence => {
+                    return Err(fatal(
+                        "policy_outcome_replay_order_conflict",
+                        "recover_policy_scheduling_outcomes",
+                    ));
+                }
+                Some(existing) if existing.completion_sequence > run.completion_sequence => {}
+                None if latest.len() >= limit => {
+                    return Err(fatal(
+                        "policy_scheduling_outcome_capacity_exceeded",
+                        "recover_policy_scheduling_outcomes",
+                    ));
+                }
+                _ => {
+                    latest.insert(key, run);
+                }
+            }
         }
-        Ok(completed)
+        Ok(latest.into_values().cloned().collect())
     }
 
     pub(crate) fn admitted_at(&self, decision_id: &str) -> RuntimeHostResult<u64> {
@@ -2207,7 +2228,8 @@ impl PolicyHost {
                 let catalog = self
                     .store
                     .load_generation(&dispatch.data.catalog_hash)?
-                    .generation;
+                    .generation
+                    .clone();
                 pinned_dispatches.insert(decision_id.clone(), catalog);
             }
         }
@@ -2976,7 +2998,9 @@ impl CatalogStore {
         let generation = generation_from(&compiled, sources);
         let path = self.generation_path(&generation.catalog_hash)?;
         if path.exists() {
-            return self.load_generation(&generation.catalog_hash);
+            return self
+                .load_generation(&generation.catalog_hash)
+                .map(|loaded| LoadedCatalog::clone(&loaded));
         }
         let temporary = self.generations.join(format!(
             ".tmp-{}-{}",
@@ -3014,6 +3038,7 @@ impl CatalogStore {
             return Err(error);
         }
         self.load_generation(&generation.catalog_hash)
+            .map(|loaded| LoadedCatalog::clone(&loaded))
     }
 
     fn load_active(&self) -> RuntimeHostResult<Option<LoadedCatalog>> {
@@ -3045,16 +3070,16 @@ impl CatalogStore {
                 "load_active_catalog",
             ));
         }
-        Ok(Some(loaded))
+        Ok(Some(LoadedCatalog::clone(&loaded)))
     }
 
-    fn load_generation(&self, hash: &str) -> RuntimeHostResult<LoadedCatalog> {
+    fn load_generation(&self, hash: &str) -> RuntimeHostResult<Arc<LoadedCatalog>> {
         if let Some(loaded) = self.memoised_generation(hash)? {
-            return Ok(LoadedCatalog::clone(&loaded));
+            return Ok(loaded);
         }
         let loaded = Arc::new(self.read_generation(hash)?);
         self.memoise_generation(hash, Arc::clone(&loaded))?;
-        Ok(LoadedCatalog::clone(&loaded))
+        Ok(loaded)
     }
 
     fn memoised_generation(&self, hash: &str) -> RuntimeHostResult<Option<Arc<LoadedCatalog>>> {
