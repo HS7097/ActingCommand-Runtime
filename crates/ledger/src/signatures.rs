@@ -4,10 +4,10 @@ use crate::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerReadOnly, GlobalLedgerResult, PersistedEvent,
 };
 use actingcommand_contract::{
-    DiagnosticSignatureDefinition, EventActor, EventPayload, EventQuery, EventSource,
+    DiagnosticSignatureDefinition, EventActor, EventPayload, EventQuery, EventSource, EventType,
     LedgerPayload, LedgerSignatureEvent, MAX_SIGNATURE_CATALOG_ENTRIES, MAX_SIGNATURE_PAGE_ROWS,
     MAX_SIGNATURE_PREFIX_BYTES, MAX_SIGNATURE_PREFIX_EVENTS, OriginModule, RuntimePayload,
-    SignatureConditionField, SignaturePageRequest, SignaturePrefixIdentity,
+    SignatureConditionField, SignaturePageRequest, SignaturePrefixIdentity, SignaturePrefixScope,
     SignatureRegistrationRef, SignatureReplayCursor, SignatureReplayGap, SignatureReplayPage,
     SignatureReplayRow,
 };
@@ -75,6 +75,108 @@ impl SignaturePrefix {
         }
         Ok(prefix.finish(snapshot.is_complete()))
     }
+
+    /// The v2 catalog identity: only catalog events through `min(through, latest)`,
+    /// read from the live writer. Concurrent appends beyond that bound are not read.
+    pub fn catalog_from_live(ledger: &GlobalLedger, through: u64) -> GlobalLedgerResult<Self> {
+        if through == 0 {
+            return Err(error("signature_through_zero"));
+        }
+        let observed = ledger.latest_sequence()?.min(through);
+        let mut events = Vec::new();
+        for event_type in CATALOG_EVENT_TYPES {
+            let mut after = 0;
+            while after < observed {
+                let page = ledger.query_page(
+                    EventQuery {
+                        event_type: Some(event_type),
+                        ..EventQuery::default()
+                    },
+                    after,
+                    observed,
+                    usize::from(MAX_SIGNATURE_PAGE_ROWS),
+                )?;
+                let Some(last) = page.last() else {
+                    break;
+                };
+                after = last.sequence();
+                events.extend(page);
+                if events.len() > MAX_SIGNATURE_PREFIX_EVENTS {
+                    return Err(error("signature_catalog_event_limit"));
+                }
+            }
+        }
+        events.sort_by_key(PersistedEvent::sequence);
+        catalog_prefix(through, observed, events, true)
+    }
+
+    /// The v2 catalog identity over one verified evidence snapshot.
+    pub fn catalog_from_evidence(
+        snapshot: &crate::GlobalLedgerEvidence,
+        through: u64,
+    ) -> GlobalLedgerResult<Self> {
+        if through == 0 {
+            return Err(error("signature_through_zero"));
+        }
+        let observed = snapshot.latest_sequence().min(through);
+        let mut events = Vec::new();
+        for event_type in CATALOG_EVENT_TYPES {
+            let query = EventQuery {
+                event_type: Some(event_type),
+                ..EventQuery::default()
+            };
+            events.extend(
+                snapshot
+                    .query(&query)
+                    .into_iter()
+                    .filter(|event| event.sequence() <= observed),
+            );
+            if events.len() > MAX_SIGNATURE_PREFIX_EVENTS {
+                return Err(error("signature_catalog_event_limit"));
+            }
+        }
+        events.sort_by_key(PersistedEvent::sequence);
+        catalog_prefix(through, observed, events, snapshot.is_complete())
+    }
+}
+
+/// The only event types `SignatureCatalog::from_prefix` consumes.
+const CATALOG_EVENT_TYPES: [EventType; 2] =
+    [EventType::SignatureRegistered, EventType::SignatureRetired];
+
+/// Hashes the domain header, both bounds and each catalog event, so a changed
+/// `catalog_through` always changes the identity.
+fn catalog_prefix(
+    through: u64,
+    observed: u64,
+    events: Vec<PersistedEvent>,
+    source_complete: bool,
+) -> GlobalLedgerResult<SignaturePrefix> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"actingcommand.signature-catalog.v2\n");
+    hasher.update(format!("through={through}\nobserved={observed}\n").as_bytes());
+    let mut total = 0_usize;
+    for event in &events {
+        let bytes =
+            serde_json::to_vec(event).map_err(|_| error("signature_prefix_encoding_failed"))?;
+        total = total
+            .checked_add(bytes.len() + 1)
+            .filter(|total| *total <= MAX_SIGNATURE_PREFIX_BYTES)
+            .ok_or_else(|| error("signature_catalog_byte_limit"))?;
+        hasher.update(&bytes);
+        hasher.update(b"\n");
+    }
+    Ok(SignaturePrefix {
+        identity: SignaturePrefixIdentity {
+            through_sequence: through,
+            observed_through_sequence: observed,
+            event_count: events.len(),
+            sha256: format!("sha256:{:x}", hasher.finalize()),
+            complete: source_complete && observed == through,
+            scope: Some(SignaturePrefixScope::CatalogEvents),
+        },
+        events,
+    })
 }
 
 struct PrefixBuilder {
@@ -126,6 +228,7 @@ impl PrefixBuilder {
                 event_count: self.events.len(),
                 sha256: format!("sha256:{:x}", self.hasher.finalize()),
                 complete: read_complete && self.contiguous && observed == self.through,
+                scope: None,
             },
             events: self.events,
         }
@@ -277,6 +380,9 @@ pub fn replay_signatures(
     request
         .validate()
         .map_err(|_| error("signature_page_invalid"))?;
+    if input.identity.scope.is_some() {
+        return Err(error("signature_input_scope_invalid"));
+    }
     let offset = match &request.cursor {
         None => 0,
         Some(cursor) if cursor.input == input.identity && cursor.catalog == catalog.identity => {

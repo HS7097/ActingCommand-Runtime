@@ -321,7 +321,8 @@ pub struct OpenReport {
     pub storage_snapshot: Option<Box<GlobalLedgerStorageSnapshot>>,
     pub latest_sequence: u64,
     pub event_count: usize,
-    pub artifact_material_complete: bool,
+    /// `None` (JSON `null`): an SQLite metadata command did not read artifact material.
+    pub artifact_material_complete: Option<bool>,
     pub listed_through_segment: Option<u64>,
     pub writer: WriterObservationReport,
     pub repair_count: Option<usize>,
@@ -635,9 +636,15 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     let stability = request.command == ForensicCommand::Stability;
     let export = request.command == ForensicCommand::Export;
     let task_evidence = request.command == ForensicCommand::TaskEvidence;
+    let material = stability || export || task_evidence;
+    let config = GlobalLedgerEvidenceConfig::new(&request.state_root);
     let mut artifact_failures = Vec::new();
     let snapshot = GlobalLedger::open_evidence(
-        GlobalLedgerEvidenceConfig::new(&request.state_root),
+        if material {
+            config.sqlite_material_per_artifact()
+        } else {
+            config.sqlite_material_not_read()
+        },
         |reference| {
             let verified = if stability && reference.kind == ArtifactKind::DiagnosticJson {
                 let size = match task_records::is_task_stream(&artifact_root, reference) {
@@ -676,11 +683,23 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     .map_err(map_ledger_error)?;
 
     if export && let Some(failure) = artifact_failures.first() {
-        return Err(ForensicError::new(
-            failure.code,
-            failure.operation,
-            "export artifact verification failed; raw content withheld",
-        ));
+        let mut detail = format!(
+            "{} artifact(s) failed material verification; raw content withheld: ",
+            artifact_failures.len()
+        );
+        for (index, failed) in artifact_failures.iter().take(64).enumerate() {
+            let id =
+                serde_json::to_value(failed.artifact.artifact_id).map_err(serialization_error)?;
+            let id = id.as_str().map_or_else(|| id.to_string(), str::to_owned);
+            if index > 0 {
+                detail.push_str(", ");
+            }
+            detail.push_str(&format!("{id}={}", failed.code));
+        }
+        if artifact_failures.len() > 64 {
+            detail.push_str(&format!(" … and {} more", artifact_failures.len() - 64));
+        }
+        return Err(ForensicError::new(failure.code, failure.operation, detail));
     }
 
     match request.command {
@@ -1510,16 +1529,18 @@ fn open_report(snapshot: &GlobalLedgerEvidence) -> OpenReport {
             .map(|source| Box::new(source.storage_snapshot().clone())),
         latest_sequence: snapshot.latest_sequence(),
         event_count: snapshot.events().len(),
-        artifact_material_complete: snapshot
-            .events()
-            .iter()
-            .flat_map(PersistedEvent::artifacts)
-            .all(|artifact| {
-                matches!(
-                    artifact.availability(),
-                    actingcommand_ledger::ArtifactAvailability::Available(_)
-                )
-            }),
+        artifact_material_complete: snapshot.material_checked().then(|| {
+            snapshot
+                .events()
+                .iter()
+                .flat_map(PersistedEvent::artifacts)
+                .all(|artifact| {
+                    matches!(
+                        artifact.availability(),
+                        actingcommand_ledger::ArtifactAvailability::Available(_)
+                    )
+                })
+        }),
         listed_through_segment: snapshot
             .segment()
             .and_then(|source| source.listed_through_segment()),
@@ -1600,7 +1621,11 @@ fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult
     writeln!(
         report,
         "artifact_material_complete: {}",
-        open.artifact_material_complete
+        match open.artifact_material_complete {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "not_checked",
+        }
     )
     .expect("write String");
     writeln!(

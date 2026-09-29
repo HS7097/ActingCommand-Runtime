@@ -905,6 +905,9 @@ fn require_file(path: &PathBuf) -> DeviceResult<()> {
 
 fn verify_device(adb: &Adb, serial: &str, connect_allowed: bool) -> DeviceResult<DeviceInfo> {
     let state = adb.ensure_device(serial, connect_allowed).map_err(|err| {
+        if err.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+            return err;
+        }
         let devices = adb
             .run(&["devices", "-l"])
             .map(|out| out.stdout)
