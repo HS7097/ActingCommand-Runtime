@@ -89,10 +89,14 @@ one check covers the adb and the Nemu touch backends alike, for client `Input` r
 for every step of a contained task. `key`, `text` and `reset` inputs and fixture instances
 are not gated.
 
-- Query: `adb -s <serial> shell dumpsys activity activities`, package of the first
+- Query: `adb -s <serial> shell "{ dumpsys activity activities; echo ac_dumpsys_rc=$?; } | grep -e topResumedActivity= -e ResumedActivity: -e ac_dumpsys_rc="`
+  (filtered on the device; a missing or non-integer `ac_dumpsys_rc=` status and a non-zero
+  one are ADB failures), package of the first
   `ActivityRecord{... u<user> <package>/<activity> ...}` behind `topResumedActivity=`, then
   `mResumedActivity:` / `ResumedActivity:`. The provider goes through the same bound-endpoint
-  guard and `ensure_device` as `control_application` and opens no session.
+  guard as `control_application` and opens no session. Only a failed query re-checks the
+  transport (get-state, one connect when allowed, get-state); the query runs once more only
+  when that connect brought adbd back to `device`.
 - Match: the input proceeds, and the instance program fact `application.foreground` =
   `string(<package>)` is recorded ledger first (`runtime.fact_recorded`) whenever the observed
   value differs from the stored one (`contracts/runtime-fact-store.md`, "Producers").
@@ -104,12 +108,15 @@ are not gated.
   contained task the refusal travels the ordinary refused-input path of the run.
 - No resumed activity reported (a transition, an empty display):
   `application_foreground_unknown`, same shape, nothing recorded.
-- ADB failure (`ensure_device` or the command itself): the ADB baseline is lost. The host
+- ADB failure (the query, or the transport re-check it triggers): the ADB baseline is lost. The host
   invalidates `device.connected`, `application.foreground` and `task.page` with reason
   `adb_unreachable` (`runtime.fact_invalidated`, absent keys ignored) and refuses with
   `application_foreground_unknown`, even while a Nemu session still delivers frames. The next
   successful gate re-records `application.foreground`; `device.connected` is written again by
   the next emulator control action, `task.page` by the next matched contained-task recognition.
+  When the ADB command's child or pipe cleanup is unconfirmed, the three facts are invalidated
+  the same way first, then the host poisons under the unconfirmed device-resource rule
+  (`application_foreground_unknown`, `runtime_fatal`); no `command.rejected` is written.
 - First contained-task capture on a physical instance (#316-P4): when it fails and one ADB
   baseline probe against the task deadline fails too, the host invalidates the same three facts
   (`device.connected`, `application.foreground`, `task.page`) with `adb_unreachable` and the
@@ -189,7 +196,8 @@ lease.released
 
 ## Typed codes
 
-`application_not_foreground`, `application_foreground_unknown` (`invalid_request`, denied);
+`application_not_foreground`, `application_foreground_unknown` (`invalid_request`, denied;
+`runtime_fatal` when the ADB cleanup is unconfirmed);
 `application_effect_requires_assigned_application` (`invalid_request`, denied);
 `startup_package_missing`, `startup_package_admission_failed` (`package_invalid`, denied);
 `emulator_control_adb_not_ready`, `startup_package_adb_not_ready`

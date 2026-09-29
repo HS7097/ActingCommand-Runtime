@@ -1865,4 +1865,44 @@ impl RetentionIndex {
         self.annotate_event(&mut event);
         Ok(event)
     }
+
+    /// Restores authenticated metadata with per-artifact material state. Eviction proofs
+    /// are applied as in `restore_record`, and a failed eviction or identity conflict stays
+    /// fatal. Unlike `restore_record`, an artifact without a proof never fails the event:
+    /// with no verifier its material is not read, and a verifier `None` leaves it
+    /// Unrecorded. The caller must record and report every such `None`.
+    pub(super) fn restore_metadata<F>(
+        &self,
+        event: crate::fact::LedgerEventMetadata,
+        verifier: &mut Option<F>,
+    ) -> GlobalLedgerResult<PersistedEvent>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
+        let mut event = event
+            .into_event_with_artifact_availability(&mut |reference| {
+                let proof = self
+                    .proof(reference)
+                    .map_err(|error| FactValidationError::new(error.code()))?;
+                if let Some(proof) = proof {
+                    return match proof.disposition {
+                        Some(
+                            ArtifactEvictionDisposition::Deleted
+                            | ArtifactEvictionDisposition::RecoveryAbsent,
+                        ) => Ok(Some(ArtifactAvailability::Evicted(Box::new(proof)))),
+                        None => Ok(Some(ArtifactAvailability::PendingEviction(Box::new(proof)))),
+                        Some(ArtifactEvictionDisposition::Failed) => {
+                            Err(FactValidationError::new("artifact_eviction_failed"))
+                        }
+                    };
+                }
+                Ok(verifier
+                    .as_mut()
+                    .and_then(|verify| verify(reference))
+                    .map(ArtifactAvailability::Available))
+            })
+            .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+        self.annotate_event(&mut event);
+        Ok(event)
+    }
 }

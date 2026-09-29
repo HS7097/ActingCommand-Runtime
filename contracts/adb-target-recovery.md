@@ -14,7 +14,9 @@ identifies offline, the original connect command succeeded, and child cleanup ha
 no unconfirmed resource. An unauthorized observation, unknown post-connect state
 or non-TCP target cannot authorize this sequence. Every transport command names
 the same serial. The first query's error remains evidence even when the later
-query establishes an unambiguous current offline state.
+query establishes an unambiguous current offline state. A command whose child
+cleanup is unconfirmed ends the sequence and is the result: no further command is
+started, and an unconfirmed verification read is not re-wrapped.
 
 The owner uses its configured ADB command_timeout as one connection deadline,
 passing only the remaining time to each existing child command. After the single

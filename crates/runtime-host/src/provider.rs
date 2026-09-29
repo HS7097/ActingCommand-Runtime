@@ -614,9 +614,10 @@ impl ExecutionBackendEntry {
             .map(|_| ())
     }
 
-    /// The ADB baseline query behind the foreground gate: same bound-endpoint guard and
-    /// `ensure_device` as `control_application`, then one read-only `dumpsys`. No session
-    /// is opened; a Nemu paired session, when one is open, is not consulted.
+    /// The ADB baseline query behind the foreground gate: same bound-endpoint guard as
+    /// `control_application`, then one read-only `dumpsys` query; only a failed query
+    /// re-checks the transport (Workflow #191 E1). No session is opened; a Nemu paired
+    /// session, when one is open, is not consulted.
     fn observe_foreground_application(&self) -> DeviceResult<ForegroundApplicationObservation> {
         let application_target = {
             let endpoint = self.endpoint();
@@ -625,9 +626,8 @@ impl ExecutionBackendEntry {
         };
         let serial = application_target.resolved_serial();
         let adb = Adb::new(self.application_adb.clone());
-        adb.ensure_device(&serial, application_target.connect)?;
         Ok(ForegroundApplicationObservation {
-            foreground: adb.foreground_package(&serial)?,
+            foreground: adb.foreground_package(&serial, application_target.connect)?,
             assigned: self.application_id.clone(),
         })
     }
