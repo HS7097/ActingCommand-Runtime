@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    NnInferenceRequest, OcrInferenceRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
+    NnInferenceRequest, OcrInferenceRequest, OcrInferenceRequestView, VisionFfiError,
+    VisionFfiErrorCode, VisionFfiResult,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1374,24 +1375,37 @@ pub struct FastDeployPpocrInvokeRequest {
 }
 
 impl FastDeployPpocrInvokeRequest {
-    pub(crate) fn new(
-        invocation_id: OcrInvocationId,
-        session: OcrSessionBinding,
-        request: OcrInferenceRequest,
-        artifacts: FastDeployPpocrArtifacts,
-        node_placement_diagnostic: Option<String>,
-    ) -> Self {
-        Self {
-            schema_version: OCR_PROVIDER_REQUEST_SCHEMA_VERSION.to_string(),
-            invocation_id,
-            session,
-            request,
-            artifacts,
-            node_placement_diagnostic,
-        }
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        self.view().validate()
     }
 
-    pub fn validate(&self) -> VisionFfiResult<()> {
+    pub(crate) fn view(&self) -> FastDeployPpocrInvokeRequestView<'_> {
+        FastDeployPpocrInvokeRequestView {
+            schema_version: &self.schema_version,
+            invocation_id: &self.invocation_id,
+            session: &self.session,
+            request: self.request.view(),
+            artifacts: &self.artifacts,
+            node_placement_diagnostic: self.node_placement_diagnostic.as_deref(),
+        }
+    }
+}
+
+/// Borrowed `FastDeployPpocrInvokeRequest`; serializes to the same bytes (same field
+/// names, order and skip rule).
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct FastDeployPpocrInvokeRequestView<'a> {
+    pub(crate) schema_version: &'a str,
+    pub(crate) invocation_id: &'a OcrInvocationId,
+    pub(crate) session: &'a OcrSessionBinding,
+    pub(crate) request: OcrInferenceRequestView<'a>,
+    pub(crate) artifacts: &'a FastDeployPpocrArtifacts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) node_placement_diagnostic: Option<&'a str>,
+}
+
+impl FastDeployPpocrInvokeRequestView<'_> {
+    pub(crate) fn validate(&self) -> VisionFfiResult<()> {
         if self.schema_version != OCR_PROVIDER_REQUEST_SCHEMA_VERSION {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidRequest,

@@ -377,8 +377,14 @@ impl HostShared {
         let mut publish = |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
             sink.publish_frame(store, input, Some(*frame_id))
         };
+        let (frame_width, frame_height, frame_backend, capture_acquire_us) = (
+            frame.width,
+            frame.height,
+            frame.backend_name,
+            frame.capture_acquire_us(),
+        );
         let reference = pipeline
-            .with_frame_copy(&frame, |pipeline, frame| -> Result<_, RequestFailure> {
+            .with_frame_by_value(frame, |pipeline, frame| -> Result<_, RequestFailure> {
                 let captured = pipeline
                     .record_frame_with_publisher(
                         FrameStoreFrameInput {
@@ -408,10 +414,10 @@ impl HostShared {
             })
             .map_err(|error| self.readonly_frame_admission_failure(error, links.clone()))??;
         let observation = ReadonlyObservation::new(
-            frame.width,
-            frame.height,
+            frame_width,
+            frame_height,
             RecognitionVerdict::FrameDecoded,
-            runtime_capture_backend(frame.backend_name)
+            runtime_capture_backend(frame_backend)
                 .map_err(RequestFailure::poison_without_terminal)?,
             reference.project(true),
         )
@@ -426,7 +432,7 @@ impl HostShared {
             links.clone(),
             observation.width(),
             observation.height(),
-            frame.capture_acquire_us(),
+            capture_acquire_us,
         )?;
         let event = self.append_event(
             EventSeverity::Info,

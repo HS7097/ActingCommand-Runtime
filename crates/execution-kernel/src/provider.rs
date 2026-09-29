@@ -21,9 +21,9 @@ use actingcommand_recognition_pack::{
 };
 use actingcommand_vision_ffi::{
     NnClassificationResult, NnEngine, NnInferenceRequest, OcrEngine, OcrExecutionAttestation,
-    OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest, OcrInferenceResult,
+    OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequestView, OcrInferenceResult,
     OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFrame,
-    VisionPixelFormat, VisionRect,
+    VisionFrameView, VisionPixelFormat, VisionRect,
 };
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -175,17 +175,17 @@ impl RecognitionVisionProvider for VisionFfiProvider {
     ) -> Result<OcrProviderResult, VisionProviderError> {
         self.require_ocr_model(request.model_ref, request.model_sha256)?;
         let capability = self.ocr.as_ref().ok_or_else(|| unavailable("OCR"))?;
-        let frame = copy_frame(request.frame)?;
+        let frame = borrow_frame(request.frame)?;
         let region = VisionRect {
             x: request.region.x,
             y: request.region.y,
             width: request.region.width,
             height: request.region.height,
         };
-        let ffi_request = OcrInferenceRequest {
+        let ffi_request = OcrInferenceRequestView {
             frame,
             region,
-            languages: request.languages.to_vec(),
+            languages: request.languages,
             timeout_ms: request.timeout_ms,
         };
         let result = invoke_ocr(capability, ffi_request)?;
@@ -200,8 +200,8 @@ impl RecognitionVisionProvider for VisionFfiProvider {
     ) -> Result<OcrProviderObservation, VisionProviderError> {
         self.require_ocr_model(request.model_ref, request.model_sha256)?;
         let capability = self.ocr.as_ref().ok_or_else(|| unavailable("OCR"))?;
-        let frame = copy_frame(request.frame)?;
-        let ffi_request = OcrInferenceRequest {
+        let frame = borrow_frame(request.frame)?;
+        let ffi_request = OcrInferenceRequestView {
             frame,
             region: VisionRect {
                 x: request.region.x,
@@ -209,7 +209,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                 width: request.region.width,
                 height: request.region.height,
             },
-            languages: request.languages.to_vec(),
+            languages: request.languages,
             timeout_ms: request.timeout_ms,
         };
         let output = invoke_ocr_with_attestation(capability, ffi_request)?;
@@ -285,7 +285,7 @@ fn require_model(
 
 fn invoke_ocr(
     capability: &OcrCapability,
-    request: OcrInferenceRequest,
+    request: OcrInferenceRequestView<'_>,
 ) -> Result<OcrInferenceResult, VisionProviderError> {
     let mut slot = capability.engine.lock().map_err(|_| {
         VisionProviderError::new(
@@ -299,7 +299,7 @@ fn invoke_ocr(
             "OCR engine was retired after a provider panic",
         )
     })?;
-    match catch_unwind(AssertUnwindSafe(|| engine.read_text(request))) {
+    match catch_unwind(AssertUnwindSafe(|| engine.read_text_view(request))) {
         Ok(result) => result.map_err(map_ffi_error),
         Err(_) => {
             *slot = None;
@@ -313,7 +313,7 @@ fn invoke_ocr(
 
 fn invoke_ocr_with_attestation(
     capability: &OcrCapability,
-    mut request: OcrInferenceRequest,
+    mut request: OcrInferenceRequestView<'_>,
 ) -> Result<OcrInferenceOutput, VisionProviderError> {
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(request.timeout_ms))
@@ -364,7 +364,7 @@ fn invoke_ocr_with_attestation(
         )
     })?;
     match catch_unwind(AssertUnwindSafe(|| {
-        engine.read_text_with_attestation(request)
+        engine.read_text_with_attestation_view(request)
     })) {
         Ok(result) => result.map_err(map_ffi_error),
         Err(_) => {
@@ -469,12 +469,14 @@ fn invoke_nn(
     }
 }
 
-fn copy_frame(frame: VisionProviderFrame<'_>) -> Result<VisionFrame, VisionProviderError> {
-    VisionFrame::new(
+fn borrow_frame(
+    frame: VisionProviderFrame<'_>,
+) -> Result<VisionFrameView<'_>, VisionProviderError> {
+    VisionFrameView::new(
         frame.width,
         frame.height,
         VisionPixelFormat::Rgb8,
-        frame.rgb8_pixels.to_vec(),
+        frame.rgb8_pixels,
     )
     .map_err(map_ffi_error)
 }
@@ -1050,7 +1052,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_vision_ffi::{NnLabel, OcrTextBlock};
+    use actingcommand_vision_ffi::{NnLabel, OcrInferenceRequest, OcrTextBlock};
     use serde_json::json;
 
     #[test]

@@ -359,6 +359,23 @@ impl CapturePipeline {
         Ok(result)
     }
 
+    /// Moves `frame` into `operation` for callers that read only metadata afterwards.
+    /// Admission is exactly `with_frame_copy`'s (owner and budget headroom, then the
+    /// layout check the copy would have run); only the copy is gone.
+    pub fn with_frame_by_value<T>(
+        &mut self,
+        frame: actingcommand_device::Frame,
+        operation: impl FnOnce(&mut Self, actingcommand_device::Frame) -> T,
+    ) -> ArtifactStoreResult<T> {
+        let original = self.frame_store.admit_frame_copy(&frame)?;
+        frame
+            .validate_layout()
+            .map_err(ArtifactStoreError::incoming_frame)?;
+        let result = operation(self, frame);
+        drop(original);
+        Ok(result)
+    }
+
     pub fn record_frame(
         &mut self,
         input: FrameStoreFrameInput,

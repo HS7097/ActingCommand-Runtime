@@ -43,7 +43,8 @@ const MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES: usize = 4_096;
 const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
 
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
-static RECOGNIZER_SESSIONS: OnceLock<ProviderSessionCache> = OnceLock::new();
+static RECOGNIZER_SESSIONS: OnceLock<SessionCache<BoundRecognizerSession, OcrSessionIdentity>> =
+    OnceLock::new();
 static DETECTOR_SESSIONS: OnceLock<ProviderSessionCache> = OnceLock::new();
 
 type ProviderSessionCache = SessionCache<BoundOrtSession, OcrSessionIdentity>;
@@ -52,6 +53,14 @@ struct BoundOrtSession {
     key: OcrSessionKey,
     plan: ProviderSessionPlan,
     session: Session,
+}
+
+/// The recognizer session with the facts established, once per session identity, before
+/// its model load: the CUDA driver version it resolved and the hash-verified dictionary.
+struct BoundRecognizerSession {
+    bound: BoundOrtSession,
+    cuda_driver_version: Option<u32>,
+    dictionary: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,51 +405,34 @@ fn read_text_json(
 ) -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError> {
     let envelope = read_request(request_ptr, request_len)?;
     envelope.validate().map_err(provider_error)?;
-    envelope
-        .artifacts
-        .validate_ppocr_v6_execution_existing_files()
-        .map_err(provider_error)?;
-    let (resolved_cuda_device, cuda_driver_version) = resolve_provider_device(&envelope.artifacts)?;
-    let runtime_library = envelope
-        .artifacts
-        .onnxruntime_library_path()
-        .map_err(provider_error)?;
-    let onnxruntime_version =
-        onnxruntime_version_string(runtime_library).map_err(provider_error)?;
-    let expected_key = envelope
-        .artifacts
-        .production_session_key(resolved_cuda_device.clone(), onnxruntime_version.clone())
-        .map_err(provider_error)?;
-    if &expected_key != envelope.session.key() {
-        return Err(ProviderInvokeError::from(
-            "provider-resolved OCR session key does not match the adapter binding".to_string(),
-        ));
-    }
-    let session_plan = ProviderSessionPlan::from_key(&expected_key)?;
-    ensure_ort_runtime(runtime_library)?;
-    let dictionary = load_dictionary(&envelope.artifacts.dictionary_path)?;
     let session_identity = OcrSessionIdentity::from(&envelope.session);
     let node_placement_diagnostic = envelope.node_placement_diagnostic.as_deref();
     let recognizer_session = recognizer_sessions().get_or_load(&session_identity, |_| {
-        load_bound_ort_session(
-            &envelope.artifacts.recognizer_model_path,
-            expected_key.clone(),
-            PpocrModelRole::Recognizer,
-            node_placement_diagnostic,
-            diagnostics,
-        )
+        establish_recognizer_session(&envelope, node_placement_diagnostic, diagnostics)
     })?;
+    // Each cached entry's key was provider-resolved and matched to the binding at load;
+    // `require_bound_session_key` below keeps that relation for every call.
+    let key = envelope.session.key();
+    let session_plan = ProviderSessionPlan::from_key(key)?;
+    ensure_ort_runtime(
+        envelope
+            .artifacts
+            .onnxruntime_library_path()
+            .map_err(provider_error)?,
+    )?;
     let inference_deadline = Instant::now()
         .checked_add(Duration::from_millis(envelope.request.timeout_ms))
         .ok_or_else(|| {
             ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
         })?;
 
-    let result = if is_full_frame_region(&envelope.request.frame, envelope.request.region) {
+    let full_frame = is_full_frame_region(&envelope.request.frame, envelope.request.region);
+    let (result, cuda_driver_version) = if full_frame {
         let detector_session = detector_sessions().get_or_load(&session_identity, |_| {
+            let (detector_key, _) = resolve_bound_session_key(&envelope)?;
             load_bound_ort_session(
                 &envelope.artifacts.detector_model_path,
-                expected_key.clone(),
+                detector_key,
                 PpocrModelRole::Detector,
                 node_placement_diagnostic,
                 diagnostics,
@@ -450,7 +442,7 @@ fn read_text_json(
             let mut detector_session = detector_session
                 .lock()
                 .map_err(|_| "PPOCR detector session mutex is poisoned".to_string())?;
-            require_bound_session_key(&detector_session, &expected_key)?;
+            require_bound_session_key(&detector_session, key)?;
             detect_text_regions(
                 &mut detector_session.session,
                 &envelope.request.frame,
@@ -462,11 +454,13 @@ fn read_text_json(
         let mut recognizer_session = recognizer_session
             .lock()
             .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
-        require_bound_session_key(&recognizer_session, &expected_key)?;
+        let recognizer = &mut *recognizer_session;
+        require_bound_session_key(&recognizer.bound, key)?;
+        let cuda_driver_version = recognizer.cuda_driver_version;
         for detected_box in detected.iter().take(MAX_DETECTED_TEXT_BOXES) {
             let decoded = recognize_region(
-                &mut recognizer_session.session,
-                &dictionary,
+                &mut recognizer.bound.session,
+                &recognizer.dictionary,
                 &envelope.request.frame,
                 detected_box.rect,
                 remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
@@ -485,28 +479,38 @@ fn read_text_json(
             .collect::<Vec<_>>()
             .join("\n");
         let confidence = average_confidence(blocks.iter().filter_map(|block| block.confidence));
-        OcrInferenceResult {
-            ppocr_diagnostics: Vec::new(),
-            text,
-            blocks,
-            confidence,
-            backend: VisionBackendKind::FastDeployPpocr,
-            warnings: Vec::new(),
-        }
+        (
+            OcrInferenceResult {
+                ppocr_diagnostics: Vec::new(),
+                text,
+                blocks,
+                confidence,
+                backend: VisionBackendKind::FastDeployPpocr,
+                warnings: Vec::new(),
+            },
+            cuda_driver_version,
+        )
     } else {
         let mut recognizer_session = recognizer_session
             .lock()
             .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
-        require_bound_session_key(&recognizer_session, &expected_key)?;
+        let recognizer = &mut *recognizer_session;
+        require_bound_session_key(&recognizer.bound, key)?;
+        let cuda_driver_version = recognizer.cuda_driver_version;
         let decoded = recognize_region(
-            &mut recognizer_session.session,
-            &dictionary,
+            &mut recognizer.bound.session,
+            &recognizer.dictionary,
             &envelope.request.frame,
             envelope.request.region,
             remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
         )?;
-        canonical_roi_result(decoded, envelope.request.region)
+        (
+            canonical_roi_result(decoded, envelope.request.region),
+            cuda_driver_version,
+        )
     };
+    let binary_sha256 = key.provider_library_sha256().to_string();
+    let onnxruntime_version = key.onnxruntime_version().to_string();
     Ok(FastDeployPpocrInvokeResponse {
         schema_version: OCR_PROVIDER_RESPONSE_SCHEMA_VERSION.to_string(),
         invocation_id: envelope.invocation_id.clone(),
@@ -522,7 +526,7 @@ fn read_text_json(
                 implementation: "actingcommand-ppocr-onnx-json".to_string(),
                 crate_version: env!("CARGO_PKG_VERSION").to_string(),
                 build_git_sha: None,
-                binary_sha256: expected_key.provider_library_sha256().to_string(),
+                binary_sha256,
             },
             runtime: OcrRuntimeBuildIdentity {
                 onnxruntime_version,
@@ -596,12 +600,71 @@ fn resolve_provider_device(
     }
 }
 
+/// Per-load checks, run before each model load of a session identity: artifact files
+/// exist and match their hashes, the CUDA device resolves, the ORT version is read, and
+/// the key resolved from them equals the adapter binding.
+fn resolve_bound_session_key(
+    envelope: &FastDeployPpocrInvokeRequest,
+) -> Result<(OcrSessionKey, Option<u32>), String> {
+    envelope
+        .artifacts
+        .validate_ppocr_v6_execution_existing_files()
+        .map_err(provider_error)?;
+    let (resolved_cuda_device, cuda_driver_version) = resolve_provider_device(&envelope.artifacts)?;
+    let runtime_library = envelope
+        .artifacts
+        .onnxruntime_library_path()
+        .map_err(provider_error)?;
+    let onnxruntime_version =
+        onnxruntime_version_string(runtime_library).map_err(provider_error)?;
+    let expected_key = envelope
+        .artifacts
+        .production_session_key(resolved_cuda_device, onnxruntime_version)
+        .map_err(provider_error)?;
+    if &expected_key != envelope.session.key() {
+        return Err(
+            "provider-resolved OCR session key does not match the adapter binding".to_string(),
+        );
+    }
+    Ok((expected_key, cuda_driver_version))
+}
+
+/// Runs only on a recognizer cache miss (first call of a session identity); a failure
+/// caches nothing, so the next call runs it again.
+fn establish_recognizer_session(
+    envelope: &FastDeployPpocrInvokeRequest,
+    node_placement_diagnostic: Option<&str>,
+    diagnostics: &mut PpocrDiagnostics,
+) -> Result<BoundRecognizerSession, String> {
+    let (key, cuda_driver_version) = resolve_bound_session_key(envelope)?;
+    ProviderSessionPlan::from_key(&key)?;
+    ensure_ort_runtime(
+        envelope
+            .artifacts
+            .onnxruntime_library_path()
+            .map_err(provider_error)?,
+    )?;
+    let dictionary = load_dictionary(&envelope.artifacts.dictionary_path)?;
+    let bound = load_bound_ort_session(
+        &envelope.artifacts.recognizer_model_path,
+        key,
+        PpocrModelRole::Recognizer,
+        node_placement_diagnostic,
+        diagnostics,
+    )?;
+    Ok(BoundRecognizerSession {
+        bound,
+        cuda_driver_version,
+        dictionary,
+    })
+}
+
 fn ensure_ort_runtime(runtime_library: &Path) -> Result<(), String> {
     ORT_RUNTIME.ensure(runtime_library)
 }
 
-fn recognizer_sessions() -> &'static ProviderSessionCache {
-    RECOGNIZER_SESSIONS.get_or_init(ProviderSessionCache::new)
+fn recognizer_sessions() -> &'static SessionCache<BoundRecognizerSession, OcrSessionIdentity> {
+    RECOGNIZER_SESSIONS.get_or_init(SessionCache::new)
 }
 
 fn detector_sessions() -> &'static ProviderSessionCache {
