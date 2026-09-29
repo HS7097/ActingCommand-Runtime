@@ -473,15 +473,36 @@ impl RetentionIndex {
         events: &[E],
         check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
     ) -> GlobalLedgerResult<Self> {
+        Self::from_events_with_indexes_checked(events, check).map(|(retained, _)| retained)
+    }
+
+    /// Workflow #191 C: the full build, also returning the event indexes it derives.
+    pub(super) fn from_events_with_indexes_checked<E: LedgerEventRead>(
+        events: &[E],
+        check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
+    ) -> GlobalLedgerResult<(Self, EventIndexes)> {
         let mut retained = Self::default();
         let mut indexes = EventIndexes::default();
         for (position, event) in events.iter().enumerate() {
             check(position + 1)?;
-            retained.validate(event, &events[..position], &indexes, true)?;
-            retained.apply(event);
-            indexes.insert(event, position);
+            retained.step(&mut indexes, &events[..position], event)?;
         }
-        Ok(retained)
+        Ok((retained, indexes))
+    }
+
+    /// Workflow #191 C: one event's retention step, shared by full builds and tail extension.
+    /// validate/apply (including validate_prior_epoch/apply_prior_epoch) must stay pure functions of
+    /// the event sequence: no clock, store or I/O, or incremental and full results diverge.
+    pub(super) fn step<E: LedgerEventRead>(
+        &mut self,
+        indexes: &mut EventIndexes,
+        prior: &[E],
+        event: &E,
+    ) -> GlobalLedgerResult<()> {
+        self.validate(event, prior, indexes, true)?;
+        self.apply(event);
+        indexes.insert(event, prior.len());
+        Ok(())
     }
 
     /// Material metadata keeps its historical identity even after the bytes are unavailable.
@@ -1816,6 +1837,20 @@ where
         );
     }
     let retention = RetentionIndex::from_events_checked(&metadata, &mut check)?;
+    restore_records_with(&retention, records, verifier, check)
+}
+
+/// Workflow #191 C: the restoring half of `restore_records`, against a retention index
+/// already derived from the same authenticated records.
+pub(super) fn restore_records_with<F>(
+    retention: &RetentionIndex,
+    records: Vec<StoredEventRecord>,
+    verifier: &mut Option<F>,
+    mut check: impl FnMut(usize) -> GlobalLedgerResult<()>,
+) -> GlobalLedgerResult<Vec<PersistedEvent>>
+where
+    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+{
     let mut events = Vec::with_capacity(records.len());
     for record in records {
         check(events.len() + 1)?;
