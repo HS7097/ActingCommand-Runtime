@@ -2,8 +2,9 @@
 
 Workflow #191 slices ps1 and ps2 (launcher design v3, Workflow #297 §3.1, §3.2 stages
 (a)(b)(c), the resume paragraph and §3.3). `RuntimeOperation::PauseScheduling` stops the
-Runtime's own policy dispatch, globally or for one instance, and an instance pause hands the
-instance's device back to the person; `RuntimeOperation::ResumeScheduling` lifts the pause again
+Runtime's own policy dispatch, globally or for one instance, and an instance pause waits until
+the instance's device is idle (its session stays open, Workflow #191 H);
+`RuntimeOperation::ResumeScheduling` lifts the pause again
 and an instance resume reconnects the device at once through the connection preparation phase
 (Workflow #317 sc3), answering with its self-check.
 
@@ -72,10 +73,10 @@ is done while (c) runs, `released` once (c) is done. The request answers after (
    `SchedulingPaused { scope, revision, drained: { finished, cancelled } }` once (c) is
    done: `finished` runs ended on their own, `cancelled` runs were asked to stop by this pause
    (a run drained again in (c) is counted too).
-3. **(c) Hand the device back** (ps2). The instance's device session is closed through the
-   existing fenced resource-close path (`close_retained_instance_while_guarded`, no second
-   close implementation), so the emulator is free for the person. Right before the close,
-   under the instance admission guard, the pause re-checks that nothing still uses the device:
+3. **(c) Wait until the device is idle** (ps2; Workflow #191 H). A pause is not a disconnect
+   (owner ruling 2026-09-29): the instance's device session stays open and the Runtime keeps
+   using nothing of it while the gate is closed. Under the instance admission guard the pause
+   re-checks that nothing still uses the device:
    - a non-empty lease queue fails the pause at once with the close path's own rule
      (`prepare_resource_close`: `TransferNotSafe`): a queued client waits for the device;
    - a contained run that started after (b) (a policy dispatch admitted just before the gate
@@ -88,16 +89,18 @@ is done while (c) runs, `released` once (c) is done. The request answers after (
    - an active lease is waited for until it is released.
 
    These waits end at the grace deadline (the drain timeout plus `30_000` ms); past it the
-   pause fails with `scheduling_pause_release_busy` (`LeaseBusy`). With nothing left, the
-   close takes no active lease: it grants the dedicated resource-close lease
-   (`prepare_resource_close`, the fixed resource-close connection, `CapacityUse::Drain`),
-   closes capture first and then input under `DeviceCloseAuthority::FencedDeviceWrite`, records
-   the usual `runtime.lifecycle_observed` `ResourceQuiescence` observation and releases the
-   lease with `LeaseReleaseReason::InstancePaused` (a `lease.released` event; the reason is the
-   scheduler's release reason, the event carries no reason field). An instance whose device
-   session is not open (never opened, or already closed by a lease release or a stopped policy
-   run's failure cleanup) closes nothing and records nothing. The stage then becomes
-   `released`.
+   pause fails with `scheduling_pause_release_busy` (`LeaseBusy`). With nothing left the stage
+   becomes `released`; the device session stays as it is and nothing is recorded. Only an
+   instance outside the multi-Nemu gate (`read-session-resource-close.md`, "Device session
+   lifetime") closes its session here, through the existing fenced resource-close path
+   (`close_retained_instance_while_guarded`, no second close implementation) and without an
+   active lease: it grants the dedicated resource-close lease (`prepare_resource_close`, the
+   fixed resource-close connection, `CapacityUse::Drain`), closes capture first and then input
+   under `DeviceCloseAuthority::FencedDeviceWrite`, records the usual
+   `runtime.lifecycle_observed` `ResourceQuiescence` observation and releases the lease with
+   `LeaseReleaseReason::InstancePaused` (a `lease.released` event; the reason is the
+   scheduler's release reason, the event carries no reason field); such an instance whose
+   device session is not open closes nothing and records nothing.
 
 If a stage fails, the request fails as a whole (`Failed` receipt) and the gate it closed is
 lifted again: no half-open pause is left behind. A drain whose stopped runs have not reached
@@ -105,8 +108,9 @@ their next checkpoint `30_000` ms after the drain timeout
 (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) fails with `scheduling_pause_drain_incomplete`
 (`ContainedTaskBusy`); a Runtime shutdown during the drain fails it with
 `scheduling_pause_drain_interrupted`, during the hand-back with
-`scheduling_pause_release_interrupted` (`RuntimeUnavailable`). A failed device close fails the
-request with the close's own error; an unconfirmed close stays fatal as on every close path. The
+`scheduling_pause_release_interrupted` (`RuntimeUnavailable`). A failed device close (an
+instance outside the multi-Nemu gate) fails the request with the close's own error; an
+unconfirmed close stays fatal as on every close path. The
 client's receipt wait is the drain timeout plus that grace plus its IO timeout.
 
 ## Resume
@@ -124,9 +128,11 @@ through the same provider opens as the lazy paths (a Nemu pair opens once) and t
 frame of a capture it opened, as the first lazy capture does, then drops it (no frame artifact
 is written). The opens are recorded like every open (`backend-open-observation.md`):
 `backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check`, and the
-instance's policy availability following the self-check. The session is then closed and the
-lease released; the next task opens it lazily. A session a read-only observe retained after
-the pause (the existing sc2 design) is closed first, so the receipt's self-check reflects this
+instance's policy availability following the self-check. The lease is then released and the
+session stays open for the next tasks (Workflow #191 H; a failed open, or an instance outside
+the multi-Nemu gate, closes it before the release). The session kept through the pause, or
+one a read-only observe retained after it (the existing sc2 design), is closed first, so a
+resume is a disconnect and a reconnect and the receipt's self-check reflects this
 preparation's complete opens (Workflow #191 h3). The receipt carries the self-check projected
 from those reports:
 
@@ -187,7 +193,8 @@ its instance is paused. Both fields are absent otherwise (additive wire: a
 Pauses live in the host's memory only: a restart starts unpaused. A pause has no TTL; only
 `ResumeScheduling` lifts it. The ledger event set is unchanged: a pause or resume leaves its
 trace in the request receipt, the refused dispatch admissions, the terminals of the runs it
-stopped, the device close's existing records and the reconnect's existing open records.
+stopped, the device close's existing records (an instance outside the multi-Nemu gate) and the
+reconnect's existing close and open records.
 
 ## CLI
 

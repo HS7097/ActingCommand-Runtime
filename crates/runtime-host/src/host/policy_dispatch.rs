@@ -1474,8 +1474,9 @@ impl HostShared {
     /// `PauseScheduling` (Workflow #191 ps1, ps2). `Global` closes the dispatch gate of every
     /// instance and closes no device session. `Instance` closes the gate of one physical
     /// instance at once (stage `Draining`), drains its in-flight contained runs (stage
-    /// `Paused`), hands its device back by closing its device session (stage `Released`, ps2)
-    /// and then answers; a failed stage lifts the gate again.
+    /// `Paused`), waits until nothing uses the device (stage `Released`, ps2; the device session
+    /// stays open, Workflow #191 H, except outside the multi-Nemu gate) and then answers; a
+    /// failed stage lifts the gate again.
     pub(super) fn pause_scheduling(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -1584,16 +1585,17 @@ impl HostShared {
         }
     }
 
-    /// Workflow #191 ps2 (c): hands the paused instance's device back. Right before the close,
-    /// under the instance admission guard, it re-checks that nothing still uses the device: a
-    /// non-empty lease queue fails at once (`TransferNotSafe`); a contained run that started
-    /// after (b) (a policy dispatch admitted before the gate closed) is drained again under the
-    /// pause's deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an
-    /// active lease are waited for until the grace deadline (`scheduling_pause_release_busy`).
-    /// The device session then closes through `close_retained_instance_while_guarded` without
-    /// reusing a lease: the dedicated close lease is released with
-    /// `LeaseReleaseReason::InstancePaused`. An instance with no device session open closes
-    /// nothing.
+    /// Workflow #191 ps2 (c): waits until the paused instance's device is idle. Under the
+    /// instance admission guard it re-checks that nothing still uses the device: a non-empty
+    /// lease queue fails at once (`TransferNotSafe`); a contained run that started after (b) (a
+    /// policy dispatch admitted before the gate closed) is drained again under the pause's
+    /// deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an active
+    /// lease are waited for until the grace deadline (`scheduling_pause_release_busy`). The
+    /// device session then stays open (Workflow #191 H: a pause is not a disconnect). Only an
+    /// instance outside the multi-Nemu gate (`keeps_device_session`) closes it, through
+    /// `close_retained_instance_while_guarded` without reusing a lease: the dedicated close
+    /// lease is released with `LeaseReleaseReason::InstancePaused`; with no device session open
+    /// it closes nothing.
     fn release_paused_instance(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -1651,6 +1653,11 @@ impl HostShared {
             let reset_awaited = lock(&self.scheduling_pause, "read_awaited_client_resets")?
                 .awaits_client_reset(instance_alias);
             if !run_in_flight && !reset_awaited && !lease_held {
+                // Workflow #191 H (owner ruling 2026-09-29): a pause is not a disconnect; only an
+                // instance outside the multi-Nemu gate closes its session here.
+                if self.keeps_device_session(instance_id)? {
+                    return Ok(());
+                }
                 return match self.close_retained_instance_while_guarded(
                     instance_id,
                     links,

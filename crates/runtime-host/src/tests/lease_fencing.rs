@@ -41,7 +41,7 @@ fn different_instances_acquire_and_execute_independently() {
     for state in [&state_a, &state_b] {
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-        assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     }
     host.close().expect("close host");
     for state in [&state_a, &state_b] {

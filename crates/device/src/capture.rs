@@ -2432,6 +2432,93 @@ impl Drop for NemuIpcWorker {
         }
     }
 }
+/// Workflow #191 H: the most vendor stdio text a Nemu worker holds between two frames.
+const VENDOR_STDIO_TEXT_LIMIT: usize = 64 * 1024;
+/// Workflow #191 H: the most vendor stdio snapshots a Nemu worker holds between two frames.
+const VENDOR_STDIO_CAPTURE_LIMIT: usize = 256;
+
+/// Workflow #191 H: the vendor stdio text a Nemu worker captured since its last frame. The
+/// session is resident, so the text is bounded: the oldest snapshots are dropped first (a single
+/// oversized snapshot keeps its tail) and every drop is written into the text itself, as a
+/// leading `…[N bytes dropped]` line per stream.
+#[derive(Default)]
+struct VendorStdioLog {
+    captures: Vec<VendorStdioCapture>,
+    text_bytes: usize,
+    dropped: [u64; 2],
+}
+
+impl VendorStdioLog {
+    fn push(&mut self, capture: VendorStdioCapture) {
+        if capture.is_empty() {
+            return;
+        }
+        self.text_bytes = self
+            .text_bytes
+            .saturating_add(capture.stdout.len().saturating_add(capture.stderr.len()));
+        self.captures.push(capture);
+        let first = usize::from(self.dropped != [0, 0]);
+        let mut dropped = [0usize; 2];
+        while self.captures.len() - first > 1
+            && (self.text_bytes > VENDOR_STDIO_TEXT_LIMIT
+                || self.captures.len() - first > VENDOR_STDIO_CAPTURE_LIMIT)
+        {
+            let oldest = self.captures.remove(first);
+            dropped[0] = dropped[0].saturating_add(oldest.stdout.len());
+            dropped[1] = dropped[1].saturating_add(oldest.stderr.len());
+            self.text_bytes = self
+                .text_bytes
+                .saturating_sub(oldest.stdout.len().saturating_add(oldest.stderr.len()));
+        }
+        if self.text_bytes > VENDOR_STDIO_TEXT_LIMIT {
+            let newest = self
+                .captures
+                .last_mut()
+                .expect("the newest vendor stdio snapshot is kept");
+            for (stream, count) in [&mut newest.stdout, &mut newest.stderr]
+                .into_iter()
+                .zip(dropped.iter_mut())
+            {
+                let excess = self.text_bytes.saturating_sub(VENDOR_STDIO_TEXT_LIMIT);
+                let mut cut = excess.min(stream.len());
+                while !stream.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                stream.drain(..cut);
+                *count = count.saturating_add(cut);
+                self.text_bytes = self.text_bytes.saturating_sub(cut);
+            }
+        }
+        if dropped == [0, 0] {
+            return;
+        }
+        for (total, count) in self.dropped.iter_mut().zip(dropped) {
+            *total = total.saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+        }
+        let line = |count: u64| {
+            if count == 0 {
+                String::new()
+            } else {
+                format!("…[{count} bytes dropped]\n")
+            }
+        };
+        let marker = VendorStdioCapture {
+            stdout: line(self.dropped[0]),
+            stderr: line(self.dropped[1]),
+        };
+        if first == 1 {
+            self.captures[0] = marker;
+        } else {
+            self.captures.insert(0, marker);
+        }
+    }
+
+    /// The text captured since the last frame, leaving the log empty.
+    fn take(&mut self) -> Vec<VendorStdioCapture> {
+        std::mem::take(self).captures
+    }
+}
+
 struct NemuIpcWorkerState {
     library: Option<Library>,
     stdio_session: Option<VendorStdioSession>,
@@ -2442,7 +2529,7 @@ struct NemuIpcWorkerState {
     raw_buffer: Vec<u8>,
     frame_width: u32,
     frame_height: u32,
-    vendor_stdio: Vec<VendorStdioCapture>,
+    vendor_stdio: VendorStdioLog,
     input: Option<nemu_input::NemuInputState>,
 }
 
@@ -2465,7 +2552,7 @@ impl NemuIpcWorkerState {
             raw_buffer: Vec::new(),
             frame_width: 0,
             frame_height: 0,
-            vendor_stdio: Vec::new(),
+            vendor_stdio: VendorStdioLog::default(),
             input,
         };
         let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2512,6 +2599,7 @@ impl NemuIpcWorkerState {
         let connect = unsafe { self.symbol::<NemuConnect>(b"nemu_connect\0")? };
         let nemu_folder = self.nemu_folder.as_ptr();
         let instance_id = self.instance_id;
+        self.resume_vendor_stdio()?;
         let connect_id = unsafe { connect(nemu_folder, instance_id) };
         self.connect_id = connect_id;
         self.record_vendor_stdio_snapshot()?;
@@ -2529,19 +2617,39 @@ impl NemuIpcWorkerState {
     }
 
     fn record_vendor_stdio(&mut self, capture: VendorStdioCapture) {
-        if !capture.is_empty() {
-            self.vendor_stdio.push(capture);
-        }
+        self.vendor_stdio.push(capture);
     }
 
-    fn record_vendor_stdio_snapshot(&mut self) -> DeviceResult<()> {
-        let capture = self
-            .stdio_session
+    /// Workflow #191 H: redirects the vendor stdio for the one native call that follows; that
+    /// call's `record_vendor_stdio_snapshot` restores it. The stdio session starts redirected
+    /// (the library load is the first call), so a redirected session resumes nothing.
+    fn resume_vendor_stdio(&mut self) -> DeviceResult<()> {
+        self.stdio_session
             .as_mut()
             .ok_or_else(|| DeviceError::fatal("Nemu vendor stdio session is closed"))?
-            .snapshot()?;
-        self.record_vendor_stdio(capture);
-        Ok(())
+            .resume()
+    }
+
+    /// Reads the vendor output of the native call that just returned, then (Workflow #191 H)
+    /// restores the process standard streams and releases the process stdio lock until the
+    /// next native call. The restore runs even when the read failed.
+    fn record_vendor_stdio_snapshot(&mut self) -> DeviceResult<()> {
+        let stdio = self
+            .stdio_session
+            .as_mut()
+            .ok_or_else(|| DeviceError::fatal("Nemu vendor stdio session is closed"))?;
+        let captured = stdio.snapshot();
+        let suspended = stdio.suspend();
+        match captured {
+            Ok(capture) => {
+                self.record_vendor_stdio(capture);
+                suspended
+            }
+            Err(primary) => Err(match suspended {
+                Ok(()) => primary,
+                Err(secondary) => primary.merge_resource_cleanup(secondary),
+            }),
+        }
     }
 
     unsafe fn symbol<T>(&self, name: &[u8]) -> DeviceResult<T>
@@ -2606,6 +2714,7 @@ impl NemuIpcWorkerState {
         if let Some((context, stopped)) = context {
             nemu_input::input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
         }
+        self.resume_vendor_stdio()?;
         let ret = unsafe {
             capture_display(
                 connect_id,
@@ -2712,6 +2821,7 @@ impl NemuIpcWorkerState {
         let width_ptr = &mut width_i32 as *mut i32;
         let height_ptr = &mut height_i32 as *mut i32;
         let buffer_ptr = self.raw_buffer.as_mut_ptr();
+        self.resume_vendor_stdio()?;
         let ret = unsafe {
             capture_display(
                 connect_id, display_id, length, width_ptr, height_ptr, buffer_ptr,
@@ -2736,18 +2846,22 @@ impl NemuIpcWorkerState {
             )));
         }
         let pixels = rgba_bottom_up_to_rgba(&self.raw_buffer, width, height)?;
+        let input_geometry = self.input_geometry(width, height)?;
+        let geometry = self.geometry_observation(
+            width,
+            height,
+            geometry_sampled_at,
+            Some(CaptureFrameTransform::FlipVertical),
+        )?;
         Ok(NemuCapturedFrame {
             width,
             height,
             pixels,
-            vendor_stdio: self.vendor_stdio.clone(),
-            input_geometry: self.input_geometry(width, height)?,
-            geometry: self.geometry_observation(
-                width,
-                height,
-                geometry_sampled_at,
-                Some(CaptureFrameTransform::FlipVertical),
-            )?,
+            // Workflow #191 H: only the text captured since the previous frame travels; the
+            // worker keeps none of it (no whole-history copy per frame).
+            vendor_stdio: self.vendor_stdio.take(),
+            input_geometry,
+            geometry,
         })
     }
 
@@ -2785,11 +2899,20 @@ impl NemuIpcWorkerState {
             )
         })?;
         let connect_id = self.connect_id;
+        // Workflow #191 H: the owned connection is released even when its output cannot be
+        // captured; that failure is reported with the snapshot's.
+        let resumed = self.resume_vendor_stdio();
         unsafe { disconnect(connect_id) };
         // The serial worker observed the call return. Retire only this owned opaque handle;
         // owned-resource quiescence still requires stdio, library and worker completion.
         self.connect_id = 0;
-        self.record_vendor_stdio_snapshot().map_err(|error| {
+        let recorded = self.record_vendor_stdio_snapshot();
+        match (resumed, recorded) {
+            (Ok(()), recorded) => recorded,
+            (Err(error), Ok(())) => Err(error),
+            (Err(primary), Err(secondary)) => Err(primary.merge_resource_cleanup(secondary)),
+        }
+        .map_err(|error| {
             error.with_resource_close_cause(
                 DeviceResourceKind::VendorStdio,
                 DeviceResourceClosePhase::SnapshotRead,
@@ -2892,7 +3015,9 @@ impl CaptureBackend for NemuIpcBackend {
         let frame = worker.capture_frame()?;
         self.frame_width = frame.width;
         self.frame_height = frame.height;
-        self.vendor_stdio = frame.vendor_stdio.clone();
+        // Workflow #191 H: the vendor output captured since the previous frame (moved, bounded
+        // by the worker); a primed first frame carries everything since the library load.
+        self.vendor_stdio = frame.vendor_stdio;
         let mut captured = Frame::from_pixels(
             frame.width,
             frame.height,
@@ -3746,7 +3871,7 @@ mod tests {
                         raw_buffer: Vec::new(),
                         frame_width: 0,
                         frame_height: 0,
-                        vendor_stdio: Vec::new(),
+                        vendor_stdio: VendorStdioLog::default(),
                     });
                     let state = worker_state.as_mut().expect("initialized worker state");
                     phase = "worker_ready_send";

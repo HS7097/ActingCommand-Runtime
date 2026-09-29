@@ -40,8 +40,11 @@ endpoint it was opened on) the instance's retained device session is closed firs
 `close_retained_instance_while_guarded` (the daemon keeps running; other instances are
 untouched; closing when no session is open is a no-op). A refusal because a lease is held is the
 same busy denial; a close failure is recorded through the existing session-close lifecycle path
-and fails the request. The device session is NOT reopened by this operation after any action: it
-opens lazily on the next lease, as before.
+and fails the request. After `start` / `restart` of a device self-checked instance the connection
+preparation phase (`runtime-fact-store.md`) reopens the session and keeps it open (Workflow #191 H:
+the session belongs to the instance and only an external command disconnects it; an instance
+outside the multi-Nemu gate closes it again, as before). After `stop` nothing reopens it; it
+opens on its next use.
 
 ## Tool dispatch, timeouts and wait criteria
 

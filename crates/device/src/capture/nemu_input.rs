@@ -462,13 +462,11 @@ impl NemuIpcWorkerState {
         if let Some((context, stopped)) = context {
             input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
         }
-        let display = unsafe {
-            query(
-                self.connect_id,
-                input.application.application_id.as_ptr(),
-                input.application.app_index.0,
-            )
-        };
+        // The application name stays owned by `self.input`; the redirection does not touch it.
+        let application_id = input.application.application_id.as_ptr();
+        let app_index = input.application.app_index.0;
+        self.resume_vendor_stdio()?;
+        let display = unsafe { query(self.connect_id, application_id, app_index) };
         let snapshot = self.record_vendor_stdio_snapshot();
         let input = self.input.as_mut().expect("input target exists");
         if display < 0 {
@@ -661,6 +659,8 @@ impl NemuIpcWorkerState {
     ) -> DeviceResult<()> {
         let down = unsafe { self.symbol::<FingerDown>(b"nemu_input_event_finger_touch_down\0")? };
         input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
+        self.input.as_ref().ok_or_else(unsupported)?;
+        self.resume_vendor_stdio()?;
         self.input.as_mut().ok_or_else(unsupported)?.contact = Contact::MayBeDown;
         let result = unsafe { down(self.connect_id, self.display_id, 1, x, y) };
         let native = if result != 0 {
@@ -680,6 +680,10 @@ impl NemuIpcWorkerState {
     ) -> DeviceResult<()> {
         let up = unsafe { self.symbol::<FingerUp>(b"nemu_input_event_finger_touch_up\0")? };
         input_check(check, InputCheckPhase::FinalUp, stopped)?;
+        self.input.as_ref().ok_or_else(unsupported)?;
+        // Workflow #191 H: the contact is released even when its output cannot be captured;
+        // that failure is reported with the snapshot's.
+        let resumed = self.resume_vendor_stdio();
         self.input.as_mut().ok_or_else(unsupported)?.contact = Contact::UpAttempted;
         let result = unsafe { up(self.connect_id, self.display_id, 1) };
         if result == 0 {
@@ -692,7 +696,10 @@ impl NemuIpcWorkerState {
         } else {
             Ok(())
         };
-        merge_input_snapshot(native, self.record_vendor_stdio_snapshot())
+        merge_input_snapshot(
+            merge_input_snapshot(native, resumed),
+            self.record_vendor_stdio_snapshot(),
+        )
     }
 
     pub(super) fn close_input_contact(

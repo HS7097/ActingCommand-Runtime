@@ -20,6 +20,9 @@ use std::time::Instant;
 struct KernelState {
     session_generation: u64,
     sessions: BTreeMap<InstanceId, Arc<ExecutionSession>>,
+    /// Workflow #191 H: instances whose session is being closed outside the state lock. Each
+    /// still owns its resources until the close result is recorded.
+    closing: BTreeSet<InstanceId>,
     closed: bool,
     close_result: Option<ExecutionKernelResult<()>>,
     instance_closes: BTreeMap<InstanceId, ExecutionKernelResult<ExecutionResourceCloseOutcome>>,
@@ -54,6 +57,7 @@ impl ExecutionKernel {
             state: Mutex::new(KernelState {
                 session_generation: 0,
                 sessions: BTreeMap::new(),
+                closing: BTreeSet::new(),
                 closed: false,
                 close_result: None,
                 instance_closes: BTreeMap::new(),
@@ -418,8 +422,9 @@ impl ExecutionKernel {
     }
 
     /// Drives the provider's instance control surface directly: no session is opened, touched
-    /// or closed here. The host closes the instance's device session first and does not
-    /// reopen it afterwards (it opens lazily on the next lease).
+    /// or closed here. The host closes the instance's device session first; after a start or
+    /// restart its preparation phase reopens the session and keeps it (Workflow #191 H), after a
+    /// stop nothing reopens it until the next use.
     pub fn control_instance(
         &self,
         instance_alias: &str,
@@ -438,7 +443,8 @@ impl ExecutionKernel {
 
     /// Rebinds the provider's endpoint after emulator control. A retained session would keep
     /// the previous endpoint identity, so one still open here is an invariant violation: the
-    /// host closes the instance's session before every control action.
+    /// host closes the instance's session before every control action. Sessions outlive lease
+    /// ends (Workflow #191 H); this check stays the backstop against a kept session.
     pub fn rebind_discovered_endpoint(
         &self,
         instance_alias: &str,
@@ -512,6 +518,16 @@ impl ExecutionKernel {
                 });
             }
         }
+        // Workflow #191 H: a close still running outside the state lock has not confirmed its
+        // resources; this kernel close cannot wait for it and reports it unconfirmed.
+        for instance in &state.closing {
+            let error = close_in_progress_error(*instance);
+            closed_sessions.push((*instance, error.clone()));
+            failure = Some(match failure {
+                None => error,
+                Some(primary) => ExecutionKernelError::merge(primary, error),
+            });
+        }
         for (instance_id, session) in sessions {
             if let Err(error) = session.close_with_authority(DeviceCloseAuthority::LocalOnly) {
                 closed_sessions.push((instance_id, error.clone()));
@@ -536,39 +552,89 @@ impl ExecutionKernel {
         self.close_instance_with_input_check(instance_id, authority, None)
     }
 
+    /// Workflow #191 H: the session is closed outside the registry lock, so a close of one
+    /// instance never blocks another instance's capture. The host closes an instance only under
+    /// its admission guard with a resource-close step, and its writes hold a business step, so no
+    /// operation of that instance can start meanwhile; the `closing` mark refuses one at once
+    /// (`execution_session_close_in_progress`) instead of waiting.
     pub fn close_instance_with_input_check(
         &self,
         instance_id: InstanceId,
         authority: DeviceCloseAuthority,
         input_check: Option<Arc<dyn InputOperationCheck>>,
     ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
-        let mut state = self.lock_state()?;
         let session = {
+            let mut state = self.lock_state()?;
             if state.closed {
                 return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+            }
+            if state.closing.contains(&instance_id) {
+                return Err(ExecutionKernelError::fatal(
+                    "execution_session_close_in_progress",
+                ));
             }
             if let Some(result) = state.instance_closes.get(&instance_id) {
                 return result.clone();
             }
-            state.sessions.remove(&instance_id)
-        };
-        let Some(session) = session else {
-            return Ok(ExecutionResourceCloseOutcome::confirmed(0));
+            let Some(session) = state.sessions.remove(&instance_id) else {
+                return Ok(ExecutionResourceCloseOutcome::confirmed(0));
+            };
+            state.closing.insert(instance_id);
+            session
         };
         let result = session
             .close_with_input_check(authority, input_check)
             .map_err(|error| error.with_instance_id(instance_id));
+        let mut state = self.lock_state()?;
+        state.closing.remove(&instance_id);
         state.instance_closes.insert(instance_id, result.clone());
         result
     }
 
+    /// A session being closed still counts as open until its close result is recorded.
     pub fn has_session(&self, instance_id: InstanceId) -> ExecutionKernelResult<bool> {
-        Ok(self.lock_state()?.sessions.contains_key(&instance_id))
+        let state = self.lock_state()?;
+        Ok(state.sessions.contains_key(&instance_id) || state.closing.contains(&instance_id))
+    }
+
+    /// Workflow #191 H: whether the instance's session must be closed rather than kept at a
+    /// lease end: a close is in progress, an unconfirmed close is retained, or the session's
+    /// worker has stopped or retained its resources after a failure.
+    pub fn session_needs_close(&self, instance_id: InstanceId) -> ExecutionKernelResult<bool> {
+        let state = self.lock_state()?;
+        Ok(state.closing.contains(&instance_id)
+            || state
+                .instance_closes
+                .get(&instance_id)
+                .is_some_and(|result| {
+                    result.as_ref().is_err_and(|error| {
+                        error.resource_quiescence()
+                            == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+                    })
+                })
+            || state
+                .sessions
+                .get(&instance_id)
+                .is_some_and(|session| session.needs_close()))
+    }
+
+    /// Workflow #191 H: a kept session forgets its pending and committed input frames at a lease
+    /// end, so the next holder starts from its own capture, as after a close. No session is
+    /// opened for it.
+    pub fn forget_input_frames(&self, instance_id: InstanceId) -> ExecutionKernelResult<()> {
+        let session = self.lock_state()?.sessions.get(&instance_id).cloned();
+        let Some(session) = session else {
+            return Ok(());
+        };
+        session
+            .forget_input_frames()
+            .map_err(|error| error.with_instance_id(instance_id))
     }
 
     pub fn owned_instance_ids(&self) -> ExecutionKernelResult<Vec<InstanceId>> {
         let state = self.lock_state()?;
         let mut instances = state.sessions.keys().copied().collect::<BTreeSet<_>>();
+        instances.extend(state.closing.iter().copied());
         instances.extend(
             state
                 .instance_closes
@@ -589,6 +655,7 @@ impl ExecutionKernel {
     pub fn has_owned_resources(&self, instance_id: InstanceId) -> ExecutionKernelResult<bool> {
         let state = self.lock_state()?;
         Ok(state.sessions.contains_key(&instance_id)
+            || state.closing.contains(&instance_id)
             || state
                 .instance_closes
                 .get(&instance_id)
@@ -630,6 +697,7 @@ impl ExecutionKernel {
     pub fn has_sessions(&self) -> ExecutionKernelResult<bool> {
         let state = self.lock_state()?;
         Ok(!state.sessions.is_empty()
+            || !state.closing.is_empty()
             || state.instance_closes.values().any(|result| {
                 result.as_ref().is_err_and(|error| {
                     error.resource_quiescence()
@@ -660,6 +728,13 @@ impl ExecutionKernel {
         let mut state = self.lock_state()?;
         if state.closed {
             return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+        }
+        // Workflow #191 H: never wait for a close in progress (its caller may hold the journal
+        // lock the close's input check needs); that instance admits no operation meanwhile.
+        if state.closing.contains(&resolved.instance_id()) {
+            return Err(ExecutionKernelError::fatal(
+                "execution_session_close_in_progress",
+            ));
         }
         if let Some(session) = state.sessions.get(&resolved.instance_id()) {
             if session.resolved() != &resolved {
@@ -772,6 +847,27 @@ impl ExecutionKernel {
             .lock()
             .map_err(|_| ExecutionKernelError::fatal("execution_kernel_state_poisoned"))
     }
+}
+
+/// Workflow #191 H: the unconfirmed result of an instance close still in progress when the
+/// kernel closes, shaped like a retained session's `execution_resource_close_incomplete`.
+fn close_in_progress_error(instance: InstanceId) -> ExecutionKernelError {
+    ExecutionKernelError::device(
+        "execution_session_close_in_progress",
+        &actingcommand_device::DeviceError::fatal(
+            "execution session close was still in progress when the kernel closed",
+        )
+        .with_resource_close_cause(
+            actingcommand_device::DeviceResourceKind::InProcessWorker,
+            actingcommand_device::DeviceResourceClosePhase::Close,
+            "execution_kernel",
+            None,
+            None,
+            actingcommand_device::DeviceResourceQuiescence::Unconfirmed,
+            1,
+        ),
+    )
+    .with_instance_id(instance)
 }
 
 impl Drop for ExecutionKernel {

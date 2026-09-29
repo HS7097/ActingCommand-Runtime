@@ -10,8 +10,9 @@
 //! retained device session is closed first for every action while the daemon keeps running
 //! (a session must not outlive the endpoint it was opened on); a refusal there is the same
 //! busy denial. The provider is driven outside the fact write gate and outside any device
-//! session, and the session is NOT reopened afterwards: it opens lazily on the next lease,
-//! as before.
+//! session. After `start` / `restart` the preparation phase reopens the session and keeps it
+//! open (Workflow #191 H: the session belongs to the instance and only an external command
+//! disconnects it); after `stop` nothing reopens it.
 //!
 //! Slice #316-B2: a discovery-bound instance may be registered with a PENDING endpoint (it
 //! was stopped at startup). After a successful `Start` / `Restart` the registry and the host

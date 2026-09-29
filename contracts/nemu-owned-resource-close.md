@@ -29,11 +29,32 @@ callback. Actual SDK closure, subsequent lease release and Lab arrival require t
 assigned real-device window. SDK postconditions beyond the observed call return
 remain unverified.
 
+Workflow #191 H: the Nemu session stays open across leases, so its stdio redirection
+and the process-level stdio lock are held per native call, not for the session's
+life. The session starts redirected and holding the lock (the library load is its
+first call); each later native call (`nemu_connect`, `nemu_get_display_id`,
+`nemu_capture_display`, the finger down / up events, `nemu_disconnect`) resumes the
+redirection (takes the lock, installs the capture targets again), makes the call,
+reads its snapshot and suspends (flushes, restores FD1/2 and the Win32 standard
+handles to the saved originals and releases the lock); the saved and capture
+descriptors, the capture files and the library stay with the session. Vendor output
+during a call is captured as before; output outside a call, and the daemon's own
+output, reaches the daemon's real standard streams. A resume that cannot redirect
+undoes its partial install at once and skips the call, except for the release calls
+(`nemu_disconnect`, finger up), which are made anyway; either failure is reported.
+A failed restore is unconfirmed, keeps the lock and is the session's cached failure,
+reported again by its close. Library unload stays after the stdio close, outside any
+redirection, as before.
+
 The stdio owner retains a bounded private context for its existing acquisition,
 redirection, restoration, descriptor close and path unlink operations. The fixed
 set consists of FD1/2, two saved descriptors, two capture descriptors and the two
 Win32 standard-handle table slots. A complete successful path has 32 recorded
-operations. The context stores at most 32 steps (up to three reference observations
+operations: the acquisition, the first installation and its restoration, and the
+final descriptor closes and unlinks. Later resume/suspend cycles are not counted in
+this 32-step budget: each records into its own context, which is dropped when the
+cycle completes; a cycle that fails keeps its own context, which its error and the
+session's close report. The context stores at most 32 steps (up to three reference observations
 per step); overflow increments a saturating dropped count. Frame snapshots do not
 append steps. PID, process creation FILETIME and observation FILETIMEs distinguish
 the producing process and read timing. Each step carries its API, phase, roles,
@@ -68,9 +89,16 @@ with a currently owned reference.
 
 Each unlink records its exact UTF-16 path and Removed or Residual result. Residual
 preserves the original I/O error and does not itself make resource quiescence
-Unconfirmed. A completed stdio close can proceed to the existing library close
-and release the process-level stdio lock. Restore, descriptor, disconnect and
-library failures retain their real causes and existing failure protection.
+Unconfirmed. A completed stdio close can proceed to the existing library close;
+it releases the process-level stdio lock if a call still held it. Restore,
+descriptor, disconnect and library failures retain their real causes and existing
+failure protection.
+
+The vendor text the Nemu worker captured is bounded: between two frames it keeps at
+most 64 KiB in at most 256 snapshots, dropping the oldest first (a single oversized
+snapshot keeps its tail), and writes each drop into the text itself as a leading
+`…[N bytes dropped]` line per stream. A frame carries only the text captured since
+the previous frame; the worker keeps no copy.
 
 An unlink failure triggers one Restart Manager session for the current capture
 paths: StartSession, RegisterResources, at most two GetList calls, and EndSession.
