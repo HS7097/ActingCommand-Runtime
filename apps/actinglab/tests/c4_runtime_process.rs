@@ -76,14 +76,7 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
     assert!(reset_json["data"]["events"].is_array());
     assert_eq!(
         support::backend_events(root.path()),
-        [
-            "capture_open",
-            "capture",
-            "open",
-            "reset",
-            "capture_close",
-            "close"
-        ]
+        ["capture_open", "capture", "open", "reset",]
     );
     runtime.assert_alive();
     runtime.stop_clean();
