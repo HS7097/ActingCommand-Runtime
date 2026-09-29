@@ -2,16 +2,26 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    IdentifierIssuer, InstanceId, OwnerEpoch, OwnerResourceDisposition, RuntimeErrorCode,
+    IdentifierIssuer, InstanceId, OWNER_JOURNAL_LIMIT, OwnerEpoch, OwnerResourceDisposition,
+    RuntimeErrorCode,
 };
 use actingcommand_host_metrics::ProcessProbe;
-use actingcommand_ledger::owner_journal::{RuntimeOwnerJournal, RuntimeOwnerRecord as OwnerRecord};
+use actingcommand_ledger::owner_journal::{
+    OwnerJournalError, RuntimeOwnerJournal, RuntimeOwnerRecord as OwnerRecord,
+};
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
-use std::path::Path;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::process;
 
 pub(crate) const OWNER_FILE_NAME: &str = "owner.lock";
+/// Workflow #191 O: the side file of an in-place compaction (`contracts/owner-journal.md`).
+pub(crate) const OWNER_COMPACTION_FILE_NAME: &str = "owner.lock.compact";
+/// Workflow #191 O: an in-epoch non-terminal append that would take the physical bytes
+/// after the checkpoint past this folds every record but the last first.
+pub(crate) const OWNER_JOURNAL_COMPACT_TAIL_BYTES: u64 = 64 * 1024;
+/// The side file is the image plus one seal line.
+const OWNER_COMPACTION_SEAL_ALLOWANCE: u64 = 4 * 1024;
 const OWNER_SCHEMA_VERSION: &str = actingcommand_contract::OWNER_JOURNAL_SCHEMA;
 /// A running process created more than this after the recorded `started_at_unix_ms` is
 /// another incarnation of a reused pid. One created earlier is the recorded owner itself,
@@ -118,6 +128,11 @@ pub(crate) struct OwnerGuard {
     retained_unconfirmed: bool,
     retention_result: Option<RuntimeHostResult<()>>,
     close_result: Option<RuntimeHostResult<()>>,
+    side_path: PathBuf,
+    /// The physical bytes after the checkpoint line.
+    uncompacted_bytes: u64,
+    /// A failed in-place rewrite; every later write returns it before writing a byte.
+    journal_failure: Option<RuntimeHostError>,
 }
 
 impl OwnerGuard {
@@ -141,6 +156,7 @@ impl OwnerGuard {
                 )
             })?;
         try_lock_owner_file(&file, "owner_conflict", "acquire_owner_file")?;
+        recover_compaction(state_root, &mut file)?;
         let journal = read_owner_journal(&mut file)?;
         let previous = journal.last().cloned();
         let released_by_exit = release_exited_owner(previous.as_ref())?;
@@ -182,7 +198,8 @@ impl OwnerGuard {
             closed_at_unix_ms: None,
             resource_disposition: Some(OwnerResourceDisposition::None),
         };
-        append_record(&mut file, &record)?;
+        let encoded = encode_record(&record)?;
+        write_record(&mut file, &encoded)?;
         Ok(OwnerStartup {
             guard: OwnerGuard {
                 file: Some(file),
@@ -192,6 +209,9 @@ impl OwnerGuard {
                 retained_unconfirmed: false,
                 retention_result: None,
                 close_result: None,
+                side_path: state_root.join(OWNER_COMPACTION_FILE_NAME),
+                uncompacted_bytes: journal.uncompacted_bytes() + encoded.len() as u64,
+                journal_failure: None,
             },
             owner_epoch,
             takeover_instances,
@@ -205,6 +225,7 @@ impl OwnerGuard {
         &mut self,
         active_instances: impl IntoIterator<Item = InstanceId>,
     ) -> RuntimeHostResult<()> {
+        self.journal_gate()?;
         let mut active_instances = active_instances.into_iter().collect::<Vec<_>>();
         active_instances.sort_unstable();
         active_instances.dedup();
@@ -220,7 +241,7 @@ impl OwnerGuard {
             )
         })?;
         record.active_instances = active_instances;
-        append_record(self.file_mut("update_owner_file")?, &record)?;
+        self.append_in_epoch(&record, "update_owner_file")?;
         self.record = record;
         Ok(())
     }
@@ -229,6 +250,7 @@ impl OwnerGuard {
         &mut self,
         disposition: OwnerResourceDisposition,
     ) -> RuntimeHostResult<()> {
+        self.journal_gate()?;
         if self.retained_unconfirmed {
             return Err(RuntimeHostError::fatal(
                 "owner_resource_unconfirmed",
@@ -248,7 +270,7 @@ impl OwnerGuard {
             )
         })?;
         record.resource_disposition = Some(disposition);
-        append_record(self.file_mut("update_owner_resource_disposition")?, &record)?;
+        self.append_in_epoch(&record, "update_owner_resource_disposition")?;
         self.record = record;
         Ok(())
     }
@@ -267,6 +289,7 @@ impl OwnerGuard {
         let file = Box::leak(Box::new(file));
         self.retained_unconfirmed = true;
         let result = (|| {
+            self.journal_gate()?;
             let mut record = self.record.clone();
             record.revision = record.revision.checked_add(1).ok_or_else(|| {
                 RuntimeHostError::fatal(
@@ -303,6 +326,7 @@ impl OwnerGuard {
             return result.clone();
         }
         let result = (|| {
+            self.journal_gate()?;
             if self.retained_unconfirmed {
                 return Err(RuntimeHostError::fatal(
                     "owner_resource_unconfirmed",
@@ -343,6 +367,74 @@ impl OwnerGuard {
         self.close_result = Some(result.clone());
         result
     }
+
+    /// Workflow #191 O: after a failed in-place rewrite no write of this guard reaches the
+    /// journal; the next start finishes the compaction from its side file.
+    fn journal_gate(&self) -> RuntimeHostResult<()> {
+        self.journal_failure.clone().map_or(Ok(()), Err)
+    }
+
+    /// Workflow #191 O: an in-epoch non-terminal append. Past the uncompacted threshold it
+    /// first folds every record but the last into the leading checkpoint; a failed fold
+    /// fails the append, which is then not written.
+    fn append_in_epoch(
+        &mut self,
+        record: &OwnerRecord,
+        operation: &'static str,
+    ) -> RuntimeHostResult<()> {
+        let encoded = encode_record(record)?;
+        if !self.retained_unconfirmed
+            && self.uncompacted_bytes + encoded.len() as u64 > OWNER_JOURNAL_COMPACT_TAIL_BYTES
+        {
+            self.compact()?;
+        }
+        write_record(self.file_mut(operation)?, &encoded)?;
+        self.uncompacted_bytes += encoded.len() as u64;
+        Ok(())
+    }
+
+    /// S1 checks the image without writing; S2 makes the side file durable; S3 rewrites
+    /// the journal in place; S4 removes the side file. Only an S3 failure is cached: the
+    /// journal may then be half written, and the next start completes it (R2-R4).
+    fn compact(&mut self) -> RuntimeHostResult<()> {
+        const OPERATION: &str = "compact_owner_file";
+        let fatal = |code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| fatal("owner_file_missing"))?;
+        let Some(compaction) =
+            RuntimeOwnerJournal::compaction_locked(file).map_err(owner_journal_error)?
+        else {
+            return Ok(());
+        };
+        if stage_side_file(&self.side_path, compaction.side_file()).is_err() {
+            let error = fatal("owner_compaction_stage_failed");
+            return Err(match std::fs::remove_file(&self.side_path) {
+                Err(cleanup) if cleanup.kind() != std::io::ErrorKind::NotFound => error
+                    .with_related_failure(
+                        "side_file_cleanup",
+                        &fatal("owner_compaction_cleanup_failed"),
+                    ),
+                _ => error,
+            });
+        }
+        let rewritten = file
+            .seek(SeekFrom::Start(0))
+            .and_then(|_| file.write_all(compaction.image()))
+            .and_then(|()| file.set_len(compaction.image().len() as u64))
+            .and_then(|()| file.sync_all());
+        if rewritten.is_err() {
+            let error = fatal("owner_compaction_rewrite_failed");
+            self.journal_failure = Some(error.clone());
+            return Err(error);
+        }
+        self.uncompacted_bytes = compaction.kept_bytes();
+        std::fs::remove_file(&self.side_path)
+            .and_then(|()| sync_directory(side_directory(&self.side_path)))
+            .map_err(|_| fatal("owner_compaction_cleanup_failed"))
+    }
+
     fn file_mut(&mut self, operation: &'static str) -> RuntimeHostResult<&mut File> {
         if let Some(Err(error)) = &self.retention_result {
             return Err(error.clone());
@@ -398,6 +490,7 @@ pub(crate) fn unlock_retained_owner(
         }
     };
     try_lock_owner_file(&file, "owner_unlock_daemon_active", OPERATION)?;
+    recover_compaction(state_root, &mut file)?;
     let Some((mut record, previous_resource_disposition)) =
         read_last_record(&mut file)?.and_then(|record| match record.resource_disposition {
             Some(
@@ -441,10 +534,68 @@ impl Drop for OwnerGuard {
     }
 }
 
+fn owner_journal_error(error: OwnerJournalError) -> RuntimeHostError {
+    RuntimeHostError::fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
+}
+
 fn read_owner_journal(file: &mut File) -> RuntimeHostResult<RuntimeOwnerJournal> {
-    RuntimeOwnerJournal::read_locked(file).map_err(|error| {
-        RuntimeHostError::fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
-    })
+    RuntimeOwnerJournal::read_locked(file).map_err(owner_journal_error)
+}
+
+/// Workflow #191 O: under the owner lock and before any read, finishes or discards a
+/// compaction a crash interrupted, then removes its side file. Like the incomplete-tail
+/// recovery it writes no event.
+fn recover_compaction(state_root: &Path, file: &mut File) -> RuntimeHostResult<()> {
+    const OPERATION: &str = "recover_owner_compaction";
+    let fatal = |code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
+    let side_path = state_root.join(OWNER_COMPACTION_FILE_NAME);
+    let mut side = Vec::new();
+    match File::open(&side_path).and_then(|side_file| {
+        side_file
+            .take(OWNER_JOURNAL_LIMIT + OWNER_COMPACTION_SEAL_ALLOWANCE + 1)
+            .read_to_end(&mut side)
+    }) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(fatal("owner_compaction_side_read_failed")),
+    }
+    if side.len() as u64 > OWNER_JOURNAL_LIMIT + OWNER_COMPACTION_SEAL_ALLOWANCE {
+        return Err(fatal("owner_compaction_unrecoverable"));
+    }
+    RuntimeOwnerJournal::recover_compaction_locked(file, &side).map_err(owner_journal_error)?;
+    std::fs::remove_file(&side_path)
+        .and_then(|()| sync_directory(side_directory(&side_path)))
+        .map_err(|_| fatal("owner_compaction_cleanup_failed"))
+}
+
+fn side_directory(side_path: &Path) -> &Path {
+    side_path.parent().unwrap_or(Path::new("."))
+}
+
+/// S2: create or truncate, write and synchronize the side file, then its directory.
+fn stage_side_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut side = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)?;
+    side.write_all(bytes)?;
+    side.sync_all()?;
+    sync_directory(side_directory(path))
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    OpenOptions::new()
+        .read(true)
+        .open(path)
+        .and_then(|directory| directory.sync_all())
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
+    // Rust's standard library cannot open Windows directories for fsync without unsafe flags.
+    Ok(())
 }
 
 fn read_last_record(file: &mut File) -> RuntimeHostResult<Option<OwnerRecord>> {
@@ -469,6 +620,10 @@ fn try_lock_owner_file(
 }
 
 fn append_record(file: &mut File, record: &OwnerRecord) -> RuntimeHostResult<()> {
+    write_record(file, &encode_record(record)?)
+}
+
+fn encode_record(record: &OwnerRecord) -> RuntimeHostResult<Vec<u8>> {
     let mut encoded = serde_json::to_vec(record).map_err(|_| {
         RuntimeHostError::fatal(
             "owner_record_encode_failed",
@@ -477,6 +632,10 @@ fn append_record(file: &mut File, record: &OwnerRecord) -> RuntimeHostResult<()>
         )
     })?;
     encoded.push(b'\n');
+    Ok(encoded)
+}
+
+fn write_record(file: &mut File, encoded: &[u8]) -> RuntimeHostResult<()> {
     file.seek(SeekFrom::End(0)).map_err(|_| {
         RuntimeHostError::fatal(
             "owner_seek_failed",
@@ -484,7 +643,7 @@ fn append_record(file: &mut File, record: &OwnerRecord) -> RuntimeHostResult<()>
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
-    file.write_all(&encoded).map_err(|_| {
+    file.write_all(encoded).map_err(|_| {
         RuntimeHostError::fatal(
             "owner_write_failed",
             "write_owner_file",

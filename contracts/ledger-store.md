@@ -100,11 +100,14 @@ subscriptions, the critical path and the writer exit rules are unchanged.
 Before Provider assembly, Host completes pending eviction recovery and capacity
 preflight, then passes the opaque complete owner-journal read to the existing
 writer. The original exclusive OwnerGuard remains held. The reader preserves the
-4 MiB ceiling, consecutive revisions, fatal complete corruption and incomplete
-tail recovery. Only a v2 ConfirmedClosed suffix without later resource use,
-Unconfirmed, epoch reuse or contradictory identity supports a proven import. An
-inactive record, None, a v1 record or an available OS lock alone supplies no
-close evidence.
+4 MiB ceiling, consecutive revisions from the checkpoint base
+(`contracts/owner-journal.md`), fatal complete corruption and incomplete tail
+recovery. After a fold the checkpoint carries the folded blocks and proofs, which
+the reader re-checks as before, and every block-start prefix, which keeps
+supporting the sealed complete-read bounds. Only a v2 ConfirmedClosed suffix
+without later resource use, Unconfirmed, epoch reuse or contradictory identity
+supports a proven import. An inactive record, None, a v1 record or an available
+OS lock alone supplies no close evidence.
 
 The first `PriorEpochOwnerImported` lifecycle fact seals the native schema,
 subject epoch, positive/final revisions, complete-read bounds and SHA-256, and
