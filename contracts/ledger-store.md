@@ -6,7 +6,7 @@ through [Ledger maintenance and cutover](ledger-maintenance.md). The explicit
 [SQLite candidate](sqlite-ledger-candidate.md) and Segment corpus share the same
 semantic core, query, projection and subscription behavior.
 
-## Open, ownership and durable append
+## Open, ownership and append durability
 
 `GlobalLedger::open_with_store` accepts an internal constructor. Configuration
 validation precedes creation of a waiting writer thread. The constructor acquires
@@ -51,18 +51,69 @@ request error, consumes no sequence and leaves the writer usable. Error severity
 is taken from the returned error, not inferred from a scenario's historical name.
 
 A failed append is not proof of absence: write/sync or later accounting may fail
-after bytes or a fact have become durable. The writer terminates on a fatal
+after bytes or a fact have become durable. A successful observational append is not
+proof of presence after a power loss (see [Durability classes](#durability-classes-workflow-191-i)).
+The writer terminates on a fatal
 append/settlement error, informs subscribers and returns the error to the caller.
 Callers must recover/read authoritative facts before deciding whether an effect
 occurred. For external effects, durable intent still precedes the attempt and
 outcome follows it; storage cannot make a device action transactional.
 
-Close drains the existing command path, syncs storage and releases ownership.
+Close drains the existing command path, syncs the Segment medium (the SQLite medium
+adds no sync at close; see [Durability classes](#durability-classes-workflow-191-i))
+and releases ownership.
 Successful explicit close yields `subscription_closed` to subscribers; close
 failure propagates as an error. Physical Segment writer metadata, repair journal,
 quarantine and rotation remain owned by `storage.rs`. Commit statistics describe
 successful writes by the current owner; timings and the owner incarnation are
 observations, not event identity or portable equality inputs.
+
+## Durability classes (Workflow #191 I)
+
+Every append has a durability class fixed by the Ledger from its payload: durable
+or observational. Callers cannot choose it; a joint `append_transaction` is always
+durable, and `append_durable` refuses an observational draft with the fatal
+`critical_event_not_durable`. A durable append returns after its WAL commit is
+synced (`synchronous=FULL`). An observational append returns after its commit is
+written without a sync (`NORMAL` for that one transaction, set by a freshly
+prepared statement and read back; the shared connection is restored to and
+verified at `FULL` before release). It survives a process crash and becomes
+durable across power loss at the next durable commit on the same database (Ledger
+or State) or at an SQLite checkpoint. The table is exhaustive and a new event type
+or lifecycle phase is durable by default. The Segment medium still syncs every
+append.
+
+Observational: `provider.startup_observed`; `monitor.probe_requested`,
+`probe_started`, `probe_completed`, `probe_failed`; `perf.pressure_started`,
+`pressure_ended`, `stutter_detected`, `summary`, `monitor_degraded`,
+`monitor_recovered`; `task.evidence_indexed`, `geometry_observed`,
+`recognition_started`, `recognition_completed`; `capture.requested`, `completed`,
+`failed`, `pressure_changed`, `dedup_window`, `policy_changed`;
+`recognition.requested`, `completed`, `failed`; `artifact.verified`,
+`artifact.pin_recorded`; `runtime.fact_recorded` and `runtime.fact_invalidated`
+with an instance scope; `runtime.lifecycle_observed` carrying `device.self_check`
+or the phases `backend_open_observed`, `adb_target_recovery` and
+`device_diagnostic_detail`. Everything else is durable, including
+`perf.balance_changed`, `artifact.created`, Runtime-scoped runtime facts (the
+configuration inventory) and every other lifecycle phase (`vendor_stdio_close`
+included, so it reaches storage before the owner journal records the close).
+
+WAL recovery keeps the longest valid prefix ending at a commit, so power loss can
+drop only a suffix of observational commits; sequence continuity and the hash
+chain stay consistent at that boundary, and every State reference to a ledger
+sequence was committed after that sequence in the same WAL. Every external
+effect — device input and application lifecycle, lease and scheduling decisions,
+task terminals, material publication (`artifact.created`) and deletion (eviction
+intent), owner-journal writes, catalog/release/state/approval transitions, client
+command records, owner unlock and Runtime lifecycle — follows a durable commit.
+Replies, receipts and live deliveries may name observational facts that a power
+loss removes; later appends then reuse their sequences but never their event ids.
+Clients must re-read after a Runtime restart instead of trusting positions kept
+across it. A connection whose level could not be set, read back or restored fails
+the append with the fatal `state_database_sync_config_failed`; one left below
+`FULL` is refused to every later user (`state_database_sync_relaxed`). Close adds
+no barrier; the Host's last append before a successful close is the durable device
+diagnostic summary.
 
 ## Deferred append
 
@@ -92,7 +143,8 @@ budget. A failed reply fails the close with that error; a reply still pending is
 fatal `deferred_append_unconfirmed`, never a silent drop. The event id returned at
 acceptance exists before commit: nothing may link to it, or treat the fact as
 persisted, until a confirmation reports it committed. The device diagnostic close
-summary is the first deferred producer; `append` and `append_transaction`,
+summary is the first deferred producer and is durable; a deferred append takes the
+same durability class as `append`. `append` and `append_transaction`,
 subscriptions, the critical path and the writer exit rules are unchanged.
 
 ## Prior-epoch scope close (proven or unproven)

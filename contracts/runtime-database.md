@@ -23,7 +23,8 @@ State database construction preserves this order:
    key/connection creation, preserving the original file and error ordering.
 3. Inspect any existing database path; load or create the 32-byte key.
 4. Open SQLite; set its five-second busy timeout, foreign keys, WAL and FULL
-   synchronous mode; execute the state-supplied schema and check the existing
+   synchronous mode (the connection's standing level; see `set_commit_sync`
+   below); execute the state-supplied schema and check the existing
    `state_meta` version; run `quick_check(1)`.
 5. Construct the state facade and validate every typed document, projection,
    release and pointer relation through its existing validation path.
@@ -55,6 +56,18 @@ coordinated work borrows the Ledger transaction without committing it. Domain
 validation and SQL request errors remain state-owned.
 The SQLite busy timeout applies to SQLite lock contention; it does not establish
 a timeout for acquisition of the Rust mutex.
+
+`set_commit_sync(connection, CommitSync)` is for the Ledger only: while holding the
+guard and outside a transaction, it sets `synchronous` to `NORMAL` for one
+observational event transaction and back to `FULL` before the guard is released
+(see [Durability classes](ledger-store.md#durability-classes-workflow-191-i)). Each
+call prepares a fresh statement, never a cached one, because SQLite applies the
+level while preparing; it then reads the level back (`1` for `NORMAL`, `2` for
+`FULL`). Any failure is `state_database_sync_config_failed` (`set_commit_sync`,
+detail `sqlite=<extended code>` or `readback=<n>`). The database is marked relaxed
+before `NORMAL` is set and unmarked only after `FULL` is read back; while marked,
+`connection` and `try_connection` refuse every caller with
+`state_database_sync_relaxed`, so State never runs below `FULL`.
 
 `integrity_tag` reads the immutable key without acquiring the connection mutex.
 Row validation and transaction callbacks can compute tags while holding the

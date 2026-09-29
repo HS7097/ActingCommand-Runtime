@@ -471,7 +471,7 @@ impl GlobalLedgerError {
         self.terminal
     }
 
-    fn fatal(code: &'static str, operation: &'static str) -> Self {
+    pub(crate) fn fatal(code: &'static str, operation: &'static str) -> Self {
         Self {
             code,
             operation,

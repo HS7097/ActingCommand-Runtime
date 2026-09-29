@@ -44,7 +44,9 @@ event identities with unique constraints; run/task/lease values span many facts.
 
 An Immediate append transaction checks the current head/next metadata, inserts
 the complete event/relations/artifacts, updates head/next/hash/keyed metadata and
-commits under WAL/FULL. Only afterward does the common store publish memory
+commits under WAL at the event's
+[durability class](ledger-store.md#durability-classes-workflow-191-i) (`FULL`, or
+`NORMAL` for that one transaction). Only afterward does the common store publish memory
 indexes and statistics. The existing writer then acknowledges and sends live
 notifications. A failed append does not establish absence: persistence may have
 completed before a later failure. Fatal errors terminate the writer and reach

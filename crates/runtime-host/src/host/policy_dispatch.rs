@@ -296,7 +296,7 @@ impl EventAppender for PolicyAdmissionAppender<'_> {
         &self,
         draft: actingcommand_contract::SanitizedEventDraft,
     ) -> actingcommand_ledger::GlobalLedgerResult<PersistedEvent> {
-        let event = self.ledger.append(draft)?;
+        let event = self.ledger.append_durable(draft)?;
         self.initial_fact_gate.borrow_mut().take();
         Ok(event)
     }

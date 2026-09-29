@@ -21,7 +21,9 @@ use actingcommand_contract::{
     LedgerReadSource, ProjectedArtifactReference, ProjectionProfile, RecoveryReason,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, VerifiedArtifactReference,
 };
-use actingcommand_runtime_database::{RuntimeDatabase, RuntimeDatabaseError, RuntimeTransaction};
+use actingcommand_runtime_database::{
+    CommitSync, RuntimeDatabase, RuntimeDatabaseError, RuntimeTransaction,
+};
 use rusqlite::{
     Connection, TransactionBehavior, params_from_iter,
     types::{Value as SqlValue, ValueRef},
@@ -516,6 +518,10 @@ where
     let head_hash = prefix.head_hash.clone();
     let head = events.last().map_or(0, PersistedEvent::sequence);
     upgrade_views(&database, head, head_hash.as_deref())?;
+    let meta_has_marker = {
+        let connection = database.connection("inspect_ledger_marker_schema")?;
+        ledger_meta_has_marker(&connection)?
+    };
     let next = increment_sequence(head)?;
     let (ownership, stale) = WriterOwnership::from_locked(lock, compatibility, &config.owner_id)?;
     let backend = SqliteStorage {
@@ -524,6 +530,7 @@ where
         head,
         head_hash,
         marker,
+        meta_has_marker,
         prefix: Cell::new(Some(prefix)),
     };
     let mut store = EventStore::recovered(backend, next, events)?;
@@ -689,6 +696,9 @@ pub(super) struct SqliteStorage {
     head: u64,
     head_hash: Option<String>,
     marker: SqliteMarker,
+    /// Whether `ledger_meta` has `migration_record`, inspected once at open: the column
+    /// set cannot change while this writer holds the writer lock.
+    meta_has_marker: bool,
     /// Seeded by open; each Runtime view read takes it and restores it only once verified.
     prefix: Cell<Option<VerifiedPrefix>>,
 }
@@ -739,9 +749,13 @@ impl SqliteLedgerStore {
                 events.last().map_or(0, PersistedEvent::sequence),
                 prefix.head_hash.as_deref(),
             )?;
-            Ok((events, prefix))
+            let meta_has_marker = {
+                let connection = database.connection("inspect_ledger_marker_schema")?;
+                ledger_meta_has_marker(&connection)?
+            };
+            Ok((events, prefix, meta_has_marker))
         })();
-        let (events, prefix) = match recovered {
+        let (events, prefix, meta_has_marker) = match recovered {
             Ok(recovered) => recovered,
             Err(error) => {
                 return Err(error.with_close_result(ownership.close()));
@@ -755,6 +769,7 @@ impl SqliteLedgerStore {
             head,
             head_hash: prefix.head_hash.clone(),
             marker: SqliteMarker::candidate(),
+            meta_has_marker,
             prefix: Cell::new(Some(prefix)),
         };
         let mut store = Self::recovered(backend, next, events)?;
@@ -773,6 +788,7 @@ impl SqliteStorage {
         &mut self,
         event: &PersistedEvent,
         work: Option<&dyn super::LedgerTransactionWork>,
+        sync: CommitSync,
     ) -> GlobalLedgerResult<Option<u64>> {
         let next = increment_sequence(event.sequence())?;
         if event.sequence() != increment_sequence(self.head)? {
@@ -781,9 +797,24 @@ impl SqliteStorage {
         let projected = project_record(&self.database, event, self.head_hash.as_deref())?;
         let started = Instant::now();
         let mut connection = self.database.connection("append_sqlite_event")?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| sql_error(error, "begin_sqlite_append"))?;
+        // An observational event commits under NORMAL for this one transaction; FULL is
+        // restored and read back on every exit before the guard is released.
+        if sync == CommitSync::Normal
+            && let Err(error) = self
+                .database
+                .set_commit_sync(&connection, CommitSync::Normal)
+        {
+            let restored = self.database.set_commit_sync(&connection, CommitSync::Full);
+            let mut failed = GlobalLedgerError::from(error);
+            append_detail(
+                &mut failed,
+                &match restored {
+                    Ok(()) => "sync_restore=ok".to_owned(),
+                    Err(restore) => sync_restore_detail(&restore),
+                },
+            );
+            return Err(failed);
+        }
         let previous_meta = meta_row_with_marker(
             &self.database,
             event.sequence(),
@@ -798,56 +829,33 @@ impl SqliteStorage {
             Some(&projected.hash),
             &self.marker,
         );
-        let prepared: GlobalLedgerResult<()> = (|| {
-            let current = read_meta(&transaction)?;
-            if current
-                != meta_row_with_marker(
-                    &self.database,
-                    event.sequence(),
-                    self.head,
-                    self.head_hash.as_deref(),
-                    &self.marker,
-                )
-            {
-                return Err(failure("ledger_meta_mismatch", "append_sqlite_event"));
+        let attempt = self.commit_joint(&mut connection, event, work, &projected, &meta);
+        let restored = match sync {
+            CommitSync::Full => Ok(()),
+            CommitSync::Normal => self.database.set_commit_sync(&connection, CommitSync::Full),
+        };
+        let commit_failure = match attempt {
+            JointCommit::Committed => {
+                if let Err(restore) = restored {
+                    // The event is committed but the connection stays refused; the head
+                    // does not advance and the failure does not establish absence.
+                    let mut failed = GlobalLedgerError::from(restore);
+                    failed.detail = Some(match failed.detail.take() {
+                        Some(detail) => {
+                            format!("committed sequence={}; {detail}", event.sequence())
+                        }
+                        None => format!("committed sequence={}", event.sequence()),
+                    });
+                    return Err(failed);
+                }
+                None
             }
-            insert_row(
-                &transaction,
-                "ledger_events",
-                EVENT_COLUMNS,
-                &projected.event,
-            )?;
-            insert_row(&transaction, "ledger_links", LINK_COLUMNS, &projected.links)?;
-            for artifact in &projected.artifacts {
-                insert_row(&transaction, "ledger_artifacts", ARTIFACT_COLUMNS, artifact)?;
+            JointCommit::RolledBack(original) => {
+                return Err(with_sync_restore(original, restored));
             }
-            let changed = transaction.execute(
-            "UPDATE ledger_meta SET schema_version=?2,next_sequence=?3,head_sequence=?4,head_record_sha256=?5,storage_backend=?6,migration_id=?7,cutover_state=?8,integer_encoding=?9,integrity_tag=?10,migration_record=?11 WHERE singleton=?1",
-            params_from_iter(meta.iter()),
-        ).map_err(|error| sql_error(error, "update_sqlite_head"))?;
-            if changed != 1 {
-                return Err(failure("ledger_meta_mismatch", "update_sqlite_head"));
-            }
-            if let Some(work) = work {
-                work.apply(&self.database.borrow_transaction(&transaction), event)
-                    .map_err(GlobalLedgerError::work_failure)?;
-            }
-            Ok(())
-        })();
-        if let Err(mut original) = prepared {
-            if let Err(rollback) = transaction.rollback() {
-                let rollback = sql_error(rollback, "rollback_joint_event");
-                original.detail = Some(format!(
-                    "original={}; detail={:?}; rollback={}; detail={:?}",
-                    original, original.detail, rollback, rollback.detail
-                ));
-                original.terminal = true;
-                original.rolled_back_work = None;
-            }
-            return Err(original);
-        }
-        if let Err(error) = transaction.commit() {
-            let mut original = sql_error(error, "commit_sqlite_event");
+            JointCommit::CommitFailed(original) => Some(with_sync_restore(original, restored)),
+        };
+        if let Some(mut original) = commit_failure {
             // The consumed transaction/guard must be released before any readback.
             drop(connection);
             if let Some(work) = work {
@@ -938,6 +946,113 @@ impl SqliteStorage {
         // The common store updates indexes/statistics only after this durable return.
         Ok(elapsed)
     }
+
+    /// Begin through commit of one event transaction on the caller's guard; the caller
+    /// restores the commit synchronization afterwards, whatever the outcome.
+    fn commit_joint(
+        &self,
+        connection: &mut Connection,
+        event: &PersistedEvent,
+        work: Option<&dyn super::LedgerTransactionWork>,
+        projected: &ProjectedRecord,
+        meta: &SqlRow,
+    ) -> JointCommit {
+        let transaction = match connection.transaction_with_behavior(TransactionBehavior::Immediate)
+        {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                return JointCommit::RolledBack(sql_error(error, "begin_sqlite_append"));
+            }
+        };
+        let prepared: GlobalLedgerResult<()> = (|| {
+            let current = read_meta_columns(&transaction, self.meta_has_marker, None, &mut 0)?;
+            if current
+                != meta_row_with_marker(
+                    &self.database,
+                    event.sequence(),
+                    self.head,
+                    self.head_hash.as_deref(),
+                    &self.marker,
+                )
+            {
+                return Err(failure("ledger_meta_mismatch", "append_sqlite_event"));
+            }
+            insert_row(
+                &transaction,
+                "ledger_events",
+                EVENT_COLUMNS,
+                &projected.event,
+            )?;
+            insert_row(&transaction, "ledger_links", LINK_COLUMNS, &projected.links)?;
+            for artifact in &projected.artifacts {
+                insert_row(&transaction, "ledger_artifacts", ARTIFACT_COLUMNS, artifact)?;
+            }
+            let changed = transaction.execute(
+            "UPDATE ledger_meta SET schema_version=?2,next_sequence=?3,head_sequence=?4,head_record_sha256=?5,storage_backend=?6,migration_id=?7,cutover_state=?8,integer_encoding=?9,integrity_tag=?10,migration_record=?11 WHERE singleton=?1",
+            params_from_iter(meta.iter()),
+        ).map_err(|error| sql_error(error, "update_sqlite_head"))?;
+            if changed != 1 {
+                return Err(failure("ledger_meta_mismatch", "update_sqlite_head"));
+            }
+            if let Some(work) = work {
+                work.apply(&self.database.borrow_transaction(&transaction), event)
+                    .map_err(GlobalLedgerError::work_failure)?;
+            }
+            Ok(())
+        })();
+        if let Err(mut original) = prepared {
+            if let Err(rollback) = transaction.rollback() {
+                let rollback = sql_error(rollback, "rollback_joint_event");
+                original.detail = Some(format!(
+                    "original={}; detail={:?}; rollback={}; detail={:?}",
+                    original, original.detail, rollback, rollback.detail
+                ));
+                original.terminal = true;
+                original.rolled_back_work = None;
+            }
+            return JointCommit::RolledBack(original);
+        }
+        match transaction.commit() {
+            Ok(()) => JointCommit::Committed,
+            Err(error) => JointCommit::CommitFailed(sql_error(error, "commit_sqlite_event")),
+        }
+    }
+}
+
+/// One event transaction's outcome, before the connection's FULL level is restored.
+enum JointCommit {
+    Committed,
+    /// Begin failed, or the transaction was rolled back (a failed rollback is recorded
+    /// in the error).
+    RolledBack(GlobalLedgerError),
+    CommitFailed(GlobalLedgerError),
+}
+
+/// Records a failed FULL restore on an append error, which then stays fatal; the
+/// connection is refused to every later user.
+fn with_sync_restore(
+    mut error: GlobalLedgerError,
+    restored: Result<(), RuntimeDatabaseError>,
+) -> GlobalLedgerError {
+    if let Err(restore) = restored {
+        append_detail(&mut error, &sync_restore_detail(&restore));
+        error.terminal = true;
+    }
+    error
+}
+
+fn sync_restore_detail(restore: &RuntimeDatabaseError) -> String {
+    match restore.detail() {
+        Some(detail) => format!("sync_restore={}({detail})", restore.code()),
+        None => format!("sync_restore={}", restore.code()),
+    }
+}
+
+fn append_detail(error: &mut GlobalLedgerError, suffix: &str) {
+    error.detail = Some(match error.detail.take() {
+        Some(detail) => format!("{detail}; {suffix}"),
+        None => suffix.to_owned(),
+    });
 }
 
 impl DurableStorage for SqliteStorage {
@@ -988,7 +1103,7 @@ impl DurableStorage for SqliteStorage {
     }
 
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
-        self.persist_joint(event, None)
+        self.persist_joint(event, None, crate::durability::commit_sync(event.payload()))
     }
 
     fn persist_transaction(
@@ -996,11 +1111,14 @@ impl DurableStorage for SqliteStorage {
         event: &PersistedEvent,
         work: &dyn super::LedgerTransactionWork,
     ) -> GlobalLedgerResult<Option<u64>> {
-        self.persist_joint(event, Some(work))
+        self.persist_joint(event, Some(work), CommitSync::Full)
     }
 
     fn close(&mut self) -> GlobalLedgerResult<()> {
-        // Every append committed under WAL/FULL; the shared connection belongs to RuntimeDatabase.
+        // Durable appends were synced before they returned. An observational tail reaches
+        // storage at the next durable commit or checkpoint; close adds no barrier (the
+        // Host's last append before a successful close is durable). The shared
+        // connection belongs to RuntimeDatabase.
         self.ownership.close()
     }
 }
@@ -2008,7 +2126,13 @@ fn read_meta_with_budget(
     budget: ReadBudget,
     bytes: &mut u64,
 ) -> GlobalLedgerResult<SqlRow> {
-    let has_marker = connection
+    let has_marker = ledger_meta_has_marker(connection)?;
+    read_meta_columns(connection, has_marker, budget, bytes)
+}
+
+/// Whether `ledger_meta` has the `migration_record` column.
+fn ledger_meta_has_marker(connection: &Connection) -> GlobalLedgerResult<bool> {
+    connection
         .prepare("PRAGMA table_info(ledger_meta)")
         .and_then(|mut statement| {
             let columns = statement
@@ -2016,7 +2140,16 @@ fn read_meta_with_budget(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(columns.iter().any(|column| column == "migration_record"))
         })
-        .map_err(|error| sql_error(error, "inspect_ledger_marker_schema"))?;
+        .map_err(|error| sql_error(error, "inspect_ledger_marker_schema"))
+}
+
+/// Reads the single meta row with the given column set; a missing marker reads as Null.
+fn read_meta_columns(
+    connection: &Connection,
+    has_marker: bool,
+    budget: ReadBudget,
+    bytes: &mut u64,
+) -> GlobalLedgerResult<SqlRow> {
     let columns = if has_marker {
         META_COLUMNS
     } else {

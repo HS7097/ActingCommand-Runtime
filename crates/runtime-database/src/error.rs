@@ -46,6 +46,11 @@ impl RuntimeDatabaseError {
         }
     }
 
+    pub(crate) fn with_detail(mut self, detail: String) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+
     pub fn warnings(&self) -> &[crate::MaintenanceWarning] {
         &self.warnings
     }

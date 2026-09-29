@@ -34,7 +34,7 @@ A typed client request carrying actor, source, correlation, target instance, and
 
 ## Receipt
 
-A projection of persisted terminal facts for one request. A successful receipt cannot precede its required durable outcome.
+A projection of persisted terminal facts for one request. A successful receipt cannot precede its required outcome at that outcome's durability class; an observational outcome survives a process crash but becomes durable across power loss only at the next durable commit.
 
 ## Global Ledger
 
@@ -42,7 +42,7 @@ The append-only production fact source shared by Runtime modules and all clients
 
 ## Ledger Writer
 
-The single live owner that allocates event sequence numbers and durably appends sanitized events.
+The single live owner that allocates event sequence numbers and appends sanitized events at their durability class (durable or observational).
 
 ## Event Draft
 
@@ -54,7 +54,7 @@ An event draft whose fields have passed the required pre-persistence redaction p
 
 ## Persisted Event
 
-A sanitized event with ledger-assigned identity and sequence that is part of the durable fact source.
+A sanitized event with ledger-assigned identity and sequence that is part of the durable fact source. An observational event is durable across power loss only after the next durable commit.
 
 ## Projection
 
