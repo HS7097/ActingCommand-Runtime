@@ -50,11 +50,10 @@ impl HostShared {
         let approvals = lock(&self.approval_records, "project_runtime_approvals")?
             .records_at(&self.ledger, Arc::clone(&self.state), ledger_position)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Every policy dispatch writer appends and applies under the policy guard (Workflow
+        // #191 U5-F1), so taking it after reading the position sees every event up to it.
         let (catalog, decisions) = {
-            let mut policy = lock(&self.policy, "project_runtime_policy")?;
-            policy
-                .refresh_dispatches(&self.ledger)
-                .map_err(RequestFailure::poison_without_terminal)?;
+            let policy = lock(&self.policy, "project_runtime_policy")?;
             (
                 policy
                     .active_loaded_at(&self.ledger, ledger_position)

@@ -2802,6 +2802,9 @@ struct HostShared {
     lifecycle_admission: RwLock<bool>,
     scheduler: Arc<Mutex<SeedScheduler>>,
     // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
+    // A policy admission takes `policy` after `policy_outcome_gate` and holds it without a
+    // break across the intent append, the lease acquisition and the outcome append, until it
+    // has applied both events (Workflow #191 U5-F1).
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,

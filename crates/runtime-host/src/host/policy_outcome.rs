@@ -51,7 +51,9 @@ impl HostShared {
                         .ledger
                         .reconcile_scheduled_policy_settlement(execution)
                         .map_err(|_| ledger_error("reconcile_policy_settlements"))?;
-                    policy.complete_dispatch(&decision_id, &completion)?;
+                    policy
+                        .complete_dispatch(&decision_id, &completion)
+                        .map_err(RuntimeHostError::into_fatal)?;
                 }
                 if !policy.dispatch_needs_completion(&decision_id)? {
                     lock(
@@ -992,17 +994,21 @@ impl HostShared {
                     self.consume_scheduled_policy_checkpoint_for_test(context)?;
                     #[cfg(test)]
                     fail_policy_execution_append_for_test()?;
-                    self.append_event_raw(
+                    if let Err(error) = self.append_event_raw(
                         policy_execution_severity(&data),
                         EventSource::Scheduler,
                         OriginModule::Policy,
                         EventActor::Scheduler,
                         links,
                         PolicyPayloadDraft::execution_recorded(data.clone(), AuditInput::new()),
-                    )?;
+                    ) {
+                        return Err(self.realign_policy_dispatches(&mut policy, error));
+                    }
                     #[cfg(test)]
                     policy_crash_test_barrier("after_policy_execution");
-                    policy.commit_execution(&data)?;
+                    policy
+                        .commit_execution(&data)
+                        .map_err(RuntimeHostError::into_fatal)?;
                     data
                 }
                 PolicyExecutionPreparation::Replay(data) => data,
@@ -1073,17 +1079,27 @@ impl HostShared {
             };
             let completion = match completions.as_slice() {
                 [completion] => completion.clone(),
-                [] => self.append_event_raw(
-                    EventSeverity::Info,
-                    EventSource::Scheduler,
-                    OriginModule::Policy,
-                    EventActor::Scheduler,
-                    match context {
+                [] => {
+                    let links = match context {
                         Some(context) => self.policy_run_event_links(context)?,
                         None => self.events.system_links()?,
-                    },
-                    PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
-                )?,
+                    };
+                    match self.append_event_raw(
+                        EventSeverity::Info,
+                        EventSource::Scheduler,
+                        OriginModule::Policy,
+                        EventActor::Scheduler,
+                        links,
+                        PolicyPayloadDraft::dispatch_completed(
+                            dispatch,
+                            admission,
+                            AuditInput::new(),
+                        ),
+                    ) {
+                        Ok(completion) => completion,
+                        Err(error) => return Err(self.realign_policy_dispatches(policy, error)),
+                    }
+                }
                 _ => {
                     return Err(policy_admission_fatal(
                         "policy_dispatch_completion_not_unique",
@@ -1093,13 +1109,40 @@ impl HostShared {
             };
             #[cfg(test)]
             policy_crash_test_barrier("after_policy_completion");
-            policy.complete_dispatch(decision_id, &completion)?;
+            policy
+                .complete_dispatch(decision_id, &completion)
+                .map_err(RuntimeHostError::into_fatal)?;
         }
         #[cfg(test)]
         self.wait_policy_outcome_transition_test_hook()?;
         self.apply_policy_outcome_cache_update(cache_update)?;
         lock(&self.policy_dispatch_clocks, "clear_policy_dispatch_start")?.remove(decision_id);
         Ok(())
+    }
+
+    /// Workflow #191 U5-F1 (I-W c): an execution or completion append that returned an error
+    /// may still have reached the ledger, so the caller re-aligns the policy projection with
+    /// the whole ledger under the guard it appended under, then returns the append error. A
+    /// failed re-alignment is fatal, marked here, and joined to the append error.
+    fn realign_policy_dispatches(
+        &self,
+        policy: &mut PolicyHost,
+        error: RuntimeHostError,
+    ) -> RuntimeHostError {
+        let Err(refresh) = policy.refresh_dispatches(&self.ledger) else {
+            return error;
+        };
+        let refresh = refresh.into_fatal();
+        let marked = self.fatal.mark(refresh.clone());
+        let error = error.with_complete_failure(
+            crate::error::RuntimeFailureRelation::LifecycleRecord,
+            refresh,
+        );
+        match marked {
+            Ok(()) => error,
+            Err(mark) => error
+                .with_complete_failure(crate::error::RuntimeFailureRelation::LifecycleRecord, mark),
+        }
     }
 
     fn policy_run_event_links(
@@ -1444,8 +1487,12 @@ fn reconcile_scheduled_policy_outcomes_for(
         let completion = ledger
             .reconcile_scheduled_policy_settlement(data.clone())
             .map_err(|_| ledger_error("reconcile_policy_outcomes"))?;
-        policy.commit_execution(&data)?;
-        policy.complete_dispatch(&decision_id, &completion)?;
+        policy
+            .commit_execution(&data)
+            .map_err(RuntimeHostError::into_fatal)?;
+        policy
+            .complete_dispatch(&decision_id, &completion)
+            .map_err(RuntimeHostError::into_fatal)?;
     }
     Ok(())
 }
