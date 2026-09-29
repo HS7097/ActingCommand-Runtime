@@ -159,9 +159,9 @@ verified prefix seeded by its full verification at open; each Runtime-source rea
 re-checks the head and boundary rows and verifies only the tail after that prefix,
 extending the prefix's retention and event indexes with the same rows, and any
 mismatch or tail failure discards the prefix with both indexes and falls back to
-the full read and verification with the same error codes. Offline and read-only snapshots still verify everything. The physical read
-transaction, selection, projection, replies and all limits retain their original
-behavior.
+the full read and verification with the same error codes. Offline and read-only
+snapshots still verify everything. The physical read transaction, selection,
+projection, replies and all limits retain their original behavior.
 
 Scale fields retain request/selection and original event/byte/recovery-context
 limits; raw bytes and event/link/artifact row counts; verified/prepared/selected
