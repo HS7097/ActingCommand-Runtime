@@ -16,11 +16,14 @@
 //! delivers frames. Refusals are `command.rejected` (diagnostic `runtime.diagnostic`, effect
 //! `not_performed`) plus the `runtime.failed` record, receipt state `denied`, host codes
 //! `application_not_foreground` / `application_foreground_unknown` (`invalid_request`).
+//! An ADB failure whose child or pipe cleanup is unconfirmed invalidates the same facts and
+//! then poisons the host (`application_foreground_unknown`, `runtime_fatal`, Workflow #191 E3).
 
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
 use super::*;
 use actingcommand_contract::{APPLICATION_FOREGROUND_FACT_KEY, FactValue};
+use actingcommand_device::DeviceResourceQuiescence;
 
 const GATE_OPERATION: &str = "require_foreground_application";
 
@@ -57,6 +60,20 @@ impl HostShared {
                 // The ADB baseline is gone; nothing device-bound is trusted from here on.
                 self.invalidate_adb_baseline(instance_id)
                     .map_err(RequestFailure::poison_without_terminal)?;
+                // Workflow #191 E3: an adb child or pipe reader left unconfirmed is a host
+                // fault (error.rs `execution`, as the startup package probe): the ADB facts are
+                // dropped as for any ADB failure, then the host is poisoned instead of refusing.
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    let mut fatal = RuntimeHostError::fatal(
+                        "application_foreground_unknown",
+                        GATE_OPERATION,
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                    .with_native_detail(format!("instance_alias={alias}; adb_failed={error}"));
+                    fatal.lifecycle.instance_id = Some(instance_id);
+                    fatal.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
+                    return Err(RequestFailure::poison_without_terminal(fatal));
+                }
                 let error = gate_error(
                     "application_foreground_unknown",
                     instance_id,

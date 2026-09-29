@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{Adb, CommandOutput, device_state_error, run_text_with_timeout};
+use super::{
+    Adb, CommandOutput, DeviceStateSequence, DeviceStateStep, device_state_error,
+    device_state_sequence, run_text_with_timeout, unconfirmed,
+};
 use crate::{DeviceError, DeviceResult};
 use std::time::{Duration, Instant};
 
@@ -235,10 +238,24 @@ pub(super) fn ensure_input_device_with_commands(
         });
         result
     };
-    let first = command(
-        AdbRecoveryPhase::InitialState,
-        1,
-        &["-s", serial, "get-state"],
+    // Workflow #191 E3: the shared transport check; a step with unconfirmed cleanup ends it.
+    let DeviceStateSequence {
+        first,
+        connect,
+        second,
+    } = device_state_sequence(
+        serial,
+        true,
+        &|result| observed_state(result) == AdbTransportState::Device,
+        &|| true,
+        &mut |step, args| {
+            let phase = match step {
+                DeviceStateStep::InitialState => AdbRecoveryPhase::InitialState,
+                DeviceStateStep::Connect => AdbRecoveryPhase::InitialConnect,
+                DeviceStateStep::ConnectedState => AdbRecoveryPhase::ConnectedState,
+            };
+            command(phase, 1, args)
+        },
     );
     if observed_state(&first) == AdbTransportState::Device {
         return Ok(AdbInputReady {
@@ -252,47 +269,40 @@ pub(super) fn ensure_input_device_with_commands(
             AdbRecoveryText::new(&format!("get-state returned {:?}", output.stdout.trim()))
         }
     };
-    let connect = command(AdbRecoveryPhase::InitialConnect, 1, &["connect", serial]);
-    let second = command(
-        AdbRecoveryPhase::ConnectedState,
-        1,
-        &["-s", serial, "get-state"],
-    );
-    let cleanup_failure = [&first, &connect, &second].into_iter().find_map(|result| {
-        result
-            .as_ref()
-            .err()
-            .filter(|error| {
-                error.resource_quiescence() == Some(crate::DeviceResourceQuiescence::Unconfirmed)
-            })
-            .cloned()
-    });
+    // Only executed steps are read; without an unconfirmed step, connect and second ran.
+    let cleanup_failure = [Some(&first), connect.as_ref(), second.as_ref()]
+        .into_iter()
+        .flatten()
+        .find_map(|result| unconfirmed(result).cloned());
     let primary = cleanup_failure.clone().unwrap_or_else(|| {
         device_state_error(
             serial,
-            state_result(&second),
-            Some(
+            second
+                .as_ref()
+                .map_or_else(|| state_result(&first), state_result),
+            connect.as_ref().map(|connect| {
                 connect
                     .as_ref()
                     .map(|_| ())
-                    .map_err(|error| (*error).clone()),
-            ),
+                    .map_err(|error| (*error).clone())
+            }),
         )
     });
-    let primary = if [&first, &second]
+    let primary = if [Some(&first), second.as_ref()]
         .into_iter()
+        .flatten()
         .any(|result| state_result(result).is_ok_and(|state| state != "device"))
     {
         primary.input_parameter_failure()
     } else {
         primary
     };
-    let mut final_state = observed_state(&second);
+    let mut final_state = observed_state(second.as_ref().unwrap_or(&first));
     let mut path = AdbRecoveryPath::Connect;
     let mut recovery_error = None;
     if final_state == AdbTransportState::Offline
         && observed_state(&first) != AdbTransportState::Unauthorized
-        && connect.is_ok()
+        && connect.as_ref().is_some_and(Result::is_ok)
         && cleanup_failure.is_none()
     {
         path = AdbRecoveryPath::TargetDisconnectConnect;
@@ -315,8 +325,11 @@ pub(super) fn ensure_input_device_with_commands(
                         final_state = observed_state(&state);
                         if final_state != AdbTransportState::Offline || attempt == 2 {
                             if final_state != AdbTransportState::Device {
+                                // An unconfirmed read is kept as is and merged below.
                                 recovery_error =
-                                    Some(device_state_error(serial, state_result(&state), None));
+                                    Some(unconfirmed(&state).cloned().unwrap_or_else(|| {
+                                        device_state_error(serial, state_result(&state), None)
+                                    }));
                             }
                             break;
                         }
