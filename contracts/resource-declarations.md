@@ -77,3 +77,47 @@ file context. Structured declaration errors retain the shared JSON-pointer detai
 Validation does not convert resources, build a package, load image/model bytes,
 create an evaluator, detect an environment or acquire a Runtime/device holder.
 Production keeps its subsequent asset, reference, admission and execution checks.
+
+## Pages and recognition backends in `task.json`
+
+`pack-containment::source` turns the pages a task names (`entry_page`, `target_page`,
+`error_pages`, `scheduling_outcome` terminal pages, `post_admission_ocr` pages, and an
+operation's `from`, `to` or `expect_after.page_id`) into generated page definitions. A page is
+declared by a template anchor (an `anchors[]` entry whose `id` is the page or starts with
+`<page>_`) or by a `page_rules.<page>` entry with a non-empty `required`, `optional` or
+`any_of`. No recognition backend is mandatory. A page declared only by its rule gets no
+implicit `page/<page>` target: its requirements are exactly the rule's targets, in any
+combination of `anchors` and `verify_templates` (template), `color_probes` (color) and
+`ocr_targets` (OCR). A page with an anchor keeps its `page/<page>` requirement (or the
+`any_of` group of its `<page>_*` variants, which a positive rule replaces) and adds the rule's
+targets. Every generated page needs a `required` target or an `any_of` group; the page
+detector refuses one without.
+
+A check that combines backends is one page rule requiring one target per backend, usually
+over the same region. The page matches only when every `required` target passes its own
+threshold, every `any_of` group has a passing target and no `forbidden` target passes:
+
+```json
+{
+  "color_probes": [
+    {"id": "state/claim_ready", "region": {"mode": "rect", "rect": {"x": 1100, "y": 620, "width": 120, "height": 40}},
+     "expected": [250, 210, 60]}
+  ],
+  "ocr_targets": [
+    {"id": "text/claim_ready", "region": {"mode": "rect", "rect": {"x": 1100, "y": 620, "width": 120, "height": 40}},
+     "languages": ["en"], "timeout_ms": 1000, "match_mode": "contains", "expected": ["Claim"],
+     "case_sensitive": false, "minimum_confidence": 0.8,
+     "model_ref": "PP-OCRv6_medium", "model_sha256": "<64 lowercase hex digits of the model>"}
+  ],
+  "page_rules": {
+    "claim_ready": {"required": ["state/claim_ready", "text/claim_ready"]}
+  }
+}
+```
+
+| Backend | Declared in | A target passes when |
+| --- | --- | --- |
+| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`) |
+| Template with color | `anchors[].color_check` | one candidate meets the template threshold and the color condition together (`template-relative-color.md`) |
+| Color | `color_probes[]` | the mean RGB of its region is within `defaults.color_max_distance` of `expected`; this distance is one value per package, taken from the entry task's `defaults` (20 when absent) |
+| OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
