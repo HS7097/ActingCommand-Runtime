@@ -10,8 +10,8 @@ use actingcommand_contract::{
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
 use actingcommand_resource_tooling::{
     AuthoringEnvironmentSnapshot, DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PackageBuildTaskRequest,
-    PackageEnvOptions, PackageSource, ResourceConvertRequest, prepare_package_build_task,
-    resource_convert,
+    PackageEnvOptions, PackageSource, ResourceConvertRequest, open_published_package,
+    prepare_package_build_task, resource_convert,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -117,7 +117,7 @@ fn coreutils_digest(directory: &Path) -> String {
         .to_owned()
 }
 
-fn sealed_package(temp: &Path) -> (BTreeMap<String, Vec<u8>>, Vec<u8>) {
+fn sealed_package(temp: &Path) -> (BTreeMap<String, Vec<u8>>, Vec<u8>, Vec<u8>) {
     let resource_root = temp.join("external-resources");
     write_external_resource_fixture(&resource_root);
     resource_convert(ResourceConvertRequest {
@@ -149,7 +149,13 @@ fn sealed_package(temp: &Path) -> (BTreeMap<String, Vec<u8>>, Vec<u8>) {
     .expect("prepare sealed package")
     .build(&AuthoringEnvironmentSnapshot::default())
     .expect("build sealed package");
-    let bytes = fs::read(&out).expect("read sealed zip");
+    let source_task = fs::read(temp.join("external-resources/operations/return_home/task.json"))
+        .expect("source task declaration");
+    // The logical output path resolves to the published generation, as in the pipeline tests.
+    let bytes = open_published_package(&out)
+        .expect("open sealed package")
+        .read_all()
+        .expect("read sealed zip");
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).expect("open sealed zip");
     let mut entries = BTreeMap::new();
     for index in 0..archive.len() {
@@ -161,21 +167,42 @@ fn sealed_package(temp: &Path) -> (BTreeMap<String, Vec<u8>>, Vec<u8>) {
         file.read_to_end(&mut content).expect("read sealed entry");
         entries.insert(file.name().to_owned(), content);
     }
-    (entries, bytes)
+    (entries, bytes, source_task)
 }
 
 #[test]
 fn one_off_a1_e1_e3_e4_content_directory() {
     let temp = TempDir::new().expect("temp dir");
-    let (sealed, sealed_zip) = sealed_package(temp.path());
+    let (sealed, sealed_zip, source_task) = sealed_package(temp.path());
     report(format!(
         "sealed entries: {:?}",
         sealed.keys().collect::<Vec<_>>()
     ));
-    let mut source = sealed.clone();
+    let mut unsealed = sealed.clone();
     for path in DERIVED {
-        assert!(source.remove(path).is_some(), "sealed package lacks {path}");
+        assert!(
+            unsealed.remove(path).is_some(),
+            "sealed package lacks {path}"
+        );
     }
+    // Information: the sealed package minus its six derived files, taken as it is. Current
+    // build-task writes the canonical execution document as task.json.
+    let task_path = "resources/operations/return_home/task.json";
+    report(format!(
+        "info sealed task.json equals the source declaration: {}",
+        sealed[task_path] == source_task
+    ));
+    let unsealed_root = temp.path().join("unsealed").join("work");
+    write_tree(&unsealed_root, &unsealed);
+    match load(&unsealed_root, &reference(&tree_digest(&unsealed))) {
+        Ok((count, _)) => report(format!(
+            "info unsealed-as-is directory: admitted ({count} entries)"
+        )),
+        Err(error) => report(format!("info unsealed-as-is directory: refused: {error}")),
+    }
+    // The self-contained source directory: the unsealed files with the source declaration.
+    let mut source = unsealed;
+    source.insert(task_path.to_owned(), source_task);
     let digest = tree_digest(&source);
     let packs = temp.path().join("packs");
     let pack = packs.join(&digest);
@@ -230,6 +257,7 @@ fn one_off_a1_e1_e3_e4_content_directory() {
     ));
 
     // E3 (neutral fixture): in-memory derived outputs vs the sealed package's files.
+    let mut e3_equal = true;
     for path in &DERIVED[1..] {
         let memory: Value =
             serde_json::from_slice(bundle.entry(path).expect("in-memory derived")).expect("json");
@@ -243,7 +271,7 @@ fn one_off_a1_e1_e3_e4_content_directory() {
             report(format!("E3 memory {path}: {memory}"));
             report(format!("E3 sealed {path}: {sealed_value}"));
         }
-        assert!(equal, "E3 derived output {path} differs");
+        e3_equal &= equal;
     }
     let sealed_manifest: Value =
         serde_json::from_slice(&sealed["resources/manifest.json"]).expect("sealed manifest");
@@ -376,7 +404,7 @@ fn one_off_a1_e1_e3_e4_content_directory() {
     write_tree(&linked, &source);
     match std::os::windows::fs::symlink_file(
         linked.join("control.json"),
-        linked.join("resources/alias.json"),
+        linked.join("resources").join("alias.json"),
     ) {
         Ok(()) => {
             let error = load(&linked, &reference(&digest)).expect_err("symlink refused");
@@ -394,8 +422,8 @@ fn one_off_a1_e1_e3_e4_content_directory() {
     write_tree(&junctioned, &source);
     let status = Command::new("cmd")
         .args(["/C", "mklink", "/J"])
-        .arg(junctioned.join("resources/junction"))
-        .arg(junctioned.join("resources/operations"))
+        .arg(junctioned.join("resources").join("junction"))
+        .arg(junctioned.join("resources").join("operations"))
         .output()
         .expect("run mklink");
     if status.status.success() {
@@ -422,6 +450,10 @@ fn one_off_a1_e1_e3_e4_content_directory() {
         ContainmentError::SourceTree {
             code: "content_directory_locator_not_absolute"
         }
+    );
+    assert!(
+        e3_equal,
+        "E3 derived outputs differ; see the ONE-OFF-A1 E3 lines"
     );
 }
 
