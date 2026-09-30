@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Instance resource target policies (Workflow #308 RT-S1a): the
+//! Instance resource target policies (Workflow #308 RT-S1a/S1b): the
 //! `actingcommand.resource-targets.v1` document, its formal parse and its check against the
 //! active catalog and an authoritative projection, the record-list rows the Runtime stores as
-//! the instance fact `session.resource_targets`, and the pure target helpers the evaluator
-//! shares. Nothing here reads a clock, a file or the network.
+//! the instance fact `session.resource_targets`, the pure target helpers the entry and the
+//! evaluator share, and the evaluator's reading and scoring of stored policies. Nothing here
+//! reads a clock, a file or the network.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::{
     FactScalar as ContractFactScalar, MAX_RESOURCE_TARGETS, MAX_RESOURCE_TARGETS_DOCUMENT_BYTES,
-    ResourceTargetCondition, ResourceTargetConditionState, ResourceTargetPendingReason,
-    ResourceTargetsRejection, ResourceTargetsRejectionReason,
+    RESOURCE_TARGETS_FACT_KEY, ResourceTargetCondition, ResourceTargetConditionState,
+    ResourceTargetPendingReason, ResourceTargetsRejection, ResourceTargetsRejectionReason,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,9 +21,10 @@ use crate::canonical::canonical_serialized;
 use crate::evaluator::{activity_scope_specificity, project_time_validity, scope_matches_instance};
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
-    CatalogDiagnosticCode, CompiledCatalog, EvaluationFacts, EvaluationTime, FactScalar, FactValue,
-    InstanceSnapshot, MAX_ID_BYTES, ObservationRef, PolicyEvaluationError, PoolSpec,
-    PoolValueSource, SchedulingDocumentKind,
+    CatalogDiagnosticCode, CompiledCatalog, DecisionReason, EvaluationFacts, EvaluationTime,
+    FactScalar, FactValue, InstanceSnapshot, MAX_ID_BYTES, ObservationRef, ObservedFact,
+    PolicyEvaluationError, PolicyEvaluationResult, PoolSpec, PoolValueSource,
+    SchedulingDocumentKind, ScopeSelector, TaskSpec,
 };
 
 pub const RESOURCE_TARGETS_SCHEMA_VERSION: &str = "actingcommand.resource-targets.v1";
@@ -294,7 +296,13 @@ pub fn check_resource_targets(
                 target_id: target.id.clone(),
                 resource: resolved.pool.id.clone(),
                 fact_key: resolved.fact_key.clone(),
-                state: match observe_target(&projected, instance, resolved, time) {
+                state: match observe_target(
+                    &projected,
+                    instance,
+                    resolved.pool,
+                    &resolved.fact_key,
+                    time,
+                ) {
                     TargetObservation::Known {
                         current,
                         observed_at_unix_ms,
@@ -327,16 +335,38 @@ pub(crate) struct ResolvedTarget<'a> {
     pub(crate) per_task: Vec<(String, u64)>,
 }
 
-/// Resolves `target` for `instance`; the entry check and the evaluator share it, so both
-/// judge a target alike. A refusal names its reason and its path below the target.
+/// Resolves `target` for `instance`: its pool, then each task, the first refusal winning.
+/// The entry check and the evaluator share both halves, so both judge a target alike. A
+/// refusal names its reason and its path below the target.
 pub(crate) fn resolve_target<'a>(
     catalog: &'a CompiledCatalog,
     target: &ResourceTargetSpec,
     instance: &InstanceSnapshot,
 ) -> Result<ResolvedTarget<'a>, (ResourceTargetsRejectionReason, String)> {
+    let (pool, fact_key) = resolve_target_pool(catalog, target, instance)?;
+    let mut per_task = Vec::with_capacity(target.tasks.len());
+    for (index, task_id) in target.tasks.iter().enumerate() {
+        let per_run = resolve_target_task(catalog, pool, task_id, instance)
+            .map_err(|reason| (reason, format!("/tasks/{index}")))?;
+        per_task.push((task_id.clone(), per_run));
+    }
+    Ok(ResolvedTarget {
+        pool,
+        fact_key,
+        per_task,
+    })
+}
+
+/// The pool half of [`resolve_target`]: the target's pool and its inventory fact key, or the
+/// refusal at `/resource`.
+pub(crate) fn resolve_target_pool<'a>(
+    catalog: &'a CompiledCatalog,
+    target: &ResourceTargetSpec,
+    instance: &InstanceSnapshot,
+) -> Result<(&'a PoolSpec, String), (ResourceTargetsRejectionReason, String)> {
     use ResourceTargetsRejectionReason as Reason;
-    let bundle = catalog.catalog();
-    let pool = bundle
+    let pool = catalog
+        .catalog()
         .pools
         .pools
         .iter()
@@ -351,40 +381,57 @@ pub(crate) fn resolve_target<'a>(
     if !scope_matches_instance(&pool.scope, instance) {
         return Err((Reason::ResourceOutOfScope, "/resource".to_owned()));
     }
-    let mut per_task = Vec::with_capacity(target.tasks.len());
-    for (index, task_id) in target.tasks.iter().enumerate() {
-        let path = format!("/tasks/{index}");
-        let task = bundle
-            .tasks
-            .tasks
-            .iter()
-            .find(|task| task.id == *task_id)
-            .ok_or_else(|| (Reason::UnknownTask, path.clone()))?;
-        if !scope_matches_instance(&task.scope, instance) {
-            return Err((Reason::TaskOutOfScope, path));
-        }
-        if task.instance_overrides.iter().any(|entry| {
-            entry.instance_id == instance.instance_id && entry.enabled.0 == Some(false)
-        }) {
-            return Err((Reason::TaskDisabled, path));
-        }
-        let produced = task
-            .produces
-            .iter()
-            .filter(|effect| effect.pool_id == pool.id)
-            .map(|effect| u128::from(effect.amount) * u128::from(effect.confidence_milli) / 1_000)
-            .sum::<u128>();
-        let per_run = u64::try_from(produced).unwrap_or(u64::MAX);
-        if per_run == 0 {
-            return Err((Reason::UnmappedTask, path));
-        }
-        per_task.push((task.id.clone(), per_run));
+    Ok((pool, fact_key.clone()))
+}
+
+/// The task half of [`resolve_target`]: one run's expected effective production of `pool`
+/// (`r_k >= 1`) by `task_id` on `instance`, or why the task cannot serve the target.
+pub(crate) fn resolve_target_task(
+    catalog: &CompiledCatalog,
+    pool: &PoolSpec,
+    task_id: &str,
+    instance: &InstanceSnapshot,
+) -> Result<u64, ResourceTargetsRejectionReason> {
+    let task = target_task(catalog, task_id, instance)?;
+    let produced = task
+        .produces
+        .iter()
+        .filter(|effect| effect.pool_id == pool.id)
+        .map(|effect| u128::from(effect.amount) * u128::from(effect.confidence_milli) / 1_000)
+        .sum::<u128>();
+    let per_run = u64::try_from(produced).unwrap_or(u64::MAX);
+    if per_run == 0 {
+        return Err(ResourceTargetsRejectionReason::UnmappedTask);
     }
-    Ok(ResolvedTarget {
-        pool,
-        fact_key: fact_key.clone(),
-        per_task,
-    })
+    Ok(per_run)
+}
+
+/// The catalog task `task_id` when it exists, its scope covers `instance` and no instance
+/// override of `instance` disables it.
+fn target_task<'a>(
+    catalog: &'a CompiledCatalog,
+    task_id: &str,
+    instance: &InstanceSnapshot,
+) -> Result<&'a TaskSpec, ResourceTargetsRejectionReason> {
+    use ResourceTargetsRejectionReason as Reason;
+    let task = catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or(Reason::UnknownTask)?;
+    if !scope_matches_instance(&task.scope, instance) {
+        return Err(Reason::TaskOutOfScope);
+    }
+    if task
+        .instance_overrides
+        .iter()
+        .any(|entry| entry.instance_id == instance.instance_id && entry.enabled.0 == Some(false))
+    {
+        return Err(Reason::TaskDisabled);
+    }
+    Ok(task)
 }
 
 /// A target's inventory as the time-validity projection shows it to one instance.
@@ -408,23 +455,22 @@ pub(crate) enum TargetObservation {
 pub(crate) fn observe_target(
     projected_facts: &EvaluationFacts,
     instance: &InstanceSnapshot,
-    resolved: &ResolvedTarget<'_>,
+    pool: &PoolSpec,
+    fact_key: &str,
     time: EvaluationTime,
 ) -> TargetObservation {
     use ResourceTargetPendingReason as Reason;
     let fact = projected_facts
         .facts
         .iter()
-        .filter(|fact| {
-            fact.fact_key == resolved.fact_key && scope_matches_instance(&fact.scope, instance)
-        })
+        .filter(|fact| fact.fact_key == fact_key && scope_matches_instance(&fact.scope, instance))
         .max_by_key(|fact| activity_scope_specificity(&fact.scope));
     let Some(fact) = fact else {
         return TargetObservation::Pending {
             reason: Reason::Missing,
         };
     };
-    let minimum_confidence = match resolved.pool.value_source {
+    let minimum_confidence = match pool.value_source {
         PoolValueSource::LedgerFact {
             minimum_confidence_milli,
         } => minimum_confidence_milli.max(1),
@@ -520,10 +566,6 @@ pub(crate) enum RowsDecodeError {
 }
 
 impl RowsDecodeError {
-    #[allow(
-        dead_code,
-        reason = "the evaluator reads stored policies in Workflow #308 RT-S1b"
-    )]
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::UnsupportedSchemaVersion => "unsupported_schema_version",
@@ -535,12 +577,8 @@ impl RowsDecodeError {
 
 /// Strictly decodes the rows of `instance_id`'s stored policy: exactly one leading header of
 /// a known version naming that instance, known row kinds with exactly their fields and
-/// types, bounded values, unique targets, and task rows that name an earlier target and
-/// reference each task once.
-#[allow(
-    dead_code,
-    reason = "the evaluator reads stored policies in Workflow #308 RT-S1b"
-)]
+/// types, bounded values, scheduling identifiers for target, resource and task ids, unique
+/// targets, and task rows that name an earlier target and reference each task once.
 pub(crate) fn decode_rows(
     rows: &[BTreeMap<String, FactScalar>],
     instance_id: &str,
@@ -609,12 +647,16 @@ pub(crate) fn decode_rows(
                     return Err(MalformedRows);
                 }
                 let id = text(row, "id")?;
-                if !valid_identifier(&id) || targets.iter().any(|target| target.id == id) {
+                let resource = text(row, "resource")?;
+                if !valid_identifier(&id)
+                    || !valid_identifier(&resource)
+                    || targets.iter().any(|target| target.id == id)
+                {
                     return Err(MalformedRows);
                 }
                 targets.push(ResourceTargetSpec {
                     id,
-                    resource: text(row, "resource")?,
+                    resource,
                     condition: TargetCondition::AtLeast {
                         amount: amount(row, "at_least", MAX_RESOURCE_TARGET_AMOUNT)?,
                     },
@@ -648,7 +690,7 @@ pub(crate) fn decode_rows(
                     .iter_mut()
                     .find(|target| target.id == target_id)
                     .ok_or(MalformedRows)?;
-                if task.is_empty()
+                if !valid_identifier(&task)
                     || target.tasks.len() >= MAX_TASKS_PER_RESOURCE_TARGET
                     || tasks.len() >= MAX_RESOURCE_TARGET_TASKS
                     || !tasks.insert(task.clone())
@@ -671,10 +713,6 @@ pub(crate) fn decode_rows(
 
 /// T1 task target score `min(⌊g·I·u / (S·U)⌋, 1_000_000)` in exact integer arithmetic, and
 /// whether the cap applied; `None` when `S·U` is zero (never for a checked target with a gap).
-#[allow(
-    dead_code,
-    reason = "the evaluator scores resource targets in Workflow #308 RT-S1b"
-)]
 pub(crate) fn task_target_milli(
     gap: u64,
     importance_milli: u64,
@@ -692,13 +730,638 @@ pub(crate) fn task_target_milli(
     })
 }
 
+/// One instance's own stored policy as the evaluator reads it (Workflow #308 RT-S1b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TargetPolicyState {
+    Active {
+        policy_sha256: String,
+        applied_at_unix_ms: u64,
+        valid_until_unix_ms: u64,
+        targets: Vec<ResourceTargetSpec>,
+    },
+    /// Past `valid_until_unix_ms`; the targets only name the candidates it no longer scores.
+    Expired {
+        policy_sha256: String,
+        applied_at_unix_ms: u64,
+        valid_until_unix_ms: u64,
+        targets: Vec<ResourceTargetSpec>,
+    },
+    Unreadable {
+        code: &'static str,
+    },
+}
+
+/// What the evaluator knows about one instance's resource target policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct InstanceTargetPolicy {
+    /// The instance-scoped record; `None` without one or for a withdrawal (`targets: []`).
+    pub(crate) state: Option<TargetPolicyState>,
+    /// A server- or game-scoped record of the key covering the instance, which only an
+    /// ordinary publication before RT-S1a could have written: `(scope kind, observed_at)`.
+    pub(crate) ignored: Option<(&'static str, u64)>,
+}
+
+/// Reads every stored `session.resource_targets` record of `facts` as given, before the
+/// time-validity projection, so a timeline reset never silently drops a policy. An
+/// instance-scoped record that cannot be decoded, or that holds targets without an expiry, is
+/// `Unreadable`; a withdrawal is no policy; `applied_at` is the record's `observed_at` and its
+/// confidence is not read. A server- or game-scoped record is never a policy and never an
+/// error: every instance it covers notes it as ignored (a server record over a game one). The
+/// map holds only the instances with something to report.
+pub(crate) fn instance_target_policies(
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+    let mut policies = BTreeMap::<String, InstanceTargetPolicy>::new();
+    for fact in facts
+        .facts
+        .iter()
+        .filter(|fact| fact.fact_key == RESOURCE_TARGETS_FACT_KEY)
+    {
+        let scope_kind = match &fact.scope {
+            ScopeSelector::Instance { instance_id } => {
+                if let Some(state) = stored_policy_state(fact, instance_id, time) {
+                    policies.entry(instance_id.clone()).or_default().state = Some(state);
+                }
+                continue;
+            }
+            ScopeSelector::Server { .. } => "server",
+            ScopeSelector::Game { .. } => "game",
+        };
+        for instance in facts
+            .instances
+            .iter()
+            .filter(|instance| scope_matches_instance(&fact.scope, instance))
+        {
+            let entry = policies.entry(instance.instance_id.clone()).or_default();
+            if entry.ignored.is_none() || scope_kind == "server" {
+                entry.ignored = Some((scope_kind, fact.observed_at_unix_ms));
+            }
+        }
+    }
+    Ok(policies)
+}
+
+fn stored_policy_state(
+    fact: &ObservedFact,
+    instance_id: &str,
+    time: EvaluationTime,
+) -> Option<TargetPolicyState> {
+    let unreadable = |code| Some(TargetPolicyState::Unreadable { code });
+    let FactValue::RecordList(rows) = &fact.value else {
+        return unreadable(RowsDecodeError::MalformedRows.code());
+    };
+    let decoded = match decode_rows(rows, instance_id) {
+        Ok(decoded) => decoded,
+        Err(error) => return unreadable(error.code()),
+    };
+    if decoded.targets.is_empty() {
+        return None;
+    }
+    let Some(valid_until_unix_ms) = fact.expires_at_unix_ms else {
+        return unreadable(RowsDecodeError::MalformedRows.code());
+    };
+    let DecodedResourceTargets {
+        policy_sha256,
+        targets,
+    } = decoded;
+    let applied_at_unix_ms = fact.observed_at_unix_ms;
+    Some(if time.unix_ms > valid_until_unix_ms {
+        TargetPolicyState::Expired {
+            policy_sha256,
+            applied_at_unix_ms,
+            valid_until_unix_ms,
+            targets,
+        }
+    } else {
+        TargetPolicyState::Active {
+            policy_sha256,
+            applied_at_unix_ms,
+            valid_until_unix_ms,
+            targets,
+        }
+    })
+}
+
+/// What a stored policy does to one score-stage candidate (Workflow #308 RT-S1b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TargetEffect {
+    /// The instance has no policy, or no target of it names the task.
+    None,
+    /// The instance's stored policy cannot be read; every candidate of the instance.
+    PolicyUnreadable {
+        code: &'static str,
+    },
+    /// The instance's policy has expired; only the candidates it names.
+    PolicyExpired {
+        policy_sha256: String,
+        applied_at_unix_ms: u64,
+        valid_until_unix_ms: u64,
+    },
+    /// The target's pool, or this task, no longer maps in the active catalog.
+    Unmapped {
+        id: String,
+        resource: String,
+        task: String,
+        why: &'static str,
+    },
+    /// The inventory has no usable observation (time-validity projected facts).
+    Pending {
+        id: String,
+        fact_key: String,
+        reason: ResourceTargetPendingReason,
+    },
+    /// The gap is zero: the target has no effect and an override is released.
+    Satisfied {
+        id: String,
+        policy_sha256: String,
+        applied_at_unix_ms: u64,
+        current: i64,
+        at_least: u64,
+        mode: TargetMode,
+    },
+    Applied(Box<AppliedTarget>),
+}
+
+/// An applied target with every T1 intermediate it recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedTarget {
+    pub(crate) id: String,
+    pub(crate) mode: TargetMode,
+    /// `s_k`, added to (adjust) or replacing score and offset in (override) the effective score.
+    pub(crate) task_target_milli: u64,
+    pub(crate) valid_until_unix_ms: u64,
+    pub(crate) inventory_expires_at_unix_ms: Option<u64>,
+    capped: bool,
+    policy_sha256: String,
+    applied_at_unix_ms: u64,
+    resource: String,
+    fact_key: String,
+    current: i64,
+    at_least: u64,
+    gap: u64,
+    scale: u64,
+    importance_milli: u64,
+    weight_milli: u64,
+    per_run: u64,
+    useful: u64,
+    best_useful: u64,
+}
+
+impl TargetEffect {
+    pub(crate) fn applied(&self) -> Option<&AppliedTarget> {
+        match self {
+            Self::Applied(applied) => Some(applied),
+            _ => None,
+        }
+    }
+
+    /// The target-level reason: applied, satisfied, pending or unmapped.
+    fn target_reason(&self) -> Option<DecisionReason> {
+        let (code, detail) = match self {
+            Self::None | Self::PolicyUnreadable { .. } | Self::PolicyExpired { .. } => return None,
+            Self::Unmapped {
+                id,
+                resource,
+                task,
+                why,
+            } => (
+                format!("resource_target_unmapped:{id}"),
+                format!("resource={resource} task={task} why={why}"),
+            ),
+            Self::Pending {
+                id,
+                fact_key,
+                reason,
+            } => (
+                format!("resource_target_pending:{id}"),
+                format!(
+                    "fact_key={fact_key} reason={}; configuration applied, waiting for a valid observation",
+                    pending_name(*reason)
+                ),
+            ),
+            Self::Satisfied {
+                id,
+                policy_sha256,
+                applied_at_unix_ms,
+                current,
+                at_least,
+                mode,
+            } => (
+                format!("resource_target_satisfied:{id}"),
+                format!(
+                    "policy={policy_sha256} applied_at={applied_at_unix_ms} current={current} at_least={at_least} gap=0 mode={}{}",
+                    mode_name(*mode),
+                    if *mode == TargetMode::Override {
+                        "; override released"
+                    } else {
+                        ""
+                    }
+                ),
+            ),
+            Self::Applied(applied) => (
+                format!("resource_target_applied:{}", applied.id),
+                format!(
+                    "policy={} applied_at={} resource={} fact_key={} mode={} current={} at_least={} gap={} scale={} importance={} weight={} per_run={} useful={} best_useful={} task_target={}{}",
+                    applied.policy_sha256,
+                    applied.applied_at_unix_ms,
+                    applied.resource,
+                    applied.fact_key,
+                    mode_name(applied.mode),
+                    applied.current,
+                    applied.at_least,
+                    applied.gap,
+                    applied.scale,
+                    applied.importance_milli,
+                    applied.weight_milli,
+                    applied.per_run,
+                    applied.useful,
+                    applied.best_useful,
+                    applied.task_target_milli,
+                    if applied.capped { " capped" } else { "" }
+                ),
+            ),
+        };
+        Some(DecisionReason { code, detail })
+    }
+}
+
+/// One instance's stored policy resolved once per evaluation against the active catalog and
+/// the time-validity projected facts.
+#[derive(Debug)]
+pub(crate) struct InstanceTargets {
+    ignored: Option<(&'static str, u64)>,
+    policy: ResolvedPolicy,
+}
+
+#[derive(Debug)]
+enum ResolvedPolicy {
+    None,
+    Unreadable(&'static str),
+    Expired {
+        policy_sha256: String,
+        applied_at_unix_ms: u64,
+        valid_until_unix_ms: u64,
+        named: BTreeSet<String>,
+    },
+    Active {
+        /// The effect of every named task that can have a candidate on the instance.
+        effects: BTreeMap<String, TargetEffect>,
+        /// `(target, task, why)` of named tasks that can have no candidate on the instance
+        /// (unknown, out of scope or disabled), in target and task order.
+        unevaluable: Vec<(String, String, &'static str)>,
+    },
+}
+
+/// What resolving one target of an active policy reads.
+struct TargetContext<'a> {
+    catalog: &'a CompiledCatalog,
+    projected_facts: &'a EvaluationFacts,
+    instance: &'a InstanceSnapshot,
+    time: EvaluationTime,
+    policy_sha256: &'a str,
+    applied_at_unix_ms: u64,
+    valid_until_unix_ms: u64,
+}
+
+/// Resolves `policy` for `instance`: each target's pool once, each named task once, and the
+/// inventory once per target in `projected_facts`. The error names a state only a bug reaches.
+pub(crate) fn resolve_instance_targets(
+    catalog: &CompiledCatalog,
+    projected_facts: &EvaluationFacts,
+    instance: &InstanceSnapshot,
+    policy: &InstanceTargetPolicy,
+    time: EvaluationTime,
+) -> Result<InstanceTargets, &'static str> {
+    let resolved = match &policy.state {
+        None => ResolvedPolicy::None,
+        Some(TargetPolicyState::Unreadable { code }) => ResolvedPolicy::Unreadable(code),
+        Some(TargetPolicyState::Expired {
+            policy_sha256,
+            applied_at_unix_ms,
+            valid_until_unix_ms,
+            targets,
+        }) => ResolvedPolicy::Expired {
+            policy_sha256: policy_sha256.clone(),
+            applied_at_unix_ms: *applied_at_unix_ms,
+            valid_until_unix_ms: *valid_until_unix_ms,
+            named: targets
+                .iter()
+                .flat_map(|target| target.tasks.iter().cloned())
+                .collect(),
+        },
+        Some(TargetPolicyState::Active {
+            policy_sha256,
+            applied_at_unix_ms,
+            valid_until_unix_ms,
+            targets,
+        }) => {
+            let context = TargetContext {
+                catalog,
+                projected_facts,
+                instance,
+                time,
+                policy_sha256,
+                applied_at_unix_ms: *applied_at_unix_ms,
+                valid_until_unix_ms: *valid_until_unix_ms,
+            };
+            let mut effects = BTreeMap::new();
+            let mut unevaluable = Vec::new();
+            for target in targets {
+                target_effects(&context, target, &mut effects, &mut unevaluable)?;
+            }
+            ResolvedPolicy::Active {
+                effects,
+                unevaluable,
+            }
+        }
+    };
+    Ok(InstanceTargets {
+        ignored: policy.ignored,
+        policy: resolved,
+    })
+}
+
+/// Resolves one active target (T1) and records the effect of each task it names.
+fn target_effects(
+    context: &TargetContext<'_>,
+    target: &ResourceTargetSpec,
+    effects: &mut BTreeMap<String, TargetEffect>,
+    unevaluable: &mut Vec<(String, String, &'static str)>,
+) -> Result<(), &'static str> {
+    use ResourceTargetsRejectionReason as Reason;
+    let TargetContext {
+        catalog,
+        projected_facts,
+        instance,
+        time,
+        ..
+    } = *context;
+    let unmapped = |task: &str, why| TargetEffect::Unmapped {
+        id: target.id.clone(),
+        resource: target.resource.clone(),
+        task: task.to_owned(),
+        why,
+    };
+    let (pool, fact_key) = match resolve_target_pool(catalog, target, instance) {
+        Ok(resolved) => resolved,
+        Err((reason, _)) => {
+            let why = resolution_why(reason)?;
+            for task in &target.tasks {
+                match target_task(catalog, task, instance) {
+                    Ok(_) => {
+                        effects.insert(task.clone(), unmapped(task, why));
+                    }
+                    Err(reason) => {
+                        unevaluable.push((target.id.clone(), task.clone(), resolution_why(reason)?))
+                    }
+                }
+            }
+            return Ok(());
+        }
+    };
+    let mut mapped = Vec::with_capacity(target.tasks.len());
+    for task in &target.tasks {
+        match resolve_target_task(catalog, pool, task, instance) {
+            Ok(per_run) => mapped.push((task, per_run)),
+            Err(Reason::UnmappedTask) => {
+                effects.insert(task.clone(), unmapped(task, "task_not_producing"));
+            }
+            Err(reason) => {
+                unevaluable.push((target.id.clone(), task.clone(), resolution_why(reason)?));
+            }
+        }
+    }
+    if mapped.is_empty() {
+        return Ok(());
+    }
+    let TargetCondition::AtLeast { amount: at_least } = target.condition;
+    let (current, inventory_expires_at_unix_ms) =
+        match observe_target(projected_facts, instance, pool, &fact_key, time) {
+            TargetObservation::Pending { reason } => {
+                for (task, _) in mapped {
+                    effects.insert(
+                        task.clone(),
+                        TargetEffect::Pending {
+                            id: target.id.clone(),
+                            fact_key: fact_key.clone(),
+                            reason,
+                        },
+                    );
+                }
+                return Ok(());
+            }
+            TargetObservation::Known {
+                current,
+                fresh_until_unix_ms,
+                ..
+            } => (current, fresh_until_unix_ms),
+        };
+    let gap = at_least.saturating_sub(current.unsigned_abs());
+    if gap == 0 {
+        for (task, _) in mapped {
+            effects.insert(
+                task.clone(),
+                TargetEffect::Satisfied {
+                    id: target.id.clone(),
+                    policy_sha256: context.policy_sha256.to_owned(),
+                    applied_at_unix_ms: context.applied_at_unix_ms,
+                    current,
+                    at_least,
+                    mode: target.apply.mode,
+                },
+            );
+        }
+        return Ok(());
+    }
+    const NO_BEST: &str = "resource target task score has no best useful contribution";
+    let best_useful = mapped
+        .iter()
+        .map(|(_, per_run)| (*per_run).min(gap))
+        .max()
+        .unwrap_or(0);
+    let (weight_milli, _) =
+        task_target_milli(gap, target.importance_milli, target.scale, 1, 1).ok_or(NO_BEST)?;
+    for (task, per_run) in mapped {
+        let useful = per_run.min(gap);
+        let (task_target_milli, capped) = task_target_milli(
+            gap,
+            target.importance_milli,
+            target.scale,
+            useful,
+            best_useful,
+        )
+        .ok_or(NO_BEST)?;
+        effects.insert(
+            task.clone(),
+            TargetEffect::Applied(Box::new(AppliedTarget {
+                id: target.id.clone(),
+                mode: target.apply.mode,
+                task_target_milli,
+                valid_until_unix_ms: context.valid_until_unix_ms,
+                inventory_expires_at_unix_ms,
+                capped,
+                policy_sha256: context.policy_sha256.to_owned(),
+                applied_at_unix_ms: context.applied_at_unix_ms,
+                resource: pool.id.clone(),
+                fact_key: fact_key.clone(),
+                current,
+                at_least,
+                gap,
+                scale: target.scale,
+                importance_milli: target.importance_milli,
+                weight_milli,
+                per_run,
+                useful,
+                best_useful,
+            })),
+        );
+    }
+    Ok(())
+}
+
+impl InstanceTargets {
+    /// The effect `task_id`'s candidate meets on this instance.
+    pub(crate) fn effect(&self, task_id: &str) -> TargetEffect {
+        match &self.policy {
+            ResolvedPolicy::None => TargetEffect::None,
+            ResolvedPolicy::Unreadable(code) => TargetEffect::PolicyUnreadable { code },
+            ResolvedPolicy::Expired {
+                policy_sha256,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                named,
+            } if named.contains(task_id) => TargetEffect::PolicyExpired {
+                policy_sha256: policy_sha256.clone(),
+                applied_at_unix_ms: *applied_at_unix_ms,
+                valid_until_unix_ms: *valid_until_unix_ms,
+            },
+            ResolvedPolicy::Expired { .. } => TargetEffect::None,
+            ResolvedPolicy::Active { effects, .. } => {
+                effects.get(task_id).cloned().unwrap_or(TargetEffect::None)
+            }
+        }
+    }
+
+    /// A candidate's resource target reasons, at most three, in this order: the policy-level
+    /// one (the first of ignored, unreadable, expired and tasks_unevaluable that applies), the
+    /// target-level one (applied, satisfied, pending or unmapped) and, for an applied override,
+    /// the selection score and manual offset it supersedes.
+    pub(crate) fn reasons(
+        &self,
+        effect: &TargetEffect,
+        score_milli: Option<i64>,
+        offset_milli: i64,
+    ) -> Vec<DecisionReason> {
+        let policy_reason = if let Some((scope_kind, observed_at_unix_ms)) = self.ignored {
+            Some(DecisionReason {
+                code: "resource_target_policy_ignored".to_owned(),
+                detail: format!(
+                    "a {scope_kind} scoped {RESOURCE_TARGETS_FACT_KEY} record (observed_at={observed_at_unix_ms}) was not written by the formal entry and is ignored"
+                ),
+            })
+        } else {
+            match (effect, &self.policy) {
+                (TargetEffect::PolicyUnreadable { code }, _) => Some(DecisionReason {
+                    code: "resource_target_policy_unreadable".to_owned(),
+                    detail: format!(
+                        "stored policy cannot be read ({code}); instance runs base scheduling"
+                    ),
+                }),
+                (
+                    TargetEffect::PolicyExpired {
+                        policy_sha256,
+                        applied_at_unix_ms,
+                        valid_until_unix_ms,
+                    },
+                    _,
+                ) => Some(DecisionReason {
+                    code: "resource_target_policy_expired".to_owned(),
+                    detail: format!(
+                        "policy={policy_sha256} applied_at={applied_at_unix_ms} valid_until={valid_until_unix_ms}"
+                    ),
+                }),
+                (_, ResolvedPolicy::Active { unevaluable, .. }) if !unevaluable.is_empty() => {
+                    Some(DecisionReason {
+                        code: "resource_target_tasks_unevaluable".to_owned(),
+                        detail: unevaluable_detail(unevaluable),
+                    })
+                }
+                _ => None,
+            }
+        };
+        let mut reasons = Vec::with_capacity(3);
+        reasons.extend(policy_reason);
+        reasons.extend(effect.target_reason());
+        if let Some(applied) = effect.applied()
+            && applied.mode == TargetMode::Override
+        {
+            reasons.push(DecisionReason {
+                code: format!("resource_target_override:{}", applied.id),
+                detail: format!(
+                    "superseded score={} offset={offset_milli}; utility kept",
+                    score_milli.map_or_else(|| "none".to_owned(), |score| score.to_string())
+                ),
+            });
+        }
+        reasons
+    }
+}
+
+/// `<target>/<task>:<why>` items joined by commas in target and task order, counted while
+/// joining so the items take at most 1010 bytes; the rest is folded into `+<n>more`.
+fn unevaluable_detail(items: &[(String, String, &'static str)]) -> String {
+    const ITEM_BUDGET_BYTES: usize = 1_010;
+    let mut detail = String::new();
+    for (index, (target, task, why)) in items.iter().enumerate() {
+        let item = format!("{target}/{task}:{why}");
+        let separator = usize::from(!detail.is_empty());
+        if detail.len() + separator + item.len() > ITEM_BUDGET_BYTES {
+            if separator == 1 {
+                detail.push(',');
+            }
+            detail.push_str(&format!("+{}more", items.len() - index));
+            break;
+        }
+        if separator == 1 {
+            detail.push(',');
+        }
+        detail.push_str(&item);
+    }
+    detail
+}
+
+/// The `why` of an unresolvable target or task; any other reason is a resolver bug.
+fn resolution_why(reason: ResourceTargetsRejectionReason) -> Result<&'static str, &'static str> {
+    use ResourceTargetsRejectionReason as Reason;
+    Ok(match reason {
+        Reason::UnknownResource => "unknown_resource",
+        Reason::ResourceNotObservable => "resource_not_observable",
+        Reason::ResourceOutOfScope => "resource_out_of_scope",
+        Reason::UnknownTask => "unknown_task",
+        Reason::TaskOutOfScope => "task_out_of_scope",
+        Reason::TaskDisabled => "task_disabled",
+        Reason::UnmappedTask => "task_not_producing",
+        _ => return Err("resource target resolution returned an unexpected reason"),
+    })
+}
+
+const fn pending_name(reason: ResourceTargetPendingReason) -> &'static str {
+    match reason {
+        ResourceTargetPendingReason::Missing => "missing",
+        ResourceTargetPendingReason::Expired => "expired",
+        ResourceTargetPendingReason::LowConfidence => "low_confidence",
+        ResourceTargetPendingReason::InvalidValue => "invalid_value",
+    }
+}
+
 const fn rule_name(rule: TargetRule) -> &'static str {
     match rule {
         TargetRule::ShortfallLinear => "shortfall_linear",
     }
 }
 
-const fn mode_name(mode: TargetMode) -> &'static str {
+pub(crate) const fn mode_name(mode: TargetMode) -> &'static str {
     match mode {
         TargetMode::Adjust => "adjust",
         TargetMode::Override => "override",

@@ -13,10 +13,11 @@ use actingcommand_selection_policy::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::resource_targets::{InstanceTargetPolicy, TargetEffect};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
     FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ObservationRef, PoolSpec,
-    PredicateSpec, PrioritySelection, ResourceEffectSpec, ScopeSelector, TaskSpec,
+    PredicateSpec, PrioritySelection, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec,
     TaskTerminalState, TimelineEvent,
 };
 
@@ -326,7 +327,8 @@ pub struct TaskRank {
     pub load_cost_milli: u16,
     pub contention_penalty: i64,
     pub total_score: i64,
-    /// The score stage's effective value (score + utility + offset); 0 when no score applies.
+    /// The score stage's effective value (score + utility + offset, plus an applied resource
+    /// target (RT-S1b)); 0 when no score applies.
     #[serde(default)]
     pub effective_milli: i64,
 }
@@ -652,6 +654,9 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
+    // Stored resource target policies are read before the time-validity projection, so a
+    // timeline reset never silently withdraws one (Workflow #308 RT-S1b).
+    let target_policies = crate::resource_targets::instance_target_policies(facts, time)?;
 
     let effective_facts = project_time_validity(catalog, facts, time)?;
     let facts = &effective_facts;
@@ -971,7 +976,14 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
         }
     }
 
-    let mut candidates = apply_priority_selection(catalog, facts, time, candidates, &mut work)?;
+    let mut candidates = apply_priority_selection(
+        catalog,
+        facts,
+        time,
+        candidates,
+        &mut work,
+        &target_policies,
+    )?;
 
     candidates.sort_by(|left, right| {
         right
@@ -1559,19 +1571,23 @@ struct StagedCandidate {
     unknown_rule: Option<String>,
     offset_milli: i64,
     utility: CandidateUtility,
+    /// score + utility + offset: the cycle thresholds are computed from it.
+    base_milli: i64,
     effective_milli: i64,
+    target: TargetEffect,
 }
 
 /// The score stage between the predicate gate and ranking. Predicate outcomes are never
 /// revisited here: only candidates that already passed trigger, feedback stop, cooldown and
-/// placement are scored. Without a selection document, without a declared value and without
-/// offsets it is a no-op.
+/// placement are scored. Without a selection document, without a declared value, without
+/// offsets and without a resource target policy it is a no-op.
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     time: EvaluationTime,
     candidates: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
+    target_policies: &BTreeMap<String, InstanceTargetPolicy>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     let policy = catalog.selection_policy();
     // The utility fields join the `scored` detail only once the catalog can score or value a
@@ -1583,8 +1599,31 @@ fn apply_priority_selection(
             .tasks
             .iter()
             .any(|task| task.value_milli.is_some());
-    if !utility_fields && facts.priority_offsets.is_empty() {
+    if !utility_fields && facts.priority_offsets.is_empty() && target_policies.is_empty() {
         return Ok(candidates);
+    }
+    // Each instance's stored policy is resolved once: every target's pool and named tasks
+    // against the catalog, its inventory in the time-validity projected facts.
+    let mut instance_targets = BTreeMap::new();
+    for (instance_id, target_policy) in target_policies {
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == *instance_id)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "resource target policy names unknown instance '{instance_id}'"
+                ))
+            })?;
+        let resolved = crate::resource_targets::resolve_instance_targets(
+            catalog,
+            facts,
+            instance,
+            target_policy,
+            time,
+        )
+        .map_err(PolicyEvaluationError::invalid)?;
+        instance_targets.insert(instance_id.as_str(), resolved);
     }
     let selection = catalog.catalog().tasks.priority_selection;
     let aging_ms_per_milli = selection.and_then(|selection| selection.aging_ms_per_milli);
@@ -1595,8 +1634,21 @@ fn apply_priority_selection(
     let mut ranked = Vec::with_capacity(candidates.len());
     let mut staged = Vec::with_capacity(candidates.len());
     for (candidate, score) in candidates.into_iter().zip(scores) {
+        let targets = instance_targets.get(candidate.instance_id.as_str());
+        let target = targets.map_or(TargetEffect::None, |targets| {
+            targets.effect(&candidate.task_id)
+        });
         let offset = effective_priority_offset(facts, &candidate.task_id, &candidate.instance_id);
-        if policy.is_none() && offset.is_none() && candidate.value_milli.is_none() {
+        if policy.is_none()
+            && offset.is_none()
+            && candidate.value_milli.is_none()
+            && target.applied().is_none()
+        {
+            if let Some(targets) = targets {
+                work[candidate.work_index]
+                    .reasons
+                    .extend(targets.reasons(&target, None, 0));
+            }
             ranked.push(candidate);
             continue;
         }
@@ -1607,31 +1659,48 @@ fn apply_priority_selection(
             None => (None, None),
         };
         let utility = candidate_utility(&candidate, aging_ms_per_milli)?;
-        let effective_milli = score_milli
+        let overflow = || {
+            PolicyEvaluationError::overflow(format!(
+                "task '{}' effective score overflowed",
+                candidate.task_id
+            ))
+        };
+        let base_milli = score_milli
             .unwrap_or(0)
             .checked_add(utility.utility_milli)
             .and_then(|sum| sum.checked_add(offset_milli))
-            .ok_or_else(|| {
-                PolicyEvaluationError::overflow(format!(
-                    "task '{}' effective score overflowed",
-                    candidate.task_id
-                ))
-            })?;
+            .ok_or_else(overflow)?;
+        // Adjust adds the task target score to the base; override replaces the selection
+        // score and the manual offset with it and keeps the utility term.
+        let effective_milli = match target.applied() {
+            None => base_milli,
+            Some(applied) => {
+                let task_target_milli =
+                    i64::try_from(applied.task_target_milli).map_err(|_| overflow())?;
+                match applied.mode {
+                    TargetMode::Adjust => base_milli.checked_add(task_target_milli),
+                    TargetMode::Override => utility.utility_milli.checked_add(task_target_milli),
+                }
+                .ok_or_else(overflow)?
+            }
+        };
         staged.push(StagedCandidate {
             candidate,
             score_milli,
             unknown_rule,
             offset_milli,
             utility,
+            base_milli,
             effective_milli,
+            target,
         });
     }
     let thresholds = selection.map(|selection| {
-        let effective = staged
+        let base = staged
             .iter()
-            .map(|staged| staged.effective_milli)
+            .map(|staged| staged.base_milli)
             .collect::<Vec<_>>();
-        (selection, CycleThresholds::new(&selection, &effective))
+        (selection, CycleThresholds::new(&selection, &base))
     });
     for StagedCandidate {
         mut candidate,
@@ -1639,7 +1708,9 @@ fn apply_priority_selection(
         unknown_rule,
         offset_milli,
         utility,
+        base_milli: _,
         effective_milli,
+        target,
     } in staged
     {
         candidate.rank.total_score = candidate
@@ -1647,9 +1718,12 @@ fn apply_priority_selection(
             .total_score
             .saturating_add(effective_milli.saturating_mul(1_000));
         candidate.rank.effective_milli = effective_milli;
+        let applied = target.applied();
+        let overridden = applied.is_some_and(|applied| applied.mode == TargetMode::Override);
         // An unknown verdict or cost never defers or promotes; only a scored one meets the
-        // thresholds.
+        // thresholds. An applied override is never deferred or promoted either.
         let disposition = match (&thresholds, score_milli) {
+            _ if overridden => ScoreDisposition::Neutral,
             (Some((selection, thresholds)), Some(_)) if !utility.cost_unknown => {
                 if let Some(detail) = thresholds.defer_detail(effective_milli) {
                     match selection.defer_aging_cap_ms {
@@ -1697,6 +1771,14 @@ fn apply_priority_selection(
         if let Some((_, thresholds)) = &thresholds {
             detail.push_str(&thresholds.reason_fields());
         }
+        if let Some(applied) = applied {
+            detail.push_str(&format!(
+                " target={}:{}:{}",
+                applied.id,
+                crate::resource_targets::mode_name(applied.mode),
+                applied.task_target_milli
+            ));
+        }
         let task_work = &mut work[candidate.work_index];
         task_work.rank = Some(candidate.rank.clone());
         task_work.reasons.push(reason("scored", detail));
@@ -1715,6 +1797,36 @@ fn apply_priority_selection(
                 "score_unknown:cost",
                 "neither the last run duration nor the declared expected duration is above zero; the utility term is dropped",
             ));
+        }
+        if let Some(targets) = instance_targets.get(candidate.instance_id.as_str()) {
+            task_work
+                .reasons
+                .extend(targets.reasons(&target, score_milli, offset_milli));
+        }
+        // An applied target is only as fresh as its inventory observation and its policy, and
+        // the evaluation wakes when either lapses (RT17).
+        if let Some(applied) = applied {
+            candidate.facts_fresh_until_unix_ms = min_wake(
+                min_wake(
+                    candidate.facts_fresh_until_unix_ms,
+                    applied.inventory_expires_at_unix_ms,
+                ),
+                Some(applied.valid_until_unix_ms),
+            );
+            for lapse in [
+                applied.inventory_expires_at_unix_ms,
+                Some(applied.valid_until_unix_ms),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let wake = lapse.checked_add(1).ok_or_else(|| {
+                    PolicyEvaluationError::overflow("resource target wake overflowed")
+                })?;
+                if wake > time.unix_ms {
+                    task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
+                }
+            }
         }
         match disposition {
             ScoreDisposition::Deferred {
@@ -4542,6 +4654,7 @@ mod tests {
     }
 
     #[test]
+    // Also Workflow #308 RT-S1b/S1c (Alice 2026-09-29 answer 3): dynamic target scoring, release, instance isolation.
     fn aging_eventually_prevents_lower_priority_starvation() {
         let catalog = two_task_catalog(|tasks| {
             tasks[0]["priority"] = serde_json::json!(100);
@@ -4585,6 +4698,233 @@ mod tests {
             result.dispatch_intents[0].task_id,
             "fixture.observe-secondary"
         );
+
+        // A resource target on instance A names the priority-0 task: the gap outranks the
+        // 100-level priority difference, a closed gap releases it, an override supersedes a
+        // manual offset, and instance B decides as if A had no policy.
+        let catalog = two_task_catalog(|tasks| {
+            for task in tasks.iter_mut() {
+                task["scope"] =
+                    serde_json::json!({"kind": "server", "server_id": "fixture-server-a"});
+                task["trigger"] = due_clock();
+                task["feedback_stop"] = false_fact();
+            }
+            tasks[0]["priority"] = serde_json::json!(100);
+            tasks[1]["priority"] = serde_json::json!(0);
+        });
+        let time = EvaluationTime {
+            unix_ms: NOW,
+            monotonic_ms: NOW,
+        };
+        let mut facts = base_facts();
+        facts.instances.push(InstanceSnapshot {
+            instance_id: "fixture-instance-b".to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: "fixture-host-a".to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        });
+        let instance_a = || ScopeSelector::Instance {
+            instance_id: "fixture-instance-a".to_owned(),
+        };
+        // The stored policy exactly as the formal entry checks and encodes it.
+        let policy_fact = |mode: &str| {
+            let document = format!(
+                r#"{{"schema_version":"actingcommand.resource-targets.v1","instance":"fixture-instance-a","valid_until_unix_ms":{},"targets":[{{"id":"primary-floor","resource":"fixture-pool-a","condition":{{"kind":"at_least","amount":100}},"scale":100,"importance_milli":200000,"rule":"shortfall_linear","apply":{{"mode":"{mode}","weight":"score_stage"}},"tasks":["fixture.observe-secondary"]}}]}}"#,
+                NOW + 3_600_000
+            );
+            let parsed = crate::parse_resource_targets(document.as_bytes()).expect("parse");
+            let checked =
+                crate::check_resource_targets(&parsed, &catalog, &facts, time).expect("check");
+            let rows = checked
+                .rows
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|(field, value)| {
+                            let value = match value {
+                                actingcommand_contract::FactScalar::Boolean(value) => {
+                                    FactScalar::Boolean(value)
+                                }
+                                actingcommand_contract::FactScalar::Integer(value) => {
+                                    FactScalar::Integer(value)
+                                }
+                                actingcommand_contract::FactScalar::String(value) => {
+                                    FactScalar::String(value)
+                                }
+                                actingcommand_contract::FactScalar::TimestampMs(value) => {
+                                    FactScalar::TimestampMs(value)
+                                }
+                                actingcommand_contract::FactScalar::DurationMs(value) => {
+                                    FactScalar::DurationMs(value)
+                                }
+                            };
+                            (field, value)
+                        })
+                        .collect()
+                })
+                .collect();
+            ObservedFact {
+                scope: instance_a(),
+                fact_key: actingcommand_contract::RESOURCE_TARGETS_FACT_KEY.to_owned(),
+                value: FactValue::RecordList(rows),
+                observed_at_unix_ms: NOW,
+                expires_at_unix_ms: parsed.document().valid_until_unix_ms,
+                confidence_milli: 1_000,
+            }
+        };
+        let (adjust, overriding) = (policy_fact("adjust"), policy_fact("override"));
+        // Every pair compared below shares ledger position, snapshot id, instant and seed.
+        let evaluate_at = |current: i64, policy: Option<&ObservedFact>, offset: Option<i32>| {
+            let mut facts = facts.clone();
+            facts.facts.push(ObservedFact {
+                scope: instance_a(),
+                fact_key: "resource.primary".to_owned(),
+                value: FactValue::Integer(current),
+                observed_at_unix_ms: NOW,
+                expires_at_unix_ms: None,
+                confidence_milli: 1_000,
+            });
+            facts.facts.extend(policy.cloned());
+            facts
+                .priority_offsets
+                .extend(offset.map(|offset_milli| PriorityOffset {
+                    task_id: "fixture.observe-secondary".to_owned(),
+                    instance_id: Some("fixture-instance-a".to_owned()),
+                    offset_milli,
+                    origin: PriorityOffsetOrigin::Agent,
+                    observed_at_unix_ms: NOW,
+                }));
+            evaluate(&catalog, &facts, &base_resources(), time, 5).expect("target evaluation")
+        };
+        let winner_on_a = |evaluation: &PolicyEvaluation| {
+            evaluation
+                .dispatch_intents
+                .iter()
+                .find(|intent| intent.instance_id == "fixture-instance-a")
+                .expect("instance A dispatch")
+                .task_id
+                .clone()
+        };
+        let secondary = |evaluation: &PolicyEvaluation| {
+            decision_for(
+                evaluation,
+                "fixture.observe-secondary",
+                "fixture-instance-a",
+            )
+            .clone()
+        };
+        let reason_detail = |evaluation: &PolicyEvaluation, code: &str| {
+            secondary(evaluation)
+                .reasons
+                .into_iter()
+                .find(|reason| reason.code == code)
+                .map(|reason| reason.detail)
+        };
+        let without_target_reasons = |evaluation: &PolicyEvaluation| {
+            let mut evaluation = evaluation.clone();
+            for reasons in evaluation
+                .decisions
+                .iter_mut()
+                .map(|decision| &mut decision.reasons)
+                .chain(
+                    evaluation
+                        .reason_chains
+                        .iter_mut()
+                        .map(|chain| &mut chain.reasons),
+                )
+            {
+                reasons.retain(|reason| !reason.code.starts_with("resource_target_"));
+            }
+            serde_json::to_vec(&evaluation).expect("evaluation bytes")
+        };
+        let instance_b = |evaluation: &PolicyEvaluation| {
+            let intents = evaluation
+                .dispatch_intents
+                .iter()
+                .filter(|intent| intent.instance_id == "fixture-instance-b")
+                .collect::<Vec<_>>();
+            let chains = evaluation
+                .reason_chains
+                .iter()
+                .filter(|chain| {
+                    intents
+                        .iter()
+                        .any(|intent| intent.decision_id == chain.decision_id)
+                })
+                .collect::<Vec<_>>();
+            let decisions = evaluation
+                .decisions
+                .iter()
+                .filter(|decision| decision.instance_id.as_deref() == Some("fixture-instance-b"))
+                .collect::<Vec<_>>();
+            serde_json::to_vec(&(decisions, intents, chains)).expect("instance B bytes")
+        };
+
+        // Dynamic scoring: s = min(g * 200000 / 100, 1e6) against a 100000 priority lead.
+        let mut previous = i64::MAX;
+        for (current, effective, winner) in [
+            (0, 200_000, "fixture.observe-secondary"),
+            (40, 120_000, "fixture.observe-secondary"),
+            (60, 80_000, "fixture.observe"),
+            (99, 2_000, "fixture.observe"),
+        ] {
+            let scored = evaluate_at(current, Some(&adjust), None);
+            let rank = secondary(&scored).rank.expect("secondary rank");
+            assert_eq!(rank.effective_milli, effective, "current={current}");
+            assert!(rank.effective_milli <= previous);
+            previous = rank.effective_milli;
+            assert_eq!(winner_on_a(&scored), winner, "current={current}");
+            assert!(reason_detail(&scored, "resource_target_applied:primary-floor").is_some());
+            assert_eq!(
+                instance_b(&scored),
+                instance_b(&evaluate_at(current, None, None))
+            );
+        }
+
+        // Release: a closed gap decides exactly as no policy, apart from its own reasons.
+        let released = evaluate_at(100, Some(&adjust), None);
+        assert_eq!(
+            without_target_reasons(&released),
+            without_target_reasons(&evaluate_at(100, None, None))
+        );
+        assert!(reason_detail(&released, "resource_target_satisfied:primary-floor").is_some());
+        assert_eq!(
+            instance_b(&released),
+            instance_b(&evaluate_at(100, None, None))
+        );
+
+        // Override: it supersedes the manual offset while the gap is open, and releases it.
+        let adjusted = evaluate_at(0, Some(&adjust), Some(-300_000));
+        assert_eq!(winner_on_a(&adjusted), "fixture.observe");
+        assert_eq!(
+            secondary(&adjusted).rank.expect("rank").effective_milli,
+            -100_000
+        );
+        let overridden = evaluate_at(0, Some(&overriding), Some(-300_000));
+        assert_eq!(winner_on_a(&overridden), "fixture.observe-secondary");
+        assert_eq!(
+            secondary(&overridden).rank.expect("rank").effective_milli,
+            200_000
+        );
+        assert!(reason_detail(&overridden, "resource_target_override:primary-floor").is_some());
+        let released = evaluate_at(100, Some(&overriding), Some(-300_000));
+        assert_eq!(
+            without_target_reasons(&released),
+            without_target_reasons(&evaluate_at(100, None, Some(-300_000)))
+        );
+        assert!(
+            reason_detail(&released, "resource_target_satisfied:primary-floor")
+                .is_some_and(|detail| detail.ends_with("; override released"))
+        );
+        for (evaluation, current) in [(adjusted, 0), (overridden, 0), (released, 100)] {
+            assert_eq!(
+                instance_b(&evaluation),
+                instance_b(&evaluate_at(current, None, Some(-300_000)))
+            );
+        }
     }
 
     #[test]
