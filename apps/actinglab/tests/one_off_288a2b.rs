@@ -246,6 +246,17 @@ fn one_off_a2b_e1_e3_digest_and_bundle_on_the_sealed_packs() {
                 "E3 {package_id}: package digest REFUSED: {}",
                 envelope["error"]
             ));
+            let admission = Containment::for_metadata_validation()
+                .load(
+                    &InstanceId::new("one-off-a2b-zip").expect("instance"),
+                    &zip_bytes,
+                    &Sha256Hash::digest(&zip_bytes),
+                )
+                .map(|_| "admitted".to_owned())
+                .unwrap_or_else(|error| format!("refused: {error}"));
+            report(format!(
+                "E3 info {package_id} sealed ZIP admission by the current loader: {admission}"
+            ));
             continue;
         }
         let data = &envelope["data"];
@@ -373,10 +384,42 @@ fn one_off_a2b_e1_e3_digest_and_bundle_on_the_sealed_packs() {
         first_digest.as_str()
     );
 
-    // `package bundle` over the same unsealed directories.
+    // `package bundle` over all ten unsealed directories: a refused pack fails the bundle
+    // loudly and leaves the named `.part` directory.
     let applications_path = temp.path().join("applications.json");
     fs::write(&applications_path, &applications).expect("write applications");
     let commit = index["source_sha"].as_str().expect("source sha");
+    let all = temp.path().join("section-all");
+    let (ok, envelope) = run_actinglab(
+        &config,
+        &[
+            "package",
+            "bundle",
+            "--applications",
+            arg(&applications_path),
+            "--packs-root",
+            arg(&unsealed_root),
+            "--out",
+            arg(&all),
+        ],
+    );
+    report(format!(
+        "bundle over all {total}: ok={ok} {} part_exists={} out_exists={}",
+        envelope["error"],
+        temp.path().join("section-all.part").exists(),
+        all.exists()
+    ));
+    assert_eq!(ok, admitted.len() == total);
+
+    // `package bundle` over the admitted directories only.
+    let admitted_root = temp.path().join("admitted");
+    for package_id in admitted.keys() {
+        write_tree(
+            &admitted_root.join(package_id),
+            &read_tree(&unsealed_root.join(package_id)),
+        );
+    }
+    let unsealed_root = admitted_root;
     let out = temp.path().join("section");
     let (ok, envelope) = run_actinglab(
         &config,
@@ -395,14 +438,12 @@ fn one_off_a2b_e1_e3_digest_and_bundle_on_the_sealed_packs() {
             commit,
         ],
     );
-    if !ok {
-        report(format!("bundle REFUSED: {}", envelope["error"]));
-        assert!(
-            admitted.len() < total,
-            "bundle refused although every directory was admitted"
-        );
-        return;
-    }
+    report(format!(
+        "bundle over the {} admitted: ok={ok} error={}",
+        admitted.len(),
+        envelope["error"]
+    ));
+    assert!(ok, "{envelope}");
     let top = fs::read_dir(&out)
         .expect("read section")
         .map(|entry| {
