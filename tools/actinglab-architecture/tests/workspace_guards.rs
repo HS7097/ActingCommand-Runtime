@@ -2654,9 +2654,10 @@ struct BridgeOwner {
 }
 
 /// C1: the owner table. pack-containment owns the pure source-conversion core (the entries
-/// resource-tooling converts through); resource-tooling owns the package build and the MAA task
-/// graph compiler; Lab's package_build.rs defines exactly the environment bridge listed here,
-/// each bridge calling its resource-tooling entry and nothing of pack-containment.
+/// resource-tooling converts through); resource-tooling owns the package build, the
+/// content-directory digest and bundle (Workflow #288 A2b) and the MAA task graph compiler;
+/// Lab's package_build.rs defines exactly the environment bridge listed here, each bridge
+/// calling its resource-tooling entry and nothing of pack-containment.
 const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "pack-containment",
@@ -2692,6 +2693,14 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
             lab_bridge(
                 "Lab::package_build_task",
                 "actingcommand_resource_tooling::prepare_package_build_task",
+            ),
+            lab_bridge(
+                "Lab::package_digest",
+                "actingcommand_resource_tooling::package_digest",
+            ),
+            lab_bridge(
+                "Lab::package_bundle",
+                "actingcommand_resource_tooling::package_bundle",
             ),
             lab_bridge(
                 "PackageBuildCatalog::open",
