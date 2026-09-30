@@ -146,10 +146,32 @@ ranking, the evaluator runs an optional score stage:
   an instance-level entry overrides the task-level entry, `|offset_milli|` is
   bounded to 1,000,000, and duplicate `(task_id, instance_id)` pairs are input
   errors. Offsets apply with or without a selection document.
-- `effective_milli = score_milli (0 when absent) + offset_milli` is added to the
-  candidate's `total_score` as `effective_milli * 1000`, the same unit as the
-  urgency and strategic terms. The decision's `rank.effective_milli` carries it
-  (with the slice 5a utility term; 0 for a candidate the stage did not score).
+- `base_milli = score_milli (0 when absent) + utility_milli + offset_milli`
+  (checked; the slice 5a utility term is 0 without a declared value), and
+  `effective_milli = base_milli`, plus an applied resource target's task target
+  score `s` (below): `base_milli + s` in `adjust` mode, `utility_milli + s` in
+  `override` mode. It is added to the candidate's `total_score` as
+  `effective_milli * 1000`, the same unit as the urgency and strategic terms. The
+  decision's `rank.effective_milli` carries it (0 for a candidate the stage did
+  not score). An overflow fails the evaluation with
+  `policy_evaluation_numeric_overflow`.
+- Resource targets (Workflow #308 RT-S1b, `contracts/resource-targets.md`): the
+  evaluator reads each instance's stored `session.resource_targets` policy from
+  the facts before the time-validity projection and resolves every target once
+  per instance against the active catalog and the projected inventory. A named
+  candidate whose target has a gap `g > 0` is *applied*: it enters the stage even
+  without a selection document, value or offset, and `s = min(⌊g·I·u/(S·U)⌋,
+  1_000_000)`. `adjust` adds `s`; `override` supersedes the selection score and
+  the manual offset with `s`, keeps the utility term and every other ranking
+  term, and is never deferred or promoted (its disposition is `none`). Every
+  other candidate, including a named one that is satisfied (`g = 0`, which
+  releases an override), pending, unmapped, expired or unreadable, keeps its rank
+  and disposition byte for byte and only gains reasons. Every admission
+  predicate stays in force.
+- The cycle thresholds (absolute pair or percentiles) are computed from the
+  staged candidates' `base_milli`, never from a target score, so a policy on one
+  instance moves no threshold of another. A scored candidate is compared with its
+  `effective_milli`.
 - The tasks document may declare a catalog-level `priority_selection` block
   `{defer_below_milli, defer_for_ms (1..=86,400,000), promote_above_milli}` with
   `defer_below_milli < promote_above_milli`; it is only allowed next to a
@@ -158,16 +180,34 @@ ranking, the evaluator runs an optional score stage:
   `score_deferred` and wakes at `now + defer_for_ms`, consuming no host budget;
   one with `effective_milli > promote_above_milli` is promoted and ranks ahead of
   every other candidate (`score_promoted`). An unscored candidate is never
-  deferred or promoted: only its offset applies and the reason
-  `score_unknown:<gate or term id>` records why.
+  deferred or promoted: its effective value is `utility_milli + offset_milli`,
+  plus an applied resource target's `s` in `adjust` mode; in `override` mode `s`
+  supersedes the offset (the utility term is kept). The reason
+  `score_unknown:<gate or term id>` records why it is unscored.
 - Every candidate that passed through the stage carries the reason `scored`
   with detail `score=<milli|none> offset=<milli> effective=<milli>
-  disposition=<deferred|promoted|none>`. Reason codes are free strings; the
-  dispatch-intent shape and the decision identity are unchanged.
+  disposition=<deferred|promoted|none>`, followed by ` target=<id>:<mode>:<s>`
+  for an applied target. Reason codes are free strings; the dispatch-intent shape
+  and the decision identity are unchanged.
+- Resource target reasons follow `scored` and `score_unknown:*` and precede the
+  disposition reason, at most three per candidate: one policy-level reason
+  (the first that applies of `resource_target_policy_ignored`,
+  `resource_target_policy_unreadable`, `resource_target_policy_expired`,
+  `resource_target_tasks_unevaluable`), one target-level reason
+  (`resource_target_applied:<id>`, `resource_target_satisfied:<id>`,
+  `resource_target_pending:<id>` or `resource_target_unmapped:<id>`) and, for an
+  applied override, `resource_target_override:<id>`. A candidate that bypasses
+  the stage carries them too.
+- An applied target bounds the candidate's `facts_fresh_until_unix_ms` by the
+  inventory observation's expiry and the policy's `valid_until_unix_ms`, so
+  admission refuses the intent as `policy_facts_stale` once either lapses, and
+  wakes the evaluation at `expiry + 1` and `valid_until + 1` when later than now.
+  No other target state changes freshness or wakes, and none requests detection.
 
-Without a selection document and without offsets the stage is a no-op and every
-evaluation output is byte-identical to a catalog compiled before this stage
-existed.
+Without a selection document, without a declared value, without offsets and
+without a stored resource target record (a withdrawal counts as none) the stage
+is a no-op and every evaluation output is byte-identical to a catalog compiled
+before this stage existed.
 
 In the Runtime (Workflow #308 slice 4a-2) manual offsets are instance facts
 `session.task.<task_id>.priority_offset` (integer milli; instance scope for one

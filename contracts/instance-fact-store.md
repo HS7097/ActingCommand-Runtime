@@ -336,7 +336,10 @@ id of its event.
 **Projection.** The key is not excluded from the overlay: an unexpired or expired policy is an
 ordinary overlaid fact, so it reaches `EvaluationFacts.facts`, the combined
 `fact_snapshot_id`, admission staleness and forward projections. It takes one of the 256
-active fact identities per instance. The S1a evaluator does not read it.
+active fact identities per instance. The evaluator scores it as `contracts/resource-targets.md`
+("Evaluation") states; a server- or game-scoped record of the key, which only an ordinary
+publication before RT-S1a could write, is never a policy: it is ignored with the reason
+`resource_target_policy_ignored` on the candidates of every instance it covers.
 
 ## Reading the seeds
 

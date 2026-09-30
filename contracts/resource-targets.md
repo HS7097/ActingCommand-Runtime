@@ -1,15 +1,16 @@
 # Instance resource targets
 
-Workflow #308 RT-S1a. An agent states, per instance, how much of a catalog resource it wants
-kept (`at least T`) and which tasks produce it. `RuntimeOperation::ApplyResourceTargets` is
-the only formal entry: the Runtime parses and checks the document once, stores the checked
+Workflow #308 RT-S1a/S1b. An agent states, per instance, how much of a catalog resource it
+wants kept (`at least T`) and which tasks produce it. `RuntimeOperation::ApplyResourceTargets`
+is the only formal entry: the Runtime parses and checks the document once, stores the checked
 policy as the instance fact `session.resource_targets` and answers with the stored version and
 what each target currently observes, or refuses the document with a field position and changes
 nothing.
 
-**Evaluation is in S1b.** In S1a the evaluator does not read the policy: every decision is the
-one it was before, except the input identity (`fact_snapshot_id`), which includes the stored
-policy like any other overlaid fact.
+The evaluator reads the stored policy in every evaluation and turns each open gap into a task
+target score in the score stage ("Evaluation" below). An instance without a policy decides
+exactly as before; the input identity (`fact_snapshot_id`) includes a stored policy like any
+other overlaid fact.
 
 ## Document `actingcommand.resource-targets.v1`
 
@@ -27,7 +28,7 @@ mismatches are refused with a line and column.
     "resource": "pool.credits",
     "condition": { "kind": "at_least", "amount": 10000 },
     "scale": 10000,
-    "importance_milli": 1000,
+    "importance_milli": 100000,
     "rule": "shortfall_linear",
     "apply": { "mode": "adjust", "weight": "score_stage" },
     "tasks": ["task.collect-income"]
@@ -161,9 +162,9 @@ Rows, in this order (at most 1 + 16 + 128):
 `at_least`, `scale` and `importance_milli` are integers, every other field a string. A
 withdrawal stores the header alone. The reader is strict: exactly one leading header of a
 known `schema_version` naming the fact's instance, known row kinds with exactly their fields
-and types, bounded values, unique targets, and task rows that name an earlier target and
-reference each task once; anything else is `unsupported_schema_version`, `malformed_rows` or
-`instance_mismatch`.
+and types, bounded values, scheduling identifiers for the target, resource and task ids,
+unique targets, and task rows that name an earlier target and reference each task once;
+anything else is `unsupported_schema_version`, `malformed_rows` or `instance_mismatch`.
 
 **Replay and withdrawal.** A submission whose `resource_bundle_hash` equals the active,
 unexpired policy's appends nothing and answers that policy's version with `replayed: true`,
@@ -183,6 +184,161 @@ supplying it is refused; both as `resource_targets_key_reserved`.
 (`policy_facts_stale`), the `FactsChanged` trigger and forward projections like every overlaid
 fact. Each instance's policy takes one of the store's 256 active fact identities; each
 inventory key it reads takes its own.
+
+## Evaluation
+
+Workflow #308 RT-S1b. Every policy evaluation reads the stored records of this key from
+`EvaluationFacts.facts` before the time-validity projection, so a timeline reset never drops a
+policy. The evaluator is pure and runs under the caller's locks; nothing here takes a lock.
+
+- An instance-scoped record that the strict reader accepts, with targets and an expiry, is the
+  instance's policy: **active** while `now <= valid_until_unix_ms`, **expired** after. Its
+  version is `policy_sha256` and `applied_at`, the record's `observed_at_unix_ms` (unique in
+  the ledger: a second submission in the same millisecond is refused as not newer); its
+  confidence is not read. A withdrawal is no policy. A record that is not a record list, that
+  the reader refuses, or that holds targets without an expiry is **unreadable** and the
+  instance runs base scheduling.
+- A server- or game-scoped record of this key can only come from an ordinary publication
+  before RT-S1a. It is never a policy and never fails the evaluation: every candidate of every
+  instance it covers carries `resource_target_policy_ignored`, and the instance's own record
+  still applies.
+- No stored state fails the evaluation (a failed first evaluation keeps the daemon from
+  starting): unreadable, expired, ignored, unmapped and pending are reasons. Only a state that
+  a bug reaches fails, as `policy_evaluation_input_invalid`, and an arithmetic overflow as
+  `policy_evaluation_numeric_overflow`.
+
+Per instance, each target of an active policy is resolved once with the entry's own resolver:
+its pool (`unknown_resource`, `resource_not_observable`, `resource_out_of_scope`), then each
+named task (`unknown_task`, `task_out_of_scope`, `task_disabled`, or `task_not_producing` for
+`r = 0`). The inventory is observed once per target in the projected facts exactly as for the
+receipt's `conditions` (`missing`, `low_confidence`, `expired`, `invalid_value`). Each score
+stage candidate (a task that passed trigger, feedback stop, cooldown and placement) meets one
+effect:
+
+| Effect | When | Rank and disposition | Reason |
+| --- | --- | --- | --- |
+| none | no policy on the instance, or no target names the task | unchanged | none |
+| unreadable | the instance's record cannot be read | unchanged | `resource_target_policy_unreadable`, every candidate of the instance |
+| expired | the policy's lifetime has passed | unchanged | `resource_target_policy_expired`, named candidates |
+| unmapped | the target's pool, or this task, no longer maps | unchanged | `resource_target_unmapped:<id>` |
+| pending | no usable inventory observation | unchanged | `resource_target_pending:<id>` |
+| satisfied | `g = 0` | unchanged; an override is released | `resource_target_satisfied:<id>` |
+| applied | `g >= 1` | scored as below | `resource_target_applied:<id>`, and `resource_target_override:<id>` in override mode |
+
+A named task that can have no candidate on the instance (unknown, out of scope or disabled) is
+listed on every candidate of the instance as `resource_target_tasks_unevaluable`, so a target
+never lapses silently.
+
+Score (`shortfall_linear`; exact integers with 128-bit intermediates, truncating):
+
+```text
+g   = max(T - c, 0)                          gap of the target (at_least T, inventory c)
+w   = min(floor(g*I / S), 1_000_000)         target weight (scale S, importance_milli I)
+r_k = sum of floor(amount * confidence_milli / 1000) over task k's produces of the pool
+u_k = min(r_k, g)                            useful contribution of one run
+U   = max u_j over the target's tasks that still map   (>= 1 while g >= 1)
+s_k = min(floor(g*I*u_k / (S*U)), 1_000_000) task target score, "capped" at the bound
+```
+
+The task with the largest useful contribution scores `s = w`; the other tasks score at most
+`s` (`s_k = min(floor(g*I*u_k / (S*U)), 1e6)`), and at the cap, or when `u_k = U`, they can
+tie with it. `s_k` never grows as `c` grows. With `base = score + utility + offset` (see
+`contracts/scheduling/README.md`, "Score-Assisted Priority"):
+
+- `adjust`: `effective = base + s`. The disposition follows the thresholds as for any scored
+  candidate, so with a selection document `s` takes part in the promotion comparison.
+- `override`: `effective = utility + s`. The selection score and the manual offset are
+  superseded; utility, priority, aging, strategic weight, urgency and contention stay. The
+  disposition is always `none`: never deferred, never promoted.
+
+The thresholds are computed from `base`, never from `s`. `total_score` gains
+`effective * 1000`, so `s = 1000` weighs one priority level; the effective score also orders
+the host budget allocation and the performance arbitration like any other. Every admission
+predicate (authorization, budgets, windows, pause, cooldown, availability, host capacity)
+stays in force.
+
+An applied candidate's `facts_fresh_until_unix_ms` is bounded by the inventory observation's
+expiry and `valid_until_unix_ms`, so admission refuses its intent as `policy_facts_stale` once
+either lapses; the evaluation wakes at each plus one. No other effect changes freshness or
+wakes, and none requests detection. The policy and the inventory are part of the combined
+`fact_snapshot_id`, so a changed inventory also refuses an already evaluated intent as stale.
+
+Reasons follow `scored` (whose detail ends with ` target=<id>:<mode>:<s>` when applied) and
+`score_unknown:*`, and precede the disposition reason: at most one policy-level reason (the
+first that applies of ignored, unreadable, expired, tasks_unevaluable), one target-level reason
+and one override reason. Codes carry no whitespace; every detail stays within 1024 bytes.
+
+| Code | Detail |
+| --- | --- |
+| `resource_target_applied:<id>` | `policy=<sha> applied_at=<ms> resource=<pool> fact_key=<k> mode=<m> current=<c> at_least=<T> gap=<g> scale=<S> importance=<I> weight=<w> per_run=<r> useful=<u> best_useful=<U> task_target=<s>[ capped]` |
+| `resource_target_override:<id>` | `superseded score=<s\|none> offset=<o>; utility kept` |
+| `resource_target_satisfied:<id>` | `policy=<sha> applied_at=<ms> current=<c> at_least=<T> gap=0 mode=<m>`, plus `; override released` in override mode |
+| `resource_target_pending:<id>` | `fact_key=<k> reason=<missing\|expired\|low_confidence\|invalid_value>; configuration applied, waiting for a valid observation` |
+| `resource_target_unmapped:<id>` | `resource=<pool> task=<task> why=<unknown_resource\|resource_not_observable\|resource_out_of_scope\|task_not_producing>` |
+| `resource_target_policy_expired` | `policy=<sha> applied_at=<ms> valid_until=<ms>` |
+| `resource_target_policy_unreadable` | `stored policy cannot be read (<code>); instance runs base scheduling` |
+| `resource_target_tasks_unevaluable` | `<target>/<task>:<why>,...` in target and task order, at most 1010 bytes of items, the rest as `+<n>more` |
+| `resource_target_policy_ignored` | `a <server\|game> scoped session.resource_targets record (observed_at=<ms>) was not written by the formal entry and is ignored` |
+
+The reasons travel in the reason chain the dispatch events already carry; no event, payload
+field or persisted structure is added.
+
+## Choosing scale and importance
+
+On one instance, let H be the candidate that ranks first without the target and T a named
+candidate, neither promoted, in `adjust` mode. In effective milli (one priority level = 1000,
+one second of aging = 1, strategic weight, urgency, offset, score and utility 1:1, a load
+cost `cost * bp / 10`), T wins exactly when `s > Δ` with
+
+```text
+Δ = 1000*(p_H - p_T) + (aging_H - aging_T)/1000 + (w_H - w_T) + (u_H - u_T)
+    - (contention_H - contention_T)/1000 + (effective_H - base_T)
+```
+
+At `s = Δ` affinity and then the deterministic tie breaker decide. The target's best task
+scores `s = min(floor(g*I/S), 1e6)`, so it overtakes from the gap `g* = ceil((Δ+1)*S/I)`
+(integer Δ); with `S = T` it leads while `c <= T - g*`. The other tasks of the target score at
+most `s` (`s_k = min(floor(g*I*u_k / (S*U)), 1e6)`); at the cap, or when `u_k = U`, they can
+tie. Each task belongs to one target.
+
+1. Estimate Δ: `1000 * priority difference + seconds the competitor may have waited longer +
+   strategic difference + load cost difference * bp / 10 + utility difference` (the last only
+   when the catalog declares `value_milli`).
+2. Choose S: the target weight reaches I at a gap of S. `S = T` by default.
+3. Choose I: to overtake from a gap of `g_want`, `I >= ceil((Δ+1)*S / g_want)`; to overtake only
+   at a full gap S, `I > Δ`.
+4. I also bounds how long the target holds a competitor off: every second the competitor waits
+   adds 1 to its aging, so at a full gap aging overtakes after about `I - Δ` seconds (I = 100000,
+   Δ = 5000: about 26.4 hours; I = 1e6: about 11.5 days). This is the existing starvation
+   guard and stays.
+5. `s <= 1_000_000`, 1000 priority levels, the bound of a manual offset. A Δ of 1e6 or more (a
+   priority difference of 1000 levels, or heavy against light at bp 10000 plus 400 levels) is
+   not crossed: treat it as a hard tier (explicit tiers are a later slice, S3).
+6. Promotion is a strict tier. An override never promotes and cannot beat a promoted
+   competitor: use `adjust` there. In `adjust` mode with a selection document a large `s` can
+   promote the candidate ahead of every unpromoted one regardless of priority. The Runtime's
+   catalog source runs no selection document today.
+7. An operator can always counter: in `adjust` mode an offset on the named task (up to ±1e6)
+   cancels `s`; in `override` mode a positive offset on the competitor, a withdrawal
+   (`targets: []`) or pausing dispatch.
+
+Worked example: `T = S = 10000`, `I = 100000`, one named task with `r = 1000` (so `s = 10 * g`)
+against a light competitor five priority levels higher with equal strategic weight and no
+urgency or value (`Δ = 5000` plus the aging difference in seconds):
+
+| c | g | s | Winner at equal aging |
+| --- | --- | --- | --- |
+| 0 | 10000 | 100000 | named task |
+| 9000 | 1000 | 10000 | named task |
+| 9499 | 501 | 5010 | named task |
+| 9500 | 500 | 5000 | tie, decided by the tie breaker |
+| 9501 | 499 | 4990 | competitor |
+| 9800 | 200 | 2000 | competitor |
+| 10000 | 0 | satisfied | competitor |
+
+The flip gap is 501 (`c <= 9499`) at equal aging, 507 (`c <= 9493`) when the competitor waited
+60 s longer and 861 (`c <= 9139`) after one hour. The example document's `importance_milli`
+of 100000 is sized this way; 1000 would weigh like a single priority level.
 
 ## Lock order
 
