@@ -482,6 +482,12 @@ impl GlobalLedgerError {
         }
     }
 
+    /// Keeps an inner cause beside the static code and operation.
+    pub(crate) fn with_detail(mut self, detail: String) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+
     pub(crate) fn request(code: &'static str, operation: &'static str) -> Self {
         Self {
             code,

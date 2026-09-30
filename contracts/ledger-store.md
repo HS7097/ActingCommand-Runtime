@@ -515,7 +515,10 @@ The Host first persists that Lab/Lab request, then the sole Ledger writer resolv
 the identity and validates the exact active Lab pin before appending the original
 `PinReleased { identity, pin, release }` fact. For Lab pins, `release` references
 that exact typed request; Explicit pins still require their original confirmed
-close. Warning/DirectEvidence pins remain unreleasable. A repeat returns the
+close, and that close must follow every pin of the object. A capture with no run
+and no lease closes on its epoch's latest quiescence; when that quiescence precedes
+the pin, the object is kept until a later close (Workflow #332 R-san).
+Warning/DirectEvidence pins remain unreleasable. A repeat returns the
 original durable release; a sealed eviction intent is always rejected.
 
 The retention index rebuilds released Lab pins, material-reference scopes, Lab

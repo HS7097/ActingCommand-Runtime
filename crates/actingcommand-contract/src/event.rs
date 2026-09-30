@@ -727,6 +727,11 @@ impl SanitizationError {
         self.code
     }
 
+    /// The refused field or rule, e.g. `pin_release_order`.
+    pub const fn field(&self) -> &'static str {
+        self.field
+    }
+
     pub fn fingerprinter_failure() -> Self {
         Self::new("fingerprinter_failed", "fingerprinter")
     }
