@@ -1,0 +1,160 @@
+name: release
+
+# On-demand release; nothing builds or publishes a main commit otherwise.
+# Actions -> release -> Run workflow and
+#   gh workflow run release.yml -R HS7097/ActingCommand-Runtime -f bump=patch|minor|major \
+#     [-f version=X.Y.Z] [-f source_sha=<40-hex main commit>] [-f prerelease=true] [-f dry_run=true]
+# are equivalent. prepare (read-only) fixes the source commit and the version;
+# build calls windows-remote-build.yml, the one build path, which builds that exact
+# commit, runs its checks (including the H3 old-state check), zips the Runtime and
+# Tools artifacts with SHA256SUMS and creates the Release vX.Y.Z with its tag on
+# that commit. With dry_run everything runs except creating the tag and the Release.
+# The version exists only in the Release tag (no VERSION file, nothing in Cargo.toml,
+# the binaries or BUILD-MANIFEST.json).
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Part to raise from the highest vX.Y.Z Release (the first release is v0.1.0 whatever is chosen)'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: 'Explicit version X.Y.Z or X.Y.Z-rc.N, without the leading v (overrides bump; leave empty to use bump)'
+        type: string
+        required: false
+        default: ''
+      source_sha:
+        description: 'Exact 40-character lowercase main commit to release (empty: the tip of main this run starts from)'
+        type: string
+        required: false
+        default: ''
+      prerelease:
+        description: 'Publish as a pre-release, never marked Latest (an X.Y.Z-rc.N version is always one)'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Build, check and stage everything, but create no tag and no Release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      previous_tag: ${{ steps.resolve.outputs.previous_tag }}
+    steps:
+      - name: Resolve the source commit and the version
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$GITHUB_REF" = refs/heads/main ] || fail "release runs only from main (this run: $GITHUB_REF)"
+
+          # Source: the given commit, or the tip of main this run starts from; main or an ancestor of main.
+          source_sha="${INPUT_SOURCE_SHA:-$GITHUB_SHA}"
+          [[ $source_sha =~ ^[0-9a-f]{40}$ ]] || fail "source_sha must be exactly 40 lowercase hexadecimal characters: '$source_sha'"
+          status=$(gh api "repos/$repo/compare/$source_sha...main" --jq .status) \
+            || fail "compare $source_sha...main failed (not a commit of $repo?)"
+          case "$status" in
+            ahead|identical) echo "source $source_sha: compare with main is $status" ;;
+            *) fail "source $source_sha is not main or an ancestor of main (compare status: $status)" ;;
+          esac
+
+          # Releases (tag, draft); the previous release is the highest strict vX.Y.Z among published ones.
+          releases=$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | "\(.tag_name)\t\(.draft)"') \
+            || fail "listing the releases of $repo failed"
+          previous=$(printf '%s\n' "$releases" | awk -F'\t' '$2 == "false" {print $1}' \
+            | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
+            | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1 || true)
+          [ -z "$previous" ] || previous="v$previous"
+
+          if [ -n "$INPUT_VERSION" ]; then
+            [[ $INPUT_VERSION =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]] \
+              || fail "version must be X.Y.Z or X.Y.Z-rc.N without a leading v: '$INPUT_VERSION'"
+            version="$INPUT_VERSION"
+            echo "explicit version $version (bump ignored; previous release: ${previous:-none})"
+          elif [ -z "$previous" ]; then
+            version=0.1.0
+            echo "no vX.Y.Z release yet: first version $version (bump '$INPUT_BUMP' ignored)"
+          else
+            IFS=. read -r major minor patch <<< "${previous#v}"
+            case "$INPUT_BUMP" in
+              major) version="$((major + 1)).0.0" ;;
+              minor) version="$major.$((minor + 1)).0" ;;
+              patch) version="$major.$minor.$((patch + 1))" ;;
+              *) fail "bump must be patch, minor or major: '$INPUT_BUMP'" ;;
+            esac
+            echo "previous release $previous + $INPUT_BUMP = $version"
+          fi
+          tag="v$version"
+
+          # The tag is new: no release (as far as this token can list them) and no ref carries it.
+          if printf '%s\n' "$releases" | cut -f1 | grep -xF -- "$tag" > /dev/null; then
+            fail "a release with tag $tag already exists"
+          fi
+          refs=$(gh api "repos/$repo/git/matching-refs/tags/$tag" --jq "[.[] | select(.ref == \"refs/tags/$tag\")] | length") \
+            || fail "reading refs/tags/$tag failed"
+          [ "$refs" = 0 ] || fail "tag $tag already exists as a ref"
+
+          # The source is not released yet and descends from the previous release.
+          while IFS=$'\t' read -r rel_tag rel_draft; do
+            if [ -z "$rel_tag" ] || [ "$rel_draft" != false ]; then continue; fi
+            rel_commit=$(gh api "repos/$repo/commits/tags/$rel_tag" --jq .sha) \
+              || fail "resolving the commit of release $rel_tag failed"
+            [ "$rel_commit" != "$source_sha" ] || fail "$source_sha is already released as $rel_tag"
+          done <<< "$releases"
+          if [ -n "$previous" ]; then
+            prev_commit=$(gh api "repos/$repo/commits/tags/$previous" --jq .sha) \
+              || fail "resolving the commit of release $previous failed"
+            status=$(gh api "repos/$repo/compare/$prev_commit...$source_sha" --jq .status) \
+              || fail "compare $prev_commit...$source_sha failed"
+            [ "$status" = ahead ] \
+              || fail "source $source_sha does not descend from the previous release $previous ($prev_commit; compare status: $status)"
+            echo "source descends from the previous release $previous ($prev_commit)"
+          fi
+
+          {
+            echo "source_sha=$source_sha"
+            echo "release_tag=$tag"
+            echo "previous_tag=$previous"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### release $tag"
+            echo "- source commit: \`$source_sha\`"
+            echo "- previous release: ${previous:-none}"
+            echo "- dry run: $INPUT_DRY_RUN"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "release $tag from $source_sha (previous release: ${previous:-none}; dry run: $INPUT_DRY_RUN)"
+
+  build:
+    needs: prepare
+    # The called workflow declares no permissions and inherits this write grant; its own
+    # pull-request and dispatch runs keep the repository's default read-only token.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/windows-remote-build.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      release_tag: ${{ needs.prepare.outputs.release_tag }}
+      previous_tag: ${{ needs.prepare.outputs.previous_tag }}
+      prerelease: ${{ inputs.prerelease }}
+      dry_run: ${{ inputs.dry_run }}

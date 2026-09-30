@@ -1,9 +1,13 @@
-# Windows Runtime distribution candidate
+# Windows Runtime distribution
 
-Status: unreleased candidate. The exact source commit, tree, Cargo.lock hash,
-Rust toolchain, target, build profile, Actions run/attempt and file identities
-are recorded in the accompanying `BUILD-MANIFEST.json`. The artifact name binds
-the complete source SHA. These notes do not assign a release version or tag.
+Version: the tag (`vX.Y.Z`) of the `HS7097/ActingCommand-Runtime` Release that
+carries this zip; download the zip and `SHA256SUMS` from that Release. The
+version exists only in the Release tag, not in the binaries or the manifest.
+The same files taken from a pull-request or manually started Actions build are
+an unreleased acceptance build with no version. The exact source commit, tree,
+Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
+file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
+and artifact names bind the complete source SHA.
 
 The Windows `x86_64-pc-windows-msvc` release-profile Runtime artifact includes the
 resident `actingcommand-actingd.exe`, the `actingctl.exe` command client, an

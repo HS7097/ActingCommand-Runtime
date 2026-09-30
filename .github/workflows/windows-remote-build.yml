@@ -1,8 +1,14 @@
 name: Windows exact-SHA build
 
+# Pushes to main do not build: a main commit is built for publication only when
+# release.yml calls this workflow (workflow_call), and for acceptance by a manual
+# dispatch. Pull-request heads keep their exact-SHA acceptance build.
+# No permissions block on purpose: pull requests, stable pushes and dispatches
+# run with the repository's default read-only token, and a release run inherits
+# the calling job's contents: write, which a block here would downgrade.
 on:
   push:
-    branches: [main, stable]
+    branches: [stable]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -11,12 +17,34 @@ on:
         description: Exact 40-character lowercase commit SHA to build
         required: true
         type: string
-
-permissions:
-  contents: read
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact 40-character lowercase main commit to build and release
+        required: true
+        type: string
+      release_tag:
+        description: Release tag to create on source_sha (vX.Y.Z or vX.Y.Z-rc.N)
+        required: true
+        type: string
+      previous_tag:
+        description: Previous release tag the generated pull-request list starts from (empty for the first release)
+        required: false
+        type: string
+        default: ''
+      prerelease:
+        description: Publish as a pre-release, never marked Latest (a tag with a '-' suffix always is one)
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: Build, verify and stage the release files without creating the tag or the release
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
-  group: windows-remote-build-${{ github.event.pull_request.number || inputs.source_sha || github.sha }}
+  group: windows-remote-build-${{ github.event.pull_request.number || inputs.release_tag || inputs.source_sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -140,6 +168,7 @@ jobs:
           }
 
       - name: Open the previous published build's state root
+        id: h3
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -247,6 +276,8 @@ jobs:
               throw "h3_previous_release_missing: no build-* release has a runtime_sha that is a strict ancestor of $env:SOURCE_SHA"
             }
             Write-Host "h3 selected $($selected.Tag) runtime_sha=$($selected.RuntimeSha) compare=ahead"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "baseline_tag=$($selected.Tag)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "baseline_runtime_sha=$($selected.RuntimeSha)"
 
             # 2. The Runtime zip against SHA256SUMS, then every file against its BUILD-MANIFEST.json.
             $zipName = "actingcommand-runtime-$($selected.RuntimeSha).zip"
@@ -469,7 +500,9 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tools_artifact_name=$toolsArtifactName"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tools_artifact_dir=$toolsDir"
 
+      # Actions artifacts are acceptance builds only; a release run publishes the Release instead.
       - name: Upload Runtime artifact
+        if: ${{ !inputs.release_tag }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.stage.outputs.runtime_artifact_name }}
@@ -478,9 +511,155 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
       - name: Upload Tools artifact
+        if: ${{ !inputs.release_tag }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.stage.outputs.tools_artifact_name }}
           path: ${{ steps.stage.outputs.tools_artifact_dir }}
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+      - name: Publish the release
+        if: ${{ inputs.release_tag }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          TREE_SHA: ${{ steps.checkout.outputs.tree_sha }}
+          H3_BASELINE_TAG: ${{ steps.h3.outputs.baseline_tag }}
+          H3_BASELINE_RUNTIME_SHA: ${{ steps.h3.outputs.baseline_runtime_sha }}
+          RUNTIME_ARTIFACT_NAME: ${{ steps.stage.outputs.runtime_artifact_name }}
+          RUNTIME_ARTIFACT_DIR: ${{ steps.stage.outputs.runtime_artifact_dir }}
+          TOOLS_ARTIFACT_NAME: ${{ steps.stage.outputs.tools_artifact_name }}
+          TOOLS_ARTIFACT_DIR: ${{ steps.stage.outputs.tools_artifact_dir }}
+        run: |
+          # Zips each staged artifact directory (files at the zip root, as the Actions
+          # artifact), reads every zip back against its BUILD-MANIFEST.json, writes
+          # SHA256SUMS and creates the Release with its tag on the exact source commit.
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $tag = $env:RELEASE_TAG
+          if ($tag -cnotmatch '\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?\z') {
+            throw "release_input_invalid: release tag is not vX.Y.Z or vX.Y.Z-rc.N: $tag"
+          }
+          if ($env:PREVIOUS_TAG -and $env:PREVIOUS_TAG -cnotmatch '\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') {
+            throw "release_input_invalid: previous release tag is not vX.Y.Z: $env:PREVIOUS_TAG"
+          }
+          if ($env:DRY_RUN -cne 'true' -and $env:DRY_RUN -cne 'false') {
+            throw "release_input_invalid: dry_run is neither true nor false: $env:DRY_RUN"
+          }
+          if ($env:PRERELEASE -cne 'true' -and $env:PRERELEASE -cne 'false') {
+            throw "release_input_invalid: prerelease is neither true nor false: $env:PRERELEASE"
+          }
+          # A pre-release is never marked Latest (GitHub does not allow it); nothing passes --latest.
+          $prerelease = $env:PRERELEASE -ceq 'true' -or $tag.Contains('-')
+          if (-not $env:H3_BASELINE_TAG -or $env:H3_BASELINE_RUNTIME_SHA -cnotmatch '\A[0-9a-f]{40}\z') {
+            throw 'release_input_invalid: the old-state check recorded no baseline'
+          }
+          $dryRun = $env:DRY_RUN -ceq 'true'
+          $releaseRoot = Join-Path $env:RUNNER_TEMP 'actingcommand-release'
+          $readbackRoot = Join-Path $env:RUNNER_TEMP 'actingcommand-release-readback'
+          New-Item -ItemType Directory -Path $releaseRoot, $readbackRoot | Out-Null
+
+          $zips = [Collections.Generic.List[string]]::new()
+          foreach ($artifact in @(
+              @{ Name = $env:RUNTIME_ARTIFACT_NAME; Dir = $env:RUNTIME_ARTIFACT_DIR },
+              @{ Name = $env:TOOLS_ARTIFACT_NAME; Dir = $env:TOOLS_ARTIFACT_DIR }
+          )) {
+            $zip = Join-Path $releaseRoot "$($artifact.Name).zip"
+            Compress-Archive -Path (Join-Path $artifact.Dir '*') -DestinationPath $zip -CompressionLevel Optimal
+            $check = Join-Path $readbackRoot $artifact.Name
+            Expand-Archive -LiteralPath $zip -DestinationPath $check
+            $manifest = Get-Content -LiteralPath (Join-Path $check 'BUILD-MANIFEST.json') -Raw | ConvertFrom-Json
+            if ($manifest.repository -cne $env:GITHUB_REPOSITORY -or $manifest.commit_sha -cne $env:SOURCE_SHA -or
+                $manifest.tree_sha -cne $env:TREE_SHA -or $manifest.source_artifact_name -cne $artifact.Name) {
+              throw "release_zip_unverified: $($artifact.Name).zip BUILD-MANIFEST.json names $($manifest.source_artifact_name) from $($manifest.repository)@$($manifest.commit_sha)"
+            }
+            $expected = @(@($manifest.files | ForEach-Object { [string]$_.path }) + 'BUILD-MANIFEST.json' | Sort-Object)
+            $actual = @(Get-ChildItem -LiteralPath $check -Recurse -File -Force |
+              ForEach-Object { [IO.Path]::GetRelativePath($check, $_.FullName) } | Sort-Object)
+            if (($expected -join '|') -cne ($actual -join '|')) {
+              throw "release_zip_unverified: $($artifact.Name).zip holds [$($actual -join ', ')], expected [$($expected -join ', ')]"
+            }
+            foreach ($file in $manifest.files) {
+              $path = Join-Path $check ([string]$file.path)
+              if ((Get-Item -LiteralPath $path).Length -ne [int64]$file.size_bytes -or
+                  (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$file.sha256) {
+                throw "release_zip_unverified: $($artifact.Name).zip $($file.path) does not match BUILD-MANIFEST.json"
+              }
+            }
+            Write-Host "release zip $($artifact.Name).zip: $((Get-Item -LiteralPath $zip).Length) bytes, BUILD-MANIFEST.json and $($expected.Count - 1) files read back"
+            $zips.Add($zip)
+          }
+
+          $sumsPath = Join-Path $releaseRoot 'SHA256SUMS'
+          $sums = @(foreach ($zip in $zips) {
+            "$((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($zip))"
+          })
+          [IO.File]::WriteAllText($sumsPath, (($sums -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $notes = @(
+            "Built from commit ``$env:SOURCE_SHA`` (tree ``$env:TREE_SHA``) by [run $env:GITHUB_RUN_ID, attempt $env:GITHUB_RUN_ATTEMPT]($runUrl).",
+            '',
+            "Old-state check (H3): this build opened a state root written by the published build ``$env:H3_BASELINE_TAG`` (Runtime ``$env:H3_BASELINE_RUNTIME_SHA``) and read its ledger.",
+            '',
+            'Assets (SHA-256, as in `SHA256SUMS`):'
+          )
+          foreach ($line in $sums) {
+            $hash, $name = $line -split '  ', 2
+            $notes += "- ``$name``: ``$hash``"
+          }
+          $notes += ''
+          $notes += 'The version exists only in this tag; the executables and the BUILD-MANIFEST.json in each zip bind the commit above.'
+          if (-not $env:PREVIOUS_TAG) {
+            $notes += ''
+            $notes += 'First release: there is no earlier release to list pull requests from.'
+          }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'actingcommand-release-notes.md'
+          [IO.File]::WriteAllText($notesPath, (($notes -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+
+          $arguments = @('release', 'create', $tag, '--repo', $env:GITHUB_REPOSITORY,
+            '--target', $env:SOURCE_SHA, '--title', $tag, '--notes-file', $notesPath)
+          if ($env:PREVIOUS_TAG) {
+            $arguments += @('--generate-notes', '--notes-start-tag', $env:PREVIOUS_TAG)
+          }
+          if ($prerelease) {
+            $arguments += '--prerelease'
+          }
+          $arguments += @($zips) + $sumsPath
+          Get-ChildItem -LiteralPath $releaseRoot | ForEach-Object { Write-Host "staged $($_.Name) $($_.Length) bytes" }
+          Write-Host "SHA256SUMS:`n$($sums -join "`n")"
+          Write-Host "release notes:`n$($notes -join "`n")"
+          Write-Host "release command: gh $($arguments -join ' ')"
+          if ($dryRun) {
+            Write-Host "dry run: not published ($tag at $env:SOURCE_SHA, prerelease=$prerelease)"
+          } else {
+            & gh @arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "release_create_failed: gh release create exited $LASTEXITCODE"
+            }
+            $tagCommit = (& gh api "repos/$env:GITHUB_REPOSITORY/commits/tags/$tag" --jq .sha | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $tagCommit -cne $env:SOURCE_SHA) {
+              throw "release_readback_failed: tag $tag resolves to '$tagCommit', expected $env:SOURCE_SHA"
+            }
+            $published = & gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" | Out-String | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $published.draft) {
+              throw "release_readback_failed: release $tag is missing or still a draft"
+            }
+            if ([bool]$published.prerelease -ne $prerelease) {
+              throw "release_readback_failed: release $tag prerelease=$($published.prerelease), expected $prerelease"
+            }
+            $expectedAssets = @(@($zips) + $sumsPath | ForEach-Object {
+              "$([IO.Path]::GetFileName($_)) $((Get-Item -LiteralPath $_).Length)"
+            } | Sort-Object)
+            $actualAssets = @($published.assets | ForEach-Object { "$($_.name) $($_.size)" } | Sort-Object)
+            if (($expectedAssets -join '|') -cne ($actualAssets -join '|')) {
+              throw "release_readback_failed: release $tag assets [$($actualAssets -join ', ')], expected [$($expectedAssets -join ', ')]"
+            }
+            Write-Host "published $($published.html_url): tag $tag -> $tagCommit, prerelease=$($published.prerelease), assets $($actualAssets -join ', ')"
+          }

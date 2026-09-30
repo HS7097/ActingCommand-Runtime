@@ -1,13 +1,20 @@
-# Windows Runtime candidate
+# Windows Runtime
 
-This is an unreleased Windows x86_64 MSVC candidate. Its source identity is the
-exact commit and tree in `BUILD-MANIFEST.json`. Use the instructions and downloader
-from that same source revision. Installation and startup require the user's
-private configuration; the included template has not been validated as a working
-configuration for any device or host.
+This is the Windows x86_64 MSVC Runtime. Its version is the tag (`vX.Y.Z`) of the
+`HS7097/ActingCommand-Runtime` Release that carries this zip; its source identity
+is the exact commit and tree in `BUILD-MANIFEST.json`. Use the instructions and
+downloader from that same source revision. Installation and startup require the
+user's private configuration; the included template has not been validated as a
+working configuration for any device or host.
 
 ## Obtain and verify the artifact
 
+A released version is downloaded from the Release page of
+`HS7097/ActingCommand-Runtime`: take `actingcommand-runtime-<sha>.zip` and
+`SHA256SUMS` from the Release, check the zip against `SHA256SUMS`, extract it into
+a new directory and check every file against `BUILD-MANIFEST.json`.
+
+An unreleased commit has no Release; its exact build is an Actions artifact.
 Select the complete 40-character lowercase commit SHA and a successful
 `Windows exact-SHA build` Actions run in `HS7097/ActingCommand-Runtime`. Use the
 existing `scripts/windows-tools/Get-ExactBuildArtifact.ps1` from that source

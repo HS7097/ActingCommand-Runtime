@@ -34,7 +34,7 @@ Tools keep their separate fixed payload set and do not declare a Runtime layout.
 
 The three static Runtime files come from `distribution/windows` at the same build
 commit. See the [installation instructions](../../distribution/windows/INSTALL.md)
-and [unreleased candidate notes](../../distribution/windows/RELEASE-NOTES.md).
+and [release notes](../../distribution/windows/RELEASE-NOTES.md).
 The template requires private values before startup; artifact verification does
 not establish successful installation, device execution or release publication.
 
