@@ -281,7 +281,11 @@ and one override reason. Codes carry no whitespace; every detail stays within 10
 | `resource_target_policy_ignored` | `a <server\|game> scoped session.resource_targets record (observed_at=<ms>) was not written by the formal entry and is ignored` |
 
 The reasons travel in the reason chain the dispatch events already carry; no event, payload
-field or persisted structure is added.
+field or persisted structure is added. A dispatched candidate's target contribution is also
+read in its dispatch decision record (Workflow #308 RT-S1c; `contracts/scheduling/README.md`,
+"Dispatch Decision Record"): `rank_breakdown` (`target`, `target_id`, `mode`, `superseded`)
+and `decision_record` (`targets=active:<sha>@<applied_at>`, `expired:…`, `unreadable:<code>`
+or `none`, plus ` ignored=…`).
 
 ## Choosing scale and importance
 
