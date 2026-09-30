@@ -240,8 +240,9 @@ U   = max u_j over the target's tasks that still map   (>= 1 while g >= 1)
 s_k = min(floor(g*I*u_k / (S*U)), 1_000_000) task target score, "capped" at the bound
 ```
 
-The task with the largest useful contribution scores `s = w`, the others their share; `s_k`
-never grows as `c` grows. With `base = score + utility + offset` (see
+The task with the largest useful contribution scores `s = w`; the other tasks score at most
+`s` (`s_k = min(floor(g*I*u_k / (S*U)), 1e6)`), and at the cap, or when `u_k = U`, they can
+tie with it. `s_k` never grows as `c` grows. With `base = score + utility + offset` (see
 `contracts/scheduling/README.md`, "Score-Assisted Priority"):
 
 - `adjust`: `effective = base + s`. The disposition follows the thresholds as for any scored
@@ -296,8 +297,9 @@ cost `cost * bp / 10`), T wins exactly when `s > Δ` with
 
 At `s = Δ` affinity and then the deterministic tie breaker decide. The target's best task
 scores `s = min(floor(g*I/S), 1e6)`, so it overtakes from the gap `g* = ceil((Δ+1)*S/I)`
-(integer Δ); with `S = T` it leads while `c <= T - g*`. The other tasks of the target score
-less (`s_k = s * u_k / U`); each task belongs to one target.
+(integer Δ); with `S = T` it leads while `c <= T - g*`. The other tasks of the target score at
+most `s` (`s_k = min(floor(g*I*u_k / (S*U)), 1e6)`); at the cap, or when `u_k = U`, they can
+tie. Each task belongs to one target.
 
 1. Estimate Δ: `1000 * priority difference + seconds the competitor may have waited longer +
    strategic difference + load cost difference * bp / 10 + utility difference` (the last only

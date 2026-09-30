@@ -180,8 +180,10 @@ ranking, the evaluator runs an optional score stage:
   `score_deferred` and wakes at `now + defer_for_ms`, consuming no host budget;
   one with `effective_milli > promote_above_milli` is promoted and ranks ahead of
   every other candidate (`score_promoted`). An unscored candidate is never
-  deferred or promoted: only its offset applies and the reason
-  `score_unknown:<gate or term id>` records why.
+  deferred or promoted: its effective value is `utility_milli + offset_milli`,
+  plus an applied resource target's `s` in `adjust` mode; in `override` mode `s`
+  supersedes the offset (the utility term is kept). The reason
+  `score_unknown:<gate or term id>` records why it is unscored.
 - Every candidate that passed through the stage carries the reason `scored`
   with detail `score=<milli|none> offset=<milli> effective=<milli>
   disposition=<deferred|promoted|none>`, followed by ` target=<id>:<mode>:<s>`

@@ -1785,10 +1785,19 @@ fn apply_priority_selection(
         if let Some(rule) = unknown_rule {
             task_work.reasons.push(reason(
                 format!("score_unknown:{rule}"),
-                if utility.cost_ms.is_some() {
-                    "the selection document could not score this candidate; only the utility term and the manual offset apply"
-                } else {
-                    "the selection document could not score this candidate; only the manual offset applies"
+                match applied.map(|applied| applied.mode) {
+                    Some(TargetMode::Adjust) => {
+                        "the selection document could not score this candidate; the utility term, the manual offset and the applied resource target apply"
+                    }
+                    Some(TargetMode::Override) => {
+                        "the selection document could not score this candidate; the utility term and the applied resource target apply, the manual offset is superseded"
+                    }
+                    None if utility.cost_ms.is_some() => {
+                        "the selection document could not score this candidate; only the utility term and the manual offset apply"
+                    }
+                    None => {
+                        "the selection document could not score this candidate; only the manual offset applies"
+                    }
                 },
             ));
         }
