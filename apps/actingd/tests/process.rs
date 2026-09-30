@@ -41,9 +41,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use zip::{ZipArchive, ZipWriter, write::FileOptions};
 
-// one-off (to be reverted): Workflow #288 A2a CI evidence.
-mod one_off_288a2a;
-
 const INSTANCE_ALIAS: &str = "node.a";
 const PROCESS_TEST_SALT: &str = "actingd-process-test-salt";
 const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;
