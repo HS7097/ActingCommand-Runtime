@@ -97,6 +97,9 @@ or the phases `backend_open_observed`, `adb_target_recovery` and
 `perf.balance_changed`, `artifact.created`, Runtime-scoped runtime facts (the
 configuration inventory) and every other lifecycle phase (`vendor_stdio_close`
 included, so it reaches storage before the owner journal records the close).
+The task family's `task.selection_evaluated` (Workflow #308, the decision record a
+select step appends before its input; see `selection-graph.md`, section Records) is
+durable as well.
 
 WAL recovery keeps the longest valid prefix ending at a commit, so power loss can
 drop only a suffix of observational commits; sequence continuity and the hash
@@ -453,6 +456,13 @@ host, which owns access to the database.
 | Errors | Existing Warning, Error and Fatal severities. Recovery status is derived from a failure and subsequent success in the same run, never stored as a mutable flag on the original row. |
 | Health | Resource samples, stutter, clock jumps and disk capacity observations. |
 | Lab | Source/session-filtered ledger facts with large debug artifacts mounted by ledger reference. |
+
+The type lists of the Observations and Changes views are compiled into the stored
+view DDL, which every open compares with its own definition
+(`ledger_view_schema_mismatch`). A new event type therefore joins a type list only
+together with a view schema upgrade; until then it belongs to the event stream and,
+by severity and request context, to Errors and Lab. `task.selection_evaluated` is
+in no type list.
 
 Actor remains audit provenance. Sensitivity is an indexed event column; the
 sending-side personal-information switch removes account/player identifiers from
