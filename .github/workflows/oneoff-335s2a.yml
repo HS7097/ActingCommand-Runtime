@@ -1,0 +1,63 @@
+name: one-off 335 S2a (to be reverted)
+
+# One-off evidence for Workflow #335 S2a (model section 8, A1-A4): the real actinglab of the
+# PR head and of the control commit 21fa4d0b, each built here from its exact commit, run on
+# the rd5/s1c catalog and on pools documents derived from it. Reverted right after its run;
+# the PR's final diff does not contain this file.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: ${{ matrix.label }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: control
+            ref: 21fa4d0bf5481aac56acfa4d2c6f69052f563578
+          - label: head
+            ref: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out the commit under test
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ matrix.ref }}
+          path: code
+          persist-credentials: false
+      - name: Check out the one-off inputs of the PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: inputs
+          persist-credentials: false
+      - name: Build actinglab (release) from the commit under test
+        shell: pwsh
+        working-directory: code
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (& git rev-parse HEAD).Trim()
+          if ($head -cne '${{ matrix.ref }}') {
+            throw "checked-out commit mismatch: expected ${{ matrix.ref }}, actual $head"
+          }
+          Write-Host "building actinglab at $head"
+          & rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install failed with exit code $LASTEXITCODE" }
+          & rustup default stable
+          if ($LASTEXITCODE -ne 0) { throw "rustup default failed with exit code $LASTEXITCODE" }
+          & cargo build --locked --release --target x86_64-pc-windows-msvc --bin actinglab
+          if ($LASTEXITCODE -ne 0) { throw "actinglab build failed with exit code $LASTEXITCODE" }
+      - name: A1-A4
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./inputs/one-off-335s2a/run.ps1 `
+            -Label '${{ matrix.label }}' `
+            -Actinglab (Resolve-Path -LiteralPath 'code/target/x86_64-pc-windows-msvc/release/actinglab.exe').Path `
+            -Commit '${{ matrix.ref }}'
