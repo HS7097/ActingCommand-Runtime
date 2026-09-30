@@ -99,8 +99,11 @@ Hash" below).
 The resource kind is the pool `id`; there is no separate kind field. Task
 quantities stay in `tasks[].produces` (`amount`, `confidence_milli`). Both
 objects reject unknown fields (`unknown_field`), and a missing required field is
-`missing_required_field`. Every violation rejects the complete catalog with the
-field's JSON Pointer and its source line and column.
+`missing_required_field`. Every violation rejects the complete catalog. A bound
+violation or an unknown `rule` value carries the field's own JSON Pointer and
+its source line and column. For a missing or unknown field the reason names the
+field, while `json_path` and the line and column point at the nearest preceding
+value (the existing parser's behaviour).
 
 The block is a declaration. The compiler validates it and hashes it with the
 catalog; the evaluator does not read it in this revision, so a catalog with a
