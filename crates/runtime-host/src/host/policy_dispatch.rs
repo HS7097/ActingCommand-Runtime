@@ -229,7 +229,9 @@ fn scheduling_pause_release_failure(error: RuntimeHostError) -> RequestFailure {
 /// and `capture_check` passed, with its frame size and selected backend. Touch: the last Input or
 /// Nemu pair report, `ok` when its open status and `input_check` passed, with its selected
 /// backend and its connection's bounds (the input geometry, else the handshake limits). A side
-/// without a report of this reconnect (its backend was reused) is `ok: false` with no values.
+/// without a report of this reconnect (the preparation lease was refused, the close of a
+/// session the instance still held failed, or an open failed before reaching that side) is
+/// `ok: false` with no values.
 /// Since Workflow #317 sc3 it projects every preparation phase's opens.
 pub(super) fn scheduling_resume_selfcheck(
     observations: &[actingcommand_device::BackendOpenObservation],
@@ -1832,13 +1834,16 @@ impl HostShared {
 
     /// Workflow #191 ps2: the reconnect of an instance resume, since Workflow #317 sc3 (c) the
     /// instance's preparation phase (`prepare_instance_connection`): a dedicated preparation
-    /// lease, the opens of its input and capture backends through
-    /// `ExecutionKernel::open_instance_backends`, recorded as every open is recorded
-    /// (`backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check` and the
-    /// availability they gate), then the session's close and the lease's release. A failing step
-    /// is reported in the self-check with its code and leaves the instance unavailable; it never
-    /// rolls the resume back and is not retried. Only a fatal failure (an unconfirmed close, a
-    /// failed record) fails the request.
+    /// lease; the close of a session the instance still holds (Workflow #191 h3: a reconnect is
+    /// a disconnect and a connect, and a failed close skips the opens); the opens of its input
+    /// and capture backends through `ExecutionKernel::open_instance_backends`, recorded as every
+    /// open is recorded (`backend.open_observed`, the `backend.selfcheck.*` facts,
+    /// `device.self_check` and the availability they gate); then the lease's release. The
+    /// opened session stays open for the instance's next leases (Workflow #191 H); a failed
+    /// open, or an instance outside the multi-Nemu gate, closes it before the release. A
+    /// failing step is reported in the self-check with its code and leaves the instance
+    /// unavailable; it never rolls the resume back and is not retried. Only a fatal failure (an
+    /// unconfirmed close, a failed record) fails the request.
     fn reconnect_resumed_instance(
         &self,
         request: &ValidatedRuntimeRequest<'_>,

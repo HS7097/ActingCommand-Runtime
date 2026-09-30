@@ -496,6 +496,9 @@ fn publish_authoring_draft_inner(
 
     events.append(&event(AuthoringEventKind::AuthoringStarted, None))?;
 
+    // Set once `Promoted` is durable: from then on the candidate is the target tree, so a later
+    // failure is post-commit cleanup and must not append a contradictory `PromoteFailed`.
+    let mut promoted = false;
     let result = (|| {
         let journal_path = parent.join(transaction_journal_name(&target_root));
         recover_transaction(&target_root, &journal_path, recovery)?;
@@ -621,11 +624,12 @@ fn publish_authoring_draft_inner(
                 format!("promoted outcome could not be made durable: {error}"),
             ));
         }
+        promoted = true;
 
         journal.phase = TransactionPhase::Committed;
         if let Err(error) = write_journal(&journal_path, &journal) {
-            let cleanup = remove_file_if_exists(&journal_path)
-                .and_then(|()| remove_tree_if_exists(&backup_root));
+            let cleanup = remove_tree_if_exists(&backup_root)
+                .and_then(|()| remove_file_if_exists(&journal_path));
             return Err(match cleanup {
                 Ok(()) => authoring_error(
                     "authoring_commit_cleanup_failed",
@@ -641,8 +645,16 @@ fn publish_authoring_draft_inner(
                 ),
             });
         }
-        remove_tree_if_exists(&backup_root)?;
-        remove_file_if_exists(&journal_path)?;
+        if let Err(cleanup) =
+            remove_tree_if_exists(&backup_root).and_then(|()| remove_file_if_exists(&journal_path))
+        {
+            return Err(authoring_error(
+                "authoring_commit_cleanup_failed",
+                format!(
+                    "resource tree was promoted and recorded, but post-commit cleanup failed: {cleanup}"
+                ),
+            ));
+        }
 
         Ok(AuthoringReceipt {
             correlation_id: draft.correlation_id.clone(),
@@ -658,6 +670,8 @@ fn publish_authoring_draft_inner(
 
     match result {
         Ok(receipt) => Ok(receipt),
+        // The durable `Promoted` is the terminal fact; the cleanup error still fails the call.
+        Err(error) if promoted => Err(error),
         Err(error) => {
             let failed = event(AuthoringEventKind::PromoteFailed, Some(error.code.clone()));
             if let Err(event_error) = events.append(&failed) {

@@ -42,6 +42,7 @@ const MAX_GENERATION_OPEN_ATTEMPTS: usize = 8;
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
 const RECORD_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const RECORD_READ_DELAY: Duration = Duration::from_millis(5);
+const MAX_RECLAIM_CLAIM_DEPTH: usize = 2;
 static SYSTEM_PROCESS_IDENTITY: OnceLock<Result<ProcessIdentity, String>> = OnceLock::new();
 static SYSTEM_RANDOM_SEED: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 static IDENTIFIER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -1005,26 +1006,7 @@ impl PublicationLock {
                 break;
             };
             validate_lock_record(&observed, &record.lock_key)?;
-            let stale = if observed.pid == record.pid
-                && observed.process_start_token == record.process_start_token
-            {
-                false
-            } else {
-                match environment.inspect_process(observed.pid) {
-                    Ok(ProcessStatus::Dead) => true,
-                    Ok(ProcessStatus::Alive { start_token }) => {
-                        start_token != observed.process_start_token
-                    }
-                    Err(error) => {
-                        return Err(publication_error(format!(
-                            "cannot confirm publication lock owner death; lock={}; pid={}; owner_token={}; original_error={error}",
-                            path.display(),
-                            observed.pid,
-                            observed.owner_token
-                        )));
-                    }
-                }
-            };
+            let stale = lock_owner_is_stale(&path, &observed, &record, environment)?;
             if !stale {
                 match policy {
                     LockContentionPolicy::RejectLiveOwner => {
@@ -1052,14 +1034,23 @@ impl PublicationLock {
                     }
                 }
             }
-            match reclaim_stale_lock(&path, &observed, &record.owner_token) {
-                Ok(true) => {}
-                Ok(false) => {
+            match reclaim_stale_lock(&path, &observed, &record, environment, 0)? {
+                StaleReclaim::Reclaimed => {}
+                StaleReclaim::Retry => {
                     if !retry_lock_acquisition(policy, attempt, started) {
                         break;
                     }
                 }
-                Err(error) => return Err(error),
+                StaleReclaim::ClaimUnstable { claim, error } => {
+                    if retry_lock_acquisition(policy, attempt, started) {
+                        continue;
+                    }
+                    return Err(publication_error(format!(
+                        "publication lock reclaim claim did not stabilize during acquisition; lock={}; claim={}; attempts={attempt}; escalation=fail_loud; last_error={error}",
+                        path.display(),
+                        claim.display()
+                    )));
+                }
             }
         }
         match policy {
@@ -1109,6 +1100,29 @@ fn retry_lock_acquisition(policy: LockContentionPolicy, attempt: usize, started:
     };
     thread::sleep(delay);
     true
+}
+
+fn lock_owner_is_stale(
+    path: &Path,
+    observed: &PublicationLockRecord,
+    candidate: &PublicationLockRecord,
+    environment: &impl PublicationEnvironment,
+) -> LabResult<bool> {
+    if observed.pid == candidate.pid
+        && observed.process_start_token == candidate.process_start_token
+    {
+        return Ok(false);
+    }
+    match environment.inspect_process(observed.pid) {
+        Ok(ProcessStatus::Dead) => Ok(true),
+        Ok(ProcessStatus::Alive { start_token }) => Ok(start_token != observed.process_start_token),
+        Err(error) => Err(publication_error(format!(
+            "cannot confirm publication lock owner death; lock={}; pid={}; owner_token={}; original_error={error}",
+            path.display(),
+            observed.pid,
+            observed.owner_token
+        ))),
+    }
 }
 
 impl GenerationReaderLease {
@@ -2572,7 +2586,90 @@ fn validate_lock_record(record: &PublicationLockRecord, expected_lock_key: &str)
     Ok(())
 }
 
+enum StaleReclaim {
+    Reclaimed,
+    Retry,
+    ClaimUnstable {
+        claim: PathBuf,
+        error: std::io::Error,
+    },
+}
+
+/// Only the holder of the claim named after one observed stale record may re-read,
+/// compare and rename the lock path, so a delayed reclaimer cannot move a newer lock.
+/// An orphaned claim is removed the same way under one deeper claim; deeper orphans fail loud.
 fn reclaim_stale_lock(
+    path: &Path,
+    observed: &PublicationLockRecord,
+    reclaimer: &PublicationLockRecord,
+    environment: &impl PublicationEnvironment,
+    depth: usize,
+) -> LabResult<StaleReclaim> {
+    let claim_key = format!("reclaim\0{}\0{}", observed.lock_key, observed.owner_token);
+    let claim_path = path.with_file_name(format!("{}.claim", digest_text(&claim_key)));
+    let claim_record = PublicationLockRecord {
+        lock_key: claim_key.clone(),
+        ..reclaimer.clone()
+    };
+    match create_lock_file(&claim_path, &claim_record) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists || transient_record_io(&error) => {
+            let Some(holder) = read_lock_record_if_present(&claim_path)? else {
+                return Ok(if error.kind() == ErrorKind::AlreadyExists {
+                    StaleReclaim::Retry
+                } else {
+                    StaleReclaim::ClaimUnstable {
+                        claim: claim_path,
+                        error,
+                    }
+                });
+            };
+            validate_lock_record(&holder, &claim_key)?;
+            if !lock_owner_is_stale(&claim_path, &holder, reclaimer, environment)? {
+                return Ok(StaleReclaim::Retry);
+            }
+            if depth + 1 >= MAX_RECLAIM_CLAIM_DEPTH {
+                return Err(publication_error(format!(
+                    "orphaned publication lock reclaim claim exceeds recovery depth; claim={}; owner_pid={}; owner_token={}; escalation=fail_loud",
+                    claim_path.display(),
+                    holder.pid,
+                    holder.owner_token
+                )));
+            }
+            return match reclaim_stale_lock(
+                &claim_path,
+                &holder,
+                reclaimer,
+                environment,
+                depth + 1,
+            )? {
+                StaleReclaim::ClaimUnstable { claim, error } => {
+                    Ok(StaleReclaim::ClaimUnstable { claim, error })
+                }
+                StaleReclaim::Reclaimed | StaleReclaim::Retry => Ok(StaleReclaim::Retry),
+            };
+        }
+        Err(error) => {
+            return Err(publication_error(format!(
+                "failed to create publication lock reclaim claim {}: {error}",
+                claim_path.display()
+            )));
+        }
+    }
+    let claim = PublicationLock {
+        path: claim_path,
+        owner_token: reclaimer.owner_token.clone(),
+    };
+    let removed = remove_unchanged_stale_lock(path, observed, &reclaimer.owner_token);
+    match (removed, claim.release()) {
+        (Ok(true), Ok(())) => Ok(StaleReclaim::Reclaimed),
+        (Ok(false), Ok(())) => Ok(StaleReclaim::Retry),
+        (Ok(_), Err(error)) | (Err(error), Ok(())) => Err(error),
+        (Err(primary), Err(secondary)) => Err(combine_errors(primary, secondary)),
+    }
+}
+
+fn remove_unchanged_stale_lock(
     path: &Path,
     observed: &PublicationLockRecord,
     reclaimer_token: &str,

@@ -45,12 +45,21 @@ While that protection is held, a second Ledger lookup verifies the same complete
 reference and observes current retention. Offline reading reopens authenticated
 metadata for this second lookup. No Ledger transaction spans the material read.
 
-Only the requested range is retained while the reader scans the entire material.
 The reader must reach EOF and successfully finish its length/hash verification
-before that range is returned. Truncation, trailing bytes or a hash mismatch
-discard all provisional bytes. Each request repeats whole-material verification;
-there is no material session, cached response, token, new pin or persistent reader.
-The original generic receipt cache is not populated or reused for material reads.
+before any byte is returned. Truncation, trailing bytes or a hash mismatch
+discard all provisional bytes. For an object above 8 MiB only the requested
+range is retained while the reader scans the entire material, so each request
+repeats whole-material verification. An object of at most 8 MiB is read whole
+on a miss and, once its verified reference equals the Ledger's current
+reference, kept in the resident Runtime's verified-object cache: process memory
+only, least recently used, 32 MiB in total, each entry charged at least 4 KiB.
+Later ranges of that exact reference are cut from those bytes without rereading
+or rehashing the file. Both Ledger lookups, both retention checks and the
+reader's shared use protection still precede every cache use, so an evicted,
+changed or missing object is never served from it. The offline entry keeps no
+cache. There is no material session, token, new pin or persistent reader, and no
+file handle or lock outlives a request. The original generic receipt cache is
+not populated or reused for material reads.
 
 One monotonic four-second cooperative budget covers reference resolution, the
 reader's chunk loop/EOF/finish and reply serialization. Offline metadata opening

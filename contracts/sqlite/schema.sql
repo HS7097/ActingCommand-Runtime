@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 
--- This authoritative schema is embedded by crates/runtime-state and mirrored at
--- contracts/sqlite/schema.sql; the two files must remain byte-for-byte equivalent.
+-- This authoritative schema is the only copy: crates/runtime-state embeds this
+-- file directly (include_str! in crates/runtime-state/src/store.rs).
 
 PRAGMA foreign_keys = ON;
 

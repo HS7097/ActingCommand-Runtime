@@ -1568,7 +1568,9 @@ pub struct SchedulingDrainSummary {
 /// The connection self-check an instance resume reports (Workflow #191 ps2), projected from the
 /// backend open reports of the resume's own reconnect. A side is `ok` only when that open
 /// verified it: its open status and its check (`capture_check`, `input_check`) passed. A side
-/// the session still held is reused without an open and reports `ok: false` with no values.
+/// without a report of this reconnect (the preparation lease was refused, the close of a
+/// session the instance still held failed, or an open failed before reaching that side)
+/// reports `ok: false` with no values.
 /// `failure_code` is the device code of a failed reconnect verbatim (for example
 /// `capture_backend_open_failed`); a failed self-check never rolls the resume back. Since
 /// Workflow #317 sc3 the reconnect is the host's preparation phase, which also answers
@@ -3075,9 +3077,12 @@ pub enum RuntimeOperation {
         scope: SchedulingPauseScope,
     },
     /// Reconnects one physical instance and self-checks it now (Workflow #317 sc3): the
-    /// host's controlled preparation phase opens its input and capture backends under a
-    /// dedicated preparation lease, records the opens and closes the session again. Only an
-    /// explicit User+Ui or Cli+Cli request may issue it (the emulator control origin gate).
+    /// host's controlled preparation phase, under a dedicated preparation lease, closes a
+    /// session the instance still holds (Workflow #191 h3), opens its input and capture
+    /// backends and records the opens. The new session then stays open for the instance's
+    /// next leases until an external command disconnects it (Workflow #191 H); a failed open,
+    /// or an instance outside the multi-Nemu gate, closes it again. Only an explicit User+Ui or
+    /// Cli+Cli request may issue it (the emulator control origin gate).
     SelfCheckInstance {
         instance_alias: String,
     },
