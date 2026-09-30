@@ -5264,9 +5264,11 @@ pub(super) fn receipt_response_timeout(
                 RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "release_lease")
             })
         }
-        // Workflow #317 sc3: the preparation phase opens the backends (first frame included)
-        // and closes the session again before it answers; an instance resume reconnects through
-        // it. Both wait its backend-open bound plus the IO margin (Workflow #191 h2).
+        // Workflow #317 sc3: the preparation phase closes a session the instance still holds
+        // and opens the backends (first frame included) before it answers; since Workflow #191 H
+        // the new session stays open unless the open failed or the multi-Nemu gate closes it.
+        // An instance resume reconnects through it. Both wait its backend-open bound plus the IO
+        // margin (Workflow #191 h2).
         RuntimeOperation::SelfCheckInstance { .. }
         | RuntimeOperation::ResumeScheduling {
             scope: SchedulingPauseScope::Instance { .. },

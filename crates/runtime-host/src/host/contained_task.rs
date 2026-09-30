@@ -2596,7 +2596,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     // #316-P4: a physical instance's first capture that fails while one ADB
                     // baseline probe (task deadline) also fails is the ADB baseline lost, not a
                     // host fault: both ADB facts are invalidated and the task fails nonfatal.
-                    // An answering adbd keeps the capture failure fatal.
+                    // An answering adbd keeps the capture failure fatal, except an operation
+                    // failure on a session kept from an earlier lease (Workflow #191 H, below).
                     if self.last_frame_id.is_none()
                         && self.execution_provenance == ExecutionBackendProvenance::PhysicalDevice
                         && runtime_error.is_fatal()

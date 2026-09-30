@@ -276,9 +276,7 @@ impl PipelinePerformanceSignal {
     }
 
     fn validate(&self) -> RuntimeHostResult<()> {
-        if self.instance_id.is_empty()
-            || self.instance_id.len() > 128
-            || self.instance_id.chars().any(char::is_control)
+        if actingcommand_contract::validate_instance_alias(&self.instance_id).is_err()
             || self.observed_at_unix_ms == 0
             || self.frame_gap_ms.is_some_and(|value| value == 0)
             || (self.frame_gap_ms.is_none()
@@ -1555,9 +1553,7 @@ fn next_streak_sample(samples: u16) -> RuntimeHostResult<u16> {
 }
 
 fn validate_pipeline_observation(observation: &PipelineEventObservation) -> RuntimeHostResult<()> {
-    if observation.instance_id.is_empty()
-        || observation.instance_id.len() > 128
-        || observation.instance_id.chars().any(char::is_control)
+    if actingcommand_contract::validate_instance_alias(&observation.instance_id).is_err()
         || observation.observed_at_unix_ms == 0
     {
         return Err(performance_fatal(

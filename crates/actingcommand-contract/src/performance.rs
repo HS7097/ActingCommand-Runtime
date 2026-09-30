@@ -548,9 +548,7 @@ pub(crate) fn validate_performance_summary(
 pub(crate) fn validate_performance_stutter(
     data: &PerformanceStutterEventData,
 ) -> Result<(), SanitizationError> {
-    if data.instance_id.is_empty()
-        || data.instance_id.len() > 128
-        || data.instance_id.chars().any(char::is_control)
+    if crate::validate_instance_alias(&data.instance_id).is_err()
         || data.observed_at_unix_ms == 0
         || data.frame_gap_ms == 0
     {

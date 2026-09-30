@@ -2422,6 +2422,8 @@ mod tests {
         let mut zip = ZipWriter::new(cursor);
         let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let files: &[(&str, &[u8])] = &[
+            // Workflow #330 CI36549559197/CI36325595894: the whole-task budget covers the real
+            // ledger and artifact path under a parallel test run; this test does not verify it.
             (
                 "control.json",
                 br#"{
@@ -2434,7 +2436,7 @@ mod tests {
                     "entry_task_id":"task",
                     "capture_interval_ms":50,
                     "step_timeout_ms":50,
-                    "timeout_ms":1000,
+                    "timeout_ms":10000,
                     "max_steps":2
                 }"#,
             ),
