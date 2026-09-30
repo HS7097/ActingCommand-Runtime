@@ -122,6 +122,11 @@ impl RuntimeDatabase {
         fs::create_dir_all(root)
             .map_err(|_| failure("state_root_create_failed", "open_runtime_state"))?;
         require_regular_directory(root)?;
+        // Workflow #332 H2f: a fresh root takes the canonical form `open_existing` stores, so
+        // the first session compares roots (e.g. the material root) like every later one.
+        let canonical_root = root.canonicalize().map_err(|error| {
+            RuntimeDatabaseError::io("state_root_inspect_failed", "open_runtime_state", &error)
+        })?;
         prepare_root(root)?;
         let database_path = root.join(DATABASE_FILE);
         let database_existed = database_path.exists();
@@ -147,7 +152,7 @@ impl RuntimeDatabase {
             return Err(failure("state_database_corrupt", "open_runtime_state").into());
         }
         Ok(Self {
-            root: root.to_path_buf(),
+            root: canonical_root,
             database_path,
             connection: Mutex::new(connection),
             integrity_key,

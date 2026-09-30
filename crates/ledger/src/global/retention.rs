@@ -314,9 +314,15 @@ impl RetentionIndex {
         {
             return Ok(None);
         }
-        if let Some(failed) = &failed_run
-            && let Some(settlement) = &closure.settlement
-            && !settlement_matches(source(events, settlement)?, failed.outcome)
+        // A settlement that does not match the terminal branch (e.g. a success that overran its
+        // runtime budget) keeps the object; it never reaches the fatal admission check.
+        if let Some(settlement) = &closure.settlement
+            && !settlement_matches(
+                source(events, settlement)?,
+                failed_run
+                    .as_ref()
+                    .map_or(TaskOutcome::Success, |failed| failed.outcome),
+            )
         {
             return Ok(None);
         }
@@ -957,7 +963,10 @@ impl RetentionIndex {
             }
         }
         if event.payload().artifact_retention().is_none() {
-            if event.severity() >= EventSeverity::Warning && scopes(event).next().is_none() {
+            if event.severity() >= EventSeverity::Warning
+                && scopes(event).next().is_none()
+                && !stale_owner_report(event)
+            {
                 self.unlinked_warning = true;
             }
             for id in self.protection_targets(event) {
@@ -1258,25 +1267,12 @@ fn material_references<E: LedgerEventRead>(event: &E) -> Vec<ProjectedArtifactRe
 
 fn direct_evidence<E: LedgerEventRead>(event: &E) -> BTreeSet<ArtifactId> {
     let mut ids = BTreeSet::new();
-    match event.payload() {
-        EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) => {
-            ids.extend(
-                payload
-                    .summary()
-                    .pinned()
-                    .iter()
-                    .filter_map(|pin| pin.artifact())
-                    .map(|reference| reference.artifact_id),
-            );
-        }
-        EventPayload::Fact(FactPayload::Published(payload)) => {
-            for record in payload.records() {
-                if let FactContent::Artifact { artifact } = &record.content {
-                    ids.insert(artifact.artifact_id);
-                }
+    if let EventPayload::Fact(FactPayload::Published(payload)) = event.payload() {
+        for record in payload.records() {
+            if let FactContent::Artifact { artifact } = &record.content {
+                ids.insert(artifact.artifact_id);
             }
         }
-        _ => {}
     }
     ids
 }
@@ -1414,6 +1410,14 @@ fn scopes<E: LedgerEventRead>(event: &E) -> impl Iterator<Item = RetentionScope>
     ]
     .into_iter()
     .flatten()
+}
+
+/// Workflow #332 H2f M3: the writer's own stale-owner takeover report names no material or
+/// scope and lost no bytes; it is not an unlinked warning.
+fn stale_owner_report<E: LedgerEventRead>(event: &E) -> bool {
+    matches!(event.payload(), EventPayload::Ledger(actingcommand_contract::LedgerPayload::Recovered(recovery))
+        if recovery.reason() == actingcommand_contract::RecoveryReason::StaleOwner
+            && recovery.affected_bytes() == 0)
 }
 
 fn recorded_owner<E: LedgerEventRead>(event: &E) -> Option<OwnerEpoch> {

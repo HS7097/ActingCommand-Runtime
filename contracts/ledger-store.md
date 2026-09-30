@@ -492,9 +492,13 @@ The failed/cancelled branch retains verified material identity, confirmed close,
 capture summary and matching scheduled settlement. Scheduled failures use their
 existing failed execution settlement; the production scheduled-cancellation path
 already commits a failure terminal and settlement. Non-scheduled cancellations
-retain their cancelled terminal. Warning/direct/nearest-frame evidence, input
-before-frames, Lab association, permanent pins and unlinked-warning protections
-remain. K/T eligibility does not imply that every failed frame can be removed.
+retain their cancelled terminal. Warning/nearest-frame evidence, published-fact
+artifacts, input before-frames, Lab association, permanent pins and
+unlinked-warning protections remain. A CaptureSummary pin marks evidence only
+and protects nothing; the writer's own stale-owner recovery report
+(`ledger.recovered`, reason `stale_owner`, `affected_bytes` 0) is not an
+unlinked warning. K/T eligibility does not imply that every failed frame can be
+removed.
 The same try-only material guard, intent-before-action/outcome-after-action and
 round limits apply. Recovery consumes sealed pending intents without changing
 their policy or repeating an unknown unlink; disabling periodic retention leaves
@@ -523,18 +527,21 @@ durable store. The Runtime SQLite view prefix holds an
 in-memory copy advanced with its authenticated tail and discarded with it; it has
 no separate durable store either.
 
-Current CaptureSummary pin reasons have no Lab-only variant: all existing summary
-pin evidence remains permanent, along with Warning/direct/nearest-frame,
-input-before-frame and unlinked-warning protections. Releasing a Lab pin does not
-remove any of those protections or create close, success or K/T evidence. Material
-guards, the sole eviction admission/outcome chain and pending-intent recovery are
-unchanged; no material I/O occurs in the unpin command.
+CaptureSummary pin reasons mark evidence only: since Workflow #332 H2f no summary
+pin, historical ones included, grants retention. Warning/nearest-frame evidence,
+published-fact artifacts, input before-frames and unlinked-warning protections
+remain. Releasing a Lab pin does not remove any of those protections or create
+close, success or K/T evidence. Material guards, the sole eviction
+admission/outcome chain and pending-intent recovery are unchanged; no material
+I/O occurs in the unpin command.
 
 Replay validates integrity, not eligibility (Workflow #332 H2f Q3). Eligibility
 (Warning/nearest-frame, input-before, Lab and unlinked-warning protections, active
 pins, close, success or K/T, capture summary and settlement) is decided only by the
-sole Ledger writer when it admits an Explicit pin release or an eviction Intent,
-and the same append is judged again before it commits. Replay (every open, every
+sole Ledger writer when it admits an Explicit pin release or an eviction Intent.
+An Explicit pin release is judged once, at its append; only an eviction Intent
+is judged at both admission points, when the writer builds it and again at its
+append before it commits. Replay (every open, every
 read face and the writer's own startup) checks, after the backend's record
 authentication (keyed chain authentication on SQLite roots; the legacy Segment
 read-only parser, kept for forensics and migration, has none), integrity only:
