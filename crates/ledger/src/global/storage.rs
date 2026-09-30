@@ -1242,7 +1242,7 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         self.retention
-            .validate(event, &self.events, &self.indexes, guarded)
+            .validate(event, &self.events, &self.indexes, guarded, true)
     }
 
     pub(super) fn persist_retention_checked(
