@@ -542,6 +542,7 @@ impl OperationConverter {
         }
         self.validate_error_page_anchor_definitions()?;
         let declared_anchor_ids = self.declared_anchor_ids();
+        let page_rule_ids = self.explicit_positive_page_ids();
         let mut errors = Vec::new();
         for bundle in &self.bundles {
             if let Err(error) = validate_phases_bundle(bundle) {
@@ -566,7 +567,9 @@ impl OperationConverter {
                     &bundle.task_json_path(),
                     "post_admission_ocr page declaration",
                     &page_ids.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                    &self.game,
                     &declared_anchor_ids,
+                    &page_rule_ids,
                     &mut errors,
                 );
             }
@@ -575,7 +578,9 @@ impl OperationConverter {
                     &bundle.task_json_path(),
                     "target_page",
                     &target_pages,
+                    &self.game,
                     &declared_anchor_ids,
+                    &page_rule_ids,
                     &mut errors,
                 ),
                 Ok(None) => {}
@@ -586,7 +591,9 @@ impl OperationConverter {
                     &bundle.task_json_path(),
                     "scheduling_outcome mappings",
                     &pages,
+                    &self.game,
                     &declared_anchor_ids,
+                    &page_rule_ids,
                     &mut errors,
                 ),
                 Err(error) => errors.push(error.message),
@@ -713,7 +720,9 @@ impl OperationConverter {
                             operation.get("id").and_then(Value::as_str)
                         ),
                         &destination_pages,
+                        &self.game,
                         &declared_anchor_ids,
+                        &page_rule_ids,
                         &mut errors,
                     ),
                     Err(error) => errors.push(error.message),
@@ -924,6 +933,7 @@ impl OperationConverter {
 
     pub fn build_pages(&self) -> CliOutcome<Value> {
         let declared_anchor_ids = self.declared_anchor_ids();
+        let page_rule_ids = self.explicit_positive_page_ids();
         let mut pages = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
         for bundle in &self.bundles {
@@ -932,6 +942,7 @@ impl OperationConverter {
                     &self.game,
                     anchor_id,
                     &declared_anchor_ids,
+                    &page_rule_ids,
                     &mut pages,
                     &mut order,
                 );
@@ -941,6 +952,7 @@ impl OperationConverter {
                     &self.game,
                     &anchor_id,
                     &declared_anchor_ids,
+                    &page_rule_ids,
                     &mut pages,
                     &mut order,
                 );
@@ -950,6 +962,7 @@ impl OperationConverter {
                     &self.game,
                     anchor_id,
                     &declared_anchor_ids,
+                    &page_rule_ids,
                     &mut pages,
                     &mut order,
                 );
@@ -959,6 +972,7 @@ impl OperationConverter {
                     &self.game,
                     &anchor_id,
                     &declared_anchor_ids,
+                    &page_rule_ids,
                     &mut pages,
                     &mut order,
                 );
@@ -969,6 +983,7 @@ impl OperationConverter {
                         &self.game,
                         anchor_id,
                         &declared_anchor_ids,
+                        &page_rule_ids,
                         &mut pages,
                         &mut order,
                     );
@@ -978,6 +993,7 @@ impl OperationConverter {
                         &self.game,
                         &anchor_id,
                         &declared_anchor_ids,
+                        &page_rule_ids,
                         &mut pages,
                         &mut order,
                     );
@@ -1003,15 +1019,7 @@ impl OperationConverter {
     }
 
     fn apply_page_rules(&self, pages: &mut HashMap<String, Value>) -> CliOutcome<()> {
-        let explicit_positive_pages = self
-            .bundles
-            .iter()
-            .filter_map(|bundle| bundle.data.get("page_rules").and_then(Value::as_object))
-            .flat_map(|rules| rules.iter())
-            .filter(|(_, rule)| has_explicit_positive_page_rule(rule))
-            .map(|(page_key, _)| normalize_page_rule_id(&self.game, page_key))
-            .collect::<BTreeSet<_>>();
-        for page_id in explicit_positive_pages {
+        for page_id in self.explicit_positive_page_ids() {
             if let Some(page) = pages.get_mut(&page_id).and_then(Value::as_object_mut) {
                 page.remove("any_of");
             }
@@ -1624,7 +1632,20 @@ impl OperationConverter {
         ids
     }
 
+    /// Pages declared by a `page_rules` entry with a non-empty `required`, `optional` or
+    /// `any_of`, as normalized page ids. Such a page needs no template anchor.
+    fn explicit_positive_page_ids(&self) -> BTreeSet<String> {
+        self.bundles
+            .iter()
+            .filter_map(|bundle| bundle.data.get("page_rules").and_then(Value::as_object))
+            .flat_map(|rules| rules.iter())
+            .filter(|(_, rule)| has_explicit_positive_page_rule(rule))
+            .map(|(page_key, _)| normalize_page_rule_id(&self.game, page_key))
+            .collect()
+    }
+
     fn validate_error_page_anchor_definitions(&self) -> CliOutcome<()> {
+        let page_rule_ids = self.explicit_positive_page_ids();
         let mut anchor_counts = HashMap::<String, usize>::new();
         for bundle in &self.bundles {
             for anchor in array_field(&bundle.data, "anchors") {
@@ -1655,8 +1676,11 @@ impl OperationConverter {
                     .filter(|(anchor, _)| anchor.starts_with(&prefix))
                     .collect::<Vec<_>>();
                 if variants.is_empty() {
+                    if page_rule_ids.contains(&page_id(&self.game, error_page)) {
+                        continue;
+                    }
                     errors.push(format!(
-                        "{}: error_pages identifier '{error_page}' has no matching anchor definition",
+                        "{}: error_pages identifier '{error_page}' has no matching anchor definition and no page_rules entry declares it",
                         bundle.task_json_path().display()
                     ));
                     continue;
@@ -3066,6 +3090,7 @@ fn add_page(
     game: &str,
     anchor_id: &str,
     declared_anchor_ids: &BTreeSet<String>,
+    page_rule_ids: &BTreeSet<String>,
     pages: &mut HashMap<String, Value>,
     order: &mut Vec<String>,
 ) {
@@ -3076,7 +3101,17 @@ fn add_page(
     if pages.contains_key(&page_id) {
         return;
     }
-    let requirements = resolve_page_requirements(anchor_id, declared_anchor_ids);
+    // A page declared only by its page rule gets no implicit `page/<id>` template target:
+    // its requirements are exactly the rule's targets, of whichever recognition backends.
+    let requirements =
+        if !has_page_anchor(anchor_id, declared_anchor_ids) && page_rule_ids.contains(&page_id) {
+            PageRequirements {
+                required: Vec::new(),
+                any_of: Vec::new(),
+            }
+        } else {
+            resolve_page_requirements(anchor_id, declared_anchor_ids)
+        };
     let required = requirements
         .required
         .into_iter()
@@ -3294,21 +3329,30 @@ fn validate_declared_page_set(
     path: &Path,
     label: &str,
     pages: &[String],
+    game: &str,
     declared_anchor_ids: &BTreeSet<String>,
+    page_rule_ids: &BTreeSet<String>,
     errors: &mut Vec<String>,
 ) {
     for page in pages {
-        if !declared_anchor_ids.contains(page)
-            && !declared_anchor_ids
-                .iter()
-                .any(|anchor| anchor.starts_with(&format!("{page}_")))
+        if !has_page_anchor(page, declared_anchor_ids)
+            && !page_rule_ids.contains(&page_id(game, page))
         {
             errors.push(format!(
-                "{}: {label} references missing page anchor '{page}'",
+                "{}: {label} references missing page anchor '{page}' and no page_rules entry declares it",
                 path.display()
             ));
         }
     }
+}
+
+/// A template anchor with the page's id, or `<page>_*` anchor variants, declares the page.
+fn has_page_anchor(page: &str, declared_anchor_ids: &BTreeSet<String>) -> bool {
+    let prefix = format!("{page}_");
+    declared_anchor_ids.contains(page)
+        || declared_anchor_ids
+            .iter()
+            .any(|anchor| anchor.starts_with(&prefix))
 }
 
 fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTreeSet<String>> {
