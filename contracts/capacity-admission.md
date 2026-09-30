@@ -66,6 +66,9 @@ In `start_with_provider`, startup preflight follows successful Ledger constructi
 and precedes Provider assembly. `start` passes a Provider that its caller has
 already constructed. Preflight returns the same performance owner used by the existing thread. A
 low/Unknown initial fact is recorded before the existing failed-start cleanup.
+Once start preparation ends and before any thread can admit business, Runtime
+samples capacity once more through the same `perf.summary` producer; whether that
+sample is recorded still follows the summary-due rules above.
 Direct/scheduled task admission follows replay resolution. Lease admission and
 queued transfer authorization use the same predicate; rejection of a successor
 must still release the previous owner. Lease-free observation and monitor windows
