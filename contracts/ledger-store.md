@@ -528,12 +528,12 @@ in-memory copy advanced with its authenticated tail and discarded with it; it ha
 no separate durable store either.
 
 CaptureSummary pin reasons mark evidence only: since Workflow #332 H2f no summary
-pin, historical ones included, grants retention. Warning/direct/nearest-frame,
-input-before-frame and unlinked-warning protections remain. Releasing a Lab pin
-does not remove any of those protections or create close, success or K/T
-evidence. Material guards, the sole eviction admission/outcome chain and
-pending-intent recovery are unchanged; no material I/O occurs in the unpin
-command.
+pin, historical ones included, grants retention. Warning/nearest-frame evidence,
+published-fact artifacts, input before-frames and unlinked-warning protections
+remain. Releasing a Lab pin does not remove any of those protections or create
+close, success or K/T evidence. Material guards, the sole eviction
+admission/outcome chain and pending-intent recovery are unchanged; no material
+I/O occurs in the unpin command.
 
 Replay validates integrity, not eligibility (Workflow #332 H2f Q3). Eligibility
 (Warning/nearest-frame, input-before, Lab and unlinked-warning protections, active

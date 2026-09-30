@@ -314,9 +314,15 @@ impl RetentionIndex {
         {
             return Ok(None);
         }
-        if let Some(failed) = &failed_run
-            && let Some(settlement) = &closure.settlement
-            && !settlement_matches(source(events, settlement)?, failed.outcome)
+        // A settlement that does not match the terminal branch (e.g. a success that overran its
+        // runtime budget) keeps the object; it never reaches the fatal admission check.
+        if let Some(settlement) = &closure.settlement
+            && !settlement_matches(
+                source(events, settlement)?,
+                failed_run
+                    .as_ref()
+                    .map_or(TaskOutcome::Success, |failed| failed.outcome),
+            )
         {
             return Ok(None);
         }
