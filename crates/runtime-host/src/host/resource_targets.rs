@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The formal entry of instance resource target policies (Workflow #308 RT-S1a): parse and
-//! check an `actingcommand.resource-targets.v1` document against the active catalog and the
-//! authoritative projection, then store it as the instance fact `session.resource_targets`.
+//! The formal entry of instance resource target policies (Workflow #308 RT-S1a, #335 S2b):
+//! parse and check an `actingcommand.resource-targets.v1` or `.v2` document against the active
+//! catalog and the authoritative projection, then store it as the instance fact
+//! `session.resource_targets`. The instance and the lifetime are read through the parsed
+//! document's accessors, which serve both versions.
 
 use super::facts::{FactPublication, FactPublicationPurpose};
 use super::*;
@@ -75,9 +77,8 @@ impl HostShared {
                 facts.ledger_position,
             )
         };
-        let document = parsed.document();
         let scope = FactScope::Instance {
-            instance_id: document.instance.clone(),
+            instance_id: parsed.instance().to_owned(),
         };
         let bundle_hash = checked
             .policy_sha256
@@ -91,7 +92,7 @@ impl HostShared {
             sample.unix_ms,
         ))
         .map_err(|_| record_invalid())?;
-        let (expires_at_unix_ms, ttl_policy) = match document.valid_until_unix_ms {
+        let (expires_at_unix_ms, ttl_policy) = match parsed.valid_until_unix_ms() {
             Some(valid_until) => (
                 Some(valid_until),
                 Some(FactTtlPolicy {
@@ -136,14 +137,14 @@ impl HostShared {
             terminal: Some(TerminalEvent { sequence, event_id }),
             result: RuntimeResult::ResourceTargetsApplied {
                 applied: Box::new(ResourceTargetsApplied {
-                    instance_alias: document.instance.clone(),
+                    instance_alias: parsed.instance().to_owned(),
                     policy_sha256: checked.policy_sha256,
                     version: sequence,
                     event_id,
                     previous_version,
                     replayed,
                     checked_catalog_hash,
-                    valid_until_unix_ms: document.valid_until_unix_ms,
+                    valid_until_unix_ms: parsed.valid_until_unix_ms(),
                     conditions_at_position,
                     conditions: checked.conditions,
                 }),

@@ -12,6 +12,14 @@ target score in the score stage ("Evaluation" below). An instance without a poli
 exactly as before; the input identity (`fact_snapshot_id`) includes a stored policy like any
 other overlaid fact.
 
+Two document versions exist. `actingcommand.resource-targets.v1` (Workflow #308 RT-S1) is
+frozen: its fields, rejections, rows, identity and evaluation stay exactly as specified here,
+and its override still supersedes the manual offset. `actingcommand.resource-targets.v2`
+(Workflow #335 S2b) weighs every produced resource of the instance with the pool's declared
+`valuation` (`contracts/scheduling/README.md`, "Pool Valuation") plus its target's shortfall
+("Document `actingcommand.resource-targets.v2`" and "Resource weights (v2)" below). Agents
+submit v2; a v1 document keeps its v1 meaning.
+
 ## Document `actingcommand.resource-targets.v1`
 
 The raw UTF-8 text is the request's `document_json` (`1..=65536` bytes); the Runtime parses it
@@ -75,6 +83,63 @@ document order its resource and then its tasks.
 The policy identity `policy_sha256` is `sha256:<hex>` of the policy crate's canonical
 serialization of the document (sorted keys, no whitespace), so documents that differ only in
 key order or whitespace are the same policy.
+
+## Document `actingcommand.resource-targets.v2`
+
+Workflow #335 S2b. The same entry, parser, size bound and general reasons as v1; the closed
+reason set is unchanged.
+
+```json
+{
+  "schema_version": "actingcommand.resource-targets.v2",
+  "instance": "instance-a",
+  "valid_until_unix_ms": 1791000000000,
+  "targets": [
+    { "id": "credits-floor", "resource": "pool.credits",
+      "condition": { "kind": "at_least", "amount": 100000 },
+      "apply": { "mode": "adjust", "weight": "score_stage" } },
+    { "id": "energy-push", "resource": "pool.energy",
+      "condition": { "kind": "at_least", "amount": 200 }, "scale": 10, "importance_milli": 500,
+      "apply": { "mode": "override", "weight": "score_stage", "manual_offset": "supersede" },
+      "tasks": ["task.collect-income"] }
+  ]
+}
+```
+
+| Field | v2 rule | Rejection reason @ path |
+| --- | --- | --- |
+| `instance`, `valid_until_unix_ms`, `targets` (`0..=16`, `[]` withdraws), `id`, `condition` | as v1 | as v1 |
+| `resource` | the v1 pool checks; at most one target per resource in the document | as v1; `duplicate_id` @ `/targets/j/resource` |
+| `scale` | optional, `1..=2^53-1`: the gap step `S`; absent takes the pool's `valuation.scale`, so it is required when the pool declares no valuation | `out_of_range` / `missing_field` @ `/targets/i/scale` |
+| `importance_milli` | optional, `1..=1_000_000`: `I`; absent takes the pool's `valuation.gap.weight_milli`, so it is required when the pool declares no `gap` | `out_of_range` / `missing_field` @ `/targets/i/importance_milli` |
+| `rule` | optional, `shortfall_linear` only; absent takes the pool's `valuation.gap.rule`, and `shortfall_linear` without a gap block | `invalid_type` |
+| `apply.mode`, `apply.weight` | as v1 | as v1 |
+| `apply.manual_offset` | optional, `keep` or `supersede`, only in `override` mode; absent is `keep` | `invalid_value` @ `/targets/i/apply/manual_offset` in `adjust` mode; `invalid_type` for another value |
+| `tasks` | optional in `adjust` mode, required in `override` mode; when given, the v1 task checks; when absent, at least one task of the instance (scope covers it, not disabled) must produce the resource (`r >= 1`) | `missing_field` @ `/targets/i/tasks`; as v1 @ `/targets/i/tasks/j`; `unmapped_task` @ `/targets/i/resource` |
+
+**Version probe.** The Runtime first reads the document as plain JSON: exactly when its
+top-level `schema_version` is the string `actingcommand.resource-targets.v2` it takes the v2
+checks; anything else, including a document the probe cannot read, takes the v1 path, so every
+non-v2 document meets the v1 rejections unchanged. The probe itself refuses nothing; UTF-8,
+JSON and duplicate-key refusals come from the shared declaration parser in both paths.
+`validate_catalog_declaration` with kind `resource_targets` dispatches by the same probe.
+
+The first failing check is reported, in this order: size, the declaration parse, schema
+version, bounds and identifier charset, uniqueness (target ids, tasks, resources), the apply
+rules (`manual_offset` in `adjust` mode, `override` without `tasks`), whether
+`valid_until_unix_ms` belongs; then the instance; then the lifetime; then per target in
+document order its resource, whether `S` and `I` resolve, and its tasks.
+
+A left-out `scale`, `importance_milli` or `rule` is not fixed at submission: every evaluation
+resolves it from the active catalog again ("Resource weights (v2)"). The identity is the
+canonical serialization of the v2 document as for v1 (a left-out field is absent from it), so a
+v1 and a v2 policy never share an identity; replacing a v1 policy with a v2 document is a new
+version. Receipts keep their shape; neither the base nor the effective weights appear in them.
+
+A Runtime build before this revision refuses a v2 document at the typed parse, usually as
+`missing_field` or `unknown_field` rather than `unsupported_schema_version`, and reads a stored
+v2 policy as unreadable (`unsupported_schema_version`), running that instance on base
+scheduling.
 
 ## Entry and receipts
 
@@ -165,6 +230,22 @@ known `schema_version` naming the fact's instance, known row kinds with exactly 
 and types, bounded values, scheduling identifiers for the target, resource and task ids,
 unique targets, and task rows that name an earlier target and reference each task once;
 anything else is `unsupported_schema_version`, `malformed_rows` or `instance_mismatch`.
+
+A v2 policy stores the same three row kinds (at most 10 fields a row, 145 rows):
+
+```text
+{row: "policy", schema_version: "actingcommand.resource-targets.v2", instance, policy_sha256}
+{row: "target", id, resource, at_least, mode, weight
+ [, scale][, importance_milli][, rule][, manual_offset]}                   one per target, document order
+{row: "task", target, task}                                                 one per task reference, document order
+```
+
+A target row carries an optional field exactly when the document states it. A target without
+`task` rows has no `tasks` (it covers every producing candidate); an `override` target has at
+least one. A header of the v2 version selects the v2 reader, as strict as v1's: the required
+fields exactly, optional fields only from the list above, `manual_offset` only with
+`mode: override`, unique target ids and resources, and the v1 task-row rules. Every other
+record list, of any header, meets the v1 reader unchanged.
 
 **Replay and withdrawal.** A submission whose `resource_bundle_hash` equals the active,
 unexpired policy's appends nothing and answers that policy's version with `replayed: true`,
@@ -287,6 +368,94 @@ read in its dispatch decision record (Workflow #308 RT-S1c; `contracts/schedulin
 and `decision_record` (`targets=active:<sha>@<applied_at>`, `expired:…`, `unreadable:<code>`
 or `none`, plus ` ignored=…`).
 
+### Resource weights (v2)
+
+Workflow #335 S2b. Everything above applies to a v1 policy only; a v2 policy is read, stored and
+reported as below, and the instance-level rules (unreadable, ignored, no stored state fails the
+evaluation) are shared.
+
+**Enabled instance.** An instance is enabled exactly while its stored record decodes as v2,
+holds targets and `now <= valid_until_unix_ms`. Without a policy, after a withdrawal, after
+expiry, with an unreadable record or with a v1 policy no base weight counts: a v1 policy takes
+the path above and never reads `valuation`.
+
+**Per evaluation.** Each target is resolved once for the instance against the active catalog:
+its pool (as v1), then `S = scale ?? valuation.scale` and `I = importance_milli ??
+valuation.gap.weight_milli` (the rule is `shortfall_linear`, the only one), then its named
+tasks (as v1), then its inventory in the time-validity projected facts (as v1). A left-out term
+whose pool no longer declares it (a catalog update removed `valuation` or `gap`) makes the
+target *unresolved*: it contributes no shortfall weight and says so, never silently zero.
+
+For an enabled instance `i` and a candidate `k` (a task that passed trigger, feedback stop,
+cooldown and placement), with exact integers, 128-bit intermediates and truncation:
+
+```text
+for each pool p whose scope covers i:
+  r(k,p) = sum of floor(amount * confidence_milli / 1000) over k's produces of p
+  B_p    = p.valuation.base_weight_milli, 0 without a valuation
+target t (at most one per pool) of pool p:
+  scope(t) = t.tasks; without tasks every candidate of i with r(k,p) >= 1
+  with a known inventory c and g = max(T - c, 0) >= 1:
+      Γ_t = min(floor(I * g / S), 1_000_000)          ("capped" at the bound)
+  otherwise (satisfied, pending, unresolved): Γ_t = 0
+W(k,p) = B_p + (k in scope(t) ? Γ_t : 0)             effective resource weight, <= 2_000_000
+Q_p    = p.valuation.scale, else t.scale
+T(k,p) = floor(r(k,p) * W(k,p) / Q_p)
+R(k)   = min(sum of T(k,p), 1_000_000)               ("capped" at the bound)
+```
+
+A pool takes part for `k` when `r(k,p) >= 1` and it declares a valuation or a target covering
+`k` names it. `W` belongs to the resource; a target's scope only decides who gets the
+shortfall part. Only `produces` count: `consumes` still drives urgency alone. `Γ`, `W`, `T` and
+`R` never fall as the gap grows; at `g = 0` the base weight stays.
+
+**Stage and score.** On an enabled instance a candidate with `R > 0`, or covered by an
+effective override (an `override` target naming it with `g >= 1`, step and importance
+resolved), enters the score stage even without a selection document, value or offset; every
+other candidate is released untouched and only gains reasons. With `base = score + utility +
+offset`:
+
+- no effective override: `effective = base + R`;
+- an effective override: `effective = utility + R`, plus `offset` when `manual_offset` is
+  `keep` (the default); the selection score is superseded and the disposition is `none`. At
+  `g = 0` the override is released and the first formula applies.
+
+The thresholds are computed from `base` only and `total_score` gains `effective * 1000`, as
+for v1. Every predicate gate, budget, window, pause, eligibility and admission check stays. The
+Runtime's catalog source runs no selection document, so an override that keeps the offset
+ranks like `adjust`; they differ in disposition and reasons only.
+
+**Other instances.** Their scores, relative order, thresholds and reasons are unchanged. The
+shared host budget is still allocated in global total order, so while it is short an enabled
+instance's candidates can take it first and another instance's candidate then records
+`host_budget_deferred` for the round, as with a v1 target.
+
+**Freshness.** A candidate that `R > 0` or an effective override moves is fresh at most until
+`valid_until_unix_ms` and the expiry of every inventory observation behind a positive
+shortfall weight (or the effective override) covering it; admission refuses its intent as
+`policy_facts_stale` once one lapses and the evaluation wakes at each plus one. Forward
+projections run the same evaluator and include the resource term.
+
+**Reasons.** On an enabled instance every candidate gains, after `scored` and
+`score_unknown:*` and before the disposition reason, at most five reasons:
+
+| Code | Detail |
+| --- | --- |
+| policy level (as v1, at most one) | `resource_target_policy_ignored`, `resource_target_policy_unreadable` or `resource_target_tasks_unevaluable`; after expiry `resource_target_policy_expired` on every candidate the policy would weigh |
+| `resource_targets` | the targets covering the candidate in document order, joined by `; `, each `<id>@<pool>:applied current=<c> at_least=<T> gap=<g> step=<S> importance=<I> gap_weight=<Γ>[ capped]`, `<id>@<pool>:satisfied current=<c> at_least=<T> gap=0 gap_weight=0`, `<id>@<pool>:pending reason=<missing\|expired\|low_confidence\|invalid_value> gap_weight=pending` or `<id>@<pool>:unresolved why=<valuation_missing\|gap_missing> gap_weight=0` |
+| `resource_target_unmapped:<id>` | as v1, for a task a target names explicitly |
+| `resource_target_override:<id>` | `superseded score=<s\|none>; offset=<o> kept (manual_offset=keep); utility kept` or `superseded score=<s\|none> offset=<o> (manual_offset=supersede); utility kept` |
+| `resource_weights` | `policy=<sha>@<applied_at> term=<R>[ capped] items=<pool>:r=<r>,per=<Q>,base=<B>,gap=<Γ>,effective=<W>,term=<T>;…`, items by `T` descending then pool id; only for a candidate with at least one item |
+
+List details are counted while joining and stay within 1010 bytes; items that do not fit fold
+into `+<n>more`. On an enabled instance `scored` ends with ` resources=<R>` and, under an
+effective override, ` override=<id>:<keep|supersede>`; the dispatch decision record shows
+`target=<R>` in `rank_breakdown` and `candidate_not_selected`, `target_id=<override id|*>`,
+`mode=<override|adjust>`, `superseded=1` under an effective override, and ends `rank_breakdown`
+with ` offset_kept=<0|1>`; `decision_record` names the policy `active.v2:<sha>@<applied_at>`
+or `expired.v2:<sha>@<applied_at>`. A v1 instance and an instance without a policy keep every
+reason byte for byte.
+
 ## Choosing scale and importance
 
 On one instance, let H be the candidate that ranks first without the target and T a named
@@ -317,7 +486,7 @@ tie. Each task belongs to one target.
    guard and stays.
 5. `s <= 1_000_000`, 1000 priority levels, the bound of a manual offset. A Δ of 1e6 or more (a
    priority difference of 1000 levels, or heavy against light at bp 10000 plus 400 levels) is
-   not crossed: treat it as a hard tier (explicit tiers are a later slice, S3).
+   not crossed.
 6. Promotion is a strict tier. An override never promotes and cannot beat a promoted
    competitor: use `adjust` there. In `adjust` mode with a selection document a large `s` can
    promote the candidate ahead of every unpromoted one regardless of priority. The Runtime's
@@ -343,6 +512,37 @@ urgency or value (`Δ = 5000` plus the aging difference in seconds):
 The flip gap is 501 (`c <= 9499`) at equal aging, 507 (`c <= 9493`) when the competitor waited
 60 s longer and 861 (`c <= 9139`) after one hour. The example document's `importance_milli`
 of 100000 is sized this way; 1000 would weigh like a single priority level.
+
+## Choosing valuation and target values (v2)
+
+1. `Q` is the resource's natural step; `B` is the standing value of one step (1000 milli = one
+   priority level), so `B/Q` is the exchange rate between resources and adding their terms is
+   meaningful.
+2. Δ is defined as above; when the competitor has a resource term too, add its `R` to Δ.
+3. For a task producing `r` per run to overtake Δ from a gap `g_want`, choose
+   `G >= ceil((ceil((Δ+1)*Q/r) - B) * S / g_want)`.
+4. `R <= 1_000_000`. A waiting competitor gains 1 of aging per second, so at the full term it
+   overtakes after about `R - Δ` seconds.
+5. The base weight is a standing preference on every producing task of an enabled instance and
+   also orders the shared host budget, so keep `B` small.
+
+Worked example: `Q = S = 1000`, `B = 100`, `G = 100`, `T = 100000`, one task with `r = 1000`
+against a light competitor five priority levels higher (`Δ = 5000` plus the aging difference in
+seconds):
+
+| c | g | Γ | W | R | Winner at equal aging |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 100000 | 10000 | 10100 | 10100 | producing task |
+| 50990 | 49010 | 4901 | 5001 | 5001 | producing task |
+| 51000 | 49000 | 4900 | 5000 | 5000 | tie: affinity, then the tie breaker |
+| 51001 | 48999 | 4899 | 4999 | 4999 | competitor |
+| 60000 | 40000 | 4000 | 4100 | 4100 | competitor |
+| 100000 | 0 | 0 | 100 | 100 | competitor (the base weight stays) |
+
+With `Q = S = 10000`, `B = 20`, `G = 10` and `T = 5000000`, a task producing `r = 300000` scores
+`T = 5010` at `c = 4853000` and leads Δ = 5000, and `4980` one unit later; item 3 gives
+`G >= 10` for `g_want = 147000`. Another resource with `Q = 10`, `B = 500` and no target adds
+`floor(20 * 500 / 10) = 1000` to a task producing 20 of it, whatever the first resource's gap.
 
 ## Lock order
 
