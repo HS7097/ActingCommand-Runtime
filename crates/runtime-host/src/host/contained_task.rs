@@ -4751,6 +4751,9 @@ impl HostShared {
         admission_request_id: Option<RequestId>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
+        // Workflow #332 H2f M1: a manual run's release also carries its task/run links, so
+        // its run scope closes in its own epoch; `scheduled` keeps the original meaning.
+        let release_links = run_links.or(Some(RuntimeRunLinks::new(task_id, run_id)));
         let scheduling_outcome = prepared
             .scheduling_outcome()
             .cloned()
@@ -4997,7 +5000,7 @@ impl HostShared {
                         original.request_id(),
                         &token,
                         connection_id,
-                        run_links,
+                        release_links,
                     ) {
                         return Err(self.cleanup_composite_failure_with_run_links(
                             request,
@@ -5218,7 +5221,7 @@ impl HostShared {
             original.request_id(),
             &token,
             connection_id,
-            run_links,
+            release_links,
         ) {
             Ok(_) => Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,

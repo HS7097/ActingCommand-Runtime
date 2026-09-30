@@ -330,7 +330,7 @@ impl RetentionIndex {
             settlement: closure.settlement,
             through_sequence: self.through_sequence,
         };
-        self.validate_intent(object, &intent, events, indexes, now)?;
+        self.validate_intent(object, &intent, events, indexes, now, true)?;
         Ok(Some(intent))
     }
 
@@ -499,7 +499,7 @@ impl RetentionIndex {
         prior: &[E],
         event: &E,
     ) -> GlobalLedgerResult<()> {
-        self.validate(event, prior, indexes, true)?;
+        self.validate(event, prior, indexes, true, false)?;
         self.apply(event);
         indexes.insert(event, prior.len());
         Ok(())
@@ -522,12 +522,15 @@ impl RetentionIndex {
         }))
     }
 
+    /// `admission` is true only on the sole writer's append path; replay (every open, every read
+    /// face, the writer's own startup) checks integrity only.
     pub(super) fn validate<E: LedgerEventRead>(
         &self,
         event: &E,
         events: &[E],
         indexes: &EventIndexes,
         guarded_intent: bool,
+        admission: bool,
     ) -> GlobalLedgerResult<()> {
         if event.sequence() != self.through_sequence.saturating_add(1) {
             return Err(invalid("artifact_retention_snapshot_gap"));
@@ -650,9 +653,10 @@ impl RetentionIndex {
                 let release_source = source(events, &release.release)?;
                 match reason {
                     ArtifactPinReason::Explicit => {
-                        if !same_close_scope(release_source, identity)
-                            || !successful_close(release_source, identity)
-                            || !self.close_owner_matches(release_source, identity)
+                        if admission
+                            && (!same_close_scope(release_source, identity)
+                                || !successful_close(release_source, identity)
+                                || !self.close_owner_matches(release_source, identity))
                         {
                             return Err(invalid("artifact_pin_release_not_closed"));
                         }
@@ -673,7 +677,14 @@ impl RetentionIndex {
                 if !guarded_intent {
                     return Err(invalid("artifact_eviction_guard_required"));
                 }
-                self.validate_intent(object, intent, events, indexes, event.timestamp_unix_ms())?;
+                self.validate_intent(
+                    object,
+                    intent,
+                    events,
+                    indexes,
+                    event.timestamp_unix_ms(),
+                    admission,
+                )?;
             }
             ArtifactRetentionFact::EvictionOutcome(outcome) => {
                 if !guarded_intent {
@@ -691,6 +702,11 @@ impl RetentionIndex {
         Ok(())
     }
 
+    /// Workflow #332 H2f Q3: replay (`admission` false) checks only that the sealed intent is
+    /// authentic and consistent with the index: its prefix, its object's identity and verified
+    /// source, no earlier proof, its evaluation time, and that every source it names resolves
+    /// in the preceding prefix. Eligibility (protection, pins, Lab, close, success or K/T,
+    /// summary, settlement) is decided once, by the admitting writer; a reader never re-judges it.
     fn validate_intent<E: LedgerEventRead>(
         &self,
         object: &RetainedObject,
@@ -698,14 +714,16 @@ impl RetentionIndex {
         events: &[E],
         indexes: &EventIndexes,
         now: u64,
+        admission: bool,
     ) -> GlobalLedgerResult<()> {
         if intent.through_sequence != self.through_sequence
             || object.proof.is_some()
-            || object.permanently_protected
-            || self.unlinked_warning
-            || !object.pins.is_empty()
             || object.identity.as_ref() != Some(&intent.identity)
             || object.verified.as_ref() != Some(&intent.verified)
+            || admission
+                && (object.permanently_protected
+                    || self.unlinked_warning
+                    || !object.pins.is_empty())
         {
             return Err(invalid("artifact_eviction_not_eligible"));
         }
@@ -714,12 +732,18 @@ impl RetentionIndex {
             (Some(success), None) => success,
             (None, Some(failed)) => {
                 if failed.evaluated_at_unix_ms != now
-                    || self
-                        .failed_run_evidence(&intent.identity, failed.policy, now)
-                        .as_ref()
-                        != Some(failed.as_ref())
+                    || admission
+                        && self
+                            .failed_run_evidence(&intent.identity, failed.policy, now)
+                            .as_ref()
+                            != Some(failed.as_ref())
                 {
                     return Err(invalid("artifact_eviction_failed_run_basis_conflict"));
+                }
+                if let FailedRunRetentionBasis::SuccessorSuccesses { terminals } = &failed.basis {
+                    for terminal in terminals {
+                        source(events, terminal)?;
+                    }
                 }
                 &failed.terminal
             }
@@ -727,6 +751,19 @@ impl RetentionIndex {
         };
         let success = source(events, terminal_ref)?;
         let close = source(events, &intent.close)?;
+        let summary = intent
+            .capture_summary
+            .as_ref()
+            .map(|value| source(events, value))
+            .transpose()?;
+        let settlement = intent
+            .settlement
+            .as_ref()
+            .map(|value| source(events, value))
+            .transpose()?;
+        if !admission {
+            return Ok(());
+        }
         if !same_scope(verified, &intent.identity)
             || !same_scope(success, &intent.identity)
             || !same_close_scope(close, &intent.identity)
@@ -750,11 +787,8 @@ impl RetentionIndex {
                 {
                     return Err(invalid("artifact_eviction_task_not_successful"));
                 }
-                let summary_ref = intent
-                    .capture_summary
-                    .as_ref()
-                    .ok_or_else(|| invalid("artifact_eviction_summary_missing"))?;
-                let summary = source(events, summary_ref)?;
+                let summary =
+                    summary.ok_or_else(|| invalid("artifact_eviction_summary_missing"))?;
                 if !same_scope(summary, &intent.identity)
                     || summary.sequence() >= close.sequence()
                     || !matches!(summary.payload(), EventPayload::Capture(CapturePayload::SummaryCommitted(payload))
@@ -774,9 +808,8 @@ impl RetentionIndex {
             .identity
             .run_id
             .is_some_and(|run| self.scheduled_runs.contains(&run));
-        match (&intent.settlement, scheduled) {
+        match (settlement, scheduled) {
             (Some(settlement), true) => {
-                let settlement = source(events, settlement)?;
                 if !same_scope(settlement, &intent.identity)
                     || settlement.sequence() <= success.sequence()
                     || self.owner_at(settlement.sequence()) != Some(intent.identity.owner_epoch)

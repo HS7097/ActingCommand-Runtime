@@ -205,9 +205,10 @@ covered by the native positive evidence. They add no task terminal, LeaseRelease
 capture summary, settlement or device action. Retention keeps original verified
 and terminal owners, all success/K-T, Lab, warning, preinput, permanent and material
 protections. Synthetic close also requires the object's original references to
-remain within the sealed range; later references/pins restore protection. Explicit
-pin release and eviction Intent both check the exact synthetic close source.
-Ordinary close authority and historical Intent validation remain unchanged.
+remain within the sealed range; later references/pins restore protection.
+Admission of an Explicit pin release or an eviction Intent checks the exact
+synthetic close source. Ordinary close authority is unchanged; replay validates
+historical Intents for integrity only (see below).
 
 ## Reads, projections and subscriptions
 
@@ -481,10 +482,11 @@ outcome, its timestamp, effective `successor_successes`/`retention_days`, the
 writer evaluation timestamp, and either the ordered successor terminal references
 or `elapsed_time`. K takes precedence when both conditions hold. Day expiry uses
 checked elapsed time; K is ordered by committed sequence. The intent's own ledger
-timestamp equals the frozen evaluation time. Validation and replay reproduce the
+timestamp equals the frozen evaluation time. Guarded admission reproduces the
 basis from that prefix and those sealed parameters, independently of the current
-configuration. Historical success intents retain their required original proof;
-no missing historical facts are synthesized.
+configuration; replay checks the evaluation time and that every sealed terminal
+reference resolves, and does not reproduce the basis. Historical success intents
+retain their required original proof; no missing historical facts are synthesized.
 
 The failed/cancelled branch retains verified material identity, confirmed close,
 capture summary and matching scheduled settlement. Scheduled failures use their
@@ -515,9 +517,9 @@ pass the historical Lab-association check. The maximum covered prefix is its
 released pins' original request sequence. Later Lab anchors, material/frame uses
 in a Lab-related scope, or newly linked Lab scopes restore the protection; old
 release evidence cannot cover them. Missing or ambiguous coverage keeps the
-material. Intent admission and reconstruction perform the same check at the
-sealed Intent prefix; later releases never supply earlier permission. These
-indexes have no separate durable store. The Runtime SQLite view prefix holds an
+material. Intent admission performs this check at the sealed Intent prefix;
+later releases never supply earlier permission. These indexes have no separate
+durable store. The Runtime SQLite view prefix holds an
 in-memory copy advanced with its authenticated tail and discarded with it; it has
 no separate durable store either.
 
@@ -527,6 +529,24 @@ input-before-frame and unlinked-warning protections. Releasing a Lab pin does no
 remove any of those protections or create close, success or K/T evidence. Material
 guards, the sole eviction admission/outcome chain and pending-intent recovery are
 unchanged; no material I/O occurs in the unpin command.
+
+Replay validates integrity, not eligibility (Workflow #332 H2f Q3). Eligibility
+(Warning/nearest-frame, input-before, Lab and unlinked-warning protections, active
+pins, close, success or K/T, capture summary and settlement) is decided only by the
+sole Ledger writer when it admits an Explicit pin release or an eviction Intent,
+and the same append is judged again before it commits. Replay (every open, every
+read face and the writer's own startup) checks, after the backend's record
+authentication (keyed chain authentication on SQLite roots; the legacy Segment
+read-only parser, kept for forensics and migration, has none), integrity only:
+the contract structure, origin and links; that the object is in
+the index with the same identity and verified source, its identity anchored in
+the object's first, scope-checked pin; no earlier proof; that the Intent prefix
+equals its position and a failed-run evaluation time equals its ledger time; that
+every referenced source resolves in the preceding prefix; that an outcome answers
+its exact Intent; and that sealed material is never used again. A reader never
+rejects a root because its own eligibility rules differ from the writer's. A
+missing file without an Intent and outcome still fails verification. Recovery of
+a pending Intent consumes the sealed Intent and does not re-judge eligibility.
 
 The frame owner reuses `frame_store`'s three watermarks, near-duplicate handling and
 pinning. ArtifactStore owns pin/persist/evict actions and file integrity, while the

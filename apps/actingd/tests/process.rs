@@ -1269,11 +1269,22 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
 fn actingd_mapped_terminal_wakes_the_resident_driver_for_one_evaluator_successor() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
+    // Workflow #191 H: a fixture keeps its device session across leases
+    // (contracts/read-session-resource-close.md), so the source run and its successor
+    // replay one frame queue and one input budget: each run sees home then terminal and
+    // performs its single input. In CI 36660930490 / 36669467761 / 36669965170 a one-run
+    // fixture ran out of frames on the successor's first capture
+    // (capture_backend_operation_failed) and actingd exited fatally.
     write_mapped_policy_execution_config(
         &config_path,
         root.path(),
         instance_id(),
-        &[vec![255, 0, 0, 0, 255, 0], vec![0, 0, 255, 0, 255, 0]],
+        &[
+            vec![255, 0, 0, 0, 255, 0],
+            vec![0, 0, 255, 0, 255, 0],
+            vec![255, 0, 0, 0, 255, 0],
+            vec![0, 0, 255, 0, 255, 0],
+        ],
     );
 
     let child = start_actingd(&config_path);
@@ -1536,6 +1547,121 @@ fn actingd_mapped_terminal_wakes_the_resident_driver_for_one_evaluator_successor
         "the source settlement must be unique before the successor decision"
     );
     assert!(child.0.try_wait().expect("process state").is_none());
+
+    // Workflow #332 G-flake2 (O1): wait for the successor's own settlement, so a fatal
+    // successor fails here instead of racing the snapshot above, then correlate the
+    // successor's single-step input (contracts/input-receipt-wait.md).
+    let settle_started = Instant::now();
+    let completed = loop {
+        let pending = match client.query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        {
+            Ok(events)
+                if events.iter().any(|event| {
+                    matches!(
+                        &event.payload,
+                        ProjectionPayload::Full(payload)
+                            if matches!(
+                                payload.as_ref(),
+                                EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
+                                    if payload.task_id() == "fixture.followup"
+                            )
+                    )
+                }) =>
+            {
+                break events;
+            }
+            Ok(_) => "successor completion not recorded yet".to_owned(),
+            Err(error) => error.to_string(),
+        };
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            let mut stderr = String::new();
+            if let Some(pipe) = child.0.stderr.as_mut() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read actingd stderr");
+            }
+            panic!(
+                "actingd exited before the successor settled with {status}: {pending}; {stderr}"
+            );
+        }
+        assert!(
+            settle_started.elapsed() < Duration::from_secs(8),
+            "successor settlement timed out: {pending}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        child.0.try_wait().expect("process state").is_none(),
+        "actingd must survive its successor's settlement"
+    );
+    let successor_inputs = completed
+        .iter()
+        .filter(|event| {
+            event.event_type == EventType::InputCommitted
+                && event.links.run_id() == Some(&successor_run)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        successor_inputs.len(),
+        1,
+        "the successor performs its own single-step input"
+    );
+    let input = successor_inputs[0];
+    assert_eq!(input.links.task_id(), successor_intent.links.task_id());
+    assert_eq!(
+        input.links.correlation_id(),
+        successor_intent.links.correlation_id()
+    );
+    let lease_id = input.links.lease_id().expect("successor input lease");
+    for event_type in [EventType::PolicyDispatchAdmitted, EventType::LeaseGranted] {
+        let admissions = completed
+            .iter()
+            .filter(|event| {
+                event.event_type == event_type
+                    && event.sequence < input.sequence
+                    && event.links.run_id() == Some(&successor_run)
+                    && (event_type != EventType::LeaseGranted
+                        || event.links.lease_id() == Some(lease_id))
+                    && event.links.instance_id() == input.links.instance_id()
+                    && event.links.task_id() == input.links.task_id()
+                    && event.links.correlation_id() == input.links.correlation_id()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            admissions.len(),
+            1,
+            "successor input needs one prior {event_type:?}"
+        );
+        assert!(successor_intent.sequence < admissions[0].sequence);
+    }
+    let action_id = input.links.action_id().expect("successor input action");
+    let input_intents = completed
+        .iter()
+        .filter(|event| {
+            event.event_type == EventType::InputIntent
+                && event.sequence < input.sequence
+                && event.links.run_id() == Some(&successor_run)
+                && event.links.lease_id() == Some(lease_id)
+                && event.links.action_id() == Some(action_id)
+                && event.links.request_id() == input.links.request_id()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        input_intents.len(),
+        1,
+        "successor input needs its original action intent"
+    );
+    assert!(
+        completed.iter().any(|event| {
+            event.event_type == EventType::SchedulerAdmitted
+                && event.sequence < input_intents[0].sequence
+                && successor_intent.sequence < event.sequence
+                && event.links.lease_id() == Some(lease_id)
+                && event.links.instance_id() == input.links.instance_id()
+                && event.links.request_id() == input.links.request_id()
+                && event.links.correlation_id() == input.links.correlation_id()
+        }),
+        "successor input needs prior Scheduler admission for its request and lease"
+    );
 
     drop(client);
     child.0.kill().expect("kill actingd");
@@ -2756,7 +2882,8 @@ fn write_mapped_policy_execution_config(
     frames: &[Vec<u8>],
 ) {
     let package = mapped_contained_task_package();
-    write_policy_execution_config_with_package(path, state_root, instance_id, &package, frames, 1);
+    // One input per run: the source and its successor share the kept session's budget (#191 H).
+    write_policy_execution_config_with_package(path, state_root, instance_id, &package, frames, 2);
     let policy_root = state_root.join("policy");
     let sources = actingd_mapped_policy_sources(1);
     for (name, source) in [

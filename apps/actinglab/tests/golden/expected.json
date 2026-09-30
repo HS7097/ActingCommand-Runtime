@@ -3962,7 +3962,9 @@
                 "correlation_id": "<CORRELATION_ID>",
                 "instance_id": "<INSTANCE_ID>",
                 "lease_id": "<LEASE_ID>",
-                "request_id": "<REQUEST_ID>"
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
               },
               "origin": {
                 "actor": "scheduler",
@@ -4005,7 +4007,9 @@
                 "correlation_id": "<CORRELATION_ID>",
                 "instance_id": "<INSTANCE_ID>",
                 "lease_id": "<LEASE_ID>",
-                "request_id": "<REQUEST_ID>"
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
               },
               "origin": {
                 "actor": "scheduler",
