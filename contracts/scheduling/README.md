@@ -207,7 +207,8 @@ ranking, the evaluator runs an optional score stage:
 Without a selection document, without a declared value, without offsets and
 without a stored resource target record (a withdrawal counts as none) the stage
 is a no-op and every evaluation output is byte-identical to a catalog compiled
-before this stage existed.
+before this stage existed, except for the dispatch decision record at the end of
+each selected chain ("Dispatch Decision Record" below).
 
 In the Runtime (Workflow #308 slice 4a-2) manual offsets are instance facts
 `session.task.<task_id>.priority_offset` (integer milli; instance scope for one
@@ -222,7 +223,8 @@ task the catalog does not declare once per cycle as
 the `fact_snapshot_id`. `contracts/instance-fact-store.md` ("Priority offset
 facts") owns the key, its validation, the origin exception and the projection.
 The `policy.dispatch_intent` payload is unchanged: the `scored` reason and its
-detail travel in the reason chain it already carries.
+detail travel in the reason chain it already carries, and so does the dispatch
+decision record, in the same `reasons`.
 
 The Runtime catalog store accepts the selection document with the other four:
 activation stages it as `selection.json` in the immutable generation, records it
@@ -231,6 +233,67 @@ from there; the stored `catalog_hash` is verified against a recompilation as for
 the four documents. An agent proposal compiled against a catalog with a
 selection document carries that document unchanged into the proposed catalog;
 proposal patches address only the four catalog documents.
+
+## Dispatch Decision Record
+
+Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the
+record of why it was dispatched, appended after `placement_selected` and
+`ranked`; the selected decision's `reasons` stay equal to its chain. No other
+decision gains a reason.
+
+1. `rank_breakdown`: `total=<t> base=<b> priority=<p> aging_ms=<a>
+   strategic_milli=<w> urgency_milli=<u> contention=<c> effective=<e>
+   score=<s|none> utility=<ut> offset=<o> target=<s|none> target_id=<id|->
+   mode=<adjust|override|-> superseded=<0|1> promoted=<0|1> affinity=<0|1>
+   tie_breaker=<u64> saturated=<0|1> lead=<l|none>`.
+   - `base` is `total_score` before the score stage,
+     `p*1_000_000 + a + w*1000 + u*1000 - c` (`c` is the contention penalty,
+     load cost x contention basis points x 100), and `total = base + e*1000`.
+   - `score`, `utility`, `offset` and `target` are the score-stage terms
+     (`none`/0 for a candidate the stage left untouched); `target_id` and `mode`
+     name an applied resource target, `superseded=1` an applied override.
+   - `promoted`, `affinity` and `tie_breaker` are the ordering keys after the
+     total; `saturated=1` when a saturating sum clipped the total (the
+     unsaturated 128-bit sum differs).
+   - `lead` is the total minus the best total among the instance's other
+     ranked candidates (`none` without one); it is negative when a better-ranked
+     candidate was deferred by the host budget or the admission state.
+2. `decision_record`: `targets=<active:<sha>@<applied_at>|expired:<sha>@<applied_at>|unreadable:<code>|none>[ ignored=<server|game>@<ms>]
+   related=<n> shown=<k> omitted=<m> omitted_why=<code>:<count>,...`.
+   - `targets` is the instance's stored resource target policy, its version
+     being `policy_sha256@applied_at` (`contracts/resource-targets.md`). The
+     instance, catalog, input ledger position and fact snapshot are fields of
+     the dispatch payload already.
+   - The related candidates are every other decision of the same instance in
+     the same evaluation. `omitted_why` counts the unlisted ones by their last
+     reason code in ascending code order, `none` when none is omitted; the codes
+     that would take the detail past 1010 bytes fold into `+<n>more` (`n` codes).
+3. `candidate_not_selected:<task_id>`, one per listed related candidate, at
+   most eight: those that were ranked first, by total descending, then the
+   others, each by task id.
+   - Ranked: `why=<code> state=<state> total=<t> behind_by=<winner total - t>
+     priority=… aging_ms=… strategic_milli=… urgency_milli=… contention=…
+     effective=… score=… utility=… offset=… target=<s|none> promoted=<0|1>
+     tie_breaker=<u64>`.
+   - Others: `why=<code> state=<state> eligibility=<true|false|unknown>`.
+   - `why` is the candidate's last reason, the one that settled it
+     (`instance_already_selected`, `host_budget_deferred`,
+     `heavy_scene_budget_deferred`, an admission eligibility code,
+     `score_deferred`, `task_cooldown_active`, `trigger_false`, …); `none`
+     without a reason.
+
+Bounds, every truncation marked: a chain of `L` reasons gains `rank_breakdown`,
+`decision_record` and at most `min(8, 128 - L - 2)` candidates when
+`128 - L >= 2`, otherwise nothing, and `ranked`'s detail then ends with
+`; decision_record omitted: reason chain at <L>/128`. A detail over 1024 bytes
+is cut at a character boundary to at most 1010 bytes and ends with
+`…[truncated]`. Codes carry no whitespace.
+
+The record is written only where the chain already is: the admission events
+`policy.dispatch_intent`, `dispatch_admitted` and `dispatch_rejected`. An
+evaluation round is never recorded on its own, so a poll that dispatches
+nothing records nothing. Ranks, states, intents (decision identity and
+prerequisites), wake times and selections are unchanged by it.
 
 ## Settlement Feedback And Eligibility Age
 

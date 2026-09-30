@@ -13,7 +13,7 @@ use actingcommand_selection_policy::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::resource_targets::{InstanceTargetPolicy, TargetEffect};
+use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
     FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ObservationRef, PoolSpec,
@@ -959,6 +959,13 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                                 )? {
                                     PlacementResult::Candidate(candidate) => {
                                         task_work.rank = Some(candidate.rank.clone());
+                                        task_work.record = Some(RankRecord {
+                                            base_total: candidate.rank.total_score,
+                                            stage: None,
+                                            promoted: false,
+                                            affinity: candidate.affinity,
+                                            tie_breaker: candidate.tie_breaker,
+                                        });
                                         candidates.push(*candidate);
                                     }
                                     PlacementResult::Blocked(blocked_reason) => {
@@ -1000,6 +1007,8 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
     let mut selected_instances = BTreeSet::new();
     let mut dispatch_intents = Vec::new();
     let mut reason_chains = Vec::new();
+    // (reason chain index, work index) of every selected candidate, for its decision record.
+    let mut selected = Vec::new();
 
     for candidate in candidates {
         if selected_instances.contains(candidate.instance_id.as_str()) {
@@ -1101,6 +1110,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
         }
         host.consume(candidate.load);
         selected_instances.insert(candidate.instance_id.clone());
+        selected.push((reason_chains.len(), candidate.work_index));
         reason_chains.push(DecisionReasonChain {
             id: intent.reason_chain_id.clone(),
             decision_id: intent.decision_id.clone(),
@@ -1112,6 +1122,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
         task_work.rank = Some(candidate.rank);
         task_work.reasons = reasons;
     }
+    append_decision_records(&mut work, &mut reason_chains, &selected, &target_policies)?;
     work.sort_by(|left, right| {
         left.task_id.cmp(&right.task_id).then_with(|| {
             left.instance_id
@@ -1142,6 +1153,8 @@ struct TaskWork {
     suggestions: Vec<DetectionSuggestion>,
     reasons: Vec<DecisionReason>,
     next_wake_unix_ms: Option<u64>,
+    /// The score breakdown of a candidate that reached the ranking; never serialized.
+    record: Option<RankRecord>,
 }
 
 impl TaskWork {
@@ -1155,6 +1168,7 @@ impl TaskWork {
             suggestions: Vec::new(),
             reasons: Vec::new(),
             next_wake_unix_ms: None,
+            record: None,
         }
     }
 
@@ -1168,10 +1182,12 @@ impl TaskWork {
             suggestions: Vec::new(),
             reasons: vec![blocked_reason],
             next_wake_unix_ms: None,
+            record: None,
         }
     }
 }
 
+/// The record is dropped: the decision shape is unchanged.
 impl From<TaskWork> for TaskDecision {
     fn from(value: TaskWork) -> Self {
         Self {
@@ -1183,6 +1199,351 @@ impl From<TaskWork> for TaskDecision {
             detection_suggestions: value.suggestions,
             reasons: value.reasons,
         }
+    }
+}
+
+/// How one candidate's `total_score` was put together (Workflow #308 RT-S1c). Written when the
+/// candidate is built and completed by the score stage; it only feeds the dispatch decision
+/// record and is never serialized.
+#[derive(Debug, Clone)]
+struct RankRecord {
+    /// `total_score` before the score stage.
+    base_total: i64,
+    /// `None` when the score stage left the candidate untouched.
+    stage: Option<StageRecord>,
+    promoted: bool,
+    affinity: bool,
+    tie_breaker: u64,
+}
+
+/// The score stage's terms of one staged candidate.
+#[derive(Debug, Clone)]
+struct StageRecord {
+    score: Option<i64>,
+    utility: i64,
+    offset: i64,
+    /// An applied resource target: `(id, mode, task target score)`.
+    target: Option<(String, TargetMode, u64)>,
+    /// An applied override superseded the selection score and the manual offset.
+    superseded: bool,
+}
+
+/// The longest reason chain admission accepts; a longer one fails it fatally.
+const MAX_REASON_CHAIN_LENGTH: usize = 128;
+/// At most this many related candidates are listed in one dispatch decision record.
+const MAX_DECISION_RECORD_CANDIDATES: usize = 8;
+/// A decision record detail over `MAX_TEXT_BYTES` keeps at most this many bytes before the mark.
+const TRUNCATED_DETAIL_BYTES: usize = 1_010;
+const TRUNCATION_MARK: &str = "…[truncated]";
+
+/// Appends the dispatch decision record after `ranked` on every selected chain (Workflow #308
+/// RT-S1c) and keeps each selected decision's reasons equal to its chain: `rank_breakdown`,
+/// `decision_record`, then `candidate_not_selected:<task>` for at most eight related
+/// candidates. A chain without room for the first two appends nothing and says so in `ranked`.
+/// No other decision gains a reason.
+fn append_decision_records(
+    work: &mut [TaskWork],
+    reason_chains: &mut [DecisionReasonChain],
+    selected: &[(usize, usize)],
+    target_policies: &BTreeMap<String, InstanceTargetPolicy>,
+) -> PolicyEvaluationResult<()> {
+    for &(chain_index, work_index) in selected {
+        let length = reason_chains
+            .get(chain_index)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid("a selected decision has no reason chain")
+            })?
+            .reasons
+            .len();
+        let room = MAX_REASON_CHAIN_LENGTH.saturating_sub(length);
+        let record = if room >= 2 {
+            Some(decision_record(
+                work,
+                work_index,
+                target_policies,
+                room - 2,
+            )?)
+        } else {
+            None
+        };
+        let chain = &mut reason_chains[chain_index].reasons;
+        match record {
+            Some(record) => chain.extend(record),
+            None => {
+                let ranked = chain
+                    .last_mut()
+                    .filter(|reason| reason.code == "ranked")
+                    .ok_or_else(|| {
+                        PolicyEvaluationError::invalid(
+                            "a selected reason chain does not end with ranked",
+                        )
+                    })?;
+                ranked.detail = bounded_detail(format!(
+                    "{}; decision_record omitted: reason chain at {length}/{MAX_REASON_CHAIN_LENGTH}",
+                    ranked.detail
+                ));
+            }
+        }
+        work[work_index].reasons.clone_from(chain);
+    }
+    Ok(())
+}
+
+/// A work entry's rank and rank record, when it reached the ranking.
+fn ranked_view(entry: &TaskWork) -> PolicyEvaluationResult<Option<(&TaskRank, &RankRecord)>> {
+    match (&entry.rank, &entry.record) {
+        (Some(rank), Some(record)) => Ok(Some((rank, record))),
+        (_, None) => Ok(None),
+        (None, Some(_)) => Err(PolicyEvaluationError::invalid(format!(
+            "task '{}' has a rank record without a rank",
+            entry.task_id
+        ))),
+    }
+}
+
+/// The decision record of the selected entry `work[work_index]`: its breakdown, the instance's
+/// target policy and its related candidates, every work entry of the same instance but itself,
+/// ranked ones first by total descending, then the rest, each by task id; `candidate_room`
+/// bounds how many are listed. The unlisted ones are counted by their last reason code.
+fn decision_record(
+    work: &[TaskWork],
+    work_index: usize,
+    target_policies: &BTreeMap<String, InstanceTargetPolicy>,
+    candidate_room: usize,
+) -> PolicyEvaluationResult<Vec<DecisionReason>> {
+    let winner = &work[work_index];
+    let instance_id = winner
+        .instance_id
+        .as_deref()
+        .ok_or_else(|| PolicyEvaluationError::invalid("a selected decision has no instance"))?;
+    let (rank, record) = ranked_view(winner)?.ok_or_else(|| {
+        PolicyEvaluationError::invalid(format!(
+            "selected task '{}' has no rank record",
+            winner.task_id
+        ))
+    })?;
+    let mut related = Vec::new();
+    for (index, entry) in work.iter().enumerate() {
+        if index != work_index && entry.instance_id.as_deref() == Some(instance_id) {
+            related.push((entry, ranked_view(entry)?));
+        }
+    }
+    related.sort_by(|(left, left_view), (right, right_view)| {
+        match (left_view, right_view) {
+            (Some((left_rank, _)), Some((right_rank, _))) => {
+                right_rank.total_score.cmp(&left_rank.total_score)
+            }
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| left.task_id.cmp(&right.task_id))
+    });
+    let lead = related
+        .first()
+        .and_then(|(_, view)| *view)
+        .map(|(related_rank, _)| {
+            i128::from(rank.total_score) - i128::from(related_rank.total_score)
+        });
+    let shown = related
+        .len()
+        .min(MAX_DECISION_RECORD_CANDIDATES)
+        .min(candidate_room);
+    let mut omitted_why = BTreeMap::<&str, usize>::new();
+    for (entry, _) in &related[shown..] {
+        *omitted_why.entry(last_reason_code(entry)).or_default() += 1;
+    }
+    let mut reasons = Vec::with_capacity(2 + shown);
+    reasons.push(reason(
+        "rank_breakdown",
+        bounded_detail(rank_breakdown_detail(rank, record, lead)),
+    ));
+    reasons.push(reason(
+        "decision_record",
+        bounded_detail(decision_record_detail(
+            &target_policy_field(target_policies.get(instance_id)),
+            related.len(),
+            shown,
+            &omitted_why,
+        )),
+    ));
+    for (entry, view) in &related[..shown] {
+        let why = last_reason_code(entry);
+        let state = state_name(entry.state);
+        let detail = match view {
+            Some((related_rank, related_record)) => format!(
+                "why={why} state={state} total={} behind_by={} {} promoted={} tie_breaker={}",
+                related_rank.total_score,
+                i128::from(rank.total_score) - i128::from(related_rank.total_score),
+                rank_terms(related_rank, related_record.stage.as_ref()),
+                u8::from(related_record.promoted),
+                related_record.tie_breaker
+            ),
+            None => format!(
+                "why={why} state={state} eligibility={}",
+                eligibility_name(entry.eligibility)
+            ),
+        };
+        reasons.push(reason(
+            format!("candidate_not_selected:{}", entry.task_id),
+            bounded_detail(detail),
+        ));
+    }
+    Ok(reasons)
+}
+
+/// Every path that leaves a candidate unselected ends with the reason that settled it.
+fn last_reason_code(entry: &TaskWork) -> &str {
+    entry
+        .reasons
+        .last()
+        .map_or("none", |reason| reason.code.as_str())
+}
+
+/// The ranking terms shared by `rank_breakdown` and a ranked `candidate_not_selected`.
+fn rank_terms(rank: &TaskRank, stage: Option<&StageRecord>) -> String {
+    format!(
+        "priority={} aging_ms={} strategic_milli={} urgency_milli={} contention={} effective={} score={} utility={} offset={} target={}",
+        rank.priority,
+        rank.aging_ms,
+        rank.strategic_weight_milli,
+        rank.urgency_milli,
+        rank.contention_penalty,
+        rank.effective_milli,
+        optional_milli(stage.and_then(|stage| stage.score)),
+        stage.map_or(0, |stage| stage.utility),
+        stage.map_or(0, |stage| stage.offset),
+        stage
+            .and_then(|stage| stage.target.as_ref())
+            .map_or_else(|| "none".to_owned(), |(_, _, score)| score.to_string()),
+    )
+}
+
+/// `saturated` compares the total with the unsaturated sum of its terms; `lead` is the total
+/// minus the best total among the instance's other ranked candidates, negative when a
+/// better-ranked candidate was deferred or already owned the budget.
+fn rank_breakdown_detail(rank: &TaskRank, record: &RankRecord, lead: Option<i128>) -> String {
+    let stage = record.stage.as_ref();
+    let (target_id, mode) = stage
+        .and_then(|stage| stage.target.as_ref())
+        .map_or(("-", "-"), |(id, mode, _)| {
+            (id.as_str(), crate::resource_targets::mode_name(*mode))
+        });
+    let unsaturated = i128::from(rank.priority) * 1_000_000
+        + i128::from(rank.aging_ms)
+        + i128::from(rank.strategic_weight_milli) * 1_000
+        + i128::from(rank.urgency_milli) * 1_000
+        - i128::from(rank.contention_penalty)
+        + i128::from(rank.effective_milli) * 1_000;
+    format!(
+        "total={} base={} {} target_id={target_id} mode={mode} superseded={} promoted={} affinity={} tie_breaker={} saturated={} lead={}",
+        rank.total_score,
+        record.base_total,
+        rank_terms(rank, stage),
+        u8::from(stage.is_some_and(|stage| stage.superseded)),
+        u8::from(record.promoted),
+        u8::from(record.affinity),
+        record.tie_breaker,
+        u8::from(unsaturated != i128::from(rank.total_score)),
+        lead.map_or_else(|| "none".to_owned(), |lead| lead.to_string()),
+    )
+}
+
+/// The instance's stored target policy as its version `sha@applied_at`, or its state.
+fn target_policy_field(policy: Option<&InstanceTargetPolicy>) -> String {
+    let mut field = match policy.and_then(|policy| policy.state.as_ref()) {
+        Some(TargetPolicyState::Active {
+            policy_sha256,
+            applied_at_unix_ms,
+            ..
+        }) => format!("active:{policy_sha256}@{applied_at_unix_ms}"),
+        Some(TargetPolicyState::Expired {
+            policy_sha256,
+            applied_at_unix_ms,
+            ..
+        }) => format!("expired:{policy_sha256}@{applied_at_unix_ms}"),
+        Some(TargetPolicyState::Unreadable { code }) => format!("unreadable:{code}"),
+        None => "none".to_owned(),
+    };
+    if let Some((scope_kind, observed_at_unix_ms)) = policy.and_then(|policy| policy.ignored) {
+        field.push_str(&format!(" ignored={scope_kind}@{observed_at_unix_ms}"));
+    }
+    field
+}
+
+/// `omitted_why` lists `<code>:<count>` in ascending code order, counted while joining so the
+/// whole detail stays within 1010 bytes; the codes that do not fit fold into `+<n>more`.
+fn decision_record_detail(
+    targets: &str,
+    related: usize,
+    shown: usize,
+    omitted_why: &BTreeMap<&str, usize>,
+) -> String {
+    let mut detail = format!(
+        "targets={targets} related={related} shown={shown} omitted={} omitted_why=",
+        related - shown
+    );
+    if omitted_why.is_empty() {
+        detail.push_str("none");
+        return detail;
+    }
+    let items = omitted_why
+        .iter()
+        .map(|(code, count)| format!("{code}:{count}"))
+        .collect::<Vec<_>>();
+    for (index, item) in items.iter().enumerate() {
+        let separator = usize::from(index > 0);
+        let rest = items.len() - index - 1;
+        // Room for the fold marker should a later code not fit.
+        let reserve = if rest == 0 {
+            0
+        } else {
+            format!(",+{rest}more").len()
+        };
+        if detail.len() + separator + item.len() + reserve > TRUNCATED_DETAIL_BYTES {
+            if separator == 1 {
+                detail.push(',');
+            }
+            detail.push_str(&format!("+{}more", items.len() - index));
+            break;
+        }
+        if separator == 1 {
+            detail.push(',');
+        }
+        detail.push_str(item);
+    }
+    detail
+}
+
+/// A detail over `MAX_TEXT_BYTES` is cut at a character boundary to at most 1010 bytes and
+/// marked `…[truncated]`, 1024 bytes at most.
+fn bounded_detail(mut detail: String) -> String {
+    if detail.len() <= MAX_TEXT_BYTES {
+        return detail;
+    }
+    let mut end = TRUNCATED_DETAIL_BYTES;
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    detail.truncate(end);
+    detail.push_str(TRUNCATION_MARK);
+    detail
+}
+
+const fn state_name(state: SchedulingDecisionState) -> &'static str {
+    match state {
+        SchedulingDecisionState::Eligible => "eligible",
+        SchedulingDecisionState::Deferred => "deferred",
+        SchedulingDecisionState::Blocked => "blocked",
+        SchedulingDecisionState::Selected => "selected",
+    }
+}
+
+const fn eligibility_name(eligibility: EligibilityState) -> &'static str {
+    match eligibility {
+        EligibilityState::True => "true",
+        EligibilityState::False => "false",
+        EligibilityState::Unknown => "unknown",
     }
 }
 
@@ -1644,6 +2005,7 @@ fn apply_priority_selection(
             && candidate.value_milli.is_none()
             && target.applied().is_none()
         {
+            // Released untouched: its rank record keeps `stage: None`.
             if let Some(targets) = targets {
                 work[candidate.work_index]
                     .reasons
@@ -1781,6 +2143,24 @@ fn apply_priority_selection(
         }
         let task_work = &mut work[candidate.work_index];
         task_work.rank = Some(candidate.rank.clone());
+        let record = task_work.record.as_mut().ok_or_else(|| {
+            PolicyEvaluationError::invalid(format!(
+                "task '{}' reached the score stage without a rank record",
+                candidate.task_id
+            ))
+        })?;
+        record.stage = Some(StageRecord {
+            score: score_milli,
+            utility: utility.utility_milli,
+            offset: offset_milli,
+            target: applied
+                .map(|applied| (applied.id.clone(), applied.mode, applied.task_target_milli)),
+            superseded: overridden,
+        });
+        record.promoted = matches!(
+            disposition,
+            ScoreDisposition::Promoted { .. } | ScoreDisposition::AgingCap { .. }
+        );
         task_work.reasons.push(reason("scored", detail));
         if let Some(rule) = unknown_rule {
             task_work.reasons.push(reason(
@@ -4832,6 +5212,7 @@ mod tests {
                 .find(|reason| reason.code == code)
                 .map(|reason| reason.detail)
         };
+        // The decision record names the stored policy; every other record reason must match.
         let without_target_reasons = |evaluation: &PolicyEvaluation| {
             let mut evaluation = evaluation.clone();
             for reasons in evaluation
@@ -4845,7 +5226,9 @@ mod tests {
                         .map(|chain| &mut chain.reasons),
                 )
             {
-                reasons.retain(|reason| !reason.code.starts_with("resource_target_"));
+                reasons.retain(|reason| {
+                    !reason.code.starts_with("resource_target_") && reason.code != "decision_record"
+                });
             }
             serde_json::to_vec(&evaluation).expect("evaluation bytes")
         };
@@ -4892,6 +5275,44 @@ mod tests {
                 instance_b(&evaluate_at(current, None, None))
             );
         }
+
+        // RT-S1c: each selected chain ends with its dispatch decision record.
+        let scored = evaluate_at(0, Some(&adjust), None);
+        let selected_chain = |instance: &str| {
+            let intent = scored
+                .dispatch_intents
+                .iter()
+                .find(|intent| intent.instance_id == instance)
+                .expect("dispatch");
+            scored
+                .reason_chains
+                .iter()
+                .find(|chain| chain.id == intent.reason_chain_id)
+                .expect("chain")
+                .reasons
+                .clone()
+        };
+        let chain = selected_chain("fixture-instance-a");
+        let tail = &chain[chain.len() - 5..];
+        assert_eq!(
+            tail.iter()
+                .map(|reason| reason.code.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "placement_selected",
+                "ranked",
+                "rank_breakdown",
+                "decision_record",
+                "candidate_not_selected:fixture.observe"
+            ]
+        );
+        assert!(tail[2].detail.contains(" target=200000 "));
+        assert!(tail[3].detail.starts_with("targets=active:"));
+        assert!(tail[4].detail.starts_with("why=instance_already_selected "));
+        assert_eq!(secondary(&scored).reasons, chain);
+        assert!(selected_chain("fixture-instance-b").iter().any(|reason| {
+            reason.code == "decision_record" && reason.detail.starts_with("targets=none ")
+        }));
 
         // Release: a closed gap decides exactly as no policy, apart from its own reasons.
         let released = evaluate_at(100, Some(&adjust), None);
