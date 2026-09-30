@@ -3,7 +3,7 @@ name: release
 # On-demand release; nothing builds or publishes a main commit otherwise.
 # Actions -> release -> Run workflow and
 #   gh workflow run release.yml -R HS7097/ActingCommand-Runtime -f bump=patch|minor|major \
-#     [-f version=X.Y.Z] [-f source_sha=<40-hex main commit>] [-f dry_run=true]
+#     [-f version=X.Y.Z] [-f source_sha=<40-hex main commit>] [-f prerelease=true] [-f dry_run=true]
 # are equivalent. prepare (read-only) fixes the source commit and the version;
 # build calls windows-remote-build.yml, the one build path, which builds that exact
 # commit, runs its checks (including the H3 old-state check), zips the Runtime and
@@ -30,6 +30,10 @@ on:
         type: string
         required: false
         default: ''
+      prerelease:
+        description: 'Publish as a pre-release, never marked Latest (an X.Y.Z-rc.N version is always one)'
+        type: boolean
+        default: false
       dry_run:
         description: 'Build, check and stage everything, but create no tag and no Release'
         type: boolean
@@ -152,4 +156,5 @@ jobs:
       source_sha: ${{ needs.prepare.outputs.source_sha }}
       release_tag: ${{ needs.prepare.outputs.release_tag }}
       previous_tag: ${{ needs.prepare.outputs.previous_tag }}
+      prerelease: ${{ inputs.prerelease }}
       dry_run: ${{ inputs.dry_run }}

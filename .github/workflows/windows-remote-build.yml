@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ''
+      prerelease:
+        description: Publish as a pre-release, never marked Latest (a tag with a '-' suffix always is one)
+        required: false
+        type: boolean
+        default: false
       dry_run:
         description: Build, verify and stage the release files without creating the tag or the release
         required: false
@@ -521,6 +526,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
           DRY_RUN: ${{ inputs.dry_run }}
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           TREE_SHA: ${{ steps.checkout.outputs.tree_sha }}
@@ -546,6 +552,11 @@ jobs:
           if ($env:DRY_RUN -cne 'true' -and $env:DRY_RUN -cne 'false') {
             throw "release_input_invalid: dry_run is neither true nor false: $env:DRY_RUN"
           }
+          if ($env:PRERELEASE -cne 'true' -and $env:PRERELEASE -cne 'false') {
+            throw "release_input_invalid: prerelease is neither true nor false: $env:PRERELEASE"
+          }
+          # A pre-release is never marked Latest (GitHub does not allow it); nothing passes --latest.
+          $prerelease = $env:PRERELEASE -ceq 'true' -or $tag.Contains('-')
           if (-not $env:H3_BASELINE_TAG -or $env:H3_BASELINE_RUNTIME_SHA -cnotmatch '\A[0-9a-f]{40}\z') {
             throw 'release_input_invalid: the old-state check recorded no baseline'
           }
@@ -617,7 +628,7 @@ jobs:
           if ($env:PREVIOUS_TAG) {
             $arguments += @('--generate-notes', '--notes-start-tag', $env:PREVIOUS_TAG)
           }
-          if ($tag.Contains('-')) {
+          if ($prerelease) {
             $arguments += '--prerelease'
           }
           $arguments += @($zips) + $sumsPath
@@ -626,7 +637,7 @@ jobs:
           Write-Host "release notes:`n$($notes -join "`n")"
           Write-Host "release command: gh $($arguments -join ' ')"
           if ($dryRun) {
-            Write-Host "dry run: not published ($tag at $env:SOURCE_SHA)"
+            Write-Host "dry run: not published ($tag at $env:SOURCE_SHA, prerelease=$prerelease)"
           } else {
             & gh @arguments
             if ($LASTEXITCODE -ne 0) {
@@ -640,6 +651,9 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $published.draft) {
               throw "release_readback_failed: release $tag is missing or still a draft"
             }
+            if ([bool]$published.prerelease -ne $prerelease) {
+              throw "release_readback_failed: release $tag prerelease=$($published.prerelease), expected $prerelease"
+            }
             $expectedAssets = @(@($zips) + $sumsPath | ForEach-Object {
               "$([IO.Path]::GetFileName($_)) $((Get-Item -LiteralPath $_).Length)"
             } | Sort-Object)
@@ -647,5 +661,5 @@ jobs:
             if (($expectedAssets -join '|') -cne ($actualAssets -join '|')) {
               throw "release_readback_failed: release $tag assets [$($actualAssets -join ', ')], expected [$($expectedAssets -join ', ')]"
             }
-            Write-Host "published $($published.html_url): tag $tag -> $tagCommit, assets $($actualAssets -join ', ')"
+            Write-Host "published $($published.html_url): tag $tag -> $tagCommit, prerelease=$($published.prerelease), assets $($actualAssets -join ', ')"
           }
