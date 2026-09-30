@@ -308,7 +308,8 @@ bytes of `[A-Za-z0-9._-]`), no duplicates; anything else fails with
 `governance_allowed_clients_invalid`. An empty list accepts only the daemon's
 own driver. The client `actingd-policy-driver` is always allowed, whatever the
 list names: it is the card the daemon's policy driver declares on its own
-(User, Ui) connection before it records the configured `catalog_approval_ids`.
+(User, Ui) connection before it records the configured `catalog_approval_ids`
+and revokes the approvals of superseded catalogs.
 Without the section any well-formed card is accepted. The effective list is the
 manifest parameter `governance.allowed_clients` and its size is in the
 `governance` subsystem reason (see `config_manifest`).

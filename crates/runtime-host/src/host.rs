@@ -1554,6 +1554,15 @@ impl RuntimeHost {
             .latest_approval_decisions(approval_ids)
     }
 
+    /// Active catalog approvals superseded by `generation` (Workflow #330 H2); appends nothing.
+    pub fn superseded_catalog_approvals(
+        &self,
+        generation: &CatalogGeneration,
+    ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
+        self.work_ref("read_superseded_catalog_approvals")?
+            .superseded_catalog_approvals(generation)
+    }
+
     #[cfg(test)]
     pub(crate) fn activate_policy_catalog_with_expected_for_test(
         &self,

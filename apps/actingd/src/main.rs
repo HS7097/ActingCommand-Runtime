@@ -177,6 +177,9 @@ fn initialize_policy(
     let latest = host
         .latest_approval_decisions(&policy.catalog_approval_ids)
         .map_err(ActingdError::runtime)?;
+    // Every configured id is built and checked before anything is recorded, so a bad
+    // configuration fails startup without a partial write (Workflow #330 H2).
+    let mut undecided = Vec::new();
     for approval_id in &policy.catalog_approval_ids {
         let decision = ApprovalDecisionRecord::new(
             approval_id,
@@ -195,6 +198,28 @@ fn initialize_policy(
             }
             continue;
         }
+        undecided.push(decision);
+    }
+    // Workflow #330 H2: the activated catalog supersedes every active catalog approval of an
+    // older version, or of this version under another hash. They can no longer authorize a
+    // dispatch, so the driver revokes them on the same (User, Ui) connection before it records
+    // the configured approvals, freeing their places in the bounded active projection.
+    for superseded in host
+        .superseded_catalog_approvals(&generation)
+        .map_err(ActingdError::runtime)?
+    {
+        let revocation = ApprovalDecisionRecord::new(
+            superseded.approval_id(),
+            ApprovalDisposition::Revoked,
+            superseded.target().clone(),
+            "catalog_superseded",
+        )
+        .map_err(|_| ActingdError::process("policy_catalog_revocation_invalid"))?;
+        governance
+            .record_approval_decision(revocation)
+            .map_err(ActingdError::client)?;
+    }
+    for decision in undecided {
         governance
             .record_approval_decision(decision)
             .map_err(ActingdError::client)?;
