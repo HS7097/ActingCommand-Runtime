@@ -230,7 +230,7 @@ impl RetentionIndex {
                                     closure.success.is_some()
                                         || self.failed_run_evidence(identity, policy, now).is_some()
                                 })
-                            && self.close_for(identity).is_some()
+                            && self.releasing_close(object, identity).is_some()
                     });
                     (self.unlinked_warning
                         || object.permanently_protected
@@ -456,6 +456,22 @@ impl RetentionIndex {
                     <= close.scope_upper_sequence
                 && self.scope_sources.get(&scope)?.1 <= close.scope_upper_sequence)
                 .then_some(source)
+        })
+    }
+
+    /// Workflow #332 R-san: the close that may release the object's Explicit pins follows every
+    /// pin. A capture with no run and no lease closes on its epoch's latest quiescence, which
+    /// can precede its pin; such an object is kept until a later close.
+    fn releasing_close(
+        &self,
+        object: &RetainedObject,
+        identity: &ArtifactRetentionIdentity,
+    ) -> Option<&TerminalEvent> {
+        self.close_for(identity).filter(|close| {
+            object
+                .pins
+                .values()
+                .all(|(pin, _)| pin.sequence < close.sequence)
         })
     }
 
@@ -1566,7 +1582,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         let verified = *verified;
         let releases = self
             .retention
-            .close_for(&identity)
+            .releasing_close(object, &identity)
             .map(|close| {
                 object
                     .pins
@@ -1670,8 +1686,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         } else {
             EventSeverity::Info
         };
-        let ids =
-            IdentifierIssuer::new().map_err(|_| invalid("artifact_retention_identifier_failed"))?;
+        let ids = IdentifierIssuer::new().map_err(|error| invalid(error.code()))?;
         let timestamp = match &fact {
             ArtifactRetentionFact::EvictionIntent(intent) if intent.failed_run.is_some() => {
                 intent
@@ -1683,8 +1698,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             _ => retention_now()?,
         };
         let draft = EventDraft::new(
-            ids.mint_event_id()
-                .map_err(|_| invalid("artifact_retention_identifier_failed"))?,
+            ids.mint_event_id().map_err(|error| invalid(error.code()))?,
             timestamp,
             severity,
             EventOrigin::new(
@@ -1698,7 +1712,10 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         .sanitize(&super::Sha256SecretFingerprinter::new(
             b"actingcommand-ledger-artifact-retention-v1",
         )?)
-        .map_err(|_| invalid("artifact_retention_sanitize_failed"))?;
+        // The FATAL line prints only code and operation; they carry the refused rule.
+        .map_err(|error| {
+            GlobalLedgerError::fatal(error.code(), error.field()).with_detail(error.to_string())
+        })?;
         let draft = links
             .apply_to(draft)
             .map_err(|error| invalid(error.code()))?;

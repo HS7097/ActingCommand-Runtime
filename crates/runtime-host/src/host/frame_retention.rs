@@ -306,5 +306,5 @@ fn ledger_failure(error: GlobalLedgerError) -> RuntimeHostError {
         error.operation(),
         RuntimeErrorCode::LedgerFailure,
     )
-    .with_native_detail(error.to_string())
+    .with_native_detail(format!("{error}; detail={:?}", error.detail()))
 }
