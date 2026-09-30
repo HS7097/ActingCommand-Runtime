@@ -313,6 +313,31 @@ impl ApprovalProjection {
             .map(|decision| decision.approval_id().to_owned())
             .collect()
     }
+
+    /// Active catalog approvals that a catalog at (`catalog_hash`, `catalog_version`) supersedes:
+    /// an older version, or the same version under another hash (Workflow #330 H2). A later
+    /// version is kept: it may be approved ahead of its activation.
+    pub(crate) fn superseded_catalog_approvals(
+        &self,
+        catalog_hash: &str,
+        catalog_version: u64,
+    ) -> Vec<ApprovalDecisionRecord> {
+        self.active
+            .values()
+            .filter(|decision| {
+                decision.disposition().grants_authority()
+                    && matches!(
+                        decision.target(),
+                        ApprovalTarget::Catalog {
+                            catalog_hash: target_hash,
+                            catalog_version: target_version,
+                        } if *target_version < catalog_version
+                            || (*target_version == catalog_version && target_hash != catalog_hash)
+                    )
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 struct ApprovalTransaction {

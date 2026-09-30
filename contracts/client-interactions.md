@@ -133,10 +133,24 @@ and only undecided ids are recorded. A latest decision that differs from the
 configured approval in any field (disposition, target, reason
 `configured_catalog_approval`) fails startup with
 `policy_catalog_approval_conflict`; an equal one is left as it is, so a restart
-with unchanged configuration records nothing. A failed read fails policy
+after startup has converged records nothing. A failed read fails policy
 initialization and is never treated as undecided. Reading and recording are two
 separate steps: a decision another governance client records between them is
 not seen by the driver.
+
+The driver also revokes approvals the activated catalog supersedes (Workflow
+#330 H2). Only after activation succeeds (including the unchanged-hash return
+of an already active catalog) and after every configured id has passed
+construction and the conflict check, it reads, from the same complete verified
+projection, every active catalog approval (`approved` or `pinned`) whose target
+is `catalog` with an older version, or with the active version under another
+hash. It records `revoked` for each one on the same (User, Ui) connection, with
+the approval's own target and reason `catalog_superseded`, and only then records
+the undecided configured approvals. Plan and decision approvals and catalog
+approvals of a later version are left as they are. The ledger keeps the whole
+history. A failed revocation fails startup (`policy_catalog_revocation_invalid`
+when the revocation cannot be built, the client error otherwise); the next
+startup computes the superseded set again.
 
 The change is additive on the event wire (new event type
 `governance.identity_declared`, client payload kind

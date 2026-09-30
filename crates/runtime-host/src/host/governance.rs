@@ -170,6 +170,35 @@ impl HostShared {
         Ok(latest)
     }
 
+    /// Workflow #330 H2: the active catalog approvals `generation` supersedes (an older
+    /// version, or the same version under another hash), read from the complete
+    /// ledger-verified approval projection under the governance write gate, exactly as
+    /// `latest_approval_decisions` reads. Appends nothing and releases the gate on return,
+    /// before the policy driver records any revocation.
+    pub(super) fn superseded_catalog_approvals(
+        &self,
+        generation: &CatalogGeneration,
+    ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
+        if let Some(error) = self.fatal.current()? {
+            return Err(error);
+        }
+        let _gate = lock(
+            &self.governance_write_gate,
+            "read_superseded_catalog_approvals",
+        )?;
+        let approvals = match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
+            Ok(approvals) => approvals,
+            Err(error) => {
+                if error.is_fatal() {
+                    self.fatal.mark(error.clone())?;
+                }
+                return Err(error);
+            }
+        };
+        Ok(approvals
+            .superseded_catalog_approvals(generation.catalog_hash(), generation.catalog_version()))
+    }
+
     /// Workflow #318 cfg4: verifies one declarative governance identity card and records it
     /// as `governance.identity_declared` with the request's actor and source. Order: card,
     /// origin (both already refused by the request envelope; repeated so this entry trusts
