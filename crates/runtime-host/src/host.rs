@@ -1373,6 +1373,17 @@ impl RuntimeHost {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
+        // Workflow #332 G-flake3: start's last capacity sample, after start preparation and
+        // before any thread admits business, so the first periodic tick keeps the
+        // 2 x interval freshness however long the preparation above took.
+        if let Err(original) = lock(&shared.performance, "sample_capacity_before_business")
+            .and_then(|mut performance| {
+                performance.sample_and_record_capacity(&shared.ledger, &shared.events)
+            })
+        {
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
+            return Err(original);
+        }
         let sweep_shared = Arc::clone(&shared);
         let sweep_thread = match thread::Builder::new()
             .name("actingcommand-runtime-sweeper".to_string())
