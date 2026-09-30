@@ -168,9 +168,13 @@ instance found already running at daemon startup pull nothing.
 The package runs only after ADB is ready: the scheduling thread probes the ADB baseline once
 more before admission, and a failed probe is `startup_package_adb_not_ready`
 (`backend_operation_failed`), recorded without a lease. Typed admission codes:
-`startup_package_missing` (the locator does not open), `startup_package_admission_failed`
+`startup_package_missing` (a ZIP locator that does not open), `startup_package_admission_failed`
 (every other admission refusal; the underlying `contained_task_package_*` code is the related
-failure), both `package_invalid`; all three are recorded before any lease as `runtime.failed`
+failure). For a digest-named content-directory locator (Workflow #288) a missing or
+unreadable directory is also `startup_package_admission_failed`, with the loader's code as the
+related failure (for example `content_directory_missing` or
+`content_directory_digest_mismatch`). Both are `package_invalid`; all three are recorded
+before any lease as `runtime.failed`
 (category `startup_package`, stage `operation_cleanup`) under the instance and the causation
 id. Failures after admission are the ordinary contained task failures (`task.failed`, lease
 release, `runtime.failed` on the cleanup path).
