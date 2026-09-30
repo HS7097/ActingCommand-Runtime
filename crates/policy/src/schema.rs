@@ -40,6 +40,14 @@ pub const MAX_VALUE_MILLI: u32 = 1_000_000;
 pub const MAX_DEFER_AGING_CAP_MS: u64 = 86_400_000;
 /// Highest relative threshold a catalog may declare.
 pub const MAX_PRIORITY_PERCENTILE: u8 = 100;
+/// Longest pool valuation display name, in UTF-8 bytes.
+pub const MAX_VALUATION_NAME_BYTES: usize = 128;
+/// Longest pool valuation display unit, in UTF-8 bytes.
+pub const MAX_VALUATION_UNIT_BYTES: usize = 32;
+/// Largest standing weight a pool valuation may declare, in milli per step.
+pub const MAX_VALUATION_BASE_WEIGHT_MILLI: u32 = 1_000_000;
+/// Largest shortfall weight a pool valuation may declare, in milli per step.
+pub const MAX_VALUATION_GAP_WEIGHT_MILLI: u32 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -496,6 +504,41 @@ pub struct PoolSpec {
     #[serde(default, skip_serializing_if = "PoolValueSource::is_static")]
     pub value_source: PoolValueSource,
     pub group_delay: Option<GroupDelayPolicy>,
+    /// What one step of this pool's resource is worth; absent keeps the catalog hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation: Option<PoolValuation>,
+}
+
+/// A pool's resource valuation declaration (Workflow #335 S2a). The resource kind is the
+/// pool id; `name` and `unit` are display text only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolValuation {
+    pub name: String,
+    pub unit: String,
+    /// Measuring step: the resource amount one weight applies to.
+    pub scale: u64,
+    /// Standing weight in milli for each produced step.
+    pub base_weight_milli: u32,
+    /// Shortfall conversion; absent means a resource target must carry its own importance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<PoolValuationGap>,
+}
+
+/// How a shortfall against a resource target converts into extra weight.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolValuationGap {
+    pub rule: ValuationGapRule,
+    /// Extra milli for each produced step per missing step of shortfall.
+    pub weight_milli: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValuationGapRule {
+    /// The target is to hold at least an amount.
+    ShortfallLinear,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

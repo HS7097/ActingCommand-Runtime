@@ -59,7 +59,7 @@ the Runtime's normal chain; an offline query establishes no production run fact.
 ## Frozen V1 Documents
 
 - `tasks.schema.json`: task entrypoints, bounded triggers, feedback stop conditions, effects, failure policy, load profile, loop budget, and instance overrides.
-- `pools.schema.json`: scoped resource pools, regeneration projections, observations, and bounded group delay.
+- `pools.schema.json`: scoped resource pools, regeneration projections, observations, bounded group delay, and an optional resource valuation ("Pool Valuation" below).
 - `activity.schema.json`: scoped activity windows, per-instance importance, bounded sessions, sampling policy, and goals.
 - `timeline.schema.json`: scoped reset, maintenance, activity, and deadline events.
 - `diagnostic.schema.json`: stable compiler diagnostic envelope.
@@ -68,6 +68,52 @@ the Runtime's normal chain; an offline query establishes no production run fact.
   own schema version and no `catalog` descriptor.
 
 All four catalog documents must carry the exact schema version `actingcommand.scheduling.v1` and an identical `catalog` descriptor. A mismatch rejects the whole catalog.
+
+## Pool Valuation
+
+Workflow #335 S2a. A pool may end with an optional `valuation` block that states
+what one step of its resource is worth. V1 and V2 catalogs accept it alike, and a
+catalog without it keeps its identity byte for byte ("Canonical Serialization And
+Hash" below).
+
+```json
+"valuation": {
+  "name": "Primary energy",
+  "unit": "point",
+  "scale": 1000,
+  "base_weight_milli": 100,
+  "gap": { "rule": "shortfall_linear", "weight_milli": 100 }
+}
+```
+
+| Field | Bound | Meaning | Diagnostic |
+| --- | --- | --- | --- |
+| `name` | 1..=128 UTF-8 bytes, nonblank after trimming whitespace, no control characters | display name only | longer: `limit_exceeded`; blank or control character: `type_mismatch` |
+| `unit` | 1..=32 UTF-8 bytes, the same text rule | display unit only | as `name` |
+| `scale` (Q) | 1..=9,007,199,254,740,991 | measuring step: the resource amount one weight applies to | `limit_exceeded` |
+| `base_weight_milli` (B) | 0..=1,000,000 | standing weight in milli for each produced step | `limit_exceeded` |
+| `gap` | optional | shortfall conversion; when absent, a resource target must carry its own importance | — |
+| `gap.rule` | `shortfall_linear` only | the target is to hold at least an amount | `type_mismatch` |
+| `gap.weight_milli` (G) | 1..=1,000,000 | extra milli for each produced step per missing step of shortfall | `limit_exceeded` |
+
+The resource kind is the pool `id`; there is no separate kind field. Task
+quantities stay in `tasks[].produces` (`amount`, `confidence_milli`). Both
+objects reject unknown fields (`unknown_field`), and a missing required field is
+`missing_required_field`. Every violation rejects the complete catalog with the
+field's JSON Pointer and its source line and column.
+
+The block is a declaration. The compiler validates it and hashes it with the
+catalog; the evaluator does not read it in this revision, so a catalog with a
+valuation ranks exactly as the same catalog without one.
+
+The bounds above are checked when the catalog is compiled (`compile_catalog`,
+`actinglab scheduling compile`, Runtime activation and startup reload).
+`validate_catalog_declaration` (`actinglab resource validate`) only parses a
+document and checks its version, so an out-of-range value passes it and is
+rejected at compilation. A Runtime build without this field rejects a catalog
+that declares it (`unknown_field`) and cannot reopen a state root on which such
+a catalog was activated or dispatched, even after its configuration returns to
+an older catalog.
 
 ## Compatibility
 
@@ -506,6 +552,9 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Predicate nodes per root | 512 |
 | Effects, references, or instance overrides per task | 128 each |
 | Windows or goals per activity profile | 128 each |
+| Pool valuation name / unit | 128 / 32 UTF-8 bytes |
+| Pool valuation scale | 1..=9,007,199,254,740,991 |
+| Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 
 Loop budgets are mandatory. Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 
@@ -515,7 +564,7 @@ The catalog hash is computed as follows:
 
 1. Parse all four documents while rejecting duplicate object keys and invalid UTF-8. Parse the optional selection document with the selection-policy crate's own reader and validation.
 2. Validate the exact V1 schemas and cross-document invariants.
-3. Construct the JSON object `{"activity": A, "pools": P, "tasks": T, "timeline": L}` from the validated documents, adding `"selection": S` only when a selection document is present. No field is removed and no default is inserted, so a catalog without a selection document keeps its existing hash.
+3. Construct the JSON object `{"activity": A, "pools": P, "tasks": T, "timeline": L}` from the validated documents, adding `"selection": S` only when a selection document is present. No field is removed and no default is inserted, so a catalog without a selection document keeps its existing hash. In the same way a pool's `valuation`, and the `gap` inside one, appear only when declared: a catalog without them keeps its existing hash, and a declared block is hashed field by field, `name` and `unit` included, so changing any of its values is a new catalog identity that needs its own approval.
 4. Serialize that object with RFC 8785 JSON Canonicalization Scheme. Object keys are sorted by JCS rules, array order is preserved, and no insignificant whitespace is emitted.
 5. Compute SHA-256 over the canonical UTF-8 bytes.
 6. Encode the result as `sha256:` followed by 64 lowercase hexadecimal characters.
