@@ -75,7 +75,7 @@ impl HostShared {
         // Drain-only confirmation of deferred appends on the tick that hosts the summary
         // producer; a failed reply ends the monitor through its existing fatal path.
         self.confirm_deferred_appends(Duration::ZERO, "confirm_deferred_appends")?;
-        let (tick, control_observation) = {
+        let (tick, control_observation, pipeline_quiet) = {
             let mut performance = lock(&self.performance, "sample_performance")?;
             let mut tick = if performance.counters_enabled() {
                 performance.tick(observed_at_unix_ms)?
@@ -89,20 +89,28 @@ impl HostShared {
             performance.sample_and_record_capacity(&self.ledger, &self.events)?;
             tick.stop_sampling &= !performance.capacity_enabled();
             performance.attach_ledger_sample(&mut tick, &self.ledger)?;
-            let observation = if performance.counters_enabled() {
-                performance.control_observation(observed_at_unix_ms)?
+            let (observation, pipeline_quiet) = if performance.counters_enabled() {
+                (
+                    performance.control_observation(observed_at_unix_ms)?,
+                    Some(performance.pipeline_quiet(observed_at_unix_ms)?),
+                )
             } else {
-                None
+                (None, None)
             };
-            (tick, observation)
+            (tick, observation, pipeline_quiet)
         };
         let PerformanceTick {
             events,
             stop_sampling,
         } = tick;
         self.record_performance_events(&events)?;
-        if let Some(observation) = control_observation {
-            self.reconcile_performance_control(observation)?;
+        match (control_observation, pipeline_quiet) {
+            (Some(observation), _) => self.reconcile_performance_control(observation)?,
+            (None, Some(pipeline_quiet)) => {
+                self.reconcile_performance_tick(observed_at_unix_ms, pipeline_quiet)?
+            }
+            // No enabled monitor: the controller has no evidence source.
+            (None, None) => {}
         }
         Ok(stop_sampling)
     }
@@ -173,6 +181,36 @@ impl HostShared {
             lock(&self.policy, "read_performance_workloads")?.active_performance_workloads()?;
         let control_events = lock(&self.performance_control, "reconcile_performance_control")?
             .observe(observation, &workloads)?
+            .into_iter()
+            .map(PerformanceSemanticEvent::BalanceChanged)
+            .collect::<Vec<_>>();
+        self.record_performance_events(&control_events)
+    }
+
+    /// A tick without a fresh sample (performance-control.md "Recovery without evidence").
+    fn reconcile_performance_tick(
+        &self,
+        observed_at_unix_ms: u64,
+        pipeline_quiet: bool,
+    ) -> RuntimeHostResult<()> {
+        // Only this monitor thread changes control levels (the one production `observe` and
+        // `observe_without_evidence` caller), so `raised` read here still holds below. Each
+        // lock below is taken in its own statement: holding scheduler while taking policy
+        // would add an edge against the existing policy -> scheduler order.
+        let raised = lock(&self.performance_control, "read_performance_control_raised")?.raised();
+        let mut owned_work = !pipeline_quiet;
+        if raised && !owned_work {
+            owned_work = !lock(&self.scheduler, "read_performance_owned_leases")?
+                .active_instance_ids()
+                .is_empty();
+        }
+        if raised && !owned_work {
+            owned_work = !lock(&self.policy, "read_performance_workloads")?
+                .active_performance_workloads()?
+                .is_empty();
+        }
+        let control_events = lock(&self.performance_control, "reconcile_performance_tick")?
+            .observe_without_evidence(observed_at_unix_ms, owned_work)?
             .into_iter()
             .map(PerformanceSemanticEvent::BalanceChanged)
             .collect::<Vec<_>>();

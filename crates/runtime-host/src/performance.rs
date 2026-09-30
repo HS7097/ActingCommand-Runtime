@@ -1072,20 +1072,7 @@ impl PerformanceMonitor {
                 "read_performance_control_observation",
             ));
         }
-        let config = self.config.as_ref().ok_or_else(|| {
-            performance_fatal(
-                "performance_monitor_disabled",
-                "read_performance_control_observation",
-            )
-        })?;
-        let freshness_ms = duration_ms(config.sample_interval)?
-            .checked_mul(2)
-            .ok_or_else(|| {
-                performance_fatal(
-                    "performance_control_duration_overflow",
-                    "read_performance_control_observation",
-                )
-            })?;
+        let freshness_ms = self.control_freshness_ms("read_performance_control_observation")?;
         if self
             .system_samples
             .back()
@@ -1171,6 +1158,27 @@ impl PerformanceMonitor {
                 .and_then(|sample| sample.foreground.as_ref())
                 .is_some_and(|foreground| foreground.fullscreen),
         }))
+    }
+
+    /// True when no pipeline sample lies within the control freshness window before `now`: the
+    /// Runtime drove no measured device work there.
+    pub(crate) fn pipeline_quiet(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
+        let freshness_ms = self.control_freshness_ms("read_performance_pipeline_quiet")?;
+        // The ring is in time order (an out-of-order sample is refused), so `back` is newest.
+        Ok(self.pipeline_samples.back().is_none_or(|sample| {
+            observed_at_unix_ms.saturating_sub(sample.observed_at_unix_ms) > freshness_ms
+        }))
+    }
+
+    /// The control freshness window: twice the sample interval.
+    fn control_freshness_ms(&self, operation: &'static str) -> RuntimeHostResult<u64> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| performance_fatal("performance_monitor_disabled", operation))?;
+        duration_ms(config.sample_interval)?
+            .checked_mul(2)
+            .ok_or_else(|| performance_fatal("performance_control_duration_overflow", operation))
     }
 
     pub(crate) fn record_event_reference(
