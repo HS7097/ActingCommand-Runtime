@@ -1535,10 +1535,8 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                     "admit_artifact_eviction",
                 ));
             }
-            // Present material stays sealed for explicit disposition; startup never repeats an unknown unlink.
-            if guard.material_present() {
-                return Ok((ArtifactEvictionAdmission::Deferred, Vec::new()));
-            }
+            // Recovery re-checks the material under this exclusive, hash-verified guard: absent
+            // material records RecoveryAbsent; present material completes the sealed unlink once.
             let original = source(&self.events, &proof.intent)?;
             let Some(ArtifactRetentionFact::EvictionIntent(intent)) =
                 original.payload().artifact_retention()
