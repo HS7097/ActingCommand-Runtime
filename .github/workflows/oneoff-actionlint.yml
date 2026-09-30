@@ -1,0 +1,56 @@
+name: one-off actionlint (to be reverted)
+
+# One-off check for the release-form change: actionlint (with shellcheck) over the
+# workflows of this PR head, the UI PR head and the umbrella PR head. Reverted
+# right after its run; the PR's final diff does not contain this file.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the Runtime PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: runtime
+          persist-credentials: false
+      - name: Check out the UI PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: HS7097/ActingCommand-UI
+          ref: afa1f03406481f7413c06abf41c8dee3c7e11e97
+          path: ui
+          persist-credentials: false
+      - name: Check out the umbrella PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: HS7097/ActingCommand
+          ref: b9de6ca0896e52259baa539d03f1ec087505f688
+          path: umbrella
+          persist-credentials: false
+      - name: actionlint 1.7.12
+        run: |
+          set -euo pipefail
+          curl -sSfL -o download-actionlint.bash https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash
+          bash download-actionlint.bash 1.7.12
+          ./actionlint -version
+          shellcheck --version | head -2
+          status=0
+          for repo in runtime ui umbrella; do
+            echo "== $repo @ $(git -C "$repo" rev-parse HEAD)"
+            ls "$repo/.github/workflows"
+            if (cd "$repo" && ../actionlint -verbose); then
+              echo "== $repo: actionlint exit 0"
+            else
+              echo "== $repo: actionlint reported problems"
+              status=1
+            fi
+          done
+          exit "$status"
