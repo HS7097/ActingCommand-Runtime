@@ -193,7 +193,7 @@ task declares its entry page and scheduling outcome; it uses `navigable_route`
 with confirmation enabled and has no internal recovery or stability termination.
 Static reachability follows `(phase, page, designated effect)` through finite
 postconditions. The designated operation is nonretryable and cannot be reachable
-again after its effect. Source conversion, build and Runtime admission share this
+again after its effect. Source parsing, build and Runtime admission share this
 check; the operation and control phase declarations must match exactly.
 
 Phases retain one Task/Run/lease, cumulative steps and the original deadline.

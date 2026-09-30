@@ -5,7 +5,7 @@ use crate::package_publish::PackagePublicationTransaction;
 #[cfg(test)]
 use crate::package_publish::open_published_package;
 use crate::resource_convert::{
-    Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,
+    Bundle, OperationParser, ParseOutputs, ResolvedResourceRoot, canonical_game,
 };
 use crate::{
     LabPackageControlResponse, LabPackageResourcesResponse, LabPackageValidationResponse,
@@ -64,10 +64,10 @@ pub struct PreparedPackageBuildTask {
     repo: PathBuf,
     resource_root: PathBuf,
     resource_layout: String,
-    converter: OperationConverter,
+    parser: OperationParser,
     task_id: String,
     task_ids: Vec<String>,
-    outputs: ConvertOutputs,
+    outputs: ParseOutputs,
     resolution: (u32, u32),
     package_id: String,
     execution_mode: String,
@@ -106,7 +106,7 @@ pub fn prepare_package_build_task(
     let prepared = (|| -> CliOutcome<PreparedPackageBuildTask> {
         let repo = source.path().to_path_buf();
         let resource_root = resolve_package_resource_root(&repo)?;
-        let converter = load_converter(
+        let parser = load_parser(
             game.as_deref(),
             server.as_deref(),
             locale.as_deref(),
@@ -115,18 +115,18 @@ pub fn prepare_package_build_task(
         let mut task_ids = vec![task_id.clone()];
         let includes_recovery = include_recovery
             && task_id != "return_home"
-            && converter
+            && parser
                 .bundles
                 .iter()
                 .any(|bundle| bundle.task_id == "return_home");
         if includes_recovery {
             task_ids.push("return_home".to_string());
         }
-        let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
-        let entry_bundle = find_bundle(&converter, &task_id)?;
+        let outputs = build_task_outputs(&parser, &task_ids, includes_recovery)?;
+        let entry_bundle = find_bundle(&parser, &task_id)?;
         let resolution = parse_resolution(resolution, entry_bundle)?;
-        let package_id = package_id
-            .unwrap_or_else(|| format!("{}.{}.{}", converter.game, converter.server, task_id));
+        let package_id =
+            package_id.unwrap_or_else(|| format!("{}.{}.{}", parser.game, parser.server, task_id));
         let execution_mode = execution_mode.unwrap_or_else(|| "navigable_route".to_string());
         validate_execution_mode(&execution_mode)?;
         let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
@@ -140,7 +140,7 @@ pub fn prepare_package_build_task(
             repo,
             resource_root: resource_root.root,
             resource_layout: resource_root.layout.to_string(),
-            converter,
+            parser,
             task_id,
             task_ids,
             outputs,
@@ -164,17 +164,17 @@ impl PreparedPackageBuildTask {
     }
 
     pub fn game(&self) -> &str {
-        &self.converter.game
+        &self.parser.game
     }
 
     pub fn server(&self) -> &str {
-        &self.converter.server
+        &self.parser.server
     }
 
     pub fn required_environment_keys(&self) -> CliOutcome<Vec<String>> {
         let mut keys = generated_output_environment_keys(&self.outputs)?;
         keys.extend(selected_operation_environment_keys(
-            &self.converter,
+            &self.parser,
             &self.task_ids,
         )?);
         Ok(keys.into_iter().collect())
@@ -209,13 +209,13 @@ impl PreparedPackageBuildTask {
                 control_json(
                     &self.package_id,
                     &self.execution_mode,
-                    &self.converter.game,
-                    &self.converter.server,
+                    &self.parser.game,
+                    &self.parser.server,
                     self.resolution,
                     &self.task_id,
                     ControlOptions {
                         timeout_ms: self.task_timeout_ms,
-                        source: Some(find_bundle(&self.converter, &self.task_id)?),
+                        source: Some(find_bundle(&self.parser, &self.task_id)?),
                         max_steps: self.task_max_steps,
                         stability_termination: self.stability_termination.as_ref(),
                     },
@@ -224,7 +224,7 @@ impl PreparedPackageBuildTask {
             add_resources_json(
                 &mut entries,
                 &self.resource_root,
-                &self.converter,
+                &self.parser,
                 &self.task_ids,
                 true,
             )?;
@@ -232,10 +232,10 @@ impl PreparedPackageBuildTask {
                 &mut entries,
                 environment,
                 &self.resource_root,
-                &self.converter,
+                &self.parser,
                 &self.task_ids,
             )?;
-            add_generated_outputs(&mut entries, &self.converter, &self.outputs)?;
+            add_generated_outputs(&mut entries, &self.parser, &self.outputs)?;
             add_recognition_target_assets(&mut entries, &self.resource_root, &self.outputs.pack)?;
             entries.add_manifest(&self.task_id)?;
 
@@ -262,8 +262,8 @@ impl PreparedPackageBuildTask {
             from_remote,
             task_id: self.task_id.clone(),
             included_tasks: self.task_ids.clone(),
-            game: self.converter.game.clone(),
-            server: self.converter.server.clone(),
+            game: self.parser.game.clone(),
+            server: self.parser.server.clone(),
             package_id: self.package_id.clone(),
             execution_mode: self.execution_mode.clone(),
             dry_run: self.dry_run,
@@ -278,7 +278,7 @@ pub struct PackageBuildCatalog {
     repo: PathBuf,
     resource_root: PathBuf,
     resource_layout: String,
-    converter: OperationConverter,
+    parser: OperationParser,
     max_buffered_payload_bytes: usize,
 }
 
@@ -291,7 +291,7 @@ impl PackageBuildCatalog {
         let opened = (|| -> CliOutcome<Self> {
             let repo = source.path().to_path_buf();
             let resource_root = resolve_package_resource_root(&repo)?;
-            let converter = load_converter(
+            let parser = load_parser(
                 request.game.as_deref(),
                 request.server.as_deref(),
                 request.locale.as_deref(),
@@ -302,7 +302,7 @@ impl PackageBuildCatalog {
                 repo,
                 resource_root: resource_root.root,
                 resource_layout: resource_root.layout.to_string(),
-                converter,
+                parser,
                 max_buffered_payload_bytes: request.max_buffered_payload_bytes,
             })
         })();
@@ -315,13 +315,13 @@ impl PackageBuildCatalog {
             resource_root: self.resource_root.clone(),
             resource_layout: self.resource_layout.clone(),
             from_remote: self.source.remote_url(),
-            game: self.converter.game.clone(),
-            server: self.converter.server.clone(),
+            game: self.parser.game.clone(),
+            server: self.parser.server.clone(),
         }
     }
 
     pub fn task_ids(&self) -> Vec<String> {
-        self.converter
+        self.parser
             .bundles
             .iter()
             .map(|bundle| bundle.task_id.clone())
@@ -329,7 +329,7 @@ impl PackageBuildCatalog {
     }
 
     pub fn default_entry_task(&self) -> CliOutcome<String> {
-        default_entry_task(&self.converter)
+        default_entry_task(&self.parser)
     }
 
     pub fn resource_root(&self) -> &Path {
@@ -337,12 +337,12 @@ impl PackageBuildCatalog {
     }
 
     pub fn task_environment_keys(&self, task_id: &str) -> CliOutcome<Vec<String>> {
-        find_bundle(&self.converter, task_id)?;
+        find_bundle(&self.parser, task_id)?;
         let task_ids = [task_id.to_string()];
-        let outputs = self.converter.build_selected(&task_ids)?;
+        let outputs = self.parser.build_selected(&task_ids)?;
         let mut keys = generated_output_environment_keys(&outputs)?;
         keys.extend(selected_operation_environment_keys(
-            &self.converter,
+            &self.parser,
             &task_ids,
         )?);
         Ok(keys.into_iter().collect())
@@ -350,10 +350,10 @@ impl PackageBuildCatalog {
 
     pub fn full_environment_keys(&self) -> CliOutcome<Vec<String>> {
         let task_ids = self.task_ids();
-        let outputs = self.converter.build_all()?;
+        let outputs = self.parser.build_all()?;
         let mut keys = generated_output_environment_keys(&outputs)?;
         keys.extend(selected_operation_environment_keys(
-            &self.converter,
+            &self.parser,
             &task_ids,
         )?);
         Ok(keys.into_iter().collect())
@@ -392,9 +392,9 @@ impl PackageBuildCatalog {
             env: _,
         } = request;
         let task_ids = vec![task_id.clone()];
-        let mut outputs = self.converter.build_selected(&task_ids)?;
+        let mut outputs = self.parser.build_selected(&task_ids)?;
         apply_environment_to_outputs(environment, &mut outputs)?;
-        let bundle = find_bundle(&self.converter, &task_id)?;
+        let bundle = find_bundle(&self.parser, &task_id)?;
         let resolution = parse_resolution(resolution, bundle)?;
         validate_execution_mode(&execution_mode)?;
         let task_timeout_ms = validate_entry_task_timeout(bundle)?;
@@ -408,8 +408,8 @@ impl PackageBuildCatalog {
             control_json(
                 &package_id,
                 &execution_mode,
-                &self.converter.game,
-                &self.converter.server,
+                &self.parser.game,
+                &self.parser.server,
                 resolution,
                 &task_id,
                 ControlOptions {
@@ -423,7 +423,7 @@ impl PackageBuildCatalog {
         add_resources_json(
             &mut entries,
             &self.resource_root,
-            &self.converter,
+            &self.parser,
             &task_ids,
             true,
         )?;
@@ -431,10 +431,10 @@ impl PackageBuildCatalog {
             &mut entries,
             environment,
             &self.resource_root,
-            &self.converter,
+            &self.parser,
             &task_ids,
         )?;
-        add_generated_outputs(&mut entries, &self.converter, &outputs)?;
+        add_generated_outputs(&mut entries, &self.parser, &outputs)?;
         add_recognition_target_assets(&mut entries, &self.resource_root, &outputs.pack)?;
         entries.add_manifest(&task_id)?;
         if publish {
@@ -458,7 +458,7 @@ impl PackageBuildCatalog {
             dry_run,
             env: _,
         } = request;
-        let entry_bundle = find_bundle(&self.converter, &entry_task_id)?;
+        let entry_bundle = find_bundle(&self.parser, &entry_task_id)?;
         let resolution = parse_resolution(resolution, entry_bundle)?;
         validate_execution_mode(&execution_mode)?;
         let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
@@ -466,7 +466,7 @@ impl PackageBuildCatalog {
             validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
         let task_max_steps =
             validate_entry_task_max_steps(entry_bundle, stability_termination.as_ref())?;
-        let mut outputs = self.converter.build_all()?;
+        let mut outputs = self.parser.build_all()?;
         apply_environment_to_outputs(environment, &mut outputs)?;
         let task_ids = self.task_ids();
         let mut entries =
@@ -476,8 +476,8 @@ impl PackageBuildCatalog {
             control_json(
                 &package_id,
                 &execution_mode,
-                &self.converter.game,
-                &self.converter.server,
+                &self.parser.game,
+                &self.parser.server,
                 resolution,
                 &entry_task_id,
                 ControlOptions {
@@ -491,7 +491,7 @@ impl PackageBuildCatalog {
         add_resources_json(
             &mut entries,
             &self.resource_root,
-            &self.converter,
+            &self.parser,
             &task_ids,
             false,
         )?;
@@ -499,10 +499,10 @@ impl PackageBuildCatalog {
             &mut entries,
             environment,
             &self.resource_root,
-            &self.converter,
+            &self.parser,
             &task_ids,
         )?;
-        add_generated_outputs(&mut entries, &self.converter, &outputs)?;
+        add_generated_outputs(&mut entries, &self.parser, &outputs)?;
         add_recognition_target_assets(&mut entries, &self.resource_root, &outputs.pack)?;
         entries.add_manifest(&entry_task_id)?;
         Ok(write_and_validate_package(&out, entries, dry_run)?.validation)
@@ -514,18 +514,18 @@ impl PackageBuildCatalog {
 }
 
 fn build_task_outputs(
-    converter: &OperationConverter,
+    parser: &OperationParser,
     task_ids: &[String],
     includes_recovery: bool,
-) -> CliOutcome<ConvertOutputs> {
-    let selected = converter.build_selected(task_ids)?;
+) -> CliOutcome<ParseOutputs> {
+    let selected = parser.build_selected(task_ids)?;
     if !includes_recovery {
         return Ok(selected);
     }
     // Recovery may start from pages outside the entry task, so keep the
     // recognition context broad while leaving executable operations selected.
-    let full = converter.build_all()?;
-    Ok(ConvertOutputs {
+    let full = parser.build_all()?;
+    Ok(ParseOutputs {
         pack: full.pack,
         pages: full.pages,
         navigation: selected.navigation,
@@ -535,18 +535,18 @@ fn build_task_outputs(
     })
 }
 
-fn load_converter(
+fn load_parser(
     game: Option<&str>,
     server: Option<&str>,
     locale: Option<&str>,
     repo: &Path,
-) -> CliOutcome<OperationConverter> {
+) -> CliOutcome<OperationParser> {
     let game = game.map(canonical_game).transpose()?;
-    OperationConverter::load(repo, game.as_deref(), server, locale)
+    OperationParser::load(repo, game.as_deref(), server, locale)
 }
 
-fn find_bundle<'a>(converter: &'a OperationConverter, task_id: &str) -> CliOutcome<&'a Bundle> {
-    converter
+fn find_bundle<'a>(parser: &'a OperationParser, task_id: &str) -> CliOutcome<&'a Bundle> {
+    parser
         .bundles
         .iter()
         .find(|bundle| bundle.task_id == task_id)
@@ -555,15 +555,15 @@ fn find_bundle<'a>(converter: &'a OperationConverter, task_id: &str) -> CliOutco
         })
 }
 
-fn default_entry_task(converter: &OperationConverter) -> CliOutcome<String> {
-    if converter
+fn default_entry_task(parser: &OperationParser) -> CliOutcome<String> {
+    if parser
         .bundles
         .iter()
         .any(|bundle| bundle.task_id == "return_home")
     {
         Ok("return_home".to_string())
     } else {
-        converter
+        parser
             .bundles
             .first()
             .map(|bundle| bundle.task_id.clone())
@@ -712,14 +712,14 @@ fn control_json(
 fn add_resources_json(
     entries: &mut PackageEntries,
     repo: &Path,
-    converter: &OperationConverter,
+    parser: &OperationParser,
     task_ids: &[String],
     subset: bool,
 ) -> CliOutcome<()> {
     let path = repo.join("operations").join("resources.json");
     let mut resources = read_json_value(repo, &path)?;
     if subset {
-        let referenced = referenced_resource_ids(converter, task_ids);
+        let referenced = referenced_resource_ids(parser, task_ids);
         if let Some(array) = resources.get_mut("resources").and_then(Value::as_array_mut) {
             array.retain(|resource| {
                 resource
@@ -736,12 +736,9 @@ fn add_resources_json(
     entries.add_json("resources/operations/resources.json", resources)
 }
 
-fn referenced_resource_ids(
-    converter: &OperationConverter,
-    task_ids: &[String],
-) -> BTreeSet<String> {
+fn referenced_resource_ids(parser: &OperationParser, task_ids: &[String]) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
-    for bundle in &converter.bundles {
+    for bundle in &parser.bundles {
         if !task_ids.iter().any(|task_id| task_id == &bundle.task_id) {
             continue;
         }
@@ -764,20 +761,20 @@ fn referenced_resource_ids(
 }
 
 fn selected_operation_environment_keys(
-    converter: &OperationConverter,
+    parser: &OperationParser,
     task_ids: &[String],
 ) -> CliOutcome<BTreeSet<String>> {
     let mut keys = BTreeSet::new();
-    for bundle in &converter.bundles {
+    for bundle in &parser.bundles {
         if task_ids.iter().any(|task_id| task_id == &bundle.task_id) {
-            let task = read_json_value(&converter.root, &bundle.dir.join("task.json"))?;
+            let task = read_json_value(&parser.root, &bundle.dir.join("task.json"))?;
             keys.extend(required_environment_keys(&task)?);
         }
     }
     Ok(keys)
 }
 
-fn generated_output_environment_keys(outputs: &ConvertOutputs) -> CliOutcome<BTreeSet<String>> {
+fn generated_output_environment_keys(outputs: &ParseOutputs) -> CliOutcome<BTreeSet<String>> {
     let mut keys = BTreeSet::new();
     for output in [
         &outputs.pack,
@@ -793,7 +790,7 @@ fn generated_output_environment_keys(outputs: &ConvertOutputs) -> CliOutcome<BTr
 
 fn apply_environment_to_outputs(
     environment: &AuthoringEnvironmentSnapshot,
-    outputs: &mut ConvertOutputs,
+    outputs: &mut ParseOutputs,
 ) -> CliOutcome<()> {
     for output in [
         &mut outputs.pack,
@@ -811,12 +808,12 @@ fn add_selected_operations(
     entries: &mut PackageEntries,
     environment: &AuthoringEnvironmentSnapshot,
     resource_root: &Path,
-    converter: &OperationConverter,
+    parser: &OperationParser,
     task_ids: &[String],
 ) -> CliOutcome<()> {
-    for bundle in &converter.bundles {
+    for bundle in &parser.bundles {
         if task_ids.iter().any(|task_id| task_id == &bundle.task_id) {
-            let canonical_task = converter.canonical_task(&bundle.task_id)?;
+            let canonical_task = parser.canonical_task(&bundle.task_id)?;
             entries.add_operation_dir(
                 environment,
                 &bundle.dir,
@@ -831,10 +828,10 @@ fn add_selected_operations(
 
 fn add_generated_outputs(
     entries: &mut PackageEntries,
-    converter: &OperationConverter,
-    outputs: &ConvertOutputs,
+    parser: &OperationParser,
+    outputs: &ParseOutputs,
 ) -> CliOutcome<()> {
-    let stem = format!("{}.{}", converter.game, converter.server);
+    let stem = format!("{}.{}", parser.game, parser.server);
     entries.add_json(
         &format!("resources/recognition/{stem}.pack.json"),
         outputs.pack.clone(),
@@ -4412,7 +4409,7 @@ mod tests {
             root.join("navigation/neutral.test.navigation.json"),
         )
         .unwrap();
-        let converter = OperationConverter::load(root, None, None, None).unwrap();
+        let converter = OperationParser::load(root, None, None, None).unwrap();
         let base = converter.build_all().unwrap();
         let source = json!({"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":base.pack["targets"][0]["id"],"privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[{"page_id":base.pages["pages"][0]["id"],"completeness":"complete","scope":"declared panel","source":"neutral/spec","visible_rect":null}]});
         let source_path = root.join("navigation/neutral.test.projection.json");
@@ -5804,7 +5801,7 @@ mod tests {
 
     #[test]
     fn generated_environment_snapshot_covers_every_output_document() {
-        let mut outputs = ConvertOutputs {
+        let mut outputs = ParseOutputs {
             projection_metadata: None,
             pack: json!({"value": "{env:theme}"}),
             pages: json!({"value": "{env:theme}"}),
