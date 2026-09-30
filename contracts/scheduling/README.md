@@ -248,7 +248,8 @@ decision gains a reason.
    tie_breaker=<u64> saturated=<0|1> lead=<l|none>`.
    - `base` is `total_score` before the score stage,
      `p*1_000_000 + a + w*1000 + u*1000 - c` (`c` is the contention penalty,
-     load cost x contention basis points x 100), and `total = base + e*1000`.
+     load cost x contention basis points x 100), and `total = base + e*1000`
+     unless `saturated=1`.
    - `score`, `utility`, `offset` and `target` are the score-stage terms
      (`none`/0 for a candidate the stage left untouched); `target_id` and `mode`
      name an applied resource target, `superseded=1` an applied override.
@@ -289,11 +290,13 @@ Bounds, every truncation marked: a chain of `L` reasons gains `rank_breakdown`,
 is cut at a character boundary to at most 1010 bytes and ends with
 `…[truncated]`. Codes carry no whitespace.
 
-The record is written only where the chain already is: the admission events
-`policy.dispatch_intent`, `dispatch_admitted` and `dispatch_rejected`. An
-evaluation round is never recorded on its own, so a poll that dispatches
-nothing records nothing. Ranks, states, intents (decision identity and
-prerequisites), wake times and selections are unchanged by it.
+The record is written only where the chain already is: the `reasons` of the
+policy dispatch events of an admission attempt (`policy.dispatch_intent`, then
+`policy.dispatch_admitted` or `policy.dispatch_rejected`, and
+`policy.dispatch_completed`). An evaluation round is never recorded on its own,
+so a poll that dispatches nothing records nothing. Ranks, states, intents
+(decision identity and prerequisites), wake times and selections are unchanged
+by it.
 
 ## Settlement Feedback And Eligibility Age
 
