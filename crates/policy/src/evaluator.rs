@@ -1419,9 +1419,11 @@ fn rank_terms(rank: &TaskRank, stage: Option<&StageRecord>) -> String {
     )
 }
 
-/// `saturated` compares the total with the unsaturated sum of its terms; `lead` is the total
-/// minus the best total among the instance's other ranked candidates, negative when a
-/// better-ranked candidate was deferred or already owned the budget.
+/// `saturated` compares the total with the unsaturated sum of its terms. `lead` is the total
+/// minus the highest total among the instance's other rank-recorded entries, `score_deferred`
+/// ones included: negative when the winner was promoted above a higher total or a higher-total
+/// entry was deferred by score, host budget or admission eligibility, and possibly positive
+/// while a better-ranked (promoted) entry was deferred.
 fn rank_breakdown_detail(rank: &TaskRank, record: &RankRecord, lead: Option<i128>) -> String {
     let stage = record.stage.as_ref();
     let (target_id, mode) = stage

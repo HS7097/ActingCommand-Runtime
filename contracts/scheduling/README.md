@@ -253,12 +253,16 @@ decision gains a reason.
    - `score`, `utility`, `offset` and `target` are the score-stage terms
      (`none`/0 for a candidate the stage left untouched); `target_id` and `mode`
      name an applied resource target, `superseded=1` an applied override.
-   - `promoted`, `affinity` and `tie_breaker` are the ordering keys after the
-     total; `saturated=1` when a saturating sum clipped the total (the
-     unsaturated 128-bit sum differs).
-   - `lead` is the total minus the best total among the instance's other
-     ranked candidates (`none` without one); it is negative when a better-ranked
-     candidate was deferred by the host budget or the admission state.
+   - The ranking order is `promoted=1` first (ahead of every other candidate),
+     then `total` descending, then `affinity=1`, then `tie_breaker` ascending:
+     the lower `tie_breaker` wins. `saturated=1` when a saturating sum clipped
+     the total (the unsaturated 128-bit sum differs).
+   - `lead` is `total` minus the highest total among the instance's other
+     ranked candidates, `score_deferred` ones included (`none` without one). It
+     is negative when the winner was promoted above a higher total, or when a
+     higher-total candidate was deferred by score, the host budget or the
+     admission state; it can be positive while a better-ranked (promoted)
+     candidate was deferred.
 2. `decision_record`: `targets=<active:<sha>@<applied_at>|expired:<sha>@<applied_at>|unreadable:<code>|none>[ ignored=<server|game>@<ms>]
    related=<n> shown=<k> omitted=<m> omitted_why=<code>:<count>,...`.
    - `targets` is the instance's stored resource target policy, its version
@@ -275,7 +279,7 @@ decision gains a reason.
    - Ranked: `why=<code> state=<state> total=<t> behind_by=<winner total - t>
      priority=… aging_ms=… strategic_milli=… urgency_milli=… contention=…
      effective=… score=… utility=… offset=… target=<s|none> promoted=<0|1>
-     tie_breaker=<u64>`.
+     tie_breaker=<u64>` (the lower `tie_breaker` wins a tie).
    - Others: `why=<code> state=<state> eligibility=<true|false|unknown>`.
    - `why` is the candidate's last reason, the one that settled it
      (`instance_already_selected`, `host_budget_deferred`,
