@@ -177,10 +177,7 @@ impl HostShared {
         check_deadline(deadline)?;
         let image = read_projected_verified(&root, &input.source.artifact)
             .map_err(|error| source_error(error.code(), error))?;
-        let bundle = if matches!(
-            &input.expected_sha256,
-            actingcommand_contract::PackageRef::GitSourceTree(_)
-        ) {
+        let bundle = if input.expected_sha256.is_directory_source() {
             let provider = self.execution.vision_provider().ok_or_else(|| {
                 source_error(
                     "saved_ocr_provider_unavailable",

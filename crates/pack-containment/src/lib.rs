@@ -24,8 +24,10 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 use zip::ZipArchive;
 
+mod content_dir;
 mod git_source;
 pub mod source;
+mod source_pack;
 
 pub type ContainmentResult<T> = Result<T, ContainmentError>;
 
@@ -204,32 +206,51 @@ impl Containment {
             }
             PackageRef::GitSourceTree(reference) => {
                 let entries = git_source::snapshot(locator, reference, self.limits, deadline)?;
-                let (package, operation) = git_source::compile(entries, self.limits, deadline)?;
-                if std::time::Instant::now() >= deadline {
-                    return Err(git_source::source_error("source_tree_deadline"));
-                }
-                let bundle = LoadedBundle::from_memory_package(
-                    package,
-                    expected.clone(),
-                    self.vision_provider.as_ref().map(Arc::clone),
-                    observation,
-                    Some(operation),
-                )?;
-                if std::time::Instant::now() >= deadline {
-                    return Err(git_source::source_error("source_tree_deadline"));
-                }
-                let bench = self
-                    .benches
-                    .entry(instance.clone())
-                    .or_insert_with(|| Bench::new(instance.clone()));
-                bench.loaded = Some(bundle);
-                Ok(bench
-                    .loaded
-                    .as_ref()
-                    .expect("bundle inserted before returning"))
+                self.admit_source(instance, entries, expected.clone(), observation, deadline)
+            }
+            PackageRef::ContentDirectory(reference) => {
+                let (entries, verified) =
+                    content_dir::snapshot(locator, reference, self.limits, deadline)?;
+                self.admit_source(instance, entries, verified, observation, deadline)
             }
         }
     }
+
+    /// Assembles one verified in-memory source snapshot and issues its capability; the
+    /// material is not read again.
+    fn admit_source(
+        &mut self,
+        instance: &InstanceId,
+        entries: BTreeMap<String, Vec<u8>>,
+        verified: PackageRef,
+        observation: bool,
+        deadline: std::time::Instant,
+    ) -> ContainmentResult<&LoadedBundle> {
+        let (package, operation) = source_pack::compile(entries, self.limits, deadline)?;
+        if std::time::Instant::now() >= deadline {
+            return Err(git_source::source_error("source_tree_deadline"));
+        }
+        let bundle = LoadedBundle::from_memory_package(
+            package,
+            verified,
+            self.vision_provider.as_ref().map(Arc::clone),
+            observation,
+            Some(operation),
+        )?;
+        if std::time::Instant::now() >= deadline {
+            return Err(git_source::source_error("source_tree_deadline"));
+        }
+        let bench = self
+            .benches
+            .entry(instance.clone())
+            .or_insert_with(|| Bench::new(instance.clone()));
+        bench.loaded = Some(bundle);
+        Ok(bench
+            .loaded
+            .as_ref()
+            .expect("bundle inserted before returning"))
+    }
+
     pub fn new() -> Self {
         Self::with_limits(ContainmentLimits::default())
     }
@@ -949,6 +970,11 @@ pub enum ContainmentError {
     SourceTree {
         code: &'static str,
     },
+    ContentDirectoryDigestMismatch {
+        expected: Sha256Hash,
+        actual: Sha256Hash,
+        file_count: usize,
+    },
     InvalidInstanceId,
     MissingTaskId,
     InvalidHash {
@@ -1028,6 +1054,14 @@ impl fmt::Display for ContainmentError {
                 issue.declaration_file, issue.field_path, issue.reason,
             ),
             Self::SourceTree { code } => write!(f, "fatal containment error: {code}"),
+            Self::ContentDirectoryDigestMismatch {
+                expected,
+                actual,
+                file_count,
+            } => write!(
+                f,
+                "fatal containment error: content_directory_digest_mismatch: expected {expected}, actual {actual} over {file_count} files"
+            ),
             Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
             Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
             Self::InvalidHash { value } => write!(

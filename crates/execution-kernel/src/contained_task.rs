@@ -5484,6 +5484,9 @@ fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskE
     }
     let code = match &error {
         ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,
+        ExecutionBundleError::Containment(ContainmentError::ContentDirectoryDigestMismatch {
+            ..
+        }) => "content_directory_digest_mismatch",
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
             code: RecognitionPackErrorCode::VisionProviderMissing,
             ..

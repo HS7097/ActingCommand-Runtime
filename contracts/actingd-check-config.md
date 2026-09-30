@@ -25,10 +25,10 @@ actingd check-config --config <path>
 (no `--config`) follow the normal `FATAL actingd: <code>` line with exit code 1.
 
 Policy sections are assembled as at startup: catalog documents are read and
-resource packages are stat'ed or canonicalized from disk. Relative
-`GitSourceTree` package paths resolve against the process working directory,
-exactly as startup does, so run the check from the directory the daemon will be
-started in. An empty `instances` array passes, as at startup, and describes a
+resource packages are stat'ed or canonicalized from disk. Relative directory
+package paths (`GitSourceTree` or `ContentDirectory`) resolve against the process
+working directory, exactly as startup does, so run the check from the directory the
+daemon will be started in. An empty `instances` array passes, as at startup, and describes a
 control-plane-only daemon.
 
 ## Result

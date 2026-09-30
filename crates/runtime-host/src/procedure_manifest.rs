@@ -245,7 +245,8 @@ fn binding_digest(
             operation_id,
             yield_points,
         )),
-        actingcommand_contract::PackageRef::GitSourceTree(_) => serde_json::to_vec(&(
+        actingcommand_contract::PackageRef::GitSourceTree(_)
+        | actingcommand_contract::PackageRef::ContentDirectory(_) => serde_json::to_vec(&(
             "actingcommand.procedure-binding.v2",
             procedure_ref,
             package_digest,

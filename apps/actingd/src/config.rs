@@ -1009,15 +1009,22 @@ fn contained_task_request(
         actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
             fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?
         }
-        actingcommand_contract::PackageRef::GitSourceTree(_) if path.is_absolute() => path,
-        actingcommand_contract::PackageRef::GitSourceTree(_) => std::env::current_dir()
+        actingcommand_contract::PackageRef::GitSourceTree(_)
+        | actingcommand_contract::PackageRef::ContentDirectory(_)
+            if path.is_absolute() =>
+        {
+            path
+        }
+        actingcommand_contract::PackageRef::GitSourceTree(_)
+        | actingcommand_contract::PackageRef::ContentDirectory(_) => std::env::current_dir()
             .map_err(|_| "procedure_package_unavailable")?
             .join(path),
     };
     let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
     if match package_digest {
         actingcommand_contract::PackageRef::LegacyZipSha256(_) => !metadata.is_file(),
-        actingcommand_contract::PackageRef::GitSourceTree(_) => !metadata.is_dir(),
+        actingcommand_contract::PackageRef::GitSourceTree(_)
+        | actingcommand_contract::PackageRef::ContentDirectory(_) => !metadata.is_dir(),
     } {
         return Err("procedure_package_not_regular");
     }
