@@ -39,6 +39,10 @@ The following is the `post_admission_ocr` member of an operation, not a complete
 scheduling mapping must bind it. It also lets the existing terminal fact require the OCR
 artifacts without adding a Global event family or changing the Global event schema.
 
+Fields are evidence only: no field value is written as an instance fact. A value the Runtime
+writes back as an instance fact is a resource reading (`resource-readings.md`), declared
+separately even on a task that also collects fields.
+
 A `0.8` fields task may declare `operations: []` in `navigable_route` mode with
 `stop_on_confirmation` omitted or true. Its nonempty target-page set, fields-page set
 and sole `fields_recorded` mapping's terminal-page set must coincide under the existing

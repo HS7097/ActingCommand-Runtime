@@ -3368,6 +3368,26 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     .any(|f| f.privacy == actingcommand_contract::OcrFieldPrivacy::Personal);
                 self.record_post_admission_ocr_comparison(report, frames, &outcome, personal)
             }
+            // #335 S5a placeholder until the S5b bridge publishes readings as instance facts: a
+            // run whose readings were taken fails before Finalizing, writes no fact and does
+            // not poison the Runtime.
+            ContainedTaskTrace::ResourceReadings { .. } => {
+                let error = RuntimeHostError::request(
+                    "contained_task_resource_reading_unsupported",
+                    "run_contained_task",
+                    RuntimeErrorCode::BackendOperationFailed,
+                );
+                Err(RequestFailure {
+                    state: RuntimeReceiptState::Failed,
+                    terminal: None,
+                    poison_runtime: false,
+                    task_failure: Some(TaskFailureEvidence {
+                        code: error.code(),
+                        severity: EventSeverity::Warning,
+                    }),
+                    error: Box::new(error),
+                })
+            }
             ContainedTaskTrace::Finalizing { outcome } => {
                 let stability_finalization_invalid = match (
                     self.expected_stability_declaration.as_ref(),

@@ -3,7 +3,7 @@
 use super::{Bundle, CliError, CliOutcome, ConversionFiles, SourceRead};
 use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 struct Declaration<'a> {
@@ -1427,6 +1427,138 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// Operation `resource_readings` (`contracts/resource-readings.md`). Structure is checked
+    /// field by field; the value rules are the shared `ResourceReadingDeclaration::validate`,
+    /// whose reason names the field reported here. Page and target cross-references belong
+    /// to the parser's package validation.
+    fn resource_readings(
+        &self,
+        value: &Value,
+        pointer: &str,
+        task: &Map<String, Value>,
+    ) -> CliOutcome<()> {
+        let readings = self.array(value, pointer)?;
+        if readings.is_empty() || readings.len() > actingcommand_contract::MAX_RESOURCE_READINGS {
+            return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        if task.get("scheduling_outcome").is_none_or(Value::is_null) {
+            return Err(self.error(
+                "/scheduling_outcome",
+                ResourceDeclarationReason::MissingField,
+            ));
+        }
+        let fields = [
+            "id",
+            "fact_key",
+            "page_id",
+            "target_id",
+            "trim",
+            "value",
+            "minimum_confidence_milli",
+            "valid_for_ms",
+        ];
+        let mut ids = BTreeSet::new();
+        let mut fact_keys = BTreeSet::new();
+        for (index, reading) in readings.iter().enumerate() {
+            let pointer = child(pointer, &index.to_string());
+            let object = self.object(reading, &pointer, &fields)?;
+            for field in fields {
+                self.required(object, &pointer, field)?;
+            }
+            for field in ["id", "fact_key", "page_id", "target_id", "trim"] {
+                self.string(&object[field], &child(&pointer, field))?;
+            }
+            if serde_json::from_value::<actingcommand_contract::OcrFieldTrim>(
+                object["trim"].clone(),
+            )
+            .is_err()
+            {
+                return Err(self.error(
+                    &child(&pointer, "trim"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            let value_pointer = child(&pointer, "value");
+            let value_type = self.object(
+                &object["value"],
+                &value_pointer,
+                &["type", "min", "max", "format"],
+            )?;
+            let kind = self.required(value_type, &value_pointer, "type")?;
+            self.string(kind, &child(&value_pointer, "type"))?;
+            if kind.as_str() != Some("unsigned_integer") {
+                return Err(self.error(
+                    &child(&value_pointer, "type"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            for field in ["min", "max"] {
+                self.unsigned(
+                    self.required(value_type, &value_pointer, field)?,
+                    &child(&value_pointer, field),
+                )?;
+            }
+            if let Some(format) = value_type.get("format") {
+                let format_pointer = child(&value_pointer, "format");
+                self.string(format, &format_pointer)?;
+                if serde_json::from_value::<actingcommand_contract::OcrUnsignedIntegerFormat>(
+                    format.clone(),
+                )
+                .is_err()
+                {
+                    return Err(
+                        self.error(&format_pointer, ResourceDeclarationReason::InvalidValue)
+                    );
+                }
+            }
+            for field in ["minimum_confidence_milli", "valid_for_ms"] {
+                self.unsigned(&object[field], &child(&pointer, field))?;
+            }
+            if object["minimum_confidence_milli"]
+                .as_u64()
+                .is_none_or(|value| u16::try_from(value).is_err())
+            {
+                return Err(self.error(
+                    &child(&pointer, "minimum_confidence_milli"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            let declaration: actingcommand_contract::ResourceReadingDeclaration =
+                serde_json::from_value(reading.clone())
+                    .map_err(|_| self.error(&pointer, ResourceDeclarationReason::InvalidValue))?;
+            if let Err(reason) = declaration.validate() {
+                let path: &[&str] = match reason {
+                    "resource_reading_id_invalid" => &["id"],
+                    "resource_reading_fact_key_invalid" => &["fact_key"],
+                    "resource_reading_page_id_invalid" => &["page_id"],
+                    "resource_reading_target_id_invalid" => &["target_id"],
+                    "resource_reading_value_max_invalid" => &["value", "max"],
+                    "resource_reading_value_min_invalid" => &["value", "min"],
+                    "resource_reading_minimum_confidence_invalid" => &["minimum_confidence_milli"],
+                    "resource_reading_valid_for_invalid" => &["valid_for_ms"],
+                    _ => &[],
+                };
+                let pointer = path
+                    .iter()
+                    .fold(pointer.clone(), |pointer, field| child(&pointer, field));
+                return Err(self.error(&pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            if !ids.insert(declaration.id) {
+                return Err(self.error(
+                    &child(&pointer, "id"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            if !fact_keys.insert(declaration.fact_key) {
+                return Err(self.error(
+                    &child(&pointer, "fact_key"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn json_reference(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         let object = self.object(value, pointer, &["path", "sha256"])?;
         for field in ["path", "sha256"] {
@@ -1582,6 +1714,7 @@ impl Declaration<'_> {
                 "max_steps",
                 "scheduling_outcome",
                 "post_admission_ocr",
+                "resource_readings",
                 "stability_termination",
                 "recovery",
                 "max_task_retries",
@@ -1631,6 +1764,12 @@ impl Declaration<'_> {
         {
             return Err(self.error("/ocr_targets", ResourceDeclarationReason::UnconsumedField));
         }
+        if object.contains_key("resource_readings") && !matches!(self.schema, Some("0.8" | "0.9")) {
+            return Err(self.error(
+                "/resource_readings",
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
         if !canonical || object.contains_key("server_scope") {
             self.strings(self.required(object, "", "server_scope")?, "/server_scope")?;
         }
@@ -1660,6 +1799,7 @@ impl Declaration<'_> {
                 "phases" => self.phases(value, &pointer)?,
                 "scheduling_outcome" if !value.is_null() => self.scheduling(value, &pointer)?,
                 "post_admission_ocr" => self.post_ocr(value, &pointer)?,
+                "resource_readings" => self.resource_readings(value, &pointer, object)?,
                 "stability_termination" => self.stability(value, &pointer)?,
                 "recovery" if !value.is_null() => self.recovery(value, &pointer)?,
                 "operations" => {
