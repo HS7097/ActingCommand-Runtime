@@ -2318,7 +2318,19 @@ fn actingd_dispatcher_recovers_fake_backend_wake_and_replays_resume() {
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
     let info = wait_for_runtime_info(&mut child.0, root.path());
-    let client = connect_agent(root.path());
+    let o1_started = Instant::now();
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
+            .with_io_timeout(Duration::from_secs(10)),
+    )
+    .expect("connect agent runtime");
+    let mut o1_stderr = std::io::stderr();
+    writeln!(
+        o1_stderr,
+        "G-flake4 site=2321 first_receipt_ms={:.1}",
+        o1_started.elapsed().as_secs_f64() * 1000.0
+    )
+    .expect("write G-flake4 O1 timing");
     let wakes = client
         .query_events(
             EventQuery {
@@ -2355,7 +2367,7 @@ fn actingd_dispatcher_recovers_fake_backend_wake_and_replays_resume() {
     };
     assert_eq!(context.status().session_id(), session_id);
     assert_eq!(raw_exchange(&info, &resume), first);
-    assert_eq!(resumed_event_count(root.path()), 1);
+    assert_eq!(resumed_event_count(root.path(), "2358"), 1);
 
     child.0.kill().expect("kill first actingd");
     child.0.wait().expect("wait first actingd");
@@ -2366,7 +2378,7 @@ fn actingd_dispatcher_recovers_fake_backend_wake_and_replays_resume() {
     let restarted_info = wait_for_runtime_info(&mut child.0, root.path());
     assert_ne!(restarted_info.pid(), info.pid());
     assert_eq!(raw_exchange(&restarted_info, &resume), first);
-    assert_eq!(resumed_event_count(root.path()), 1);
+    assert_eq!(resumed_event_count(root.path(), "2369"), 1);
 
     child.0.kill().expect("kill restarted actingd");
     child.0.wait().expect("wait restarted actingd");
@@ -3656,8 +3668,21 @@ fn agent_resume_request(session_id: AgentSessionId) -> RuntimeRequest {
     .expect("resume request")
 }
 
-fn resumed_event_count(state_root: &Path) -> usize {
-    connect_agent(state_root)
+fn resumed_event_count(state_root: &Path, o1_site: &str) -> usize {
+    let o1_started = Instant::now();
+    let o1_client = RuntimeClient::connect(
+        RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter)
+            .with_io_timeout(Duration::from_secs(10)),
+    )
+    .expect("connect agent runtime");
+    let mut o1_stderr = std::io::stderr();
+    writeln!(
+        o1_stderr,
+        "G-flake4 site={o1_site} first_receipt_ms={:.1}",
+        o1_started.elapsed().as_secs_f64() * 1000.0
+    )
+    .expect("write G-flake4 O1 timing");
+    o1_client
         .query_events(
             EventQuery {
                 event_type: Some(EventType::AgentSessionResumed),
