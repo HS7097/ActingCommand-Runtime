@@ -188,6 +188,8 @@ pub(crate) struct PerformanceBalanceController {
     candidate_level: Option<PerformanceControlLevel>,
     candidate_samples: u16,
     last_observation: Option<PerformanceControlObservation>,
+    /// The latest performance tick without a fresh sample; memory-only.
+    last_tick_unix_ms: Option<u64>,
 }
 
 impl PerformanceBalanceController {
@@ -204,7 +206,18 @@ impl PerformanceBalanceController {
             candidate_level: None,
             candidate_samples: 0,
             last_observation: None,
+            last_tick_unix_ms: None,
         })
+    }
+
+    /// A level above Normal, globally or on an instance: only then can a tick without
+    /// evidence recover (performance-control.md "Recovery without evidence").
+    pub(crate) fn raised(&self) -> bool {
+        self.level != PerformanceControlLevel::Normal
+            || self
+                .instance_levels
+                .values()
+                .any(|level| *level != PerformanceControlLevel::Normal)
     }
 
     pub(crate) fn observe(
@@ -225,10 +238,14 @@ impl PerformanceBalanceController {
             ));
         }
         self.sync_workloads(workloads)?;
-        if let Some(previous) = self.last_observed_at_unix_ms {
+        // A forward jump is measured against the latest input, a sample or a tick without
+        // one; a backward jump only against the previous sample.
+        if let Some(reference) = self.last_observed_at_unix_ms.max(self.last_tick_unix_ms) {
             let jump_threshold = duration_ms(self.config.clock_jump_threshold)?;
-            if observation.observed_at_unix_ms < previous
-                || observation.observed_at_unix_ms.saturating_sub(previous) > jump_threshold
+            if self
+                .last_observed_at_unix_ms
+                .is_some_and(|previous| observation.observed_at_unix_ms < previous)
+                || observation.observed_at_unix_ms.saturating_sub(reference) > jump_threshold
             {
                 self.candidate_level = None;
                 self.candidate_samples = 0;
@@ -262,8 +279,82 @@ impl PerformanceBalanceController {
             self.candidate_samples = 0;
             return Ok(Vec::new());
         };
+        self.apply_target(target, &observation)
+    }
+
+    /// One performance tick without a fresh sample (performance-control.md "Recovery without
+    /// evidence"): it advances the clock-jump reference; without owned work and with a level
+    /// above Normal it is one recovery sample under the unchanged hysteresis and cooldown.
+    pub(crate) fn observe_without_evidence(
+        &mut self,
+        now_unix_ms: u64,
+        owned_work: bool,
+    ) -> RuntimeHostResult<Vec<PerformanceControlEventData>> {
+        if now_unix_ms == 0 {
+            return Err(control_fatal(
+                "performance_control_tick_invalid",
+                "observe_performance_tick",
+            ));
+        }
+        let previous_tick = self.last_tick_unix_ms;
+        if previous_tick == Some(now_unix_ms) {
+            // The same tick cannot advance hysteresis twice.
+            return Ok(Vec::new());
+        }
+        let reference = self.last_observed_at_unix_ms.max(previous_tick);
+        self.last_tick_unix_ms = Some(now_unix_ms);
+        let tick = PerformanceControlObservation {
+            observed_at_unix_ms: now_unix_ms,
+            host_responsiveness_basis_points: None,
+            third_party_pressure_basis_points: None,
+            foreground_fullscreen: false,
+        };
+        if let Some(reference) = reference {
+            let jump_threshold = duration_ms(self.config.clock_jump_threshold)?;
+            // Backward only tick against tick: after a clock step back, every later tick
+            // would otherwise report itself against a "future" sample time again.
+            if previous_tick.is_some_and(|previous| now_unix_ms < previous)
+                || now_unix_ms.saturating_sub(reference) > jump_threshold
+            {
+                self.candidate_level = None;
+                self.candidate_samples = 0;
+                self.cooldown_until_unix_ms = now_unix_ms
+                    .checked_add(duration_ms(self.config.transition_cooldown)?)
+                    .ok_or_else(|| {
+                        control_fatal(
+                            "performance_control_time_overflow",
+                            "observe_performance_tick_clock_jump",
+                        )
+                    })?;
+                return Ok(vec![self.event(
+                    None,
+                    self.level,
+                    self.level,
+                    PerformanceControlReason::ClockJump,
+                    false,
+                    None,
+                    &tick,
+                )]);
+            }
+        }
+        if owned_work || !self.raised() {
+            return Ok(Vec::new());
+        }
+        // No lease, no admitted dispatch, no recent pipeline sample: every workload has ended
+        // (contract: an instance raised above the global level keeps its level without one).
+        self.sync_workloads(&[])?;
+        self.apply_target(PerformanceControlLevel::Normal, &tick)
+    }
+
+    /// The transition toward `target` under hysteresis, cooldown, one level and one instance
+    /// per transition; shared by measured samples and ticks without evidence.
+    fn apply_target(
+        &mut self,
+        target: PerformanceControlLevel,
+        observation: &PerformanceControlObservation,
+    ) -> RuntimeHostResult<Vec<PerformanceControlEventData>> {
         if target == self.level {
-            return self.recover_instances_if_due(target, &observation);
+            return self.recover_instances_if_due(target, observation);
         }
         if self.candidate_level == Some(target) {
             self.candidate_samples = self.candidate_samples.saturating_add(1);
@@ -303,20 +394,20 @@ impl PerformanceBalanceController {
                 PerformanceControlReason::Recovery,
                 true,
                 None,
-                &observation,
+                observation,
             )];
-            if let Some(event) = self.recover_one_instance(&observation)? {
+            if let Some(event) = self.recover_one_instance(observation)? {
                 events.push(event);
             }
             return Ok(events);
         }
         let step = next_level(previous);
-        let reason = control_reason(&observation);
+        let reason = control_reason(observation);
         let mut events = Vec::new();
         if step.rank() >= PerformanceControlLevel::Suspended.rank() {
             // Suspension and shutdown reach one instance per transition; the global level
             // follows only once every instance has been raised on its own.
-            if let Some(event) = self.suspend_one_instance(step, reason, &observation)? {
+            if let Some(event) = self.suspend_one_instance(step, reason, observation)? {
                 events.push(event);
             }
             if self
@@ -334,7 +425,7 @@ impl PerformanceBalanceController {
             }
         }
         self.level = step;
-        events.push(self.event(None, previous, step, reason, false, None, &observation));
+        events.push(self.event(None, previous, step, reason, false, None, observation));
         Ok(events)
     }
 

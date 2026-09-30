@@ -2,13 +2,38 @@
 
 The performance balance controller derives one Runtime-wide control level from
 the host responsiveness and third-party pressure samples of each performance
-tick. Escalation, recovery, hysteresis, the transition cooldown and clock-jump
+tick; a tick without a fresh sample follows "Recovery without evidence" below.
+Escalation, recovery, hysteresis, the transition cooldown and clock-jump
 handling belong to the controller and are not changed by the consumers below.
 Every instance with an active policy workload carries its own level: an
 escalation below Suspended raises every instance to the new level, a recovery
 releases one instance per transition. The levels in rank order are Normal,
 DispatchPaused, Throttled, YieldRequested, QosReduced, Suspended and
 ShutdownRequested.
+
+## Recovery without evidence
+
+Every performance tick reaches the controller. A tick without a fresh sample
+changes no level and no transition evidence while the Runtime has owned work:
+a pipeline sample within the control freshness window (twice the sample
+interval), a lease held on any instance, or an admitted policy dispatch.
+Without owned work, and while the global level or any instance level is above
+Normal, such a tick counts as one recovery sample toward Normal under the same
+`recovery_samples`, transition cooldown, one level per transition and one
+instance per transition as a measured recovery; instances then have no
+arbitration input, so instance id order decides. Its
+`PerformanceBalanceChanged` events carry reason `Recovery`, `recovery: true`
+and neither `host_responsiveness_basis_points` nor
+`third_party_pressure_basis_points`; a measured recovery always carries at
+least one of them. This is a liveness exit, not a measured zero: an unknown
+pressure stays unrecorded.
+
+A clock jump is measured against the controller's latest input, a sample or
+a tick without a fresh sample: a tick earlier than the previous tick, a
+sample earlier than the previous sample, or an input more than
+`clock_jump_threshold` after the latest input. Silence between samples while
+ticks continue is not a clock jump; a clock jump found on a tick without a
+fresh sample carries no evidence fields.
 
 ## Host arbitration
 
