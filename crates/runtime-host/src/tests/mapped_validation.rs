@@ -182,7 +182,28 @@ fn mapped_terminal_page_conflicts_and_error_pages_fail_without_success() {
         record_policy_approval(&host, &intent);
         let PolicyDispatchAdmission::Granted { context } = host
             .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
-            .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"))
+            .unwrap_or_else(|error| {
+                // one-off (to be reverted) E1: print the capacity decision before the panic.
+                if let Some(decision) = error.lifecycle.capacity.as_ref() {
+                    let fact = decision.fact.as_ref();
+                    eprintln!(
+                        "E1 reason={:?} outcome={:?} fact.observed_at_unix_ms={:?} fact.observed_at_monotonic_ms={:?} decided_at_unix_ms={} decided_at_monotonic_ms={} wall_age_ms={:?} mono_age_ms={:?}",
+                        decision.reason,
+                        decision.outcome,
+                        fact.map(|fact| fact.observed_at_unix_ms),
+                        fact.map(|fact| fact.observed_at_monotonic_ms),
+                        decision.decided_at_unix_ms,
+                        decision.decided_at_monotonic_ms,
+                        fact.map(|fact| decision
+                            .decided_at_unix_ms
+                            .saturating_sub(fact.observed_at_unix_ms)),
+                        fact.map(|fact| decision
+                            .decided_at_monotonic_ms
+                            .saturating_sub(fact.observed_at_monotonic_ms)),
+                    );
+                }
+                panic!("{case}: policy admission: {error}")
+            })
         else {
             panic!("{case}: expected mapped policy context")
         };
