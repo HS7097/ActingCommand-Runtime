@@ -535,8 +535,10 @@ Replay validates integrity, not eligibility (Workflow #332 H2f Q3). Eligibility
 pins, close, success or K/T, capture summary and settlement) is decided only by the
 sole Ledger writer when it admits an Explicit pin release or an eviction Intent,
 and the same append is judged again before it commits. Replay (every open, every
-read face and the writer's own startup) checks, after keyed chain authentication,
-integrity only: the contract structure, origin and links; that the object is in
+read face and the writer's own startup) checks, after the backend's record
+authentication (keyed chain authentication on SQLite roots; the legacy Segment
+read-only parser, kept for forensics and migration, has none), integrity only:
+the contract structure, origin and links; that the object is in
 the index with the same identity and verified source, its identity anchored in
 the object's first, scope-checked pin; no earlier proof; that the Intent prefix
 equals its position and a failed-run evaluation time equals its ledger time; that
