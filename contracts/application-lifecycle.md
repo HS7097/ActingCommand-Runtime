@@ -145,7 +145,9 @@ Instance configuration (`actingd`, `contracts/actingd-check-config.md`):
 Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: a ZIP
 locator (relative paths resolve against the configuration file's directory; the assembled
 path must be absolute) and the bare lowercase hex digest; the response deadline is the
-contract maximum. Nothing is opened or hashed at assembly or startup: `check-config` echoes
+contract maximum. A locator whose last segment equals the digest names a content directory
+(Workflow #288) and is run with that content-directory reference
+(`contracts/package-reference.md`); the configuration shape is unchanged. Nothing is opened or hashed at assembly or startup: `check-config` echoes
 the declaration per instance and counts them as `instances_startup_package_count`; host
 startup binds each alias to a registered physical instance
 (`startup_package_instance_unknown`, `startup_package_requires_physical_instance` are fatal;
