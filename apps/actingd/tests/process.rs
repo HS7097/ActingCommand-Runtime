@@ -110,6 +110,7 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
         .expect("start actingd");
     let mut child = ChildGuard(child);
     wait_for_runtime_info(&mut child.0, root.path());
+    wait_for_first_receipt(root.path());
 
     let first = connect(root.path());
     let owner_epoch = first.health().expect("first client health");
@@ -2318,6 +2319,7 @@ fn actingd_dispatcher_recovers_fake_backend_wake_and_replays_resume() {
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
     let info = wait_for_runtime_info(&mut child.0, root.path());
+    wait_for_first_receipt(root.path());
     let o1_started = Instant::now();
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
@@ -2433,6 +2435,7 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
     let mut policy_identity_header_io = None;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         wait_for_runtime_info(&mut child.0, root.path());
+        wait_for_first_receipt(root.path());
         let client = connect_agent(root.path());
         let identity = client
             .project_policy_input_identity(evidence_sequence)
@@ -2685,6 +2688,19 @@ fn connect_agent(state_root: &Path) -> RuntimeClient {
             .with_io_timeout(Duration::from_millis(500)),
     )
     .expect("connect agent runtime")
+}
+
+/// Workflow #332 G-flake4: `RuntimeHost::start` publishes `runtime-info.json` before it spawns
+/// the accept thread, and by design the host answers nobody until its start (the #317 sc3
+/// preparation phase included) is done. One connection with the production I/O budget waits
+/// that out; the clients a test opens afterwards keep their own budgets.
+fn wait_for_first_receipt(state_root: &Path) {
+    let probe = RuntimeClient::connect(
+        RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_secs(5)),
+    )
+    .expect("first runtime receipt after start");
+    drop(probe);
 }
 
 fn wait_for_agent_client(child: &mut Child, state_root: &Path) -> RuntimeClient {
