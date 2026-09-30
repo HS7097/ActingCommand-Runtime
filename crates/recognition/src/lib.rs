@@ -8,6 +8,8 @@ use std::error::Error;
 use std::fmt;
 use std::time::{Duration, Instant};
 
+pub mod color_digest;
+
 pub type RecognitionResult<T> = Result<T, RecognitionError>;
 
 const TEMPLATE_MATCH_TIMEOUT: Duration = Duration::from_secs(5);
