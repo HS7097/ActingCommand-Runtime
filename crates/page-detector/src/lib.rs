@@ -362,8 +362,12 @@ impl PageDetector {
         for page in &self.page_set.pages {
             for target_id in page_target_ids(page) {
                 match evaluator.target_kind(target_id).map_err(pack_error)? {
-                    TargetKind::Template | TargetKind::Color | TargetKind::Ocr | TargetKind::Nn => {
-                    }
+                    TargetKind::Template
+                    | TargetKind::Color
+                    | TargetKind::Ocr
+                    | TargetKind::Nn
+                    | TargetKind::ColorDigest
+                    | TargetKind::Composite => {}
                     TargetKind::ClickOnly => {
                         return Err(PageDetectorError::fatal(format!(
                             "page definition references click-only target: {target_id}"
@@ -1952,18 +1956,21 @@ mod tests {
                     region: rect(0, 0, 4, 4),
                     expected: [255, 0, 0],
                     click: None,
+                    max_distance: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "fixture/settings_anchor".to_string(),
                     region: rect(4, 0, 4, 4),
                     expected: [0, 255, 0],
                     click: None,
+                    max_distance: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "fixture/forbidden_popup".to_string(),
                     region: rect(0, 4, 4, 4),
                     expected: [0, 0, 255],
                     click: None,
+                    max_distance: None,
                 }),
                 RecognitionTarget::ClickOnly(ClickOnlyTarget {
                     id: "fixture/click_only".to_string(),

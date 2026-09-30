@@ -557,6 +557,8 @@ impl RuntimeContainedTask<'_> {
                     actingcommand_recognition_pack::TargetKind::ClickOnly => "click_only",
                     actingcommand_recognition_pack::TargetKind::Ocr => "ocr",
                     actingcommand_recognition_pack::TargetKind::Nn => "nn",
+                    actingcommand_recognition_pack::TargetKind::ColorDigest => "color_digest",
+                    actingcommand_recognition_pack::TargetKind::Composite => "composite",
                 }
                 .to_owned(),
                 passed: target.passed,
