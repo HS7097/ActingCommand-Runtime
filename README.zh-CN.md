@@ -18,13 +18,13 @@
 
 ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上执行多目标自动化。内核不含任何具体目标的身份：代码、合约、默认值与夹具都由守卫测试扫描，保证其保持中立（`tools/actinglab-architecture/tests/workspace_guards.rs:239`、`:333`）。全部目标知识以声明式资源包的形式存在于独立的资源仓，运行时只接受带哈希校验的密封包（`actingctl task-run` 要求 `--package`，并要求 `--expected-sha256` 或 `--package-ref` 二者之一）。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v2` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。所有边界失败关闭：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级。
 
-[CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / test） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · 许可 `AGPL-3.0-only` · [协作看板](https://github.com/HS7097/ActingCommand-Workflow) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI) · [历史归档](https://github.com/HS7097/ActingCommand-Legacy-Runtime)
+[CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / test） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases)（按需发版：Actions → release → Run workflow） · 许可 `AGPL-3.0-only` · [协作看板](https://github.com/HS7097/ActingCommand-Workflow) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI) · [历史归档](https://github.com/HS7097/ActingCommand-Legacy-Runtime)
 
 ## 仓库族
 
 | 仓库 | 角色 |
 | --- | --- |
-| [HS7097/ActingCommand](https://github.com/HS7097/ActingCommand) | 伞仓（门面页）：项目族 README、`bundles/` 下的标准包，以及 Releases 里的安装器与每日构建 |
+| [HS7097/ActingCommand](https://github.com/HS7097/ActingCommand) | 伞仓（门面页）：项目族 README、`bundles/` 下的标准包，以及 Releases 里的安装器与构建预发布（每日发布已暂停） |
 | [HS7097/ActingCommand-Runtime](https://github.com/HS7097/ActingCommand-Runtime) | 本仓：常驻运行时（守护进程、CLI、账本、设备后端） |
 | [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | 安装向导与监控台，只经运行时 API 与运行时通信 |
 | [HS7097/ActingCommand-Workflow](https://github.com/HS7097/ActingCommand-Workflow) | 协作看板，工作从这里的 issue 起步 |
@@ -86,7 +86,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 
 仓库根的 `ratchet/` 里只有一个棘轮文件：`actinglab_commands.json`（schema `actingcommand.command-inventory.v1`，47 个顶层分派臂 / 132 条命令 / 8 项流水线豁免），由守卫测试 `command_inventory_matches_checked_in_snapshot` 读取。
 
-CI 共三个工作流：`ci.yml` 在 windows-latest 上执行格式、locked workspace build 和 Clippy。Test 步分别保留四组结果：排除 actingd/runtime-client 的 workspace、runtime-client、actingd binary 及 process integration target；Test observation 以 `test-observation` feature 执行原两个 runtime-client 检查。架构守卫仍由 workspace tests 执行。`commit-identity-guard.yml` 在 ubuntu-latest 上要求推送或 PR 范围内每个提交的 author **与** committer 邮箱都落在一份八项精确白名单内（HS7097 / HS7097Agt / HS7097ViW 三个账号各两种 noreply 形式、一个注册邮箱地址，以及 GitHub 网页端提交者 `noreply@github.com`），否则失败；`windows-remote-build.yml` 解析并复核一个 40 位小写 SHA，随后 `cargo build --locked --release --target x86_64-pc-windows-msvc`，产出两份带 `BUILD-MANIFEST.json` 的构件。
+CI 共三个工作流：`ci.yml` 在 windows-latest 上执行格式、locked workspace build 和 Clippy。Test 步分别保留四组结果：排除 actingd/runtime-client 的 workspace、runtime-client、actingd binary 及 process integration target；Test observation 以 `test-observation` feature 执行原两个 runtime-client 检查。架构守卫仍由 workspace tests 执行。`commit-identity-guard.yml` 在 ubuntu-latest 上要求推送或 PR 范围内每个提交的 author **与** committer 邮箱都落在一份八项精确白名单内（HS7097 / HS7097Agt / HS7097ViW 三个账号各两种 noreply 形式、一个注册邮箱地址，以及 GitHub 网页端提交者 `noreply@github.com`），否则失败；`windows-remote-build.yml` 解析并复核一个 40 位小写 SHA，随后 `cargo build --locked --release --target x86_64-pc-windows-msvc`，产出两份带 `BUILD-MANIFEST.json` 的构件；它在 PR、推送 `stable` 与手动派发时运行，推送 `main` 不再触发。`release.yml` 只在手动启动时运行（Actions → release → Run workflow，或 `gh workflow run release.yml -f bump=patch|minor|major [-f version=X.Y.Z] [-f source_sha=<sha>] [-f dry_run=true]`）：按本仓 Releases 算出下一个 `vX.Y.Z`，对选定的 `main` 提交调用 `windows-remote-build.yml`，把两份构件打成 zip 连同 `SHA256SUMS` 发布为 Release，tag 建在该提交上。版本号只存在于 Release 的 tag。
 
 ## Workspace 成员
 
@@ -151,7 +151,7 @@ CI 共三个工作流：`ci.yml` 在 windows-latest 上执行格式、locked wor
 
 ## 构建与运行
 
-Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、安装说明与未发布候选说明，
+Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、安装说明与发布说明，
 由同一 BUILD-MANIFEST 逐项绑定。见[下载契约](scripts/windows-tools/README.md)与
 [安装说明](distribution/windows/INSTALL.md)；Tools 仍为独立工件。
 
