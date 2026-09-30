@@ -113,7 +113,7 @@ jobs:
 
           # The source is not released yet and descends from the previous release.
           while IFS=$'\t' read -r rel_tag rel_draft; do
-            [ -n "$rel_tag" ] && [ "$rel_draft" = false ] || continue
+            if [ -z "$rel_tag" ] || [ "$rel_draft" != false ]; then continue; fi
             rel_commit=$(gh api "repos/$repo/commits/tags/$rel_tag" --jq .sha) \
               || fail "resolving the commit of release $rel_tag failed"
             [ "$rel_commit" != "$source_sha" ] || fail "$source_sha is already released as $rel_tag"
