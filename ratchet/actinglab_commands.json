@@ -53,7 +53,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 132,
+  "command_count": 134,
   "commands": [
     "help",
     "version",
@@ -115,6 +115,8 @@
     "package run",
     "package build-task",
     "package build-pack",
+    "package digest",
+    "package bundle",
     "operation validate",
     "operation inspect",
     "operation explain",

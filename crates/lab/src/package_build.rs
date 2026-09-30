@@ -3,6 +3,7 @@
 use crate::{
     EnvMarkerResolutionRequest, Lab, LabPorts, LabResult, PackageBuildCatalogMetadata,
     PackageBuildCatalogRequest, PackageBuildTaskRequest, PackageBuildTaskResponse,
+    PackageBundleRequest, PackageBundleResponse, PackageDigestRequest, PackageDigestResponse,
     PackageEnvOptions, PackageFullArchiveRequest, PackageTaskArchiveRequest,
 };
 use actingcommand_resource_tooling::{
@@ -28,6 +29,22 @@ impl<P: LabPorts> Lab<P> {
             prepared.required_environment_keys()?,
         )?;
         prepared.build(&environment)
+    }
+
+    /// Workflow #288 A2b: the content-directory reference of one package directory.
+    pub fn package_digest(
+        &mut self,
+        request: PackageDigestRequest,
+    ) -> LabResult<PackageDigestResponse> {
+        actingcommand_resource_tooling::package_digest(request)
+    }
+
+    /// Workflow #288 A2b: the standard package's resource section from pack directories.
+    pub fn package_bundle(
+        &mut self,
+        request: PackageBundleRequest,
+    ) -> LabResult<PackageBundleResponse> {
+        actingcommand_resource_tooling::package_bundle(request)
     }
 }
 

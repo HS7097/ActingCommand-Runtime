@@ -11,6 +11,7 @@ use actingcommand_contract::{
     safe_source_path,
 };
 use std::fs;
+use std::path::PathBuf;
 use std::time::Instant;
 
 /// Maximum number of path segments below the directory.
@@ -26,11 +27,7 @@ pub(super) fn snapshot(
     limits: ContainmentLimits,
     deadline: Instant,
 ) -> ContainmentResult<(BTreeMap<String, Vec<u8>>, PackageRef)> {
-    if !locator.is_absolute() {
-        return Err(source_error("content_directory_locator_not_absolute"));
-    }
-    // Links above the directory are resolved here; links inside it are rejected below.
-    let root = fs::canonicalize(locator).map_err(|_| source_error("content_directory_missing"))?;
+    let root = canonical_root(locator)?;
     // A digest-form directory name is part of the declared identity: checked before any read.
     if [locator, root.as_path()]
         .into_iter()
@@ -39,6 +36,58 @@ pub(super) fn snapshot(
     {
         return Err(source_error("content_directory_name_mismatch"));
     }
+    let entries = read_entries(root, limits, deadline)?;
+    let actual = entries_digest(&entries);
+    let expected_hash = Sha256Hash::parse_hex(&expected.sha256)?;
+    let actual_hash = Sha256Hash::parse_hex(&actual)?;
+    // Nothing has been parsed yet: a mismatch rejects the raw material as a whole.
+    if !constant_time_hash_eq(&actual_hash, &expected_hash) {
+        return Err(ContainmentError::ContentDirectoryDigestMismatch {
+            expected: expected_hash,
+            actual: actual_hash,
+            file_count: entries.len(),
+        });
+    }
+    Ok((
+        entries,
+        PackageRef::ContentDirectory(ContentDirectory {
+            schema_version: ContentDirectoryVersion::V1,
+            sha256: actual,
+        }),
+    ))
+}
+
+/// Workflow #288 A2b: the same bounded read without an expected reference or a name
+/// comparison, returning the reference of whatever the directory holds. Nothing is parsed.
+pub(super) fn measure(
+    locator: &Path,
+    limits: ContainmentLimits,
+    deadline: Instant,
+) -> ContainmentResult<(BTreeMap<String, Vec<u8>>, ContentDirectory)> {
+    let entries = read_entries(canonical_root(locator)?, limits, deadline)?;
+    let sha256 = entries_digest(&entries);
+    Ok((
+        entries,
+        ContentDirectory {
+            schema_version: ContentDirectoryVersion::V1,
+            sha256,
+        },
+    ))
+}
+
+fn canonical_root(locator: &Path) -> ContainmentResult<PathBuf> {
+    if !locator.is_absolute() {
+        return Err(source_error("content_directory_locator_not_absolute"));
+    }
+    // Links above the directory are resolved here; links inside it are rejected below.
+    fs::canonicalize(locator).map_err(|_| source_error("content_directory_missing"))
+}
+
+fn read_entries(
+    root: PathBuf,
+    limits: ContainmentLimits,
+    deadline: Instant,
+) -> ContainmentResult<BTreeMap<String, Vec<u8>>> {
     let metadata =
         fs::symlink_metadata(&root).map_err(|_| source_error("content_directory_missing"))?;
     if is_link(&metadata) {
@@ -115,28 +164,15 @@ pub(super) fn snapshot(
         }
     }
     check_time(deadline)?;
-    let actual = content_directory_digest(
+    Ok(entries)
+}
+
+fn entries_digest(entries: &BTreeMap<String, Vec<u8>>) -> String {
+    content_directory_digest(
         entries
             .iter()
             .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
-    );
-    let expected_hash = Sha256Hash::parse_hex(&expected.sha256)?;
-    let actual_hash = Sha256Hash::parse_hex(&actual)?;
-    // Nothing has been parsed yet: a mismatch rejects the raw material as a whole.
-    if !constant_time_hash_eq(&actual_hash, &expected_hash) {
-        return Err(ContainmentError::ContentDirectoryDigestMismatch {
-            expected: expected_hash,
-            actual: actual_hash,
-            file_count: entries.len(),
-        });
-    }
-    Ok((
-        entries,
-        PackageRef::ContentDirectory(ContentDirectory {
-            schema_version: ContentDirectoryVersion::V1,
-            sha256: actual,
-        }),
-    ))
+    )
 }
 
 fn check_time(deadline: Instant) -> ContainmentResult<()> {

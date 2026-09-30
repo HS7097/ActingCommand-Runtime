@@ -54,6 +54,11 @@ pub(super) fn help_data() -> Value {
             "resource compile-maa": [
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
+            "package digest": ["--package <directory>"],
+            "package bundle": [
+                "--applications <applications.json>", "--packs-root <directory of pack directories>",
+                "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>"
+            ],
             "session record build-task": [
                 "--locale <locale>"
             ]
