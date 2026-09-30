@@ -77,6 +77,8 @@ The operation contract is consumed through its current validator.
 
 Any personal classification on the target, field, original operation declaration
 or supplied result requires redaction. Public classifications cannot downgrade it.
+A composite check (`selection-graph.md`) evaluates its members, so a personal
+classification of any member classifies the composite as personal too.
 An unknown target, unknown field tuple or mismatched target/field is rejected.
 A field without its cataloged operation classification remains redacted with
 `privacy: null`, even when the caller or companion labels it public. This unknown

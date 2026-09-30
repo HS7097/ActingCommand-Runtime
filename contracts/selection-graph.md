@@ -72,7 +72,9 @@ threshold that was applied.
 - The composite's evaluation lists every member as `{target_id, passed, evaluation}` with
   the member's own evaluation, and its message names the members that did not pass. The
   members' PP-OCR reports travel with the composite on success and on error. A member keeps
-  its own privacy treatment wherever the composite is serialized.
+  its own privacy treatment wherever the composite is serialized, and a composite with a
+  personal member is itself personal in page projections and observation facts
+  (`page-projection.md`).
 - Serialized evaluations gain a `composite` object, and a `color_digest` object for digest
   targets, only for those kinds. Every other evaluation serializes exactly as before.
 
