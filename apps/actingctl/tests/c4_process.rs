@@ -257,6 +257,23 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
             "close"
         ]
     );
+    // One-off (to be reverted), Workflow #308 G3: keep this end-to-end state root.
+    if let Some(keep) = std::env::var_os("GC3_KEEP_STATE_ROOT") {
+        gc3_copy_tree(root.path(), Path::new(&keep));
+    }
+}
+
+fn gc3_copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("create kept state root");
+    for entry in fs::read_dir(from).expect("read state root") {
+        let entry = entry.expect("state root entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("state root entry type").is_dir() {
+            gc3_copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("copy state root file");
+        }
+    }
 }
 
 #[test]

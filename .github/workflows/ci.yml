@@ -94,3 +94,126 @@ jobs:
           if (Test-Path -LiteralPath target/tests) {
             Remove-Item -LiteralPath target/tests -Recurse -Force -ErrorAction Stop
           }
+
+  # One-off (to be reverted), Workflow #308 G3 evidence (model GC3).
+  gc3_one_off:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: GC3 record round trip, golden hash and merge-base ledger read comparison
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          BASE_SHA: 21fa4d0bf5481aac56acfa4d2c6f69052f563578
+          FEATURE_SHA: 7d1d4ed0bda490ad3db8d987cd309a82bbee6b17
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Invoke-Checked([string] $Code, [string] $Exe, [string[]] $Arguments) {
+            & $Exe @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "${Code}: $Exe $($Arguments -join ' ') exited $LASTEXITCODE"
+            }
+          }
+          function Invoke-Raw([string] $Exe, [string[]] $Arguments) {
+            $info = [System.Diagnostics.ProcessStartInfo]::new($Exe)
+            foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
+            $info.UseShellExecute = $false
+            $info.RedirectStandardOutput = $true
+            $info.RedirectStandardError = $true
+            $process = [System.Diagnostics.Process]::Start($info)
+            $stderr = $process.StandardError.ReadToEndAsync()
+            $buffer = [System.IO.MemoryStream]::new()
+            $process.StandardOutput.BaseStream.CopyTo($buffer)
+            $process.WaitForExit()
+            [pscustomobject]@{
+              Exit = $process.ExitCode
+              Stdout = $buffer.ToArray()
+              Stderr = $stderr.GetAwaiter().GetResult()
+            }
+          }
+          function Get-BytesSha256([byte[]] $Bytes) {
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            try { return [System.Convert]::ToHexString($sha.ComputeHash($Bytes)).ToLowerInvariant() }
+            finally { $sha.Dispose() }
+          }
+
+          Write-Host "gc3 base $env:BASE_SHA feature $env:FEATURE_SHA head $env:HEAD_SHA"
+
+          # 1. The record round trip and the golden hash, on this head.
+          Invoke-Checked 'gc3_round_trip_failed' 'cargo' @('test', '--locked', '-p', 'actingcommand-ledger', '--lib', 'global::tests::gc3_one_off', '--', '--nocapture', '--test-threads=1')
+
+          # 2. This head's actingledger.
+          Invoke-Checked 'gc3_head_build_failed' 'cargo' @('build', '--locked', '-p', 'actingledger', '--bin', 'actingledger')
+          $headLedger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe').Path
+
+          # 3. The merge-base end-to-end flow keeps its state root; the merge-base actingledger.
+          $base = Join-Path $env:RUNNER_TEMP 'gc3-base'
+          $patch = Join-Path $env:RUNNER_TEMP 'gc3-keep-root.patch'
+          $baseTarget = Join-Path $env:RUNNER_TEMP 'gc3-base-target'
+          $stateRoot = Join-Path $env:RUNNER_TEMP 'gc3-state-root'
+          Invoke-Checked 'gc3_base_worktree_failed' 'git' @('worktree', 'add', '--detach', $base, $env:BASE_SHA)
+          Invoke-Checked 'gc3_keep_patch_failed' 'git' @('diff', "--output=$patch", $env:FEATURE_SHA, $env:HEAD_SHA, '--', 'apps/actingctl/tests/c4_process.rs')
+          Invoke-Checked 'gc3_keep_patch_failed' 'git' @('-C', $base, 'apply', '--verbose', $patch)
+          Push-Location -LiteralPath $base
+          try {
+            $env:CARGO_TARGET_DIR = $baseTarget
+            $env:GC3_KEEP_STATE_ROOT = $stateRoot
+            Invoke-Checked 'gc3_base_flow_failed' 'cargo' @('test', '--locked', '-p', 'actingcommand-actingctl', '--test', 'c4_process', 'actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit', '--', '--exact', '--nocapture', '--test-threads=1')
+            Remove-Item -LiteralPath Env:GC3_KEEP_STATE_ROOT
+            Invoke-Checked 'gc3_base_build_failed' 'cargo' @('build', '--locked', '-p', 'actingledger', '--bin', 'actingledger')
+          } finally {
+            Remove-Item -LiteralPath Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath Env:GC3_KEEP_STATE_ROOT -ErrorAction SilentlyContinue
+            Pop-Location
+          }
+          $baseLedger = (Resolve-Path -LiteralPath (Join-Path $baseTarget 'debug/actingledger.exe')).Path
+          Get-ChildItem -LiteralPath $stateRoot -Recurse -File | ForEach-Object {
+            Write-Host "gc3 state root file $($_.FullName.Substring($stateRoot.Length)) $($_.Length) bytes"
+          }
+
+          # 4. Both actingledger builds read the same root; stdout must be byte-identical.
+          $commands = [System.Collections.Generic.List[object]]::new()
+          $commands.Add(@('open', @('open')))
+          $commands.Add(@('events', @('events')))
+          foreach ($view in @('events', 'observation', 'changes', 'errors', 'health', 'lab')) {
+            $commands.Add(@("views-$view", @('views', '--query', ('{"view":"' + $view + '"}'))))
+          }
+          $commands.Add(@('views-events-forensic', @('views', '--query', '{"view":"events"}', '--profile', 'forensic')))
+          $commands.Add(@('export', @('export')))
+          $failures = 0
+          $compared = 0
+          $requestId = $null
+          $index = 0
+          while ($index -lt $commands.Count) {
+            $name = $commands[$index][0]
+            $arguments = @('--state-root', $stateRoot) + $commands[$index][1]
+            $index += 1
+            $old = Invoke-Raw $baseLedger $arguments
+            $new = Invoke-Raw $headLedger $arguments
+            $oldHash = Get-BytesSha256 $old.Stdout
+            $newHash = Get-BytesSha256 $new.Stdout
+            $same = ($oldHash -ceq $newHash) -and ($old.Exit -eq $new.Exit) -and ($old.Stderr -ceq $new.Stderr)
+            Write-Host "gc3 compare ${name}: merge-base exit $($old.Exit) $($old.Stdout.Length) bytes sha256 $oldHash; head exit $($new.Exit) $($new.Stdout.Length) bytes sha256 $newHash; identical=$same"
+            $text = [System.Text.Encoding]::UTF8.GetString($old.Stdout)
+            Write-Host "gc3 ${name} merge-base output head: $($text.Substring(0, [Math]::Min(600, $text.Length)))"
+            if ($old.Stderr.Length -gt 0 -or $new.Stderr.Length -gt 0) {
+              Write-Host "gc3 ${name} stderr merge-base: $($old.Stderr.Trim()) | head: $($new.Stderr.Trim())"
+            }
+            $compared += 1
+            if (-not $same -or $old.Exit -ne 0) { $failures += 1 }
+            if ($name -ceq 'events') {
+              $match = [regex]::Match($text, '"request_id"\s*:\s*"(request_[0-9a-f]{32})"')
+              if (-not $match.Success) { throw 'gc3_request_id_missing: the events output names no request id' }
+              $requestId = $match.Groups[1].Value
+              $commands.Add(@('chain', @('chain', '--req', $requestId)))
+            }
+          }
+          Write-Host "gc3 summary: $compared commands compared, $failures differing or failing, chain request $requestId"
+          if ($failures -ne 0) { throw "gc3_outputs_differ: $failures of $compared commands" }
