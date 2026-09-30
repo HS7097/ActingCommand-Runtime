@@ -501,8 +501,12 @@ unlinked warning. K/T eligibility does not imply that every failed frame can be
 removed.
 The same try-only material guard, intent-before-action/outcome-after-action and
 round limits apply. Recovery consumes sealed pending intents without changing
-their policy or repeating an unknown unlink; disabling periodic retention leaves
-that startup recovery intact. No unpin or synthetic-close permission follows
+their policy or re-judging eligibility. Under the same try-only guard it
+re-reads the material: absent material records `recovery_absent`; material
+still present with the sealed byte count and SHA-256 is removed once under the
+original Intent and records `deleted` (or `failed`). Nothing is unlinked
+without that verification. Disabling periodic retention leaves that startup
+recovery intact. No unpin or synthetic-close permission follows
 from K/T.
 
 Explicit Lab unpin uses the existing `LabRequest` event type with a closed
