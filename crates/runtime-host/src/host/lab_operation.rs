@@ -46,10 +46,7 @@ impl HostShared {
                     "absolute package path required",
                 ));
             }
-            let observer = if matches!(
-                &input.expected_sha256,
-                actingcommand_contract::PackageRef::GitSourceTree(_)
-            ) {
+            let observer = if input.expected_sha256.is_directory_source() {
                 let deadline = Instant::now()
                     .checked_add(Duration::from_millis(
                         ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,

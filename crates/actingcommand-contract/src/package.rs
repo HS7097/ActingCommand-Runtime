@@ -80,13 +80,44 @@ impl GitSourceTree {
     }
 }
 
-/// The legacy string encoding preserves existing record bytes. Source references
-/// carry their own wire version and the entire Git identity in the same typed slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ContentDirectoryVersion {
+    #[serde(rename = "actingcommand.package.content-directory.v1")]
+    V1,
+}
+
+/// The domain line that opens every `content-directory.v1` digest input.
+pub const CONTENT_DIRECTORY_V1: &str = "actingcommand.package.content-directory.v1";
+
+/// A package identified only by the content of its directory: no repository, commit or
+/// path participates. `sha256` is the lowercase hex `content_directory_digest`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentDirectory {
+    pub schema_version: ContentDirectoryVersion,
+    pub sha256: String,
+}
+
+impl ContentDirectory {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.sha256.len() != 64 || !lower_hex(&self.sha256) {
+            return Err(RuntimeContractError::new(
+                "invalid_content_directory_reference",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The legacy string encoding preserves existing record bytes. Versioned references
+/// carry their own wire version and the entire identity in the same typed slot. The
+/// untagged variants are tried in order, so new variants are only ever appended.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PackageRef {
     LegacyZipSha256(String),
     GitSourceTree(Box<GitSourceTree>),
+    ContentDirectory(ContentDirectory),
 }
 
 // Older policy payloads can omit the binding. Keep them decodable; every
@@ -105,6 +136,7 @@ impl PackageRef {
             }
             Self::LegacyZipSha256(hash) => serde_json::Value::String(format!("sha256:{hash}")),
             Self::GitSourceTree(reference) => serde_json::json!(reference),
+            Self::ContentDirectory(reference) => serde_json::json!(reference),
         }
     }
 
@@ -117,21 +149,26 @@ impl PackageRef {
                 Ok(())
             }
             Self::GitSourceTree(value) => value.validate(),
+            Self::ContentDirectory(value) => value.validate(),
         }
     }
 
     pub fn legacy_sha256(&self) -> Option<&str> {
         match self {
             Self::LegacyZipSha256(value) => Some(value),
-            Self::GitSourceTree(_) => None,
+            Self::GitSourceTree(_) | Self::ContentDirectory(_) => None,
         }
+    }
+
+    /// The locator names a directory read by containment rather than a ZIP file.
+    pub fn is_directory_source(&self) -> bool {
+        matches!(self, Self::GitSourceTree(_) | Self::ContentDirectory(_))
     }
 
     pub fn parse_argument(value: &str) -> RuntimeContractResult<Self> {
         let reference = if value.trim_start().starts_with('{') {
+            // A JSON object can only decode as one of the versioned object references.
             serde_json::from_str(value)
-                .map(Box::new)
-                .map(Self::GitSourceTree)
                 .map_err(|_| RuntimeContractError::new("invalid_source_tree_reference"))?
         } else {
             Self::LegacyZipSha256(value.strip_prefix("sha256:").unwrap_or(value).to_owned())
@@ -215,6 +252,39 @@ fn lower_hex(value: &str) -> bool {
     value
         .bytes()
         .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// The final path segment when it has the digest form (64 lowercase hex digits).
+pub fn digest_named(path: &std::path::Path) -> Option<&str> {
+    path.file_name()?
+        .to_str()
+        .filter(|name| name.len() == 64 && lower_hex(name))
+}
+
+/// The single `content-directory.v1` digest: SHA-256 over the domain line followed by one
+/// `<hex sha256 of the bytes>  <path>\n` line per regular file, ordered by the UTF-8 bytes
+/// of the `/`-separated relative path. Callers supply distinct, already admitted paths.
+pub fn content_directory_digest<'a>(
+    files: impl IntoIterator<Item = (&'a str, [u8; 32])>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut files: Vec<_> = files.into_iter().collect();
+    // `str` ordering is the byte order of its UTF-8 encoding (`LC_ALL=C sort`).
+    files.sort_unstable_by_key(|file| file.0);
+    let mut hash = Sha256::new();
+    hash.update(CONTENT_DIRECTORY_V1.as_bytes());
+    hash.update(b"\n");
+    for (path, file) in files {
+        hash.update(lower_hex_string(&file).as_bytes());
+        hash.update(b"  ");
+        hash.update(path.as_bytes());
+        hash.update(b"\n");
+    }
+    lower_hex_string(&hash.finalize())
+}
+
+fn lower_hex_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Existing prefixed ZIP digest slots retain their canonical bytes while

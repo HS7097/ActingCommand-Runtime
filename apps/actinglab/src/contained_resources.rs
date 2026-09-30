@@ -215,7 +215,7 @@ impl PackageInput {
         )?;
         let reader = match &reference {
             PackageRef::LegacyZipSha256(_) => Some(open_published_package(&logical)?),
-            PackageRef::GitSourceTree(_) => None,
+            PackageRef::GitSourceTree(_) | PackageRef::ContentDirectory(_) => None,
         };
         let located = reader
             .as_ref()

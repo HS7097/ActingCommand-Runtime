@@ -3482,10 +3482,7 @@ fn prepare_contained_task(
             "contained_task_path_not_absolute",
         ));
     }
-    if matches!(
-        request.expected_sha256(),
-        actingcommand_contract::PackageRef::GitSourceTree(_)
-    ) {
+    if request.expected_sha256().is_directory_source() {
         return PreparedContainedTask::load_path(
             instance_alias,
             path,
@@ -4586,12 +4583,11 @@ impl HostShared {
             Some(token.lease_id()),
             None,
         ))?;
-        let source_deadline = matches!(
-            task_request.expected_sha256(),
-            actingcommand_contract::PackageRef::GitSourceTree(_)
-        )
-        .then(|| self.contained_task_deadline(task_request, token))
-        .transpose()?;
+        let source_deadline = task_request
+            .expected_sha256()
+            .is_directory_source()
+            .then(|| self.contained_task_deadline(task_request, token))
+            .transpose()?;
         let material_deadline = source_deadline
             .map(|deadline| self.package_material_deadline(deadline))
             .transpose()?

@@ -39,7 +39,8 @@ CLI envelope, legacy task, task operation, recognition pack, control and package
 reference. No common highest version is defined. Each resource still passes
 its existing version-specific validation; schema support does not prove an
 installed resource or provider is usable. Package references include the
-accepted typed Git source-tree version and the legacy ZIP digest form.
+accepted typed Git source-tree and content-directory versions and the legacy
+ZIP digest form.
 
 `lab unpin --artifact-id <artifact-id> --pin-sequence <sequence>
 --pin-event-id <event-id>` requires `running_runtime`. It releases only the named

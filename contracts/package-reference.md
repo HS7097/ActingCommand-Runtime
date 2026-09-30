@@ -27,7 +27,63 @@ trailing `.git`. `bundle_path` is a safe relative path, or `.` for the repositor
 All four identity components participate in equality. A changed path, repository or
 commit is a different reference even when the tree is equal.
 
-## Admission
+A content-directory reference is the third form in the same slot. It carries only the
+digest of the directory's content; no repository, commit or path participates:
+
+```json
+{
+  "schema_version": "actingcommand.package.content-directory.v1",
+  "sha256": "<64 lowercase hex digits>"
+}
+```
+
+The untagged variants are tried in order (ZIP string, Git source tree, content
+directory), so the object forms never decode as each other and existing ZIP strings and
+Git source-tree objects decode and re-encode byte-identically. `actingctl --package-ref`
+and the Lab `--package-ref` flags accept either object form.
+
+## Content-directory admission
+
+The locator names a local directory, typically named by its own digest. The directory
+itself is canonicalized first (links above it are resolved); every entry inside it is
+read without following links. Admission runs in this order under one deadline:
+
+1. The reference is validated and the locator must be absolute.
+2. If the last segment of the locator, or of its canonical form, has the digest form
+   (64 lowercase hex digits) and differs from the reference,
+   `content_directory_name_mismatch` is returned before any file is read. A directory
+   with any other name is verified only against the explicit reference.
+3. Every regular file at any depth is read into memory exactly once. Empty directories
+   do not contribute. Links, junctions and every other reparse point, including cloud
+   placeholders, fail with `content_directory_link_or_type`. A relative path must be
+   UTF-8 (`content_directory_path_encoding`), safe as defined for `bundle_path`, and
+   must not contain a `.git` segment (`content_directory_path_invalid`). Paths that
+   differ only by ASCII case fail with `content_directory_case_collision`; executable or
+   script extensions are rejected as for ZIP entries. A file that starts with
+   `version https://git-lfs.github.com/spec/v1` fails with
+   `content_directory_lfs_pointer`. The existing file count, per-file, total and
+   resident limits apply, and nesting is limited to 64 segments.
+4. The digest of those bytes is compared in constant time with the reference.
+   `content_directory_digest_mismatch` reports the expected and actual digests and the
+   file count. No JSON has been parsed at this point.
+5. The same snapshot is assembled in memory exactly as a verified Git source tree
+   (self-contained layout below) and issued with the content-directory reference.
+   Nothing is read from disk afterwards.
+
+The digest `content-directory.v1` is the lowercase hex SHA-256 of the line
+`actingcommand.package.content-directory.v1` followed by one line per file,
+`<lowercase hex SHA-256 of the raw bytes>  <relative path>` (two spaces), ordered by the
+UTF-8 bytes of the `/`-separated relative path; every line ends with `\n`. Raw bytes are
+hashed: line endings, byte-order marks, alternate data streams, timestamps and
+attributes are neither normalized nor included, and paths are not Unicode-normalized.
+`actingcommand_contract::content_directory_digest` is the single implementation. The
+same value can be recomputed with coreutils (Git Bash or Linux):
+
+```sh
+cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n'; find . -type f -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -b | sed 's/ \*/  /'; } | sha256sum -b | cut -c1-64
+```
+
+## Git source-tree admission
 
 The caller supplies a local Git worktree and materialized LFS files. The locator names
 the bundle directory. Containment uses installed Git's read-only object commands,
@@ -70,7 +126,8 @@ are converted together; references to missing resources fail before any input.
 ## Consumers
 
 `actingctl task-run` accepts `--package <directory> --package-ref <JSON>` and optional
-`--recovery-package <directory> --recovery-package-ref <JSON>`. The existing ZIP/hash
+`--recovery-package <directory> --recovery-package-ref <JSON>` for either directory
+reference form. The existing ZIP/hash
 flags remain accepted. Package-consuming Lab commands (debug/run, observe, do and
 resource restore) accept `--package <directory> --package-ref <JSON>` instead of their
 ZIP/hash flags. Evidence replay continues to use its independent evidence ZIP hash.
@@ -78,12 +135,14 @@ ZIP/hash flags. Evidence replay continues to use its independent evidence ZIP ha
 Runtime requests, prepared observations, effective configuration, task/recovery facts,
 Lab results and `EvidencePackage` carry the complete reference. `scheduled_execution`
 uses its existing `package_path` locator and the procedure binding's typed
-`package_digest`; admission and execution compare that same reference. Source binding
-fingerprints hash the canonical tuple of binding version, procedure alias, complete
-reference, operation ID and ordered yield points. ZIP bindings keep the original tuple.
+`package_digest`; admission and execution compare that same reference. Git source-tree
+and content-directory binding fingerprints hash the canonical tuple of binding version,
+procedure alias, complete reference, operation ID and ordered yield points. ZIP bindings
+keep the original tuple.
 The calendar driver transports the typed request/context through the existing calls.
 
 Forensics and resource restore consume the same reference and require the separately
-supplied exact source tree/LFS material for reconstruction. Evidence ZIP export/replay
+supplied exact material for reconstruction (the content directory, or the source
+tree with its LFS files). Evidence ZIP export/replay
 keeps its own byte SHA-256 and does not archive source material or guarantee its future
 availability. Current ZIP production and resource deployment remain available.
