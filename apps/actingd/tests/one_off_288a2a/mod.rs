@@ -229,11 +229,13 @@ fn exercise_fixture(label: &str, root: &Path, files: &BTreeMap<String, Vec<u8>>,
             digest.as_str(),
             "content_directory_digest_mismatch",
         ),
+        // The reference is the directory's own name, so another digest name refuses the
+        // content as a digest mismatch.
         (
-            "name differs from content",
+            "name of another digest",
             files,
             other.as_str(),
-            "content_directory_name_mismatch",
+            "content_directory_digest_mismatch",
         ),
     ] {
         let case_root = root.join(case.split(' ').next().expect("case").to_lowercase());
