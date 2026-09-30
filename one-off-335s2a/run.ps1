@@ -255,3 +255,5 @@ if ($failures.Count -gt 0) {
     throw "ONE-OFF-335S2A [$Label] $($failures.Count) check(s) did not match: $($failures -join ', ')"
 }
 Say 'every applicable check matched'
+# The last actinglab call is an expected rejection; do not leave its exit code as the step's.
+exit 0
