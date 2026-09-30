@@ -2,7 +2,7 @@
 
 use super::facts::FactPublicationPurpose;
 use super::*;
-use crate::ipc::{FrameRead, read_frame, write_frame};
+use crate::ipc::{FrameRead, FrameStart, read_started_frame, wait_frame_start, write_frame};
 use std::net::TcpStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -916,6 +916,8 @@ fn connection_loop(
     io_timeout: Duration,
     context: &mut ConnectionFailureContext,
 ) -> RuntimeHostResult<()> {
+    // Every read of a started frame is bounded by io_timeout; the idle wait before a frame is a
+    // non-blocking poll (ipc::wait_frame_start), so no receive timeout expires on an idle socket.
     stream
         .set_read_timeout(Some(io_timeout))
         .map_err(|_| protocol_error("set_read_timeout"))?;
@@ -932,10 +934,20 @@ fn connection_loop(
         context.links = EventLinksDraft::default();
         context.timing = ConnectionTiming::default();
         context.timing.receive.begin();
-        let received = read_frame(stream, maximum_frame_bytes);
+        let received = match wait_frame_start(stream, || shared.fatal.is_shutdown_requested()) {
+            Ok(FrameStart::Ready) => {
+                // Time the frame itself, not the idle wait before it.
+                context.timing.receive.begin();
+                read_started_frame(stream, maximum_frame_bytes)
+            }
+            Ok(FrameStart::Stopped) => Ok(FrameRead::Idle),
+            Ok(FrameStart::Closed) => Ok(FrameRead::Closed),
+            Err(error) => Err(error),
+        };
         context.timing.receive.finish(received.is_ok());
         let frame = match received {
             Ok(FrameRead::Data(frame)) => frame,
+            // Only after FrameStart::Stopped: the loop condition then ends the connection.
             Ok(FrameRead::Idle) => continue,
             Ok(FrameRead::Closed) => {
                 #[cfg(feature = "test-observation")]
