@@ -13,10 +13,12 @@ use crate::{
     MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
     MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE,
     MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
-    MAX_UTC_OFFSET_MINUTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
-    MIN_DST_OFFSET_MINUTES, MIN_UTC_OFFSET_MINUTES, MetricRef, ObservationRef, PoolSpec,
-    PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
-    ScopeSelector, TaskSpec, TimelineDocument,
+    MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
+    MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
+    MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_UTC_OFFSET_MINUTES, MetricRef,
+    ObservationRef, PoolSpec, PoolValuation, PredicateSpec, ResourceEffectSpec,
+    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
+    TimelineDocument,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -1210,6 +1212,75 @@ fn validate_pools(
                 descriptor,
             ));
         }
+        if let Some(valuation) = &pool.valuation {
+            validate_valuation(
+                valuation,
+                &format!("{path}/valuation"),
+                map,
+                descriptor,
+                diagnostics,
+            );
+        }
+    }
+}
+
+fn validate_valuation(
+    valuation: &PoolValuation,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    for (field, text, max_bytes) in [
+        ("name", &valuation.name, MAX_VALUATION_NAME_BYTES),
+        ("unit", &valuation.unit, MAX_VALUATION_UNIT_BYTES),
+    ] {
+        if text.len() > max_bytes {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("{path}/{field}"),
+                format!("valuation {field} exceeds {max_bytes} UTF-8 bytes"),
+                descriptor,
+            ));
+        }
+        if text.trim().is_empty() || text.chars().any(char::is_control) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::TypeMismatch,
+                format!("{path}/{field}"),
+                format!("valuation {field} must be nonblank text without control characters"),
+                descriptor,
+            ));
+        }
+    }
+    if valuation.scale == 0 || valuation.scale > MAX_CANONICAL_INTEGER as u64 {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/scale"),
+            format!("valuation scale must be within 1..={MAX_CANONICAL_INTEGER}"),
+            descriptor,
+        ));
+    }
+    if valuation.base_weight_milli > MAX_VALUATION_BASE_WEIGHT_MILLI {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/base_weight_milli"),
+            format!(
+                "valuation base_weight_milli must be within 0..={MAX_VALUATION_BASE_WEIGHT_MILLI}"
+            ),
+            descriptor,
+        ));
+    }
+    if let Some(gap) = &valuation.gap
+        && !(1..=MAX_VALUATION_GAP_WEIGHT_MILLI).contains(&gap.weight_milli)
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/gap/weight_milli"),
+            format!(
+                "valuation gap weight_milli must be within 1..={MAX_VALUATION_GAP_WEIGHT_MILLI}"
+            ),
+            descriptor,
+        ));
     }
 }
 
