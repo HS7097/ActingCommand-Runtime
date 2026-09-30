@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: HS7097/ActingCommand-UI
-          ref: dddf214e6db83fe9ee09b6c0321a7cd6efe8384b
+          ref: 148bf0aa4889eb641f2eabd947cb83493e6c3445
           path: ui
           persist-credentials: false
       - name: Check out the umbrella PR head
