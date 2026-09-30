@@ -16,6 +16,9 @@ use actingcommand_contract::{
     VerifiedArtifactReference,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+#[cfg(test)]
+#[path = "tests/one_off_r_san.rs"]
+mod one_off_r_san;
 mod prior_epoch;
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
