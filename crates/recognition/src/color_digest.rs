@@ -19,6 +19,7 @@ pub const MAX_GRID_AXIS: u32 = 32;
 pub const MAX_QUANTIZED_LEVEL: u8 = 31;
 
 const CHANNELS: usize = 3;
+const HEX_DIGITS_PER_CELL: usize = 2 * CHANNELS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorDigestErrorCode {
@@ -201,12 +202,13 @@ impl ColorDigest {
                 let mut sum = [0_u64; 3];
                 for y in y0..y1 {
                     let line = y as usize * stride;
-                    let span =
-                        &pixels[line + x0 as usize * CHANNELS..line + x1 as usize * CHANNELS];
-                    for pixel in span.chunks_exact(CHANNELS) {
-                        sum[0] += u64::from(pixel[0]);
-                        sum[1] += u64::from(pixel[1]);
-                        sum[2] += u64::from(pixel[2]);
+                    let (span, _) = pixels
+                        [line + x0 as usize * CHANNELS..line + x1 as usize * CHANNELS]
+                        .as_chunks::<CHANNELS>();
+                    for &[red, green, blue] in span {
+                        sum[0] += u64::from(red);
+                        sum[1] += u64::from(green);
+                        sum[2] += u64::from(blue);
                     }
                 }
                 let divisor = 8 * u64::from(x1 - x0) * u64::from(y1 - y0);
@@ -221,7 +223,7 @@ impl ColorDigest {
     /// every byte at most `0x1f`.
     pub fn from_hex(grid: ColorDigestGrid, hex: &str) -> ColorDigestResult<Self> {
         let cell_count = grid.cell_count() as usize;
-        let expected_len = 2 * CHANNELS * cell_count;
+        let expected_len = HEX_DIGITS_PER_CELL * cell_count;
         if hex.len() != expected_len {
             return Err(ColorDigestError::new(
                 ColorDigestErrorCode::CellsInvalid,
@@ -233,12 +235,14 @@ impl ColorDigest {
                 ),
             ));
         }
-        let digits = hex.as_bytes();
+        // The length check above leaves no partial cell.
+        let (digits, _) = hex.as_bytes().as_chunks::<HEX_DIGITS_PER_CELL>();
         let mut cells = Vec::with_capacity(cell_count);
-        for cell in digits.chunks_exact(2 * CHANNELS) {
+        for cell in digits {
             let mut channels = [0_u8; 3];
-            for (channel, pair) in channels.iter_mut().zip(cell.chunks_exact(2)) {
-                let byte = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+            let (pairs, _) = cell.as_chunks::<2>();
+            for (channel, &[high, low]) in channels.iter_mut().zip(pairs) {
+                let byte = (hex_nibble(high)? << 4) | hex_nibble(low)?;
                 if byte > MAX_QUANTIZED_LEVEL {
                     return Err(ColorDigestError::new(
                         ColorDigestErrorCode::CellsInvalid,
@@ -258,7 +262,7 @@ impl ColorDigest {
     /// The lowercase hex encoding, `6 * columns * rows` digits.
     pub fn to_hex(&self) -> String {
         const DIGITS: &[u8; 16] = b"0123456789abcdef";
-        let mut hex = String::with_capacity(self.cells.len() * 2 * CHANNELS);
+        let mut hex = String::with_capacity(self.cells.len() * HEX_DIGITS_PER_CELL);
         for byte in self.cells.iter().flatten() {
             hex.push(char::from(DIGITS[usize::from(byte >> 4)]));
             hex.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
