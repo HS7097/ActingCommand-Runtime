@@ -92,6 +92,17 @@ fn select_package() -> Vec<u8> {
         "server_scope": [SELECT_SERVER],
         "coordinate_space": {"width": width, "height": height},
         "target_page": "terminal",
+        "candidate_layouts": [{
+            "id": "layout/slots",
+            "page_id": "home",
+            "kind": "fixed_slots",
+            "features": [{"name": "open", "value": "passed"}],
+            "slots": [{
+                "rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "click": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "targets": {"open": "guard/ready"}
+            }]
+        }],
         "operations": [{
             "id": "choose_slot",
             "from": "home",
@@ -223,6 +234,7 @@ struct Run {
     events: Vec<PersistedEvent>,
     outcome: String,
     primary: String,
+    detail: String,
     inputs: usize,
     captures: usize,
     advanced: bool,
@@ -278,9 +290,10 @@ impl Run {
 
     fn print(&self, label: &str) {
         emit(&format!(
-            "{label} outcome={} primary={} inputs_device={} input_events={} captures_device={} clock_advanced={}",
+            "{label} outcome={} primary={} detail={} inputs_device={} input_events={} captures_device={} clock_advanced={}",
             self.outcome,
             self.primary,
+            self.detail,
             self.inputs,
             self.input_events(),
             self.captures,
@@ -406,15 +419,24 @@ fn manual_run(confirmation_capture: usize, refuse: bool) -> (Run, String) {
         done.store(true, Ordering::Release);
         result
     });
-    let (outcome, primary) = match &result {
+    let (outcome, primary, detail) = match &result {
         Ok(receipt) => (
             format!("receipt:{:?}", receipt.state()),
             format!(
                 "{:?}",
                 receipt.error_projection().map(|projection| projection.code)
             ),
+            format!("{:?}", receipt.error_projection()),
         ),
-        Err(error) => ("host_error".to_owned(), error.code().to_owned()),
+        Err(error) => (
+            "host_error".to_owned(),
+            error.code().to_owned(),
+            format!(
+                "declaration={:?} native={:?}",
+                error.resource_declaration(),
+                error.diagnostics().native_detail().map(|detail| detail.text())
+            ),
+        ),
     };
     let events = host
         .query_persisted_events_for_test(query)
@@ -423,6 +445,7 @@ fn manual_run(confirmation_capture: usize, refuse: bool) -> (Run, String) {
         events,
         outcome,
         primary,
+        detail,
         inputs: state.input_count.load(Ordering::Acquire),
         captures: state.capture_count.load(Ordering::Acquire),
         advanced: advanced.load(Ordering::Acquire),
@@ -507,15 +530,24 @@ fn scheduled_run(confirmation_capture: usize, refuse: bool) -> (Run, String) {
         done.store(true, Ordering::Release);
         result
     });
-    let (outcome, primary) = match &result {
+    let (outcome, primary, detail) = match &result {
         Ok(receipt) => (
             format!("receipt:{:?}", receipt.state()),
             format!(
                 "{:?}",
                 receipt.error_projection().map(|projection| projection.code)
             ),
+            format!("{:?}", receipt.error_projection()),
         ),
-        Err(error) => ("run_error".to_owned(), error.code().to_owned()),
+        Err(error) => (
+            "run_error".to_owned(),
+            error.code().to_owned(),
+            format!(
+                "declaration={:?} native={:?}",
+                error.resource_declaration(),
+                error.diagnostics().native_detail().map(|detail| detail.text())
+            ),
+        ),
     };
     let events = host
         .query_persisted_events_for_test(query)
@@ -524,6 +556,7 @@ fn scheduled_run(confirmation_capture: usize, refuse: bool) -> (Run, String) {
         events,
         outcome,
         primary,
+        detail,
         inputs: state.input_count.load(Ordering::Acquire),
         captures: state.capture_count.load(Ordering::Acquire),
         advanced: advanced.load(Ordering::Acquire),
@@ -539,8 +572,8 @@ fn find_confirmation_capture(
         let (attempt, closed) = run(confirmation_capture, false);
         let records = attempt.selection_evaluated();
         emit(&format!(
-            "{path} search fail_capture_on={confirmation_capture} outcome={} primary={} selection_evaluated={records:?} host={closed}",
-            attempt.outcome, attempt.primary
+            "{path} search fail_capture_on={confirmation_capture} outcome={} primary={} selection_evaluated={records:?} host={closed} detail={}",
+            attempt.outcome, attempt.primary, attempt.detail
         ));
         if records
             .iter()
