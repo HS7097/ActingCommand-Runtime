@@ -3362,6 +3362,9 @@ struct OperationGuard {
     verify_template: Option<String>,
     #[serde(default)]
     color_probe: Option<String>,
+    /// A named check (a `composite` target) guards the input, as in Runtime admission.
+    #[serde(default)]
+    check: Option<String>,
 }
 
 impl OperationGuard {
@@ -3388,9 +3391,9 @@ impl OperationGuard {
             )));
         }
         validate_guard_rect(self.expected_rect, &control.resolution)?;
-        if self.verify_template.is_none() && self.color_probe.is_none() {
+        if self.verify_template.is_none() && self.color_probe.is_none() && self.check.is_none() {
             return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' guard requires verify_template or color_probe"
+                "operation '{operation_id}' guard requires verify_template, color_probe or check"
             )));
         }
         Ok(())

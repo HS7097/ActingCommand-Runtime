@@ -94,15 +94,17 @@ declared by a template anchor (an `anchors[]` entry whose `id` is the page or st
 `<page>_`) or by a `page_rules.<page>` entry with a non-empty `required`, `optional` or
 `any_of`. No recognition backend is mandatory. A page declared only by its rule gets no
 implicit `page/<page>` target: its requirements are exactly the rule's targets, in any
-combination of `anchors` and `verify_templates` (template), `color_probes` (color) and
-`ocr_targets` (OCR). A page with an anchor keeps its `page/<page>` requirement (or the
-`any_of` group of its `<page>_*` variants, which a positive rule replaces) and adds the rule's
-targets. Every generated page needs a `required` target or an `any_of` group; the page
-detector refuses one without.
+combination of `anchors` and `verify_templates` (template), `color_probes` (color or color
+digest), `ocr_targets` (OCR) and `checks` (named checks). A page with an anchor keeps its
+`page/<page>` requirement (or the `any_of` group of its `<page>_*` variants, which a positive
+rule replaces) and adds the rule's targets. Every generated page needs a `required` target or
+an `any_of` group; the page detector refuses one without.
 
-A check that combines backends is one page rule requiring one target per backend, usually
-over the same region. The page matches only when every `required` target passes its own
-threshold, every `any_of` group has a passing target and no `forbidden` target passes:
+A check that combines backends is either one page rule requiring one target per backend,
+usually over the same region, or a named check of the `checks` family (below) that a page
+rule or an operation guard references as one target. The page matches only when every
+`required` target passes its own threshold, every `any_of` group has a passing target and no
+`forbidden` target passes:
 
 ```json
 {
@@ -125,6 +127,42 @@ threshold, every `any_of` group has a passing target and no `forbidden` target p
 | Backend | Declared in | A target passes when |
 | --- | --- | --- |
 | Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`) |
-| Template with color | `anchors[].color_check` | one candidate meets the template threshold and the color condition together (`template-relative-color.md`) |
-| Color | `color_probes[]` | the mean RGB of its region is within `defaults.color_max_distance` of `expected`; this distance is one value per package, taken from the entry task's `defaults` (20 when absent) |
+| Template with color | `anchors[].color_check` | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent |
+| Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected`; when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
+| Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
 | OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
+| Check | `checks[]` | `all_of`: every member passes; `any_of`: at least one member passes. Every member is evaluated with its own threshold (`selection-graph.md`, section Checks) |
+
+### Pack schema `0.7` declarations
+
+Task schemas `0.6` through `0.9` accept the following declarations without a schema change.
+An older task schema refuses each of them with `UnconsumedField` at its pointer. A source that
+uses none of them derives every document byte for byte as before.
+
+| Declaration | Rule |
+| --- | --- |
+| `checks[]` | `{"id", "all_of": [...]}` or `{"id", "any_of": [...]}`: exactly one of the two, with 2 to 8 distinct member IDs. Each member is a template, color, color digest, OCR or NN target of the derived pack, never another check. |
+| `color_probes[].max_distance`, `anchors[].color_check.max_distance` | Optional finite number `>= 0`, the target's own color threshold. |
+| `color_probes[].digest` | A color digest entry (`color-digest.md`, section Package declaration). A color probe declares exactly one of `expected` and `digest`; a digest entry has no `max_distance`. |
+| `operations[].guard.check` | A string naming the check that guards the input; the guard evaluates its `target_id`, which is that check. |
+
+A check, like a color digest, is never clicked and never locates anything. `guard.check`
+requires the guard target to be a `composite` target. `guard.color_probe` accepts a color or a
+color digest target. A `target`, `target_center` or `offset` click still requires a template
+guard (`guard.verify_template`).
+
+Color digest and check IDs share one namespace with every other target ID. The same ID with
+an identical definition, repeated by several tasks, is kept once; any other reuse of the ID
+is refused at the digest or check entry that reuses it (`/color_probes/<i>/id`,
+`/checks/<i>/id`), whichever family declared the ID first. The older families keep their
+first-declaration rule among themselves.
+
+Refusals carry the task's `task.json` and the JSON pointer of the offending field, with the
+reason `InvalidValue`, `InvalidType`, `MissingField`, `UnknownField` or `UnconsumedField`. A
+check member that is not a target of the derived pack, or is another check, is refused at
+`/checks/<i>/all_of/<j>` (or `any_of`). Every check of the selected tasks needs its members in
+the same build.
+
+Only `pack.json` is written at schema `0.7`, and only when it holds a `composite` or
+`color_digest` target or a per-target `max_distance`. The page set, navigation, operation
+index and primitives stay at `0.6`.

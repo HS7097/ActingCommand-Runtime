@@ -26,7 +26,14 @@ form. Its `anchor_target_id` must equal the containing template target's own ID:
 
 Authoring anchors use the same `color_check` object, with the final `page/<anchor>`
 ID. The native parser retains the relative declaration and checks its types, positive
-dimensions and self-anchor binding. Existing page-to-template color propagation
+dimensions and self-anchor binding.
+
+An absolute or relative `color_check` may also carry `max_distance`, a finite number
+`>= 0`: that check's own color threshold. It is a pack schema `0.7` construct. Task schemas
+`0.6` through `0.9` accept it in `anchors[].color_check`, and the parser then writes
+`pack.json` at schema `0.7` (`selection-graph.md`, section Checks); older pack schemas
+refuse it at `/targets/<i>/color_check/max_distance`. Without it the check uses
+`defaults.color_max_distance`, as before. Existing page-to-template color propagation
 binds the copied check to the destination template alias's own candidate. Expected
 RGB components are bytes; offsets and dimensions are signed 32-bit integers.
 Pack admission rejects unknown fields/modes, use on other target kinds, another
@@ -38,7 +45,8 @@ the template threshold and the color condition together. The color rectangle is
 the candidate's top-left plus the declared offset; the entire rectangle must fit
 the original frame. Arithmetic overflow or an out-of-frame rectangle disqualifies
 that candidate without clipping. Color uses the existing mean RGB and Euclidean
-distance predicate with `defaults.color_max_distance`.
+distance predicate with the check's `max_distance`, or `defaults.color_max_distance` when
+it declares none.
 
 The joint candidate with the highest raw template score is selected; equal raw
 scores retain the first `(y, x)` position. A lower-scoring candidate with valid color can win over a

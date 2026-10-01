@@ -37,7 +37,7 @@ file. The following is the member only, not a complete task:
 | `id` | `[A-Za-z0-9_\-/.:]`, `1..=128` bytes, unique in the task | `InvalidValue` @ `/resource_readings/<i>/id` |
 | `fact_key` | starts with `resource.` or `inventory.`, satisfies the instance fact key rule, unique in the task | `InvalidValue` @ `…/fact_key` |
 | `page_id` | an identifier like `id` (not `any`) that is one of the task's `scheduling_outcome` terminal pages; the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id` |
-| `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`, named by no page gate (`required`, `optional`, `any_of`, `forbidden`) | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
+| `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`, named by no page gate (`required`, `optional`, `any_of`, `forbidden`), directly or as a member of a check the page gate names | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
 | `value` | `type` `unsigned_integer` only; `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`; `min <= max <= 2^53-1` | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`) |
 | `minimum_confidence_milli` | `1..=1000` | `InvalidValue` @ `…/minimum_confidence_milli` |
