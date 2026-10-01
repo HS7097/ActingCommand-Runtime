@@ -34,6 +34,7 @@ fn test_operation(to: Option<&str>, verify_template: Option<&str>) -> Operation 
         from: "home".to_string(),
         to: to.map(|page| NormalizedPageSet(vec![page.to_string()])),
         application: None,
+        select: None,
         click: Some(OperationClick {
             kind: "point".to_string(),
             x: Some(100),
