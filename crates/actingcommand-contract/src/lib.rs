@@ -10,6 +10,7 @@
 
 pub mod agent;
 pub mod backend_open;
+pub mod candidate_projection;
 pub mod capture_geometry;
 pub mod emulator;
 pub mod event;
@@ -36,6 +37,7 @@ pub mod types;
 
 pub use agent::*;
 pub use backend_open::*;
+pub use candidate_projection::*;
 pub use capture_geometry::*;
 pub use emulator::*;
 pub use event::*;

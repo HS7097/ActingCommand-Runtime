@@ -22,6 +22,8 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `page-projection.md` — package annotations and the shared bounded single-frame page projection.
 - `runtime-fact-store.md` — the Runtime's own fact records (disjoint from instance facts), the memory-only store, and ledger-only persistence.
 - `selection-policy.md` — the declared selection document, its canonical identity, and the pure evaluator's semantics.
+- `candidate-projection.md` — `actingcommand.candidate-projection.v1`: one layout's candidate set on one frame, its IDs, hash, budgets and public/controlled forms.
+- `selection-graph.md` — the #308 selection graph; section Records: the `task.selection_evaluated` ledger record and its evaluator mirror.
 - `resource-targets.md` — the instance resource target policy: the v1 document, its rejection reasons, the `ApplyResourceTargets` entry and receipts, and its storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation").
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
@@ -194,7 +196,7 @@ task declares its entry page and scheduling outcome; it uses `navigable_route`
 with confirmation enabled and has no internal recovery or stability termination.
 Static reachability follows `(phase, page, designated effect)` through finite
 postconditions. The designated operation is nonretryable and cannot be reachable
-again after its effect. Source conversion, build and Runtime admission share this
+again after its effect. Source parsing, build and Runtime admission share this
 check; the operation and control phase declarations must match exactly.
 
 Phases retain one Task/Run/lease, cumulative steps and the original deadline.

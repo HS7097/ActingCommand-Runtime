@@ -25,7 +25,7 @@ and `operation explain` keep their existing behavior.
 | `scheduling/procedure-manifest.*.json` | Shared `ProcedureBindingConfigFile` / `ScheduledExecutionConfigFile` serde declarations |
 | `control.json` | The source control declaration validator and production task-control parser |
 | `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
-| Converter semantic-mapping and task-facts declarations | The converter's existing declaration-pair rules |
+| Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
 A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
 (`contracts/resource-readings.md`); in `0.3`–`0.7` it is `UnconsumedField` @
@@ -53,7 +53,7 @@ root. Paths are relative to their actual repository or resource subroot. Nested 
 roots are supported without identifying a game in the Runtime. Task validation
 reads the corresponding `operations/resources.json` and only the JSON
 dependencies requested by the shared declaration parser. MAA pair validation
-uses the first operation's declared game, matching the existing converter.
+uses the first operation's declared game, matching the existing parser.
 
 Repository provenance (`manifest.yaml`), `.github` configuration, upstream and
 archived material, art catalogs (including historical equipment metadata), and

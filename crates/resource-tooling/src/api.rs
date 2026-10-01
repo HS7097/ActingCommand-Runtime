@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::{BundleIndexV2, BundleSource, ContentDirectory};
 use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use serde_json::Value;
@@ -7,7 +8,7 @@ use std::path::PathBuf;
 
 /// A source entry or all generated package payloads may use at most 32 MiB.
 /// The supported minimum packaging environment reserves 512 MiB of process
-/// headroom; this one-sixteenth share leaves room for conversion, ZIP state,
+/// headroom; this one-sixteenth share leaves room for parsing, ZIP state,
 /// and validation while source assets use the fixed streaming buffer.
 pub const DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 
@@ -111,6 +112,42 @@ pub struct PackageBuildCatalogMetadata {
     pub from_remote: Option<String>,
     pub game: String,
     pub server: String,
+}
+
+/// Workflow #288 A2b `package digest`: one local package directory.
+#[derive(Debug, Clone)]
+pub struct PackageDigestRequest {
+    pub package: PathBuf,
+}
+
+/// The directory's content-directory reference, from a full admission against it.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageDigestResponse {
+    pub status: String,
+    pub package: String,
+    pub reference: ContentDirectory,
+    pub package_id: String,
+    pub server: String,
+    pub entry_task_id: String,
+    pub file_count: usize,
+    pub byte_count: u64,
+}
+
+/// Workflow #288 A2b `package bundle`: the applications table, the directory holding one
+/// source directory per task pack, and the new output directory.
+#[derive(Debug, Clone)]
+pub struct PackageBundleRequest {
+    pub applications: PathBuf,
+    pub packs_root: PathBuf,
+    pub out: PathBuf,
+    pub source: Option<BundleSource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageBundleResponse {
+    pub status: String,
+    pub out: String,
+    pub index: BundleIndexV2,
 }
 
 #[derive(Debug, Clone)]

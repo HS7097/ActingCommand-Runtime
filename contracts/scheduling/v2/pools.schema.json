@@ -74,6 +74,27 @@
               "additionalProperties": false
             }
           ]
+        },
+        "valuation": { "$ref": "#/$defs/valuation" }
+      },
+      "additionalProperties": false
+    },
+    "valuation": {
+      "type": "object",
+      "required": ["name", "unit", "scale", "base_weight_milli"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$" },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$" },
+        "scale": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "base_weight_milli": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "gap": {
+          "type": "object",
+          "required": ["rule", "weight_milli"],
+          "properties": {
+            "rule": { "const": "shortfall_linear" },
+            "weight_milli": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

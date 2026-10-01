@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Pure operation conversion over supplied source data and byte snapshots.
+//! Pure operation parsing over supplied source data and byte snapshots.
 //! No resource admission or filesystem reads occur in this module.
 
 #![forbid(unsafe_code)]
-// Conversion keeps the existing LabError-by-value API.
+// Parsing keeps the existing LabError-by-value API.
 #![allow(clippy::result_large_err)]
 
 use actingcommand_contract::page_projection::{ProjectionCatalog, ProjectionMetadata};
@@ -35,7 +35,7 @@ pub use declarations::{
     validate_resource_declarations,
 };
 
-/// File data needed by conversion; metadata-only templates are not decoded.
+/// File data needed by parsing; metadata-only templates are not decoded.
 #[derive(Debug, Clone, Copy)]
 pub enum SourceRead {
     Metadata,
@@ -44,7 +44,7 @@ pub enum SourceRead {
 }
 
 /// Collect dependencies without reading files. Invalid declarations are rejected by
-/// the normal conversion checks, before any captured read error is consumed.
+/// the normal parsing checks, before any captured read error is consumed.
 pub fn source_file_requests(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceRead> {
     let mut requests = BTreeMap::new();
     let mut add = |path: PathBuf, read: SourceRead| {
@@ -113,12 +113,12 @@ pub struct SourceFile {
     pub bytes: Result<Vec<u8>, String>,
 }
 #[derive(Debug, Clone)]
-pub struct ConversionFiles {
+pub struct ParseFiles {
     pub files: Arc<BTreeMap<PathBuf, SourceFile>>,
     pub projection_bytes: Result<Option<Vec<u8>>, String>,
     pub projection_exists: Result<bool, String>,
 }
-impl ConversionFiles {
+impl ParseFiles {
     fn is_file(&self, path: &Path) -> bool {
         self.files.get(path).is_some_and(|file| file.is_file)
     }
@@ -141,7 +141,7 @@ impl ConversionFiles {
 #[derive(Debug)]
 struct SourceAssetResolver {
     root: PathBuf,
-    files: ConversionFiles,
+    files: ParseFiles,
 }
 impl AssetResolver for SourceAssetResolver {
     fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>> {
@@ -194,7 +194,7 @@ pub fn canonical_locale(value: &str) -> CliOutcome<String> {
 }
 
 #[derive(Debug)]
-pub struct OperationConverter {
+pub struct OperationParser {
     pub root: PathBuf,
     pub game: String,
     pub server: String,
@@ -215,7 +215,7 @@ pub struct Bundle {
 }
 
 #[derive(Debug)]
-pub struct ConvertOutputs {
+pub struct ParseOutputs {
     pub pack: Value,
     pub pages: Value,
     pub navigation: Value,
@@ -224,7 +224,7 @@ pub struct ConvertOutputs {
     pub projection_metadata: Option<Value>,
 }
 
-impl OperationConverter {
+impl OperationParser {
     fn enrich_template_source(&self, source: &Value, source_task_id: &str) -> CliOutcome<Value> {
         if self.maa_task_overlays.is_empty() {
             return Ok(source.clone());
@@ -266,7 +266,7 @@ impl OperationConverter {
         Ok(Value::Object(out))
     }
 
-    pub fn build_all(&self, files: &ConversionFiles) -> CliOutcome<ConvertOutputs> {
+    pub fn build_all(&self, files: &ParseFiles) -> CliOutcome<ParseOutputs> {
         let mut outputs = self.build_resources(files)?;
         let path = self
             .root
@@ -294,7 +294,7 @@ impl OperationConverter {
         Ok(outputs)
     }
 
-    fn projection_catalog(&self, outputs: &ConvertOutputs) -> CliOutcome<ProjectionCatalog> {
+    fn projection_catalog(&self, outputs: &ParseOutputs) -> CliOutcome<ProjectionCatalog> {
         let mut catalog =
             ProjectionCatalog::from_resources(&outputs.pack, &outputs.pages, &outputs.navigation)?;
         for bundle in &self.bundles {
@@ -303,15 +303,15 @@ impl OperationConverter {
         Ok(catalog)
     }
 
-    fn build_resources(&self, files: &ConversionFiles) -> CliOutcome<ConvertOutputs> {
+    fn build_resources(&self, files: &ParseFiles) -> CliOutcome<ParseOutputs> {
         self.build_resources_with_dependencies(&[], files)
     }
 
     fn build_resources_with_dependencies(
         &self,
         dependencies: &[Bundle],
-        files: &ConversionFiles,
-    ) -> CliOutcome<ConvertOutputs> {
+        files: &ParseFiles,
+    ) -> CliOutcome<ParseOutputs> {
         let pack = if dependencies.is_empty() {
             self.build_pack(files)?
         } else {
@@ -323,8 +323,8 @@ impl OperationConverter {
         let navigation = self.build_navigation()?;
         let index = self.build_index()?;
         let primitives = self.build_primitives()?;
-        validate_converted_guard_references(&pack, &pages, &primitives)?;
-        Ok(ConvertOutputs {
+        validate_parsed_guard_references(&pack, &pages, &primitives)?;
+        Ok(ParseOutputs {
             pages,
             navigation,
             index,
@@ -337,8 +337,8 @@ impl OperationConverter {
     pub fn build_selected(
         &self,
         task_ids: &[String],
-        files: &ConversionFiles,
-    ) -> CliOutcome<ConvertOutputs> {
+        files: &ParseFiles,
+    ) -> CliOutcome<ParseOutputs> {
         let selected = self
             .bundles
             .iter()
@@ -536,7 +536,7 @@ impl OperationConverter {
             .collect())
     }
 
-    pub fn validate_bundles(&self, files: &ConversionFiles) -> CliOutcome<()> {
+    pub fn validate_bundles(&self, files: &ParseFiles) -> CliOutcome<()> {
         for bundle in &self.bundles {
             validate_bundle_declarations(bundle, files)?;
         }
@@ -785,14 +785,14 @@ impl OperationConverter {
         }
     }
 
-    pub fn build_pack(&self, files: &ConversionFiles) -> CliOutcome<Value> {
+    pub fn build_pack(&self, files: &ParseFiles) -> CliOutcome<Value> {
         self.build_pack_with_dependencies(&[], files)
     }
 
     fn build_pack_with_dependencies(
         &self,
         dependencies: &[Bundle],
-        files: &ConversionFiles,
+        files: &ParseFiles,
     ) -> CliOutcome<Value> {
         let recognition_defaults = self
             .defaults
@@ -2707,10 +2707,7 @@ fn validate_post_admission_ocr_target_region(
     Ok(())
 }
 
-pub fn validate_post_admission_ocr_bundle(
-    bundle: &Bundle,
-    files: &ConversionFiles,
-) -> CliOutcome<()> {
+pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -> CliOutcome<()> {
     let schema = bundle
         .data
         .get("schema_version")
@@ -3056,11 +3053,7 @@ fn add_ocr_target(
     Ok(())
 }
 
-fn validate_generated_ocr_targets(
-    root: &Path,
-    pack: &Value,
-    files: &ConversionFiles,
-) -> CliOutcome<()> {
+fn validate_generated_ocr_targets(root: &Path, pack: &Value, files: &ParseFiles) -> CliOutcome<()> {
     let mut ocr_targets = array_field(pack, "targets")
         .iter()
         .filter(|target| target.get("type").and_then(Value::as_str) == Some("ocr"))
@@ -3855,11 +3848,7 @@ fn template_target_id(template_rel: &str) -> String {
     format!("template/{}", stem.to_ascii_lowercase())
 }
 
-fn validate_pack_targets_exist(
-    root: &Path,
-    pack: &Value,
-    files: &ConversionFiles,
-) -> CliOutcome<()> {
+fn validate_pack_targets_exist(root: &Path, pack: &Value, files: &ParseFiles) -> CliOutcome<()> {
     let mut errors = Vec::new();
     for target in array_field(pack, "targets") {
         let Some(path) = target.get("template_path").and_then(Value::as_str) else {
@@ -3935,7 +3924,7 @@ fn validate_page_rule_targets(pack: &Value, bundles: &[Bundle]) -> CliOutcome<()
     }
 }
 
-fn validate_converted_guard_references(
+fn validate_parsed_guard_references(
     pack: &Value,
     pages: &Value,
     primitives: &Value,
@@ -3964,7 +3953,7 @@ fn validate_converted_guard_references(
             continue;
         };
         let page_id = guard.get("page_id").and_then(Value::as_str).unwrap_or("");
-        if !converted_page_id_exists(game, &page_ids, page_id) {
+        if !parsed_page_id_exists(game, &page_ids, page_id) {
             errors.push(format!(
                 "operation '{operation_id}' guard.page_id '{page_id}' does not exist in pages"
             ));
@@ -4020,7 +4009,7 @@ fn validate_converted_guard_references(
     }
 }
 
-fn converted_page_id_exists(game: &str, page_ids: &HashSet<String>, guard_page_id: &str) -> bool {
+fn parsed_page_id_exists(game: &str, page_ids: &HashSet<String>, guard_page_id: &str) -> bool {
     guard_page_id == "any"
         || page_ids.contains(guard_page_id)
         || (!game.is_empty() && page_ids.contains(&page_id(game, guard_page_id)))

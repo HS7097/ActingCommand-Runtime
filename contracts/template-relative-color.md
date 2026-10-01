@@ -25,7 +25,7 @@ form. Its `anchor_target_id` must equal the containing template target's own ID:
 ```
 
 Authoring anchors use the same `color_check` object, with the final `page/<anchor>`
-ID. Native convert retains the relative declaration and checks its types, positive
+ID. The native parser retains the relative declaration and checks its types, positive
 dimensions and self-anchor binding. Existing page-to-template color propagation
 binds the copied check to the destination template alias's own candidate. Expected
 RGB components are bytes; offsets and dimensions are signed 32-bit integers.
@@ -66,6 +66,6 @@ current scene evaluation and the existing GlobalLedger diagnostic path.
 
 The four neutral regression scenarios are: a high-scoring gray status row; a lower
 scoring valid row that moves; color without a matching template; and declaration /
-resolved-region boundaries, including native convert and alias binding. Existing
+resolved-region boundaries, including the native parser and alias binding. Existing
 absolute-color, OCR-region and fail-closed specifications remain in workspace CI.
 First-failure and assignment: [Workflow #279, TEMPLATE-MATCH-COLOR-v1](https://github.com/HS7097/ActingCommand-Workflow/issues/279).

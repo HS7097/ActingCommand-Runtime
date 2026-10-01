@@ -18,8 +18,8 @@ const CHECK_CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v1
 /// Inputs this command cannot validate: the vision provider manifest is only read and
 /// validated inside host startup, and nothing under `state_root` is inspected here.
 const NOT_CHECKED: [&str; 2] = ["vision_provider_manifest", "state_root"];
-/// Added to `not_checked` when a `resource_package` is a directory: the package loader reads
-/// a directory only against a Git source-tree reference, which the field does not carry.
+/// Added to `not_checked` when a `resource_package` is a directory whose name is not a content
+/// digest: the field carries no reference to admit such a directory against (Workflow #288).
 const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
 /// Added to `not_checked` when no MuMu install root could be resolved.
 const MUMU_DISCOVERY_NOT_CHECKED: &str = "mumu_discovery";
@@ -205,10 +205,10 @@ fn summarize(
         }
     }
     let mut not_checked = NOT_CHECKED.to_vec();
-    if resource_packages
-        .values()
-        .any(|package| package.kind == InstanceResourcePackageKind::Directory)
-    {
+    if resource_packages.values().any(|package| {
+        package.kind == InstanceResourcePackageKind::Directory
+            && actingcommand_contract::digest_named(Path::new(&package.path)).is_none()
+    }) {
         not_checked.push(RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED);
     }
     let (mumu_root, mumu_root_unresolved) = mumu_root_report(

@@ -287,6 +287,134 @@ fn lower_hex_string(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BundleIndexVersion {
+    #[serde(rename = "actingcommand.bundle.v2")]
+    V2,
+}
+
+/// Where a bundle's packs were built from. Information only: it never takes part in a
+/// pack's identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleSource {
+    /// `<owner>/<name>`.
+    pub repository: String,
+    /// The lowercase hex commit id.
+    pub commit: String,
+}
+
+impl BundleSource {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        let segment = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 100
+                && value != "."
+                && value != ".."
+                && value
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        };
+        let repository = self
+            .repository
+            .split_once('/')
+            .is_some_and(|(owner, name)| segment(owner) && segment(name));
+        if !repository || !matches!(self.commit.len(), 40 | 64) || !lower_hex(&self.commit) {
+            return Err(RuntimeContractError::new("invalid_bundle_source"));
+        }
+        Ok(())
+    }
+}
+
+/// One task pack of a bundle: the content directory `path` (`packs/<digest>`), whose
+/// `content-directory.v1` digest is `digest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundlePackV2 {
+    pub package_id: String,
+    pub server: String,
+    pub entry_task_id: String,
+    pub digest: String,
+    pub path: String,
+    pub file_count: u64,
+    pub byte_count: u64,
+}
+
+impl BundlePackV2 {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if !bundle_identifier(&self.server)
+            || !bundle_text(&self.package_id)
+            || !bundle_text(&self.entry_task_id)
+            || self.file_count == 0
+        {
+            return Err(RuntimeContractError::new("invalid_bundle_pack"));
+        }
+        if self.digest.len() != 64
+            || !lower_hex(&self.digest)
+            || self.path != format!("packs/{}", self.digest)
+        {
+            return Err(RuntimeContractError::new("invalid_bundle_pack_path"));
+        }
+        Ok(())
+    }
+}
+
+/// `bundle.json` of a standard package's resource section (Workflow #288): each package id
+/// mapped to its hash-named content directory. A file format only, never persisted in the
+/// ledger. It names no default package: the applications table beside it does
+/// (`servers.<server>.default_package_id`). Version 1 remains a separate shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleIndexV2 {
+    pub schema_version: BundleIndexVersion,
+    pub game: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<BundleSource>,
+    pub packs: Vec<BundlePackV2>,
+}
+
+impl BundleIndexV2 {
+    /// At least one pack; package ids and digests unique; every `path` is `packs/<digest>`.
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if !bundle_identifier(&self.game) || self.packs.is_empty() {
+            return Err(RuntimeContractError::new("invalid_bundle_index"));
+        }
+        if let Some(source) = &self.source {
+            source.validate()?;
+        }
+        let mut package_ids = std::collections::BTreeSet::new();
+        let mut digests = std::collections::BTreeSet::new();
+        for pack in &self.packs {
+            pack.validate()?;
+            if !package_ids.insert(pack.package_id.as_str())
+                || !digests.insert(pack.digest.as_str())
+            {
+                return Err(RuntimeContractError::new("duplicate_bundle_pack"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A game or server key of a bundle: 1-128 bytes of `[a-z0-9._-]`, usable as one path segment.
+fn bundle_identifier(value: &str) -> bool {
+    value.len() <= 128
+        && !value.contains('/')
+        && safe_source_path(value)
+        && value != "."
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"._-".contains(&c))
+}
+
+/// A package or task id of a bundle: 1-128 bytes, trimmed, without control characters.
+fn bundle_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
 /// Existing prefixed ZIP digest slots retain their canonical bytes while
 /// source-tree values carry the common versioned reference.
 pub mod prefixed_reference {

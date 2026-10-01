@@ -33,7 +33,7 @@ An operation carries exactly one effect: the existing `click` object, or
   other key is accepted inside `application`; `click` and `application` on one operation, or
   neither, is a declaration error.
   Null is not an effect: two absent/null effects are rejected at the source declaration
-  entrance with the original structured path/reason, before conversion or packaging.
+  entrance with the original structured path/reason, before parsing or packaging.
 - Execution resolves the instance's `application_id` and drives the existing
   `ApplicationLifecycle` path (`control_application`: adb `force-stop` for `stop`, `monkey`
   launch for `launch`, both for `restart`) under the run's lease, with the task and run ids on
@@ -145,7 +145,9 @@ Instance configuration (`actingd`, `contracts/actingd-check-config.md`):
 Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: a ZIP
 locator (relative paths resolve against the configuration file's directory; the assembled
 path must be absolute) and the bare lowercase hex digest; the response deadline is the
-contract maximum. Nothing is opened or hashed at assembly or startup: `check-config` echoes
+contract maximum. A locator whose last segment equals the digest names a content directory
+(Workflow #288) and is run with that content-directory reference
+(`contracts/package-reference.md`); the configuration shape is unchanged. Nothing is opened or hashed at assembly or startup: `check-config` echoes
 the declaration per instance and counts them as `instances_startup_package_count`; host
 startup binds each alias to a registered physical instance
 (`startup_package_instance_unknown`, `startup_package_requires_physical_instance` are fatal;
@@ -166,9 +168,13 @@ instance found already running at daemon startup pull nothing.
 The package runs only after ADB is ready: the scheduling thread probes the ADB baseline once
 more before admission, and a failed probe is `startup_package_adb_not_ready`
 (`backend_operation_failed`), recorded without a lease. Typed admission codes:
-`startup_package_missing` (the locator does not open), `startup_package_admission_failed`
+`startup_package_missing` (a ZIP locator that does not open), `startup_package_admission_failed`
 (every other admission refusal; the underlying `contained_task_package_*` code is the related
-failure), both `package_invalid`; all three are recorded before any lease as `runtime.failed`
+failure). For a digest-named content-directory locator (Workflow #288) a missing or
+unreadable directory is also `startup_package_admission_failed`, with the loader's code as the
+related failure (for example `content_directory_missing` or
+`content_directory_digest_mismatch`). Both are `package_invalid`; all three are recorded
+before any lease as `runtime.failed`
 (category `startup_package`, stage `operation_cleanup`) under the instance and the causation
 id. Failures after admission are the ordinary contained task failures (`task.failed`, lease
 release, `runtime.failed` on the cleanup path).

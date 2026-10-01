@@ -99,7 +99,7 @@ run filters, execute source code or write derived resources. Every operation sha
 absolute admission deadline and the existing file count, byte and resident limits.
 
 Only after the entire snapshot is verified may it be parsed. The same in-memory bytes
-feed the pure converter owned by `pack-containment::source` and the normal reference
+feed the pure parser owned by `pack-containment::source` and the normal reference
 closure/recognition/navigation validation. The entry execution document also uses the
 existing `canonical_task` transformation (including inferred guards and canonical click
 geometry). The loaded capability retains original source entry bytes for provenance and
@@ -110,9 +110,9 @@ restore alongside that derived execution document.
 The bundle contains `control.json` with the existing Lab control fields, and:
 
 - `resources/operations/resources.json`: shared resource IDs and optional authored
-  `control_points` used by navigation conversion.
+  `control_points` used by navigation parsing.
 - `resources/operations/<task>/task.json`: original operation declarations. The entry
-  operation supplies `locale`, `coordinate_space` and `defaults` for conversion;
+  operation supplies `locale`, `coordinate_space` and `defaults` for parsing;
   `control.json` supplies canonical `game`, `server` and `entry_task_id`.
 - All referenced templates, OCR dictionaries/truth sets and operation dependencies at
   their declared local paths inside this tree.
@@ -121,7 +121,62 @@ The bundle contains `control.json` with the existing Lab control fields, and:
 Recognition pack/pages, navigation, operation index, primitives and the dependency
 hash index are derived only in memory. A source tree containing those generated output
 paths is rejected. All operations and shared dependencies in the self-contained bundle
-are converted together; references to missing resources fail before any input.
+are parsed together; references to missing resources fail before any input.
+
+## Content-directory tools and the bundle index
+
+`actinglab package digest --package <directory>` reads the directory with the loader's own
+snapshot (the rules of "Content-directory admission" without the name comparison), computes
+its content-directory reference and then admits the directory in full against that
+reference, so a digest-form name that differs from the content fails
+`content_directory_name_mismatch`. It prints `reference` (the object above), the
+`package_id`, `server` and `entry_task_id` stated by `control.json`, `file_count` and
+`byte_count`. An author directory with any other name is used with that reference through
+the explicit `--package-ref` flags; no command derives a reference from a path by itself.
+A refusal is `package_invalid` with the loader's code, plus the computed digest once the
+snapshot was read.
+
+`actinglab package bundle --applications <file> --packs-root <directory> --out <new
+directory> [--source-repository <owner>/<name> --source-commit <commit>]` lays out the
+resource section of a standard package:
+
+```text
+applications.json          the given applications table, copied byte for byte
+bundle.json                actingcommand.bundle.v2
+packs/<digest>/control.json
+packs/<digest>/resources/...
+```
+
+Every entry of `--packs-root` must be one pack source directory (anything else fails
+`package_bundle_packs_root_invalid`). Each is read with the same snapshot; only
+`control.json` and `resources/**` are copied into `packs/<digest>/`, and the copy is
+read again and admitted in full under that name. Its `control.json` must state the
+applications table's `game` and one of its servers (`package_bundle_pack_mismatch`), and
+every `servers.<server>.default_package_id` must name a pack of that server
+(`package_bundle_default_package_missing`). The output is written to `<out>.part` and
+renamed to `--out` only when complete; `--out` and `<out>.part` must not exist
+(`package_bundle_out_exists`). A failure leaves `<out>.part` in place and names it; nothing
+is removed.
+
+The bundle index (`actingcommand_contract::BundleIndexV2`, checked by `validate()`) is a
+file format only and is never recorded in the ledger:
+
+```json
+{"schema_version":"actingcommand.bundle.v2","game":"neutral",
+ "source":{"repository":"example-owner/neutral-resources","commit":"<40 lowercase hex digits>"},
+ "packs":[{"package_id":"neutral.test.task","server":"test","entry_task_id":"task",
+           "digest":"<64 lowercase hex digits>","path":"packs/<same digest>",
+           "file_count":4,"byte_count":1234}]}
+```
+
+`game` and `server` are 1-128 bytes of `[a-z0-9._-]` usable as one path segment;
+`package_id` and `entry_task_id` are trimmed text of 1-128 bytes. At least one pack is
+listed, package ids and digests are unique, `path` is exactly `packs/` plus `digest` and
+`file_count` is positive. `source` is optional information (`<owner>/<name>` and a 40 or
+64 digit lowercase hex commit) and never part of a pack's identity; the index carries no
+version or tag. It names no default package: the applications table beside it does. The
+version 1 index (`actingcommand.bundle.v1`, ZIP packs and `default_packs`) is a separate
+shape; its readers are unchanged.
 
 ## Consumers
 

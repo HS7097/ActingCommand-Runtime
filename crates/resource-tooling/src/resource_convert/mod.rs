@@ -4,11 +4,11 @@ use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
 use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
 pub(crate) use actingcommand_pack_containment::source::validate_phases_bundle;
 use actingcommand_pack_containment::source::{
-    self, ConversionFiles, SourceFile, SourceRead, canonical_resource_identifier,
-    first_server_scope, required_string, resource_ids, string_field,
+    self, ParseFiles, SourceFile, SourceRead, canonical_resource_identifier, first_server_scope,
+    required_string, resource_ids, string_field,
 };
 pub use actingcommand_pack_containment::source::{
-    Bundle, ConvertOutputs, canonical_game, canonical_locale, canonical_server,
+    Bundle, ParseOutputs, canonical_game, canonical_locale, canonical_server,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -82,35 +82,35 @@ pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceC
     let resource_root = resolve_resource_root(&request.repo);
     let repo = &resource_root.root;
     let game_override = request.game.as_deref().map(canonical_game).transpose()?;
-    let mut converter = OperationConverter::load(
+    let mut parser = OperationParser::load(
         repo,
         game_override.as_deref(),
         request.server.as_deref(),
         request.locale.as_deref(),
     )?;
-    let maa_semantic_mappings = admit_maa_semantic_mapping(repo, &converter.game)?;
+    let maa_semantic_mappings = admit_maa_semantic_mapping(repo, &parser.game)?;
     let maa_tasks_root = request.maa_tasks_root;
     if let Some(tasks_root) = maa_tasks_root.as_deref() {
-        converter.load_maa_task_overlays(tasks_root)?;
+        parser.load_maa_task_overlays(tasks_root)?;
     }
-    let outputs = converter.build_all()?;
+    let outputs = parser.build_all()?;
     let dry_run = request.dry_run;
     if !dry_run {
         write_outputs(&outputs, repo)?;
     }
     let maa_compiled_tasks = maa_tasks_root
         .as_ref()
-        .map(|_| converter.maa_task_overlays.len());
+        .map(|_| parser.maa_task_overlays.len());
     Ok(ResourceConvertResponse {
         repo: resource_root.input.display().to_string(),
         resource_root: repo.display().to_string(),
         resource_layout: resource_root.layout.to_string(),
-        game: converter.game,
-        server: converter.server,
-        locale: converter.locale,
+        game: parser.game,
+        server: parser.server,
+        locale: parser.locale,
         dry_run,
         maa_semantic_mappings,
-        bundles: converter.bundles.len(),
+        bundles: parser.bundles.len(),
         targets: outputs
             .pack
             .get("targets")
@@ -399,7 +399,7 @@ fn looks_like_resource_root(path: &Path) -> bool {
 }
 
 #[derive(Debug)]
-pub struct OperationConverter {
+pub struct OperationParser {
     pub root: PathBuf,
     pub game: String,
     pub server: String,
@@ -412,7 +412,7 @@ pub struct OperationConverter {
     maa_task_overlays: HashMap<String, Value>,
 }
 
-fn write_outputs(outputs: &ConvertOutputs, repo: &Path) -> CliOutcome<()> {
+fn write_outputs(outputs: &ParseOutputs, repo: &Path) -> CliOutcome<()> {
     let game = required_string(&outputs.pack, "game")?;
     let server = required_string(&outputs.pack, "server")?;
     let stem = format!("{game}.{server}");
@@ -440,7 +440,7 @@ fn write_outputs(outputs: &ConvertOutputs, repo: &Path) -> CliOutcome<()> {
     )
 }
 
-impl OperationConverter {
+impl OperationParser {
     pub fn load(
         root: &Path,
         game_override: Option<&str>,
@@ -508,7 +508,7 @@ impl OperationConverter {
         } else {
             None
         };
-        let converter = Self {
+        let parser = Self {
             root,
             game,
             server,
@@ -520,10 +520,8 @@ impl OperationConverter {
             existing_navigation,
             maa_task_overlays: HashMap::new(),
         };
-        converter
-            .core()
-            .validate_bundles(&capture_files(&converter))?;
-        Ok(converter)
+        parser.core().validate_bundles(&capture_files(&parser))?;
+        Ok(parser)
     }
 
     pub(super) fn load_maa_task_overlays(&mut self, tasks_root: &Path) -> CliOutcome<()> {
@@ -536,8 +534,8 @@ impl OperationConverter {
         Ok(())
     }
 
-    fn core(&self) -> source::OperationConverter {
-        source::OperationConverter {
+    fn core(&self) -> source::OperationParser {
+        source::OperationParser {
             root: self.root.clone(),
             game: self.game.clone(),
             server: self.server.clone(),
@@ -551,11 +549,11 @@ impl OperationConverter {
         }
     }
 
-    pub fn build_all(&self) -> CliOutcome<ConvertOutputs> {
+    pub fn build_all(&self) -> CliOutcome<ParseOutputs> {
         self.core().build_all(&capture_files(self))
     }
 
-    pub fn build_selected(&self, task_ids: &[String]) -> CliOutcome<ConvertOutputs> {
+    pub fn build_selected(&self, task_ids: &[String]) -> CliOutcome<ParseOutputs> {
         self.core().build_selected(task_ids, &capture_files(self))
     }
 
@@ -627,19 +625,19 @@ fn capture_bundle_files(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceFile> {
         .collect()
 }
 
-fn capture_files(converter: &OperationConverter) -> ConversionFiles {
-    let path = converter.root.join("navigation").join(format!(
-        "{}.{}.projection.json",
-        converter.game, converter.server
-    ));
+fn capture_files(parser: &OperationParser) -> ParseFiles {
+    let path = parser
+        .root
+        .join("navigation")
+        .join(format!("{}.{}.projection.json", parser.game, parser.server));
     let projection_exists = path.try_exists().map_err(|error| error.to_string());
     let projection_bytes = match fs::read(&path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     };
-    ConversionFiles {
-        files: capture_bundle_files(&converter.bundles).into(),
+    ParseFiles {
+        files: capture_bundle_files(&parser.bundles).into(),
         projection_exists,
         projection_bytes,
     }
@@ -649,7 +647,7 @@ fn capture_files(converter: &OperationConverter) -> ConversionFiles {
 fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
     source::validate_post_admission_ocr_bundle(
         bundle,
-        &ConversionFiles {
+        &ParseFiles {
             files: capture_bundle_files(std::slice::from_ref(bundle)).into(),
             projection_bytes: Ok(None),
             projection_exists: Ok(false),

@@ -266,10 +266,13 @@ that belongs to emulator control:
 - The thread runs the package only after one more ADB baseline probe of the instance; a
   probe failure is `startup_package_adb_not_ready` (`backend_operation_failed`), recorded
   and consumed without a lease. Admission refusals fail typed before any lease:
-  `startup_package_missing` when the locator does not open,
+  `startup_package_missing` when a ZIP locator does not open,
   `startup_package_admission_failed` for every other admission refusal (the underlying
   `contained_task_package_*` code attached as related failure, a resource declaration
-  rejection carried along). Every failure of the run is recorded as
+  rejection carried along). For a digest-named content-directory locator (Workflow #288) a
+  missing or unreadable directory is also `startup_package_admission_failed`, with the
+  loader's code attached as related failure (for example `content_directory_missing` or
+  `content_directory_digest_mismatch`). Every failure of the run is recorded as
   `runtime.failed` (stage `operation_cleanup`, category `startup_package`) linked to the
   instance and the causation id; a fatal one poisons the host as any other.
 
