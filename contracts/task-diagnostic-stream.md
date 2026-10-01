@@ -253,8 +253,11 @@ its admission request link only when that recorded admission ID and all three
 correlation/task/run links match the observation. Neither request is rewritten,
 and this association creates no additional event or bypass of failure handling.
 
-`actingcommand.runtime.task-diagnostic.v1` is one immutable, task-scoped
-`DiagnosticJson` artifact produced by the Runtime through ArtifactStore. Its
+The task diagnostic stream is one immutable, task-scoped `DiagnosticJson` artifact
+produced by the Runtime through ArtifactStore. The Runtime writes schema
+`actingcommand.runtime.task-diagnostic.v2`; readers also accept
+`actingcommand.runtime.task-diagnostic.v1` (see [Schema v2 and v1
+compatibility](#schema-v2-and-v1-compatibility)). Its
 authority is the original GlobalLedger `ArtifactVerified` reference. Unpublished
 staging bytes are not diagnostic evidence. The Runtime receipt keeps its existing
 fields and artifact selection.
@@ -305,8 +308,9 @@ record is appended as a byte chunk; no whole-task document is assembled.
 `kind` determines `data`:
 
 The contract's `TaskDiagnosticPayload` is the discriminated transport type for
-these twelve kinds. Host explicitly maps its existing evaluation values to the
-contract DTOs; the contract has no dependency on evaluators or Host. Forensics
+these thirteen kinds; `color_digest` exists only in v2. Host explicitly maps its
+existing evaluation values to the contract DTOs; the contract has no dependency on
+evaluators or Host. Forensics
 decodes the same `TaskDiagnosticRecord` and rejects unknown envelope/payload
 fields and mismatched payload shapes. The private wire decoder resolves
 `kind/data` before exposing a typed record. Nullable values stay nullable and
@@ -317,7 +321,8 @@ their original evaluators.
 | Kind | Actual data |
 | --- | --- |
 | `page` | phase (`page` or `home_preflight`), native page index/ID, matched flag, group pass/total counts and message; errors carry the failed target and original typed cause |
-| `target` | target ID/kind, passed/message, actual template and color evaluation, source role/group/target index or guard phase |
+| `target` | target ID/kind, passed/message, actual template and color evaluation, source role/group/target index, guard phase or (v2) composite member |
+| `color_digest` | (v2) actual `color_digest.v1` evaluation of its parent target row: algorithm, grid, active cells, mean/max/worst cell, both thresholds and the observed digest |
 | `ocr` | requested/resolved region evidence, provider `raw_text`, business `derived_text`, aggregate confidence, actual selection/execution metadata and block count |
 | `ocr_block` | original text/confidence/rect with `source_index` and `derived_rank` |
 | `nn` | actual requested ROI, selected label/score, selection mode and label count |
@@ -371,6 +376,45 @@ covering guard, input and post-input waiting. An unfinished attempt ends only at
 the next actual attempt or task termination, with `completed=false`; this does
 not emit StepFinished. RuntimeClock `checked_sub` supplies elapsed time. Wall
 clock values do not supply or correct the interval.
+
+## Schema v2 and v1 compatibility
+
+v2 keeps the v1 framing, header fields, record envelope, record bounds and the twelve v1
+kinds with their data unchanged. It adds exactly two rows, for the `color_digest` and
+`composite` targets of a schema `0.7` recognition pack ([color-digest.md](color-digest.md),
+[selection-graph.md](selection-graph.md#checks)):
+
+- A `color_digest` record is a child of the target row of a `color_digest` target:
+  `parent_index` is that target row. Its data is the evaluator's own result: `algorithm`,
+  `columns`, `rows`, `active_cells`, `mean_milli`, `max_cell`, `worst_cell`,
+  `max_mean_milli`, `max_cell_threshold` (null when the target declares no `max_cell`) and
+  `observed_cells`, the lowercase hex digest of the evaluated frame's region. The target row
+  itself has kind `color_digest` and null template and color data.
+- A target row of kind `composite` has null template and color data. Every member follows
+  it, in declaration order, as the member's own target row whose `parent_index` is the
+  composite row and whose source is `composite_member`:
+  `{"composite_target_id": <composite ID>, "member_index": <0-based declaration index>}`.
+  A member's OCR, OCR block, NN, NN label and `color_digest` rows are children of that
+  member row, exactly as for a target evaluated directly.
+
+Every member was evaluated, so there is no unexecuted member row and no new `unexecuted`
+variant. A member's evaluation error is the composite's error and is recorded where the
+original error is recorded (the page's failed target or the guard's `error` row); the
+members completed before it are not recorded. Composite and color digest results enter
+the ledger only as their existing `task.recognition_completed` targets; the ledger and its
+persisted shapes do not change.
+
+Readers recognize both schemas as a task stream in each place that identifies one: the
+stream check that exempts it from the legacy document limits of `export --stability` and
+of `export`'s effective configuration, the record pages of `export --task-evidence`, and
+the diagnostic coverage of a run. A v1 stream is decoded exactly as before and keeps its
+closed v1 row set: a `color_digest` row or a `composite_member` source in a v1 stream is
+`task_diagnostic_record_invalid`. Existing v1 artifacts read and re-serialize unchanged.
+
+A reader that knows only v1 reports a v2 stream as `unknown_schema` in task records, and
+its stability and export reads treat it as a legacy document, which can fail at the size
+limit or at the pending redaction. Such a reader is not supported against a state root
+written by a v2 Runtime (no downgrade).
 
 ## Read-only export and privacy
 
