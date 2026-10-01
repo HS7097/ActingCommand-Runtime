@@ -543,11 +543,13 @@ impl OperationParser {
         self.validate_error_page_anchor_definitions()?;
         let declared_anchor_ids = self.declared_anchor_ids();
         let page_rule_ids = self.explicit_positive_page_ids();
+        let page_gate_targets = self.page_rule_target_ids();
         let mut errors = Vec::new();
         for bundle in &self.bundles {
             if let Err(error) = validate_phases_bundle(bundle) {
                 errors.push(error.message);
             }
+            validate_resource_readings_bundle(bundle, &self.game, &page_gate_targets, &mut errors);
             if let Err(error) = validate_task_timeout_bundle(bundle) {
                 errors.push(error.message);
             }
@@ -1644,6 +1646,38 @@ impl OperationParser {
             .collect()
     }
 
+    /// Every target a `page_rules` entry names in `required`, `optional`, `forbidden` or
+    /// `any_of`: the page gates of the generated pages besides their template anchors.
+    fn page_rule_target_ids(&self) -> BTreeSet<String> {
+        let mut targets = BTreeSet::new();
+        for rule in self
+            .bundles
+            .iter()
+            .filter_map(|bundle| bundle.data.get("page_rules").and_then(Value::as_object))
+            .flat_map(|rules| rules.values())
+        {
+            for field in ["required", "optional", "forbidden"] {
+                targets.extend(
+                    array_field(rule, field)
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned),
+                );
+            }
+            for group in array_field(rule, "any_of") {
+                targets.extend(
+                    group
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned),
+                );
+            }
+        }
+        targets
+    }
+
     fn validate_error_page_anchor_definitions(&self) -> CliOutcome<()> {
         let page_rule_ids = self.explicit_positive_page_ids();
         let mut anchor_counts = HashMap::<String, usize>::new();
@@ -2342,6 +2376,76 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &scheduling,
     )
     .map_err(CliError::package_invalid)
+}
+
+/// Cross-references of operation `resource_readings` (`contracts/resource-readings.md`). The
+/// declaration gate has already checked each entry; this adds the pages and targets it names:
+/// a reading's page is a `scheduling_outcome` terminal page and its target is one of the task's
+/// own `ocr_targets`, used by no page gate. Each error names the entry's field pointer.
+fn validate_resource_readings_bundle(
+    bundle: &Bundle,
+    game: &str,
+    page_gate_targets: &BTreeSet<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(value) = bundle.data.get("resource_readings") else {
+        return;
+    };
+    let path = bundle.task_json_path();
+    let readings: Vec<actingcommand_contract::ResourceReadingDeclaration> =
+        match serde_json::from_value(value.clone()) {
+            Ok(readings) => readings,
+            Err(error) => {
+                errors.push(format!(
+                    "{}: /resource_readings is invalid: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+    // An invalid outcome declaration is reported by its own check.
+    let Ok(terminal_pages) = declared_scheduling_outcome_page_ids(bundle) else {
+        return;
+    };
+    let terminal_pages = terminal_pages
+        .iter()
+        .map(|page| normalize_page_rule_id(game, page))
+        .collect::<BTreeSet<_>>();
+    let targets = match ocr_target_declarations(bundle) {
+        Ok(targets) => targets,
+        Err(error) => {
+            errors.push(error.message);
+            return;
+        }
+    };
+    for (index, reading) in readings.iter().enumerate() {
+        if !terminal_pages.contains(&normalize_page_rule_id(game, &reading.page_id)) {
+            errors.push(format!(
+                "{}: /resource_readings/{index}/page_id '{}' is not a terminal page of scheduling_outcome",
+                path.display(),
+                reading.page_id
+            ));
+        }
+        let declared = targets
+            .iter()
+            .filter(|target| {
+                target.get("id").and_then(Value::as_str) == Some(reading.target_id.as_str())
+            })
+            .count();
+        if declared != 1 {
+            errors.push(format!(
+                "{}: /resource_readings/{index}/target_id '{}' is not one declared ocr_targets entry",
+                path.display(),
+                reading.target_id
+            ));
+        } else if page_gate_targets.contains(&reading.target_id) {
+            errors.push(format!(
+                "{}: /resource_readings/{index}/target_id '{}' is used by a page gate",
+                path.display(),
+                reading.target_id
+            ));
+        }
+    }
 }
 
 fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {

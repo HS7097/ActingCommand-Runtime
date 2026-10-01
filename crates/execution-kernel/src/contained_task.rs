@@ -14,12 +14,13 @@ use actingcommand_contract::{
     InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA, OcrFieldDictionary, OcrFieldReason,
     OcrFieldRecord, OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration,
     OcrFieldsReport, PHASED_CONTROL_SCHEMA, RecognizedTarget, RecognizedTargetRole,
-    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
-    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
-    SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
-    SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
-    TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
-    TaskTimingStage, validate_task_phases,
+    ResourceReadingDeclaration, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
+    SchedulingEffectCondition, SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT,
+    TaskOutcome, TaskPhase, TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure,
+    TaskTimingScope, TaskTimingStage, ocr_confidence_milli, validate_resource_readings,
+    validate_task_phases,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -38,7 +39,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 mod timing;
 pub use timing::{
@@ -622,6 +623,12 @@ struct PostAdmissionOcrCollector<'a> {
     tolerant_scalar_comparisons: u64,
     invocation_ids: BTreeSet<String>,
     stream_binding: Option<OcrProviderExecutionEvidence>,
+    /// Readings taken on the successful terminal frame; `None` when the run does not read them
+    /// (offline simulation, bound recovery entry).
+    resource_readings: Option<&'a [ResourceReadingDeclaration]>,
+    /// The fields report was recorded by a successful completion; a reading that then fails
+    /// must not record it a second time.
+    fields_report_recorded: bool,
 }
 
 impl<'a> PostAdmissionOcrCollector<'a> {
@@ -1506,9 +1513,90 @@ pub enum ContainedTaskTrace {
     PostAdmissionOcrFields {
         report: OcrFieldsReport,
     },
+    /// Every declared reading bound to the terminal page, read from the terminal frame before
+    /// `Finalizing`. In memory only; `captured_at` is that frame's device capture time.
+    ResourceReadings {
+        captured_at: SystemTime,
+        readings: Vec<ResourceReadingValue>,
+    },
     Finalizing {
         outcome: TaskOutcome,
     },
+}
+
+/// One resolved resource reading (Workflow #335 S5a). In memory only; never serialized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceReadingValue {
+    pub declaration: ResourceReadingDeclaration,
+    pub value: u64,
+    pub confidence_milli: u16,
+}
+
+/// Reads the declarations bound to `page_label` from one already captured scene: one OCR
+/// evaluation of each declared target, the shared trim and parse, and the confidence floor.
+/// Each evaluation goes to `observer` before it is judged. Declarations of other pages are
+/// not read; an empty result means none is bound to this page. The first reading that does
+/// not hold fails with `contained_task_resource_reading_unresolved` and detail
+/// `<id>:<reason>`, the reason being an `OcrFieldReason` name, `confidence_missing` or
+/// `low_confidence`.
+pub fn evaluate_resource_readings(
+    game: &str,
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    page_label: &str,
+    declarations: &[ResourceReadingDeclaration],
+    observer: &mut OcrEvaluationObserver<'_>,
+) -> Result<Vec<ResourceReadingValue>, ContainedTaskError> {
+    let context = evaluator.scene_context(scene);
+    let mut readings = Vec::new();
+    for declaration in declarations
+        .iter()
+        .filter(|declaration| crate::page_anchor_matches(game, page_label, &declaration.page_id))
+    {
+        let unresolved = |reason: &str| {
+            ContainedTaskError::with_detail(
+                "contained_task_resource_reading_unresolved",
+                format!("{}:{reason}", declaration.id),
+            )
+        };
+        let result = context.evaluate_ocr_observation(&declaration.target_id);
+        observer(&declaration.target_id, &result)?;
+        let evaluated = match result {
+            Ok(evaluated) => evaluated,
+            Err(error) => {
+                let reason = if error.code() == RecognitionPackErrorCode::RegionUnresolved {
+                    OcrFieldReason::RegionUnresolved
+                } else {
+                    OcrFieldReason::ProviderFailed
+                };
+                return Err(unresolved(&ocr_field_reason_name(reason)?));
+            }
+        };
+        let value = match declaration.parse(&evaluated.text) {
+            Ok(value) => value,
+            Err(reason) => return Err(unresolved(&ocr_field_reason_name(reason)?)),
+        };
+        let confidence_milli = ocr_confidence_milli(evaluated.confidence)
+            .ok_or_else(|| unresolved("confidence_missing"))?;
+        if confidence_milli < declaration.minimum_confidence_milli {
+            return Err(unresolved("low_confidence"));
+        }
+        readings.push(ResourceReadingValue {
+            declaration: declaration.clone(),
+            value,
+            confidence_milli,
+        });
+    }
+    Ok(readings)
+}
+
+fn ocr_field_reason_name(reason: OcrFieldReason) -> Result<String, ContainedTaskError> {
+    match serde_json::to_value(reason) {
+        Ok(serde_json::Value::String(name)) => Ok(name),
+        _ => Err(ContainedTaskError::new(
+            "contained_task_resource_reading_invalid",
+        )),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1776,6 +1864,7 @@ impl PreparedContainedTask {
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
             program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
+        program.validate_resource_reading_targets(&bundle, &detector, &evaluator)?;
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -1826,6 +1915,11 @@ impl PreparedContainedTask {
 
     pub const fn has_post_admission_ocr(&self) -> bool {
         self.post_admission_ocr.is_some() || self.post_admission_fields.is_some()
+    }
+
+    /// Whether the task declares `resource_readings`; offline simulation does not read them.
+    pub const fn has_resource_readings(&self) -> bool {
+        self.program.resource_readings.is_some()
     }
 
     pub fn required_home_entry_page(&self) -> Option<&str> {
@@ -1976,6 +2070,9 @@ impl PreparedContainedTask {
             PostAdmissionOcrExecution::Enabled
         ) {
             ocr_collector.fields = self.post_admission_fields.as_ref();
+            if options.entry == ContainedTaskEntry::Ordinary {
+                ocr_collector.resource_readings = self.program.resource_readings.as_deref();
+            }
         }
         let result = self.run_with_collector(
             runtime,
@@ -1991,6 +2088,7 @@ impl PreparedContainedTask {
             &result,
             Err(ContainedTaskRunError::Task(_) | ContainedTaskRunError::NonfatalOperation(_))
         ) && ocr_collector.frames_collected > 0
+            && !ocr_collector.fields_report_recorded
             && let Some(report) = ocr_collector.fields_report()
         {
             runtime
@@ -2641,9 +2739,10 @@ impl PreparedContainedTask {
                     return Err(ContainedTaskError::new("contained_task_state_invalid").into());
                 }
                 RunDirective::Terminal(RunTerminal::Completed { current_page }) => {
-                    return Self::finish_success(
+                    return self.finish_success(
                         runtime,
                         ocr_collector,
+                        observation.as_ref(),
                         current_page,
                         machine.completed_steps(),
                     );
@@ -2742,9 +2841,10 @@ impl PreparedContainedTask {
         reason: StabilityTerminalReason,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         match reason {
-            StabilityTerminalReason::ConsecutiveUnchangedThresholdReached => Self::finish_success(
+            StabilityTerminalReason::ConsecutiveUnchangedThresholdReached => self.finish_success(
                 runtime,
                 ocr_collector,
+                Some(observation),
                 Some(observation.page_label.clone()),
                 machine.completed_steps(),
             ),
@@ -2755,11 +2855,14 @@ impl PreparedContainedTask {
     }
 
     fn finish_success<R: ContainedTaskRuntime>(
+        &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        terminal: Option<&PageObservation>,
         final_page: Option<String>,
         executed_steps: u32,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        let resource_readings = ocr_collector.resource_readings;
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
             let outcome_key = report.declaration.outcome_key.clone();
             if report.frames_collected == 0 {
@@ -2771,6 +2874,7 @@ impl PreparedContainedTask {
             runtime
                 .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
                 .map_err(ContainedTaskRunError::Boundary)?;
+            ocr_collector.fields_report_recorded = true;
             Some(outcome_key)
         } else {
             match std::mem::take(ocr_collector).finish()? {
@@ -2784,6 +2888,9 @@ impl PreparedContainedTask {
                 None => None,
             }
         };
+        if let Some(declarations) = resource_readings {
+            self.record_resource_readings(runtime, declarations, terminal, final_page.as_deref())?;
+        }
         runtime
             .record(ContainedTaskTrace::Finalizing {
                 outcome: TaskOutcome::Success,
@@ -2795,6 +2902,51 @@ impl PreparedContainedTask {
             executed_steps,
             selected_scheduling_outcome,
         })
+    }
+
+    /// Reads the declarations bound to the completed page from the terminal observation's own
+    /// frame: no further capture and no input. A run completed on another allowed terminal page
+    /// reads nothing.
+    fn record_resource_readings<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        declarations: &[ResourceReadingDeclaration],
+        terminal: Option<&PageObservation>,
+        final_page: Option<&str>,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        let observation = terminal
+            .filter(|observation| final_page == Some(observation.page_label.as_str()))
+            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+        // Preserve a recorder failure's original boundary type, as page capture does.
+        let mut recording_failure = None;
+        let readings = evaluate_resource_readings(
+            &self.control.game,
+            &self.evaluator,
+            &observation.scene,
+            &observation.page_label,
+            declarations,
+            &mut |target, result| {
+                runtime
+                    .record_ocr_evaluation(target, result)
+                    .map_err(|error| {
+                        recording_failure = Some(error);
+                        ContainedTaskError::new("contained_task_record_boundary")
+                    })
+            },
+        );
+        if let Some(error) = recording_failure {
+            return Err(ContainedTaskRunError::Boundary(error));
+        }
+        let readings = readings?;
+        if readings.is_empty() {
+            return Ok(());
+        }
+        runtime
+            .record(ContainedTaskTrace::ResourceReadings {
+                captured_at: observation.captured_at,
+                readings,
+            })
+            .map_err(ContainedTaskRunError::Boundary)
     }
 
     fn finish_effect_attempt<R: ContainedTaskRuntime>(
@@ -3091,6 +3243,7 @@ impl PreparedContainedTask {
                 scene,
                 stability_sample,
                 input_context,
+                captured_at: frame.captured_at,
             }))
         })();
         let capture_ended = Instant::now();
@@ -3196,6 +3349,8 @@ struct PageObservation {
     scene: Scene,
     stability_sample: Option<StabilityFrameSample>,
     input_context: Option<InputFrameContext>,
+    /// The device capture time of this observation's frame (in memory only).
+    captured_at: SystemTime,
 }
 
 enum PostconditionResolution {
@@ -3588,6 +3743,8 @@ struct TaskProgram {
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     post_admission_ocr: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    resource_readings: Option<Vec<ResourceReadingDeclaration>>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
     #[serde(default)]
     recovery: Option<TaskRecovery>,
@@ -3630,6 +3787,18 @@ impl TaskProgram {
         }
         self.validate_task_timeout(control)?;
         self.validate_task_max_steps(control)?;
+        if let Some(readings) = &self.resource_readings {
+            let invalid = |reason: &str| {
+                ContainedTaskError::with_detail("contained_task_resource_reading_invalid", reason)
+            };
+            if !matches!(self.schema_version.as_str(), "0.8" | "0.9") {
+                return Err(invalid("schema_version_unsupported"));
+            }
+            if self.scheduling_outcome.is_none() {
+                return Err(invalid("scheduling_outcome_missing"));
+            }
+            validate_resource_readings(readings).map_err(invalid)?;
+        }
         if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
             || self.phases != control.phases
             || (self.phases.is_some() && self.schema_version != "0.9")
@@ -4091,6 +4260,51 @@ impl TaskProgram {
             declaration,
             dictionaries,
         }))
+    }
+
+    /// Before any input: each reading's target is one OCR target, used by no page gate and not
+    /// marked personal by the projection metadata. The page gate's own backends are not limited.
+    fn validate_resource_reading_targets(
+        &self,
+        bundle: &LoadedBundle,
+        detector: &PageDetector,
+        evaluator: &RecognitionEvaluator,
+    ) -> Result<(), ContainedTaskError> {
+        for reading in self.resource_readings.iter().flatten() {
+            let invalid = |reason: &str| {
+                ContainedTaskError::with_detail(
+                    "contained_task_resource_reading_invalid",
+                    format!("{}:{reason}", reading.id),
+                )
+            };
+            let matching = evaluator
+                .pack()
+                .targets
+                .iter()
+                .filter(|target| recognition_target_id(target) == reading.target_id)
+                .collect::<Vec<_>>();
+            if !matches!(matching.as_slice(), [RecognitionTarget::Ocr(_)]) {
+                return Err(invalid("target_not_ocr"));
+            }
+            if detector.page_definitions().iter().any(|page| {
+                page.required
+                    .iter()
+                    .chain(page.any_of.iter().flatten())
+                    .chain(page.optional.iter())
+                    .chain(page.forbidden.iter())
+                    .flat_map(|target| page_target_evaluates(evaluator, target))
+                    .any(|target| target == reading.target_id)
+            }) {
+                return Err(invalid("target_in_page_gate"));
+            }
+            if bundle.projection_metadata().is_some_and(|metadata| {
+                metadata.target_privacy(&reading.target_id)
+                    == Some(actingcommand_contract::page_projection::Privacy::Personal)
+            }) {
+                return Err(invalid("target_personal"));
+            }
+        }
+        Ok(())
     }
 
     fn target_pages(&self) -> Result<Vec<String>, ContainedTaskError> {
@@ -8634,6 +8848,7 @@ mod retry_wiring_tests {
             },
             scheduling_outcome: None,
             post_admission_ocr: None,
+            resource_readings: None,
             stability_termination: None,
             recovery: None,
             defaults: TaskOperationDefaults::default(),
@@ -8718,6 +8933,7 @@ mod retry_wiring_tests {
             page_label: "neutral/home".to_owned(),
             scene: scene_from_frame(&page_frame("home")).expect("scene"),
             stability_sample: None,
+            captured_at: SystemTime::UNIX_EPOCH,
         };
         let mut runtime = ScriptedRuntime::new("home");
         let (outcome, target) = task.program.operations[0]
@@ -8744,6 +8960,7 @@ mod retry_wiring_tests {
             page_label: "neutral/terminal".to_owned(),
             scene: scene_from_frame(&page_frame("terminal")).expect("scene"),
             stability_sample: None,
+            captured_at: SystemTime::UNIX_EPOCH,
         };
         assert!(
             task.evaluator
@@ -8781,6 +8998,7 @@ mod retry_wiring_tests {
             page_label: "neutral/terminal".to_owned(),
             scene: scene_from_frame(&page_frame("terminal")).expect("scene"),
             stability_sample: None,
+            captured_at: SystemTime::UNIX_EPOCH,
         };
         let mut runtime = ScriptedRuntime::new("terminal");
         let (outcome, target) = task.program.operations[0]
@@ -8809,6 +9027,7 @@ mod retry_wiring_tests {
             page_label: "neutral/home".to_owned(),
             scene: scene_from_frame(&frame).expect("scene"),
             stability_sample: None,
+            captured_at: SystemTime::UNIX_EPOCH,
         };
         let mut runtime = ScriptedRuntime::new("home");
         let Err(ContainedTaskRunError::Task(error)) = task.program.operations[0].guard_outcome(
