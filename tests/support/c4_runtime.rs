@@ -93,14 +93,7 @@ impl InputBackend for FileBackend {
             self.record("tap_started")?;
             thread::sleep(self.input_delay);
         }
-        // One-off (to be reverted), Workflow #308 D2: a prepared frame shows the tap's result.
-        let prepared = self.frame_path.with_file_name("after-tap.png");
-        if prepared.is_file() {
-            fs::copy(&prepared, &self.frame_path)
-                .map_err(|error| DeviceError::fatal(format!("show prepared frame: {error}")))?;
-        } else {
-            write_frame(&self.frame_path, [0, 0, 255])?;
-        }
+        write_frame(&self.frame_path, [0, 0, 255])?;
         self.record("tap")
     }
 
