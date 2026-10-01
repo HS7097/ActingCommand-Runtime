@@ -8,7 +8,9 @@ use `sha256:<hex>` (policy bindings/dispatch facts and `EvidencePackage.sha256`)
 that encoding; task requests and semantic facts retain bare lowercase hex. Existing
 field names and historical event bytes remain unchanged.
 
-A source reference is a JSON object in that same typed slot:
+A Git source-tree reference is a JSON object in that same typed slot. Its loader is
+retired (see "Git source-tree references" below); the form is still decoded, validated
+and re-encoded unchanged so that records holding it stay readable:
 
 ```json
 {
@@ -40,7 +42,8 @@ digest of the directory's content; no repository, commit or path participates:
 The untagged variants are tried in order (ZIP string, Git source tree, content
 directory), so the object forms never decode as each other and existing ZIP strings and
 Git source-tree objects decode and re-encode byte-identically. `actingctl --package-ref`
-and the Lab `--package-ref` flags accept either object form.
+and the Lab `--package-ref` flags parse either object form; admission refuses a Git
+source-tree reference with `source_tree_loader_retired`.
 
 ## Content-directory admission
 
@@ -66,8 +69,8 @@ read without following links. Admission runs in this order under one deadline:
 4. The digest of those bytes is compared in constant time with the reference.
    `content_directory_digest_mismatch` reports the expected and actual digests and the
    file count. No JSON has been parsed at this point.
-5. The same snapshot is assembled in memory exactly as a verified Git source tree
-   (self-contained layout below) and issued with the content-directory reference.
+5. The same snapshot is assembled in memory ("In-memory assembly" and the
+   self-contained layout below) and issued with the content-directory reference.
    Nothing is read from disk afterwards.
 
 The digest `content-directory.v1` is the lowercase hex SHA-256 of the line
@@ -83,20 +86,17 @@ same value can be recomputed with coreutils (Git Bash or Linux):
 cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n'; find . -type f -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -b | sed 's/ \*/  /'; } | sha256sum -b | cut -c1-64
 ```
 
-## Git source-tree admission
+## Git source-tree references
 
-The caller supplies a local Git worktree and materialized LFS files. The locator names
-the bundle directory. Containment uses installed Git's read-only object commands,
-checks the origin, hashes raw commit/tree/blob objects with their Git headers, proves
-the tree belongs to that commit at the declared path, and compares the actual files.
-Only regular files and directories are admitted. Executable mode must agree on Unix;
-Windows validates the Git mode and rejects filesystem reparse points. Ambiguous links,
-unsafe names, undeclared files, missing objects and out-of-limit material fail explicitly.
+The Git source-tree loader is retired (Workflow #288 A4). Containment no longer runs Git
+or reads the locator of this form: once the reference itself is valid, admitting it fails
+with `source_tree_loader_retired` (the same source admission error family as the other
+loader codes, refused as an invalid package by the host). The reference type, its
+validation and its serialization are unchanged, so ledgers, evidence and configuration
+that record one still decode and re-encode byte-identically. `actinglab capabilities` no
+longer lists it as an accepted package reference.
 
-An LFS pointer is first verified as a Git blob; its materialized entity must match the
-pointer's SHA-256 and size. A remaining pointer is an error. Admission does not fetch,
-run filters, execute source code or write derived resources. Every operation shares one
-absolute admission deadline and the existing file count, byte and resident limits.
+## In-memory assembly
 
 Only after the entire snapshot is verified may it be parsed. The same in-memory bytes
 feed the pure parser owned by `pack-containment::source` and the normal reference
@@ -181,8 +181,8 @@ shape; its readers are unchanged.
 ## Consumers
 
 `actingctl task-run` accepts `--package <directory> --package-ref <JSON>` and optional
-`--recovery-package <directory> --recovery-package-ref <JSON>` for either directory
-reference form. The existing ZIP/hash
+`--recovery-package <directory> --recovery-package-ref <JSON>` for a content-directory
+reference; a Git source-tree reference is refused with `source_tree_loader_retired`. The existing ZIP/hash
 flags remain accepted. Package-consuming Lab commands (debug/run, observe, do and
 resource restore) accept `--package <directory> --package-ref <JSON>` instead of their
 ZIP/hash flags. Evidence replay continues to use its independent evidence ZIP hash.
@@ -197,7 +197,7 @@ keep the original tuple.
 The calendar driver transports the typed request/context through the existing calls.
 
 Forensics and resource restore consume the same reference and require the separately
-supplied exact material for reconstruction (the content directory, or the source
-tree with its LFS files). Evidence ZIP export/replay
+supplied exact material for reconstruction (the content directory; a recorded Git
+source-tree reference is refused with `source_tree_loader_retired`). Evidence ZIP export/replay
 keeps its own byte SHA-256 and does not archive source material or guarantee its future
 availability. Current ZIP production and resource deployment remain available.

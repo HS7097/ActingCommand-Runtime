@@ -615,7 +615,6 @@ pub(crate) fn schema_capabilities() -> Value {
         "control": {"supported": ["Lab-1y.control.v1", actingcommand_contract::PHASED_CONTROL_SCHEMA]},
         "package_reference": {
             "legacy_zip": {"kind": "sha256"},
-            "git_source_tree": {"schema_version": actingcommand_contract::GitSourceTreeVersion::V1},
             "content_directory": {"schema_version": actingcommand_contract::ContentDirectoryVersion::V1}
         }
     })

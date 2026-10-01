@@ -3,7 +3,6 @@
 //! Source-neutral in-memory assembly of an admitted source snapshot.
 
 use super::*;
-use crate::git_source::source_error;
 use actingcommand_contract::safe_source_path;
 use std::path::PathBuf;
 use std::time::Instant;

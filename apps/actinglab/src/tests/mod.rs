@@ -899,9 +899,10 @@ fn capabilities_are_offline() {
         data["schema_domains"]["control"]["supported"],
         json!(["Lab-1y.control.v1", "Lab-1y.control.v2"])
     );
-    assert_eq!(
-        data["schema_domains"]["package_reference"]["git_source_tree"]["schema_version"],
-        "actingcommand.package.git-source-tree.v1"
+    assert!(
+        data["schema_domains"]["package_reference"]
+            .get("git_source_tree")
+            .is_none()
     );
     assert!(data["lab2_cli"]["schema_versions"].get("max").is_none());
     assert!(!runtime_root.exists());
