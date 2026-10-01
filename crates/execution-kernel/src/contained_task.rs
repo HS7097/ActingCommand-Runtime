@@ -4169,12 +4169,14 @@ fn validate_post_admission_ocr_page_set(
     page_ids: &[String],
     target_ids: &[String],
 ) -> Result<(), ContainedTaskError> {
+    // A composite evaluates its members, so a member counts as referenced by the page.
     if pages.pages.iter().any(|page| {
         page.required
             .iter()
             .chain(page.any_of.iter().flatten())
             .chain(page.optional.iter())
             .chain(page.forbidden.iter())
+            .flat_map(|target| page_target_evaluates(evaluator, target))
             .any(|target| target_ids.iter().any(|target_id| target == target_id))
     }) {
         return Err(ContainedTaskError::new(
@@ -4201,12 +4203,9 @@ fn validate_post_admission_ocr_page_set(
             .collect::<Vec<_>>();
         let positive_count = page.required.len() + page.any_of.iter().map(Vec::len).sum::<usize>();
         if positive_count == 0
-            || gate_targets.iter().any(|target| {
-                !matches!(
-                    evaluator.target_kind(target),
-                    Ok(TargetKind::Template | TargetKind::Color)
-                )
-            })
+            || gate_targets
+                .iter()
+                .any(|target| !post_admission_ocr_gate_target_is_pixel(evaluator, target))
         {
             return Err(ContainedTaskError::new(
                 "contained_task_post_admission_ocr_page_gate_invalid",
@@ -4214,6 +4213,52 @@ fn validate_post_admission_ocr_page_set(
         }
     }
     Ok(())
+}
+
+/// A page gating post-admission OCR is judged by pixel backends only: template, color and
+/// color digest targets, or a composite whose members are all of those.
+fn post_admission_ocr_gate_target_is_pixel(evaluator: &RecognitionEvaluator, target: &str) -> bool {
+    let is_pixel = |target: &str| {
+        matches!(
+            evaluator.target_kind(target),
+            Ok(TargetKind::Template | TargetKind::Color | TargetKind::ColorDigest)
+        )
+    };
+    match evaluator.target_kind(target) {
+        Ok(TargetKind::Composite) => composite_members(evaluator, target)
+            .is_some_and(|members| members.iter().all(|member| is_pixel(member.as_str()))),
+        _ => is_pixel(target),
+    }
+}
+
+/// A page target and, when it is a composite, every member it evaluates.
+fn page_target_evaluates<'a>(
+    evaluator: &'a RecognitionEvaluator,
+    target: &'a str,
+) -> impl Iterator<Item = &'a str> {
+    std::iter::once(target).chain(
+        composite_members(evaluator, target)
+            .into_iter()
+            .flatten()
+            .map(String::as_str),
+    )
+}
+
+/// The declared members of a composite target; `None` for any other target.
+fn composite_members<'a>(
+    evaluator: &'a RecognitionEvaluator,
+    target_id: &str,
+) -> Option<&'a [String]> {
+    evaluator
+        .pack()
+        .targets
+        .iter()
+        .find_map(|target| match target {
+            RecognitionTarget::Composite(composite) if composite.id == target_id => {
+                Some(composite.members.as_slice())
+            }
+            _ => None,
+        })
 }
 
 /// Targets of the matched page, or of the first candidate page when no page matched.
@@ -4278,7 +4323,9 @@ fn recognized_target_region(
             }),
             _ => declared_target_rect(evaluator, &evaluation.id)?,
         },
-        TargetKind::Color => declared_target_rect(evaluator, &evaluation.id)?,
+        TargetKind::Color | TargetKind::ColorDigest => {
+            declared_target_rect(evaluator, &evaluation.id)?
+        }
         TargetKind::Ocr => evaluation
             .ocr
             .as_ref()
@@ -4290,7 +4337,7 @@ fn recognized_target_region(
                 height: roi.height,
             }),
         TargetKind::Nn => evaluation.nn.as_ref().map(|nn| nn.requested_region),
-        TargetKind::ClickOnly => None,
+        TargetKind::ClickOnly | TargetKind::Composite => None,
     };
     rect.map(|rect| {
         match (
@@ -4316,7 +4363,8 @@ fn recognized_target_region(
     .transpose()
 }
 
-/// A template's static search rectangle or a color target's sampled rectangle.
+/// A template's static search rectangle, or the rectangle a color or color digest target
+/// samples.
 fn declared_target_rect(
     evaluator: &RecognitionEvaluator,
     target_id: &str,
@@ -4338,9 +4386,11 @@ fn declared_target_rect(
             PackRegion::TemplateRelative(_) | PackRegion::Keyword(_) => None,
         },
         RecognitionTarget::Color(target) => Some(target.region),
-        RecognitionTarget::ClickOnly(_) | RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_) => {
-            None
-        }
+        RecognitionTarget::ColorDigest(target) => Some(target.region),
+        RecognitionTarget::ClickOnly(_)
+        | RecognitionTarget::Ocr(_)
+        | RecognitionTarget::Nn(_)
+        | RecognitionTarget::Composite(_) => None,
     })
 }
 
@@ -4351,6 +4401,8 @@ fn recognition_target_id(target: &RecognitionTarget) -> &str {
         RecognitionTarget::ClickOnly(target) => &target.id,
         RecognitionTarget::Ocr(target) => &target.id,
         RecognitionTarget::Nn(target) => &target.id,
+        RecognitionTarget::ColorDigest(target) => &target.id,
+        RecognitionTarget::Composite(target) => &target.id,
     }
 }
 
@@ -5453,6 +5505,8 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
         TargetKind::ClickOnly => "click_only",
         TargetKind::Ocr => "ocr",
         TargetKind::Nn => "nn",
+        TargetKind::ColorDigest => "color_digest",
+        TargetKind::Composite => "composite",
     }
 }
 
@@ -9884,6 +9938,8 @@ mod retry_wiring_tests {
             color: None,
             ocr: None,
             nn: None,
+            color_digest: None,
+            composite: None,
             message: "matched".to_string(),
         };
         for click in [
@@ -10024,6 +10080,8 @@ mod retry_wiring_tests {
             color: None,
             ocr: None,
             nn: None,
+            color_digest: None,
+            composite: None,
             message: "matched".to_string(),
         };
         let target_center: TaskClick = serde_json::from_value(json!({

@@ -9,7 +9,7 @@ use actingcommand_contract::{
 };
 use actingcommand_lab::{parse_environment_catalog_value, validate_control_declaration};
 use actingcommand_pack_containment::source::{
-    Bundle, ConversionFiles, SourceFile, SourceRead, declaration_file_requests,
+    Bundle, ParseFiles, SourceFile, SourceRead, declaration_file_requests,
     validate_bundle_declarations, validate_control_declarations, validate_navigation_declarations,
     validate_resource_declarations,
 };
@@ -741,7 +741,7 @@ impl DeclarationReader {
         }
         validate_bundle_declarations(
             &bundle,
-            &ConversionFiles {
+            &ParseFiles {
                 files: Arc::new(files),
                 projection_bytes: Ok(None),
                 projection_exists: Ok(false),

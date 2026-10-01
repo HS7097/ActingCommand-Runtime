@@ -1085,6 +1085,8 @@ fn resolve_cli_target_kind(pack: &RecognitionPack, target_id: &str) -> DeviceRes
             RecognitionTarget::ClickOnly(target) => target.id == target_id,
             RecognitionTarget::Ocr(target) => target.id == target_id,
             RecognitionTarget::Nn(target) => target.id == target_id,
+            RecognitionTarget::ColorDigest(target) => target.id == target_id,
+            RecognitionTarget::Composite(target) => target.id == target_id,
         })
         .ok_or_else(|| DeviceError::fatal(format!("target id not found: {target_id}")))?;
 
@@ -1099,6 +1101,11 @@ fn resolve_cli_target_kind(pack: &RecognitionPack, target_id: &str) -> DeviceRes
         RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_) => {
             return Err(DeviceError::fatal(
                 "device-test does not inject a production vision provider",
+            ));
+        }
+        RecognitionTarget::ColorDigest(_) | RecognitionTarget::Composite(_) => {
+            return Err(DeviceError::fatal(
+                "device-test recognize does not report color_digest or composite targets",
             ));
         }
     })
@@ -1167,6 +1174,9 @@ fn format_evaluation(
         )),
         TargetKind::Ocr | TargetKind::Nn => Err(DeviceError::fatal(
             "device-test cannot format vision evaluation without a production provider",
+        )),
+        TargetKind::ColorDigest | TargetKind::Composite => Err(DeviceError::fatal(
+            "device-test cannot format color_digest or composite evaluation",
         )),
     }
 }

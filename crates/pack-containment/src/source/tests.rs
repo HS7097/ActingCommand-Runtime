@@ -392,7 +392,7 @@ fn converted_offset_click_rejects_color_probe_guard() {
         }]
     });
 
-    let err = validate_converted_guard_references(&pack, &pages, &primitives)
+    let err = validate_parsed_guard_references(&pack, &pages, &primitives)
         .expect_err("offset click must require template matched_rect source");
 
     assert!(err.message.contains("requires a template guard"));

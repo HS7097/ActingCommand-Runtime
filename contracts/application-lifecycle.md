@@ -33,7 +33,7 @@ An operation carries exactly one effect: the existing `click` object, or
   other key is accepted inside `application`; `click` and `application` on one operation, or
   neither, is a declaration error.
   Null is not an effect: two absent/null effects are rejected at the source declaration
-  entrance with the original structured path/reason, before conversion or packaging.
+  entrance with the original structured path/reason, before parsing or packaging.
 - Execution resolves the instance's `application_id` and drives the existing
   `ApplicationLifecycle` path (`control_application`: adb `force-stop` for `stop`, `monkey`
   launch for `launch`, both for `restart`) under the run's lease, with the task and run ids on

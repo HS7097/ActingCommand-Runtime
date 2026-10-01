@@ -4,6 +4,10 @@ use actingcommand_contract::{
     OcrAnchorMatch, OcrRegionEvidence, OcrRegionOffset, OcrRegionRect, OcrRegionUnresolvedReason,
 };
 use actingcommand_recognition as recognition;
+use recognition::color_digest::{
+    self, ColorDigest, ColorDigestAlgorithm, ColorDigestError, ColorDigestGrid,
+    ColorDigestThresholds,
+};
 use recognition::{MatchMetric, Scene};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -27,6 +31,10 @@ const MAX_OCR_BLOCKS: usize = 1_024;
 const MAX_VISION_RESULTS: usize = 1_024;
 const MAX_TEMPLATE_REGION_EVALUATIONS: usize = 64;
 const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
+/// The only schema that declares `color_digest` and `composite` targets and a per-target
+/// color `max_distance`. Every other construct keeps its schema 0.6 rules.
+const SCHEMA_0_7: &str = "0.7";
+const COMPOSITE_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RecognitionPackErrorSeverity {
@@ -269,6 +277,8 @@ pub enum RecognitionTarget {
     ClickOnly(ClickOnlyTarget),
     Ocr(OcrTarget),
     Nn(NnTarget),
+    ColorDigest(ColorDigestTarget),
+    Composite(CompositeTarget),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -292,6 +302,42 @@ pub struct ColorTarget {
     pub region: PackRect,
     pub expected: [u8; 3],
     pub click: Option<PackRect>,
+    /// Schema 0.7: this target's color threshold; absent means `defaults.color_max_distance`.
+    #[serde(default)]
+    pub max_distance: Option<f32>,
+}
+
+/// Schema 0.7 `color_digest.v1` verifier of one fixed rectangle. It never locates anything
+/// and has no default threshold.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ColorDigestTarget {
+    pub id: String,
+    pub region: PackRect,
+    pub algorithm: String,
+    pub columns: u32,
+    pub rows: u32,
+    pub cells: String,
+    #[serde(default)]
+    pub exclude_cells: Vec<u32>,
+    pub max_mean_milli: u32,
+    #[serde(default)]
+    pub max_cell: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompositeMode {
+    AllOf,
+    AnyOf,
+}
+
+/// Schema 0.7 named check over 2..=8 existing targets. Every member is evaluated; the
+/// thresholds stay on the members. A composite is never clicked, located or nested.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CompositeTarget {
+    pub id: String,
+    pub mode: CompositeMode,
+    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -347,6 +393,9 @@ pub struct NnTarget {
 pub struct ColorCheck {
     pub region: PackRegion,
     pub expected: [u8; 3],
+    /// Schema 0.7: this check's color threshold; absent means `defaults.color_max_distance`.
+    #[serde(default)]
+    pub max_distance: Option<f32>,
 }
 
 impl ColorCheck {
@@ -621,6 +670,8 @@ pub enum TargetKind {
     ClickOnly,
     Ocr,
     Nn,
+    ColorDigest,
+    Composite,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -632,17 +683,59 @@ pub struct TargetEvaluation {
     pub color: Option<ColorEvaluation>,
     pub ocr: Option<Box<OcrEvaluation>>,
     pub nn: Option<NnEvaluation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_digest: Option<Box<ColorDigestEvaluation>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composite: Option<Box<CompositeEvaluation>>,
     pub message: String,
 }
 
 impl TargetEvaluation {
+    /// A composite carries the reports of all its members; any other target its own.
     pub fn ppocr_diagnostics(
         &self,
     ) -> &[std::sync::Arc<actingcommand_contract::PpocrNodePlacementDiagnostic>] {
+        if let Some(composite) = &self.composite {
+            return composite.ppocr_diagnostics.as_slice();
+        }
         self.ocr
             .as_ref()
             .map_or(&[], |ocr| ocr.ppocr_diagnostics.as_slice())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ColorDigestEvaluation {
+    pub algorithm: String,
+    pub columns: u32,
+    pub rows: u32,
+    pub active_cells: u32,
+    pub mean_milli: u32,
+    pub max_cell: u32,
+    pub worst_cell: u32,
+    pub max_mean_milli: u32,
+    /// The declared `max_cell` threshold; `None` when the target declares none.
+    pub max_cell_threshold: Option<u32>,
+    /// The digest of the evaluated frame, in the declaration's hex form.
+    pub observed_cells: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CompositeEvaluation {
+    pub mode: CompositeMode,
+    /// Every member in declaration order.
+    pub members: Vec<CompositeMemberEvaluation>,
+    #[serde(skip)]
+    pub ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
+}
+
+/// One member's own evaluation. `target_id` names the member so that a member keeps its own
+/// privacy treatment wherever the composite is serialized.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CompositeMemberEvaluation {
+    pub target_id: String,
+    pub passed: bool,
+    pub evaluation: TargetEvaluation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -1031,6 +1124,8 @@ impl RecognitionEvaluator {
             ))),
             RecognitionTarget::Ocr(target) => self.evaluate_ocr(context, target),
             RecognitionTarget::Nn(target) => self.evaluate_nn(scene, target),
+            RecognitionTarget::ColorDigest(target) => self.evaluate_color_digest(scene, target),
+            RecognitionTarget::Composite(target) => self.evaluate_composite(context, target),
         }
     }
 
@@ -1320,6 +1415,14 @@ impl RecognitionEvaluator {
             RecognitionTarget::Nn(target) => target.click.ok_or_else(|| {
                 RecognitionPackError::fatal(format!("nn target '{}' has no click field", target.id))
             }),
+            RecognitionTarget::ColorDigest(target) => Err(RecognitionPackError::fatal(format!(
+                "color_digest target '{}' has no click field",
+                target.id
+            ))),
+            RecognitionTarget::Composite(target) => Err(RecognitionPackError::fatal(format!(
+                "composite target '{}' cannot be clicked",
+                target.id
+            ))),
         }
     }
 
@@ -1342,7 +1445,9 @@ impl RecognitionEvaluator {
             RecognitionTarget::Color(_)
             | RecognitionTarget::ClickOnly(_)
             | RecognitionTarget::Ocr(_)
-            | RecognitionTarget::Nn(_) => Ok(None),
+            | RecognitionTarget::Nn(_)
+            | RecognitionTarget::ColorDigest(_)
+            | RecognitionTarget::Composite(_) => Ok(None),
         }
     }
 
@@ -1354,6 +1459,8 @@ impl RecognitionEvaluator {
             RecognitionTarget::ClickOnly(_) => TargetKind::ClickOnly,
             RecognitionTarget::Ocr(_) => TargetKind::Ocr,
             RecognitionTarget::Nn(_) => TargetKind::Nn,
+            RecognitionTarget::ColorDigest(_) => TargetKind::ColorDigest,
+            RecognitionTarget::Composite(_) => TargetKind::Composite,
         })
     }
 
@@ -1427,6 +1534,8 @@ impl RecognitionEvaluator {
             color,
             ocr: None,
             nn: None,
+            color_digest: None,
+            composite: None,
             message: template_message(template_ok, color_ok),
         })
     }
@@ -1482,7 +1591,7 @@ impl RecognitionEvaluator {
                             (
                                 Some(ColorEvaluation {
                                     distance: measured.distance,
-                                    max_distance: self.pack.defaults.color_max_distance,
+                                    max_distance: self.color_max_distance(check.max_distance),
                                     mean: measured.mean,
                                     expected: check.expected,
                                     region: Some(region),
@@ -1528,6 +1637,8 @@ impl RecognitionEvaluator {
             color,
             ocr: None,
             nn: None,
+            color_digest: None,
+            composite: None,
             message: match unresolved {
                 Some(reason) => format!(
                     "no joint template/color match; best template color region unresolved: {reason:?}"
@@ -1545,7 +1656,13 @@ impl RecognitionEvaluator {
         scene: &Scene,
         target: &ColorTarget,
     ) -> RecognitionPackResult<TargetEvaluation> {
-        let color = self.evaluate_color_match(scene, &target.id, target.region, target.expected)?;
+        let color = self.evaluate_color_match(
+            scene,
+            &target.id,
+            target.region,
+            target.expected,
+            target.max_distance,
+        )?;
         let passed = color.distance <= color.max_distance;
 
         Ok(TargetEvaluation {
@@ -1556,6 +1673,8 @@ impl RecognitionEvaluator {
             color: Some(color),
             ocr: None,
             nn: None,
+            color_digest: None,
+            composite: None,
             message: if passed {
                 "color passed".to_string()
             } else {
@@ -1627,6 +1746,8 @@ impl RecognitionEvaluator {
                     blocks: ocr.blocks,
                 })),
                 nn: None,
+                color_digest: None,
+                composite: None,
                 message,
             })
         })()
@@ -1685,11 +1806,133 @@ impl RecognitionEvaluator {
                 selection: target.selection,
                 labels,
             }),
+            color_digest: None,
+            composite: None,
             message: if passed {
                 "nn passed".to_string()
             } else {
                 "nn score below threshold or no eligible label".to_string()
             },
+        })
+    }
+
+    fn evaluate_color_digest(
+        &self,
+        scene: &Scene,
+        target: &ColorDigestTarget,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        let digest_error = |error: ColorDigestError| {
+            RecognitionPackError::fatal(format!(
+                "color_digest target '{}' failed: {error}",
+                target.id
+            ))
+        };
+        let algorithm = ColorDigestAlgorithm::parse(&target.algorithm).map_err(digest_error)?;
+        let grid = ColorDigestGrid::new(target.columns, target.rows).map_err(digest_error)?;
+        let expected = ColorDigest::from_hex(grid, &target.cells).map_err(digest_error)?;
+        let observed =
+            ColorDigest::compute(scene, target.region.into(), grid).map_err(digest_error)?;
+        let distance = color_digest::distance(&expected, &observed, &target.exclude_cells)
+            .map_err(digest_error)?;
+        let passed = distance.passes(ColorDigestThresholds {
+            max_mean_milli: target.max_mean_milli,
+            max_cell: target.max_cell,
+        });
+
+        Ok(TargetEvaluation {
+            id: target.id.clone(),
+            kind: TargetKind::ColorDigest,
+            passed,
+            template: None,
+            color: None,
+            ocr: None,
+            nn: None,
+            color_digest: Some(Box::new(ColorDigestEvaluation {
+                algorithm: algorithm.as_str().to_string(),
+                columns: grid.columns(),
+                rows: grid.rows(),
+                active_cells: distance.active_cells,
+                mean_milli: distance.mean_milli,
+                max_cell: distance.max_cell,
+                worst_cell: distance.worst_cell,
+                max_mean_milli: target.max_mean_milli,
+                max_cell_threshold: target.max_cell,
+                observed_cells: observed.to_hex(),
+            })),
+            composite: None,
+            message: if passed {
+                "color digest passed".to_string()
+            } else {
+                "color digest distance above threshold".to_string()
+            },
+        })
+    }
+
+    /// Evaluates every member in declaration order through the same Scene context, so a
+    /// template member reuses the template cache; the composite itself is never cached. A
+    /// member error is the composite's error: it is never counted as a member that did not
+    /// pass. The members' PP-OCR reports travel with the composite on both paths.
+    fn evaluate_composite(
+        &self,
+        context: &SceneEvaluation<'_>,
+        target: &CompositeTarget,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        let mut members = Vec::with_capacity(target.members.len());
+        let mut ppocr_diagnostics = Vec::new();
+        for member_id in &target.members {
+            match context.evaluate_target(member_id) {
+                Ok(evaluation) => {
+                    ppocr_diagnostics.extend(evaluation.ppocr_diagnostics().iter().cloned());
+                    members.push(CompositeMemberEvaluation {
+                        target_id: member_id.clone(),
+                        passed: evaluation.passed,
+                        evaluation,
+                    });
+                }
+                Err(mut error) => {
+                    ppocr_diagnostics.append(&mut error.ppocr_diagnostics);
+                    error.ppocr_diagnostics = ppocr_diagnostics;
+                    error.message = format!(
+                        "composite target '{}' member '{member_id}' failed: {}",
+                        target.id, error.message
+                    );
+                    return Err(error);
+                }
+            }
+        }
+        let passed = match target.mode {
+            CompositeMode::AllOf => members.iter().all(|member| member.passed),
+            CompositeMode::AnyOf => members.iter().any(|member| member.passed),
+        };
+        let message = if passed {
+            "composite passed".to_string()
+        } else {
+            format!(
+                "composite failed; members not passed: {}",
+                members
+                    .iter()
+                    .filter(|member| !member.passed)
+                    .map(|member| member.target_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        Ok(TargetEvaluation {
+            id: target.id.clone(),
+            kind: TargetKind::Composite,
+            passed,
+            template: None,
+            color: None,
+            ocr: None,
+            nn: None,
+            color_digest: None,
+            composite: Some(Box::new(CompositeEvaluation {
+                mode: target.mode,
+                members,
+                ppocr_diagnostics,
+            })),
+            message,
         })
     }
 
@@ -1704,7 +1947,7 @@ impl RecognitionEvaluator {
                 "relative color requires its template candidate",
             ));
         };
-        self.evaluate_color_match(scene, target_id, region, check.expected)
+        self.evaluate_color_match(scene, target_id, region, check.expected, check.max_distance)
     }
 
     fn evaluate_color_match(
@@ -1713,17 +1956,23 @@ impl RecognitionEvaluator {
         target_id: &str,
         region: PackRect,
         expected: [u8; 3],
+        max_distance: Option<f32>,
     ) -> RecognitionPackResult<ColorEvaluation> {
         let matched = scene
             .compare_color(region.into(), expected)
             .map_err(|err| primitive_error(target_id, err))?;
         Ok(ColorEvaluation {
             distance: matched.distance,
-            max_distance: self.pack.defaults.color_max_distance,
+            max_distance: self.color_max_distance(max_distance),
             mean: matched.mean,
             expected,
             region: None,
         })
+    }
+
+    /// The declared per-target threshold, or the package default when none is declared.
+    fn color_max_distance(&self, declared: Option<f32>) -> f32 {
+        declared.unwrap_or(self.pack.defaults.color_max_distance)
     }
 
     fn validate_coordinate_space(&self, scene: &Scene) -> RecognitionPackResult<()> {
@@ -1764,7 +2013,9 @@ pub fn unsupported_recognition_targets(
             RecognitionTarget::Color(_)
             | RecognitionTarget::ClickOnly(_)
             | RecognitionTarget::Ocr(_)
-            | RecognitionTarget::Nn(_) => None,
+            | RecognitionTarget::Nn(_)
+            | RecognitionTarget::ColorDigest(_)
+            | RecognitionTarget::Composite(_) => None,
         })
         .collect()
 }
@@ -1777,6 +2028,8 @@ impl RecognitionTarget {
             Self::ClickOnly(target) => &target.id,
             Self::Ocr(target) => &target.id,
             Self::Nn(target) => &target.id,
+            Self::ColorDigest(target) => &target.id,
+            Self::Composite(target) => &target.id,
         }
     }
 }
@@ -1834,22 +2087,22 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
         })?;
         let allowed = match target_type {
             "template" => {
-                if schema == "0.6" && object.contains_key("mask") {
+                if matches!(schema, "0.6" | SCHEMA_0_7) && object.contains_key("mask") {
                     return Err(RecognitionPackError::fatal_with_code(
                         RecognitionPackErrorCode::UnsupportedTarget,
                         format!(
-                            "schema 0.6 target[{index}].mask is deprecated_in_vNext and must be migrated"
+                            "schema {schema} target[{index}].mask is deprecated_in_vNext and must be migrated"
                         ),
                     ).at_declaration(format!("/targets/{index}/mask"), actingcommand_contract::ResourceDeclarationReason::UnconsumedField));
                 }
                 if let Some(method) = object.get("method").and_then(Value::as_str)
-                    && schema == "0.6"
+                    && matches!(schema, "0.6" | SCHEMA_0_7)
                     && method != "ncc"
                 {
                     return Err(RecognitionPackError::fatal_with_code(
                         RecognitionPackErrorCode::UnsupportedTarget,
                         format!(
-                            "schema 0.6 target[{index}].method='{method}' is deprecated_in_vNext and must be migrated"
+                            "schema {schema} target[{index}].method='{method}' is deprecated_in_vNext and must be migrated"
                         ),
                     ).at_declaration(format!("/targets/{index}/method"), actingcommand_contract::ResourceDeclarationReason::UnconsumedField));
                 }
@@ -1866,7 +2119,35 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                     "click",
                 ][..]
             }
+            "color" if schema == SCHEMA_0_7 => {
+                &["type", "id", "region", "expected", "click", "max_distance"][..]
+            }
             "color" => &["type", "id", "region", "expected", "click"][..],
+            "color_digest" | "composite" if schema != SCHEMA_0_7 => {
+                return Err(RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::UnsupportedTarget,
+                    format!(
+                        "schema {schema} target[{index}] type '{target_type}' requires schema_version '{SCHEMA_0_7}'"
+                    ),
+                )
+                .at_declaration(
+                    format!("/targets/{index}/type"),
+                    actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            "color_digest" => &[
+                "type",
+                "id",
+                "region",
+                "algorithm",
+                "columns",
+                "rows",
+                "cells",
+                "exclude_cells",
+                "max_mean_milli",
+                "max_cell",
+            ][..],
+            "composite" => &["type", "id", "mode", "members"][..],
             "click_only" => &["type", "id", "click"][..],
             "ocr" => &[
                 "type",
@@ -1903,6 +2184,19 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             }
         };
         reject_unknown_fields(object, allowed, &format!("/targets/{index}"))?;
+        if target_type == "color_digest"
+            && let Some(algorithm) = object.get("algorithm").and_then(Value::as_str)
+            && let Err(error) = ColorDigestAlgorithm::parse(algorithm)
+        {
+            return Err(RecognitionPackError::fatal_with_code(
+                RecognitionPackErrorCode::UnsupportedTarget,
+                format!("target[{index}].algorithm: {error}"),
+            )
+            .at_declaration(
+                format!("/targets/{index}/algorithm"),
+                actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+            ));
+        }
         if let Some(mask) = object.get("mask").filter(|mask| !mask.is_null()) {
             let fields: &[&str] = match mask.get("type").and_then(Value::as_str) {
                 Some("range") => &["type", "lower", "upper"],
@@ -1946,9 +2240,14 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
         if let Some(color_check) = object.get("color_check")
             && !color_check.is_null()
         {
+            let color_check_fields: &[&str] = if schema == SCHEMA_0_7 {
+                &["region", "expected", "max_distance"]
+            } else {
+                &["region", "expected"]
+            };
             let color_check = validate_strict_object(
                 color_check,
-                &["region", "expected"],
+                color_check_fields,
                 &format!("/targets/{index}/color_check"),
             )?;
             if let Some(region) = color_check.get("region") {
@@ -2017,13 +2316,15 @@ fn validate_pack(
 ) {
     if !matches!(
         pack.schema_version.as_str(),
-        "0.1" | "0.3" | "0.4" | "0.5" | "0.6"
+        "0.1" | "0.3" | "0.4" | "0.5" | "0.6" | SCHEMA_0_7
     ) {
         errors.push(format!(
-            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5', '0.6'",
+            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5', '0.6', '0.7'",
             pack.schema_version
         ));
     }
+    let schema_0_6_rules = matches!(pack.schema_version.as_str(), "0.6" | SCHEMA_0_7);
+    let schema_0_7 = pack.schema_version == SCHEMA_0_7;
     match pack.coordinate_space {
         Some(space) if space.width > 0 && space.height > 0 => {}
         Some(space) => errors.push(format!(
@@ -2048,7 +2349,7 @@ fn validate_pack(
 
         match target {
             RecognitionTarget::Template(target) => {
-                if pack.schema_version == "0.6" {
+                if schema_0_6_rules {
                     if target.method != RecognitionMethod::Ncc {
                         errors.push(format!(
                             "target[{index}] method={:?} is deprecated_in_vNext; migrate to template+ncc, color, ocr, or nn",
@@ -2057,7 +2358,8 @@ fn validate_pack(
                     }
                     if target.mask.is_some() {
                         errors.push(format!(
-                            "target[{index}] mask is deprecated_in_vNext and cannot be declared by schema 0.6"
+                            "target[{index}] mask is deprecated_in_vNext and cannot be declared by schema {}",
+                            pack.schema_version
                         ));
                     }
                 }
@@ -2082,13 +2384,19 @@ fn validate_pack(
                     if let Err(error) = check.validate_for_template(&target.id) {
                         errors.push(format!("target[{index}]: {}", error.message()));
                     }
+                    validate_max_distance(
+                        check.max_distance,
+                        schema_0_7,
+                        &format!("target[{index}].color_check.max_distance"),
+                        errors,
+                    );
                     if let PackRegion::TemplateRelative(
                         TemplateRelativeRegion::TemplateRelative { width, height, .. },
                     ) = &check.region
                     {
-                        if pack.schema_version != "0.6" {
+                        if !schema_0_6_rules {
                             errors.push(format!(
-                                "target[{index}] relative color requires schema_version '0.6'"
+                                "target[{index}] relative color requires schema_version '0.6' or '0.7'"
                             ));
                         }
                         if pack.coordinate_space.is_some_and(|space| {
@@ -2115,14 +2423,20 @@ fn validate_pack(
                 if let Some(click) = target.click {
                     validate_rect_shape(click, &format!("target[{index}].click"), errors);
                 }
+                validate_max_distance(
+                    target.max_distance,
+                    schema_0_7,
+                    &format!("target[{index}].max_distance"),
+                    errors,
+                );
             }
             RecognitionTarget::ClickOnly(target) => {
                 validate_rect_shape(target.click, &format!("target[{index}].click"), errors);
             }
             RecognitionTarget::Ocr(target) => {
-                if pack.schema_version != "0.6" {
+                if !schema_0_6_rules {
                     errors.push(format!(
-                        "target[{index}] type=ocr requires schema_version '0.6'"
+                        "target[{index}] type=ocr requires schema_version '0.6' or '0.7'"
                     ));
                 }
                 if let PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
@@ -2195,9 +2509,9 @@ fn validate_pack(
                 }
             }
             RecognitionTarget::Nn(target) => {
-                if pack.schema_version != "0.6" {
+                if !schema_0_6_rules {
                     errors.push(format!(
-                        "target[{index}] type=nn requires schema_version '0.6'"
+                        "target[{index}] type=nn requires schema_version '0.6' or '0.7'"
                     ));
                 }
                 validate_region_shape(&target.region, &format!("target[{index}].region"), errors);
@@ -2246,7 +2560,119 @@ fn validate_pack(
                     validate_rect_shape(click, &format!("target[{index}].click"), errors);
                 }
             }
+            RecognitionTarget::ColorDigest(target) => {
+                if !schema_0_7 {
+                    errors.push(format!(
+                        "target[{index}] type=color_digest requires schema_version '{SCHEMA_0_7}'"
+                    ));
+                }
+                let label = format!("target[{index}].region");
+                validate_rect_shape(target.region, &label, errors);
+                validate_region_within_coordinate_space(
+                    &PackRegion::Rect(target.region),
+                    pack.coordinate_space,
+                    &label,
+                    errors,
+                );
+                if let Err(error) = validate_color_digest_declaration(target) {
+                    errors.push(format!("target[{index}] {error}"));
+                }
+            }
+            RecognitionTarget::Composite(target) => {
+                if !schema_0_7 {
+                    errors.push(format!(
+                        "target[{index}] type=composite requires schema_version '{SCHEMA_0_7}'"
+                    ));
+                }
+                validate_composite_members(pack, index, target, errors);
+            }
         }
+    }
+}
+
+/// Algorithm, grid, grid fit, cells and exclusion list of a digest declaration. The region
+/// shape and its place in the coordinate space are checked by the caller.
+fn validate_color_digest_declaration(target: &ColorDigestTarget) -> Result<(), ColorDigestError> {
+    ColorDigestAlgorithm::parse(&target.algorithm)?;
+    let grid = ColorDigestGrid::new(target.columns, target.rows)?;
+    if let (Ok(width), Ok(height)) = (
+        u32::try_from(target.region.width),
+        u32::try_from(target.region.height),
+    ) {
+        grid.ensure_fits(width, height)?;
+    }
+    ColorDigest::from_hex(grid, &target.cells)?;
+    color_digest::validate_exclude_cells(grid, &target.exclude_cells)?;
+    Ok(())
+}
+
+/// 2..=8 distinct members, each an existing template, color, color_digest, OCR or NN target.
+fn validate_composite_members(
+    pack: &RecognitionPack,
+    index: usize,
+    target: &CompositeTarget,
+    errors: &mut Vec<String>,
+) {
+    if !COMPOSITE_MEMBERS.contains(&target.members.len()) {
+        errors.push(format!(
+            "target[{index}] composite '{}' must have {}..={} members, got {}",
+            target.id,
+            COMPOSITE_MEMBERS.start(),
+            COMPOSITE_MEMBERS.end(),
+            target.members.len()
+        ));
+    }
+    let mut seen = HashSet::new();
+    for member in &target.members {
+        if !seen.insert(member.as_str()) {
+            errors.push(format!(
+                "target[{index}] composite '{}' repeats member '{member}'",
+                target.id
+            ));
+            continue;
+        }
+        match pack
+            .targets
+            .iter()
+            .find(|candidate| candidate.id() == member)
+        {
+            None => errors.push(format!(
+                "target[{index}] composite '{}' member '{member}' does not exist",
+                target.id
+            )),
+            Some(RecognitionTarget::Composite(_)) => errors.push(format!(
+                "target[{index}] composite '{}' member '{member}' is a composite; composites do not nest",
+                target.id
+            )),
+            Some(RecognitionTarget::ClickOnly(_)) => errors.push(format!(
+                "target[{index}] composite '{}' member '{member}' is click-only and cannot be evaluated",
+                target.id
+            )),
+            Some(
+                RecognitionTarget::Template(_)
+                | RecognitionTarget::Color(_)
+                | RecognitionTarget::ColorDigest(_)
+                | RecognitionTarget::Ocr(_)
+                | RecognitionTarget::Nn(_),
+            ) => {}
+        }
+    }
+}
+
+fn validate_max_distance(
+    max_distance: Option<f32>,
+    schema_0_7: bool,
+    label: &str,
+    errors: &mut Vec<String>,
+) {
+    let Some(max_distance) = max_distance else {
+        return;
+    };
+    if !schema_0_7 {
+        errors.push(format!("{label} requires schema_version '{SCHEMA_0_7}'"));
+    }
+    if !max_distance.is_finite() || max_distance < 0.0 {
+        errors.push(format!("{label} must be finite and >= 0.0: {max_distance}"));
     }
 }
 
@@ -4206,12 +4632,14 @@ mod tests {
                     region: rect(0, 0, 10, 10),
                     expected: [255, 0, 0],
                     click: Some(rect(9, 10, 11, 12)),
+                    max_distance: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "no-click".to_string(),
                     region: rect(0, 0, 10, 10),
                     expected: [255, 0, 0],
                     click: None,
+                    max_distance: None,
                 }),
             ],
             ..base_pack()
@@ -4270,6 +4698,7 @@ mod tests {
                     region: rect(0, -1, 4, 0),
                     expected: [0, 0, 0],
                     click: None,
+                    max_distance: None,
                 }),
             ],
             ..base_pack()
@@ -4346,6 +4775,7 @@ mod tests {
                 region: rect(0, 0, 20, 20),
                 expected,
                 click: None,
+                max_distance: None,
             })],
             ..base_pack()
         }
@@ -4445,6 +4875,7 @@ mod tests {
                     color_check: Some(ColorCheck {
                         region: PackRegion::Rect(rect(0, 0, 8, 8)),
                         expected,
+                        max_distance: None,
                     }),
                     click: None,
                 })],
@@ -4473,6 +4904,7 @@ mod tests {
                     height: 2,
                 }),
                 expected: [255, 0, 0],
+                max_distance: None,
             });
             RecognitionEvaluator::new(self.dir.path.clone(), pack).expect("relative evaluator")
         }
@@ -4501,6 +4933,7 @@ mod tests {
                         region: rect(0, 0, 4, 4),
                         expected: [30, 31, 32],
                         click: None,
+                        max_distance: None,
                     }),
                     RecognitionTarget::Ocr(OcrTarget {
                         id: "ocr/page".to_string(),

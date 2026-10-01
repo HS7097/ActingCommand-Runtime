@@ -3,7 +3,7 @@
 //! MAA task graph expansion at the resource-data boundary.
 //!
 //! This module consumes MAA task JSON data and implements the public task-schema
-//! semantics needed before ActingCommand can convert those resources into its own
+//! semantics needed before ActingCommand can parse those resources into its own
 //! schema. It does not call or copy the upstream MAA engine.
 
 use crate::JsonDocument;

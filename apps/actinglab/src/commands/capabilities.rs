@@ -611,7 +611,7 @@ pub(crate) fn schema_capabilities() -> Value {
             "supported": ["0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"],
             "validation": "version_specific_fields_required"
         },
-        "recognition_pack": {"supported": ["0.1", "0.3", "0.4", "0.5", "0.6"]},
+        "recognition_pack": {"supported": ["0.1", "0.3", "0.4", "0.5", "0.6", "0.7"]},
         "control": {"supported": ["Lab-1y.control.v1", actingcommand_contract::PHASED_CONTROL_SCHEMA]},
         "package_reference": {
             "legacy_zip": {"kind": "sha256"},

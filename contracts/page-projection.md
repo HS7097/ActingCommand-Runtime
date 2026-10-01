@@ -10,9 +10,9 @@ adapter calls this owner; Runtime consumption uses the same boundary.
 
 The optional source is `navigation/<game>.<server>.projection.json` below the
 resolved resource root. This is the only authored source for these annotations.
-Conversion validates it against generated pack/pages/navigation and existing
+Parsing validates it against generated pack/pages/navigation and existing
 operation field identities. Package construction copies the selected declaration
-to `resources/navigation/<game>.<server>.projection.json`. Conversion does not
+to `resources/navigation/<game>.<server>.projection.json`. Parsing does not
 overwrite the source. Selected packages first validate the complete source, then
 retain only references present in the selected package.
 
@@ -77,6 +77,8 @@ The operation contract is consumed through its current validator.
 
 Any personal classification on the target, field, original operation declaration
 or supplied result requires redaction. Public classifications cannot downgrade it.
+A composite check (`selection-graph.md`) evaluates its members, so a personal
+classification of any member classifies the composite as personal too.
 An unknown target, unknown field tuple or mismatched target/field is rejected.
 A field without its cataloged operation classification remains redacted with
 `privacy: null`, even when the caller or companion labels it public. This unknown

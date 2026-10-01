@@ -675,7 +675,7 @@ fn runtime_wait_for_stable_target(
     timeout: Duration,
     poll: Duration,
 ) -> CliOutcome<Value> {
-    guard_evaluable_target(evaluator, target, "wait --stable")?;
+    guard_stable_target(evaluator, target)?;
     let started = Instant::now();
     let first = load_runtime_lab2_scene(session, instance)?;
     let mut previous = evaluator
@@ -1846,7 +1846,7 @@ fn wait_for_stable_target(
     target: &str,
     timing: WaitTiming,
 ) -> CliOutcome<Value> {
-    guard_evaluable_target(evaluator, target, "wait --stable")?;
+    guard_stable_target(evaluator, target)?;
     let started = Instant::now();
     let first = load_lab2_scene(global, flags)?;
     let mut previous = evaluator
@@ -2016,6 +2016,22 @@ fn guard_evaluable_target(
     {
         return Err(CliError::usage(format!(
             "{command} requires a visually evaluatable target; '{target}' is click-only"
+        )));
+    }
+    Ok(())
+}
+
+/// `wait --stable` compares a target's measured place between frames; a composite check has
+/// no region of its own to compare.
+fn guard_stable_target(evaluator: &RecognitionEvaluator, target: &str) -> CliOutcome<()> {
+    guard_evaluable_target(evaluator, target, "wait --stable")?;
+    if evaluator
+        .target_kind(target)
+        .map_err(|err| CliError::usage(err.to_string()))?
+        == TargetKind::Composite
+    {
+        return Err(CliError::usage(format!(
+            "wait --stable requires a target with a region; '{target}' is a composite check"
         )));
     }
     Ok(())

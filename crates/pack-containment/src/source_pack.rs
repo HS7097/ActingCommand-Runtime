@@ -9,13 +9,13 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 /// The source directory uses the existing control/resource layout. Only original
-/// operation declarations and their explicit dependencies enter pure conversion.
+/// operation declarations and their explicit dependencies enter pure parsing.
 pub(super) fn compile(
     mut entries: BTreeMap<String, Vec<u8>>,
     limits: ContainmentLimits,
     deadline: Instant,
 ) -> ContainmentResult<(MemoryPackage, Value)> {
-    use source::{Bundle, ConversionFiles, OperationConverter, SourceFile, SourceRead};
+    use source::{Bundle, OperationParser, ParseFiles, SourceFile, SourceRead};
     if Instant::now() >= deadline {
         return Err(source_error("source_tree_deadline"));
     }
@@ -64,7 +64,7 @@ pub(super) fn compile(
         .ok_or_else(|| source_error("source_locale_missing"))?;
     let stem = format!("{}.{}", control.game, control.server);
     let projection_path = format!("resources/navigation/{stem}.projection.json");
-    let files = ConversionFiles {
+    let files = ParseFiles {
         files: Arc::new(
             source::source_file_requests(&bundles)
                 .into_iter()
@@ -99,7 +99,7 @@ pub(super) fn compile(
         projection_bytes: Ok(entries.get(&projection_path).cloned()),
         projection_exists: Ok(entries.contains_key(&projection_path)),
     };
-    let converter = OperationConverter {
+    let parser = OperationParser {
         root: PathBuf::from("resources"),
         game: source::canonical_game(&control.game)
             .map_err(|_| source_error("source_game_invalid"))?,
@@ -117,13 +117,13 @@ pub(super) fn compile(
         bundles,
         maa_task_overlays: Default::default(),
     };
-    converter
+    parser
         .validate_bundles(&files)
         .map_err(|error| declaration_error("resources/operations", error))?;
-    let outputs = converter
+    let outputs = parser
         .build_all(&files)
         .map_err(|error| declaration_error("resources/operations", error))?;
-    let operation = converter
+    let operation = parser
         .canonical_task(&control.entry_task_id)
         .map_err(|error| ContainmentError::PackParse {
             path: format!("resources/operations/{}/task.json", control.entry_task_id),

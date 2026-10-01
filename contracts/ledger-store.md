@@ -589,7 +589,7 @@ The future source-tree `PackageRef` belongs to the separately frozen package
 identity/containment contract in #288. Its issuer, source-tree identity and ledger
 representation require coordination at that shared boundary. S0 preserves current
 package facts and artifact references for the storage comparison. Parallel policy
-time/window work (#267) and translator-owner relocation (#288) retain their own
+time/window work (#267) and parser-owner relocation (#288) retain their own
 owners; the six SQL views remain assigned to the stages below.
 
 | Stage | Concrete boundary and remaining proof |

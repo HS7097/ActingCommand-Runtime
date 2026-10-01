@@ -122,6 +122,8 @@ fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvalu
         }),
         ocr: None,
         nn: None,
+        color_digest: None,
+        composite: None,
         message: if passed {
             "color passed".to_string()
         } else {

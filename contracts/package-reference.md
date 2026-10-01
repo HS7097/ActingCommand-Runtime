@@ -99,7 +99,7 @@ run filters, execute source code or write derived resources. Every operation sha
 absolute admission deadline and the existing file count, byte and resident limits.
 
 Only after the entire snapshot is verified may it be parsed. The same in-memory bytes
-feed the pure converter owned by `pack-containment::source` and the normal reference
+feed the pure parser owned by `pack-containment::source` and the normal reference
 closure/recognition/navigation validation. The entry execution document also uses the
 existing `canonical_task` transformation (including inferred guards and canonical click
 geometry). The loaded capability retains original source entry bytes for provenance and
@@ -110,9 +110,9 @@ restore alongside that derived execution document.
 The bundle contains `control.json` with the existing Lab control fields, and:
 
 - `resources/operations/resources.json`: shared resource IDs and optional authored
-  `control_points` used by navigation conversion.
+  `control_points` used by navigation parsing.
 - `resources/operations/<task>/task.json`: original operation declarations. The entry
-  operation supplies `locale`, `coordinate_space` and `defaults` for conversion;
+  operation supplies `locale`, `coordinate_space` and `defaults` for parsing;
   `control.json` supplies canonical `game`, `server` and `entry_task_id`.
 - All referenced templates, OCR dictionaries/truth sets and operation dependencies at
   their declared local paths inside this tree.
@@ -121,7 +121,7 @@ The bundle contains `control.json` with the existing Lab control fields, and:
 Recognition pack/pages, navigation, operation index, primitives and the dependency
 hash index are derived only in memory. A source tree containing those generated output
 paths is rejected. All operations and shared dependencies in the self-contained bundle
-are converted together; references to missing resources fail before any input.
+are parsed together; references to missing resources fail before any input.
 
 ## Content-directory tools and the bundle index
 

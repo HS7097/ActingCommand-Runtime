@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{Bundle, CliError, CliOutcome, ConversionFiles, SourceRead};
+use super::{Bundle, CliError, CliOutcome, ParseFiles, SourceRead};
 use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -1191,7 +1191,7 @@ pub fn declaration_file_requests(bundles: &[Bundle]) -> CliOutcome<BTreeMap<Path
 }
 
 /// Declaration validation never reads template metadata, images or models.
-pub fn validate_bundle_declarations(bundle: &Bundle, files: &ConversionFiles) -> CliOutcome<()> {
+pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliOutcome<()> {
     let requests = declaration_file_requests(std::slice::from_ref(bundle))?;
     for (path, read) in requests {
         let mut declaration = Declaration {
