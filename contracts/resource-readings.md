@@ -184,8 +184,8 @@ terminal flow once, unchanged.
 
 A refusal in stage 0 or 2 rewrites the terminal as a refused projection does: outcome `Failure`
 with that code, no final page, no settlement, and the projection failure severity (`warning`
-for a policy run). The receipt is `Failed` with that code, the detail as native detail and the
-failure terminal.
+for a policy run). The request fails as `Failed` with that code and the failure terminal; the
+detail is the failure's native detail.
 
 `publish_facts` takes `fact_write_gate` itself, so nothing is published under the gate, and the
 `policy` lock is never taken under it. Between stage 2 and stage 3 another path can commit the
@@ -202,8 +202,11 @@ observations of the terminal frame, and the rejection is reported on its own.
   `capture.summary_committed`, `TerminalCommitted` (`failure`). This is the same sequence as for
   a refused settlement projection.
 
-**Failure codes.** `TerminalCommitted.failure_code` holds the code alone; the receipt's native
-detail holds the detail.
+**Failure codes.** `TerminalCommitted.failure_code` holds the code alone. The detail is the
+native detail of the run's host failure (`RuntimeHostError`). A policy run's driver receives
+that error, and its failure record keeps the detail when the error was not already recorded.
+The IPC receipt of a manual `task-run` carries the code (`host_code`) but has no native detail
+field.
 
 | Code | When | Native detail | Reading why from the ledger |
 | --- | --- | --- | --- |
