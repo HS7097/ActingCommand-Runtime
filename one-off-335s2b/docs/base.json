@@ -1,0 +1,25 @@
+{
+  "schema_version": "actingcommand.resource-targets.v1",
+  "instance": "BlueArchiveJP",
+  "valid_until_unix_ms": 1790858298113,
+  "targets": [
+    {
+      "id": "credits-floor",
+      "resource": "bluearchive.credits",
+      "condition": {
+        "kind": "at_least",
+        "amount": 10000
+      },
+      "scale": 10000,
+      "importance_milli": 100000,
+      "rule": "shortfall_linear",
+      "apply": {
+        "mode": "adjust",
+        "weight": "score_stage"
+      },
+      "tasks": [
+        "cafe_income"
+      ]
+    }
+  ]
+}
