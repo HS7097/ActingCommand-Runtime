@@ -43,7 +43,7 @@ impl FrameMemoryBudget {
             .map_err(|error| error.with_frame_memory_failure(FrameMemoryFailure::BudgetSource))?;
         self.0
             .live
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 live.checked_add(bytes).filter(|total| *total <= limit)
             })
             .map_err(|_| DeviceError::frame_memory(FrameMemoryFailure::Capacity))?;
@@ -122,7 +122,7 @@ impl Drop for FrameMemoryCharge {
         self.owner
             .0
             .live
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 live.checked_sub(self.bytes)
             })
             .expect("frame memory charge underflow");

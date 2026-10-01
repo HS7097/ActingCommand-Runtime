@@ -152,9 +152,9 @@ impl ProviderStartupRecord {
                     .all(|value| valid(value))
                     && instances.iter().all(|instance| {
                         valid(&instance.instance_name)
-                            && instance.adb_host.as_deref().is_none_or(&valid)
+                            && instance.adb_host.as_deref().is_none_or(valid)
                             && instance.adb_port != Some(0)
-                            && instance.bound_alias.as_deref().is_none_or(&valid)
+                            && instance.bound_alias.as_deref().is_none_or(valid)
                     })
             }
             ProviderStartupObservation::CapabilityProfile {

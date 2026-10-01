@@ -547,7 +547,7 @@ fn next_invocation_id() -> VisionFfiResult<OcrInvocationId> {
 
 fn next_sequence(counter: &AtomicU64, label: &str) -> VisionFfiResult<u64> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .map_err(|_| {
