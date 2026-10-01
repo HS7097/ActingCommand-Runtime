@@ -4,8 +4,9 @@ use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
 use actingcommand_contract::{
-    ContainedTaskRequest, InstanceId, InstanceResourcePackage, InstanceResourcePackageKind,
-    RuntimeConfigManifest,
+    ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion, InstanceId,
+    InstanceResourcePackage, InstanceResourcePackageKind, PackageRef, RuntimeConfigManifest,
+    digest_named,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
@@ -35,7 +36,7 @@ use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod manifest;
 mod provider_startup;
@@ -50,6 +51,8 @@ const MAX_FIXTURE_RESIDENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FIXTURE_INPUTS: u16 = 32;
 /// Workflow #318 cfg4: the most `governance.allowed_clients` entries a file may name.
 const MAX_GOVERNANCE_ALLOWED_CLIENTS: usize = 32;
+/// Workflow #288: the admission deadline of one digest-named `resource_package` directory.
+const RESOURCE_PACKAGE_DIRECTORY_DEADLINE: Duration = Duration::from_secs(60);
 /// The governance identity card `client` of the daemon's own policy driver connection; it is
 /// always allowed, whatever `governance.allowed_clients` names.
 pub(super) const GOVERNANCE_POLICY_DRIVER_CLIENT: &str = "actingd-policy-driver";
@@ -314,7 +317,9 @@ struct InstanceConfig {
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
 /// locator (relative paths resolve against the configuration file's directory) and the
-/// bare lowercase hex digest. The file is neither opened nor hashed at assembly.
+/// bare lowercase hex digest. A locator whose last segment is that same digest names a
+/// content directory (Workflow #288) and yields its `ContentDirectory` reference; any other
+/// locator keeps the ZIP digest. Nothing is opened or hashed at assembly.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartupPackageConfigFile {
@@ -332,12 +337,15 @@ impl StartupPackageConfigFile {
         if !path.is_absolute() {
             return Err("startup_package_path_invalid");
         }
-        let digest = actingcommand_contract::PackageRef::from(self.expected_sha256);
-        if !matches!(
-            digest,
-            actingcommand_contract::PackageRef::LegacyZipSha256(_)
-        ) || digest.validate().is_err()
-        {
+        let digest = if digest_named(&path) == Some(self.expected_sha256.as_str()) {
+            PackageRef::ContentDirectory(ContentDirectory {
+                schema_version: ContentDirectoryVersion::V1,
+                sha256: self.expected_sha256,
+            })
+        } else {
+            PackageRef::from(self.expected_sha256)
+        };
+        if digest.validate().is_err() {
             return Err("startup_package_digest_invalid");
         }
         ContainedTaskRequest::new(path.to_string_lossy().into_owned(), digest)
@@ -414,9 +422,10 @@ impl std::fmt::Display for ResourcePackageRejection {
 /// Admits every configured `resource_package`, identically for `check-config` and daemon
 /// startup: the path must exist (`resource_package_missing`); a file must be read by the
 /// contained-task package loader exactly as `task-run` admits one, with the file's own
-/// digest as the expected one (`resource_package_invalid`). A directory is confirmed to
-/// exist only: the loader reads a package directory solely against a Git source-tree
-/// reference, which this field does not carry, so `check-config` lists it as not checked.
+/// digest as the expected one (`resource_package_invalid`). A directory whose name is a
+/// content digest (Workflow #288) is admitted the same way against the `ContentDirectory`
+/// reference of that name; any other directory is confirmed to exist only, since the field
+/// carries no reference for it, so `check-config` lists it as not checked.
 pub(super) fn validate_resource_packages(
     configured: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, InstanceResourcePackage>, ResourcePackageRejection> {
@@ -432,25 +441,40 @@ pub(super) fn validate_resource_packages(
             .map_err(|_| rejected("resource_package_missing", configured_path, None))?;
         let metadata =
             fs::metadata(&path).map_err(|_| rejected("resource_package_missing", &path, None))?;
+        let invalid = |code, message: String| {
+            rejected("resource_package_invalid", &path, Some((code, message)))
+        };
+        let loader_refused = |error: actingcommand_execution_kernel::ContainedTaskError| {
+            invalid(
+                error.code(),
+                error
+                    .detail()
+                    .map_or_else(|| error.to_string(), str::to_owned),
+            )
+        };
         let kind = if metadata.is_dir() {
+            if let Some(digest) = digest_named(&path) {
+                let expected = PackageRef::ContentDirectory(ContentDirectory {
+                    schema_version: ContentDirectoryVersion::V1,
+                    sha256: digest.to_owned(),
+                });
+                PreparedContainedTask::load_path(
+                    alias,
+                    &path,
+                    &expected,
+                    None,
+                    Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
+                )
+                .map_err(loader_refused)?;
+            }
             InstanceResourcePackageKind::Directory
         } else if metadata.is_file() {
-            let invalid = |code, message: String| {
-                rejected("resource_package_invalid", &path, Some((code, message)))
-            };
             let bytes = fs::read(&path)
                 .map_err(|error| invalid("package_read_failed", error.to_string()))?;
             let expected =
                 ExternalExpectedSha256::parse_hex(&format!("{:x}", Sha256::digest(&bytes)))
                     .map_err(|error| invalid("package_reference_invalid", error.to_string()))?;
-            PreparedContainedTask::load(alias, &bytes, expected).map_err(|error| {
-                invalid(
-                    error.code(),
-                    error
-                        .detail()
-                        .map_or_else(|| error.to_string(), str::to_owned),
-                )
-            })?;
+            PreparedContainedTask::load(alias, &bytes, expected).map_err(loader_refused)?;
             InstanceResourcePackageKind::File
         } else {
             return Err(rejected("resource_package_invalid", &path, None));

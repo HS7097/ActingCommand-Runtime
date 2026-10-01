@@ -87,8 +87,11 @@ terminal with the chosen eligibility basis in the original eviction intent.
   instance's `startup_package { package, expected_sha256 }` declaration as
   assembled (slice #316-B3, `contracts/application-lifecycle.md`): the locator
   with a relative path resolved against the configuration file's directory and
-  the bare hex digest, or `null` when none is declared. The file is neither
-  opened nor hashed here; admission happens when the package runs. A
+  the bare hex digest, or `null` when none is declared. When the locator's last
+  segment equals that digest (a content directory named by its digest, Workflow
+  #288), `expected_sha256` is the content-directory reference object
+  (`contracts/package-reference.md`) instead of the bare digest. The package is
+  neither opened nor hashed here; admission happens when the package runs. A
   `startup_package` on a fixture instance fails assembly with
   `instance_config_invalid`; a non-absolute locator, a digest that is not 64
   lowercase hex digits or a request the contract refuses fail with
@@ -181,8 +184,10 @@ terminal with the chosen eligibility basis in the original eviction intent.
   with `vision_provider_manifest` (only read and validated inside host startup,
   which records `provider.startup_observed`) and `state_root` (nothing under it
   is inspected). `resource_package_directory_declarations` is appended when at
-  least one instance's `resource_package` is a directory: its existence is
-  checked, its declarations are not (see "Instance resource package").
+  least one instance's `resource_package` is a directory whose name is not a
+  content digest: its existence is checked, its declarations are not (see
+  "Instance resource package"). A digest-named directory is admitted in full and
+  never adds this entry.
   `mumu_discovery` is appended when no MuMu install root could be resolved
   (`mumu_root` is `null`).
 - `mumu_root` is always present; `mumu_root_unresolved` only when `mumu_root`
@@ -221,8 +226,11 @@ A `resource_package` failure also carries `error.detail`; no other stage does:
 
 `detail.alias` is the instance and `detail.path` the absolute path that was
 checked. `detail.loader_code` and `detail.loader_message` are the package
-loader's own code and message for `resource_package_invalid` on a package file,
-and `null` otherwise.
+loader's own code and message for `resource_package_invalid` on a package file
+or a digest-named package directory, and `null` otherwise. A changed or missing
+file in a digest-named directory reports `loader_code`
+`content_directory_digest_mismatch` with the expected and actual digests and the
+file count in `loader_message`.
 
 ## Instance resource package
 
@@ -242,9 +250,14 @@ before any side effect, and fails with the same codes on the normal
   (`PreparedContainedTask::load`, the loader `actingctl task-run` uses) cannot
   read. The file's own SHA-256 serves as the expected digest, so only the
   package content is judged.
-- A directory is checked for existence only. The loader reads a package
-  directory solely against a Git source-tree reference
-  (`contracts/package-reference.md`), which this field does not carry; hence the
+- A directory whose name is a content digest (64 lowercase hex digits, Workflow
+  #288) is admitted in full by the same loader (`PreparedContainedTask::load_path`,
+  no vision provider, one 60 s deadline) against the content-directory reference
+  of that name (`contracts/package-reference.md`, "Content-directory admission");
+  a refusal is `resource_package_invalid` with the loader's code, for example
+  `content_directory_digest_mismatch` after a file was changed or removed.
+- Any other directory is checked for existence only: this field carries no
+  reference to admit it against; hence the
   `resource_package_directory_declarations` entry in `not_checked`.
 - Packages declare no application id (`contracts/application-lifecycle.md`), so
   nothing is compared against the instance's `application_id`.

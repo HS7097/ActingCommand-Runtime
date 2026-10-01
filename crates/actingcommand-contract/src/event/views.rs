@@ -38,6 +38,9 @@ impl LedgerView {
         Self::Lab,
     ];
 
+    /// The stored view DDL is built from these lists and compared on every open
+    /// (`ledger_view_schema_mismatch`), so a new event type joins a type list only together
+    /// with a view schema upgrade. `task.selection_evaluated` is therefore in no type list.
     pub const fn definition(self) -> LedgerViewDefinition {
         use EventType::*;
         match self {

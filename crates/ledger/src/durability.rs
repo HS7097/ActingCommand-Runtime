@@ -130,6 +130,7 @@ pub(crate) fn commit_sync(payload: &EventPayload) -> CommitSync {
         | EventType::TaskStarted
         | EventType::TaskStepStarted
         | EventType::TaskEntryPreflight
+        | EventType::TaskSelectionEvaluated
         | EventType::TaskEffectIntent
         | EventType::TaskEffectCompleted
         | EventType::TaskStepFinished

@@ -165,6 +165,14 @@ impl Default for ContainmentLimits {
     }
 }
 
+/// A local directory as content-directory admission reads it: its `content-directory.v1`
+/// reference and the bytes of every regular file, keyed by `/`-separated relative path.
+#[derive(Debug)]
+pub struct ContentDirectorySnapshot {
+    pub reference: actingcommand_contract::ContentDirectory,
+    pub entries: BTreeMap<String, Vec<u8>>,
+}
+
 #[derive(Debug, Default)]
 pub struct Containment {
     limits: ContainmentLimits,
@@ -214,6 +222,20 @@ impl Containment {
                 self.admit_source(instance, entries, verified, observation, deadline)
             }
         }
+    }
+
+    /// Workflow #288 A2b: reads `locator` exactly as content-directory admission does (one
+    /// bounded snapshot under this loader's limits and `deadline`, links and unsafe entries
+    /// refused), but against no expected reference and without the directory-name check, and
+    /// returns the `content-directory.v1` reference of what it holds with the bytes read.
+    /// Nothing is parsed; admitting the directory remains `load_path` with that reference.
+    pub fn snapshot_content_directory(
+        &self,
+        locator: &Path,
+        deadline: std::time::Instant,
+    ) -> ContainmentResult<ContentDirectorySnapshot> {
+        let (entries, reference) = content_dir::measure(locator, self.limits, deadline)?;
+        Ok(ContentDirectorySnapshot { reference, entries })
     }
 
     /// Assembles one verified in-memory source snapshot and issues its capability; the

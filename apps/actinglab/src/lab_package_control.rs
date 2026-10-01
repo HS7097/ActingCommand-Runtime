@@ -115,6 +115,8 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
         }
         "build-task" => package_build::run_build_task(global, &flags),
         "build-pack" => package_build::run_build_pack(global, &flags),
+        "digest" => package_build::run_digest(&flags),
+        "bundle" => package_build::run_bundle(&flags),
         _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
     }
 }
