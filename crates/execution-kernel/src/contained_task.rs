@@ -626,6 +626,9 @@ struct PostAdmissionOcrCollector<'a> {
     /// Readings taken on the successful terminal frame; `None` when the run does not read them
     /// (offline simulation, bound recovery entry).
     resource_readings: Option<&'a [ResourceReadingDeclaration]>,
+    /// The fields report was recorded by a successful completion; a reading that then fails
+    /// must not record it a second time.
+    fields_report_recorded: bool,
 }
 
 impl<'a> PostAdmissionOcrCollector<'a> {
@@ -2085,6 +2088,7 @@ impl PreparedContainedTask {
             &result,
             Err(ContainedTaskRunError::Task(_) | ContainedTaskRunError::NonfatalOperation(_))
         ) && ocr_collector.frames_collected > 0
+            && !ocr_collector.fields_report_recorded
             && let Some(report) = ocr_collector.fields_report()
         {
             runtime
@@ -2870,6 +2874,7 @@ impl PreparedContainedTask {
             runtime
                 .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
                 .map_err(ContainedTaskRunError::Boundary)?;
+            ocr_collector.fields_report_recorded = true;
             Some(outcome_key)
         } else {
             match std::mem::take(ocr_collector).finish()? {
@@ -4287,7 +4292,8 @@ impl TaskProgram {
                     .chain(page.any_of.iter().flatten())
                     .chain(page.optional.iter())
                     .chain(page.forbidden.iter())
-                    .any(|target| target == &reading.target_id)
+                    .flat_map(|target| page_target_evaluates(evaluator, target))
+                    .any(|target| target == reading.target_id)
             }) {
                 return Err(invalid("target_in_page_gate"));
             }

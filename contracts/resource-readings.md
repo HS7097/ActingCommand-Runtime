@@ -105,7 +105,8 @@ hold fails the run with `contained_task_resource_reading_unresolved` and the det
 `invalid_integer`, `overflow`, `out_of_range`, `region_unresolved`, `provider_failed`),
 `confidence_missing` or `low_confidence`. This happens before `Finalizing`, so no fact is
 written and an earlier fact of the key stays until its own expiry. The raw text and confidence
-remain in the task diagnostic.
+remain in the task diagnostic. A schema `0.8` fields report already recorded by that
+completion stays the only one; the failure does not record it again.
 
 When every bound reading holds, the kernel emits the in-memory trace
 `ContainedTaskTrace::ResourceReadings { captured_at, readings }` with the terminal frame's
@@ -114,7 +115,7 @@ milli. The trace is never serialized. `evaluate_resource_readings` is the export
 kernel uses for this evaluation.
 
 Before any input, the Runtime refuses a package whose reading target is not one OCR target, is
-named by a page gate, or is marked personal by the projection metadata, with
+named by a page gate (directly or as a member of a composite target), or is marked personal by the projection metadata, with
 `contained_task_resource_reading_invalid` and the detail `<id>:<reason>` (`target_not_ocr`,
 `target_in_page_gate`, `target_personal`). A program that violates the declaration rules is
 refused with the same code and the rule's reason as detail.
