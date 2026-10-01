@@ -212,7 +212,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     reader.finish().unwrap();
     assert_eq!(
         document["schema_version"],
-        actingcommand_contract::TASK_DIAGNOSTIC_SCHEMA
+        actingcommand_contract::TASK_DIAGNOSTIC_SCHEMA_V2
     );
     let records = document["records"].as_array().unwrap();
     let ocr = records

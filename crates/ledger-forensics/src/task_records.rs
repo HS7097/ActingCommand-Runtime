@@ -4,7 +4,8 @@ use super::*;
 use actingcommand_artifact_store::{ArtifactReader, open_projected_stream};
 use actingcommand_contract::{
     MAX_TASK_DIAGNOSTIC_PAGE_RECORDS, MAX_TASK_DIAGNOSTIC_RECORD_BYTES, TASK_DIAGNOSTIC_SCHEMA,
-    TaskDiagnosticCursor, TaskDiagnosticHeader, TaskDiagnosticRecord,
+    TASK_DIAGNOSTIC_SCHEMA_V2, TaskDiagnosticCursor, TaskDiagnosticHeader, TaskDiagnosticPayload,
+    TaskDiagnosticRecord, TaskDiagnosticTargetSource,
 };
 use std::io::{BufRead, BufReader, Read};
 
@@ -43,6 +44,23 @@ pub struct TaskDiagnosticGap {
     pub run_id: actingcommand_contract::RunId,
     pub state: &'static str,
     pub record_count: Option<u64>,
+}
+
+/// Both task stream schemas; every other schema keeps its legacy document handling.
+fn is_task_stream_schema(schema: &str) -> bool {
+    schema == TASK_DIAGNOSTIC_SCHEMA || schema == TASK_DIAGNOSTIC_SCHEMA_V2
+}
+
+/// A row that only task-diagnostic.v2 defines. A v1 stream keeps its closed v1 row set.
+fn is_v2_row(record: &TaskDiagnosticRecord) -> bool {
+    match &record.payload {
+        TaskDiagnosticPayload::ColorDigest(_) => true,
+        TaskDiagnosticPayload::Target(target) => matches!(
+            target.source,
+            TaskDiagnosticTargetSource::CompositeMember { .. }
+        ),
+        _ => false,
+    }
 }
 
 fn invalid(code: &'static str) -> ForensicError {
@@ -94,7 +112,7 @@ pub(super) fn is_task_stream(
     bytes.push(b'}');
     let header: TaskDiagnosticHeader =
         serde_json::from_slice(&bytes).map_err(|_| invalid("task_diagnostic_header_invalid"))?;
-    if header.schema_version != TASK_DIAGNOSTIC_SCHEMA {
+    if !is_task_stream_schema(&header.schema_version) {
         return Ok(false);
     }
     reader
@@ -140,7 +158,7 @@ fn page(
             .and_then(|v| v.as_str())
             .map(str::to_owned);
         output.schema_version = schema.clone();
-        if schema.as_deref() != Some(TASK_DIAGNOSTIC_SCHEMA) {
+        if !schema.as_deref().is_some_and(is_task_stream_schema) {
             reader
                 .into_inner()
                 .finish()
@@ -150,6 +168,7 @@ fn page(
         }
         let header: TaskDiagnosticHeader =
             serde_json::from_value(value).map_err(|_| invalid("task_diagnostic_header_invalid"))?;
+        let v1 = header.schema_version == TASK_DIAGNOSTIC_SCHEMA;
         if event.links().request_id() != Some(&header.request_id)
             || event.links().correlation_id() != Some(&header.correlation_id)
             || event.links().task_id() != Some(&header.task_id)
@@ -181,6 +200,9 @@ fn page(
             };
             let record: TaskDiagnosticRecord = serde_json::from_slice(bytes)
                 .map_err(|_| invalid("task_diagnostic_record_invalid"))?;
+            if v1 && is_v2_row(&record) {
+                return Err(invalid("task_diagnostic_record_invalid"));
+            }
             total = total
                 .checked_add(1)
                 .ok_or_else(|| invalid("task_diagnostic_record_limit"))?;
@@ -313,7 +335,10 @@ pub(super) fn expand(
                 Ok(page) => {
                     remaining = remaining
                         .saturating_sub(page.records.len() + usize::from(page.legacy.is_some()));
-                    if page.schema_version.as_deref() == Some(TASK_DIAGNOSTIC_SCHEMA)
+                    if page
+                        .schema_version
+                        .as_deref()
+                        .is_some_and(is_task_stream_schema)
                         && let Some(run) = event.links().run_id()
                     {
                         covered.insert(*run);

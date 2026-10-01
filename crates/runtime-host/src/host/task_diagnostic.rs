@@ -2,16 +2,16 @@
 
 use super::*;
 use actingcommand_contract::{
-    MAX_TASK_DIAGNOSTIC_RECORD_BYTES, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA,
-    TaskDiagnosticArtifactData, TaskDiagnosticColorData, TaskDiagnosticErrorData,
-    TaskDiagnosticHeader, TaskDiagnosticNnData, TaskDiagnosticNnLabel, TaskDiagnosticNnLabelData,
-    TaskDiagnosticNnRank, TaskDiagnosticOcrBlock, TaskDiagnosticOcrBlockData,
-    TaskDiagnosticOcrData, TaskDiagnosticOcrExecution, TaskDiagnosticPageData,
-    TaskDiagnosticPayload as Payload, TaskDiagnosticRecognitionError, TaskDiagnosticRecord,
-    TaskDiagnosticStepElapsedData, TaskDiagnosticStepStartedData, TaskDiagnosticTargetData,
-    TaskDiagnosticTargetFailure, TaskDiagnosticTargetSource, TaskDiagnosticTemplateData,
-    TaskDiagnosticTerminalData, TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage,
-    TaskRecordSubphases, TaskTimingResult,
+    MAX_TASK_DIAGNOSTIC_RECORD_BYTES, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA_V2,
+    TaskDiagnosticArtifactData, TaskDiagnosticColorData, TaskDiagnosticColorDigestData,
+    TaskDiagnosticErrorData, TaskDiagnosticHeader, TaskDiagnosticNnData, TaskDiagnosticNnLabel,
+    TaskDiagnosticNnLabelData, TaskDiagnosticNnRank, TaskDiagnosticOcrBlock,
+    TaskDiagnosticOcrBlockData, TaskDiagnosticOcrData, TaskDiagnosticOcrExecution,
+    TaskDiagnosticPageData, TaskDiagnosticPayload as Payload, TaskDiagnosticRecognitionError,
+    TaskDiagnosticRecord, TaskDiagnosticStepElapsedData, TaskDiagnosticStepStartedData,
+    TaskDiagnosticTargetData, TaskDiagnosticTargetFailure, TaskDiagnosticTargetSource,
+    TaskDiagnosticTemplateData, TaskDiagnosticTerminalData, TaskDiagnosticUnexecutedData,
+    TaskDiagnosticUnexecutedPage, TaskRecordSubphases, TaskTimingResult,
 };
 use actingcommand_page_detector::{PageBatchResult, PageOutcome, PageTargetEvaluation};
 use actingcommand_recognition_pack::{
@@ -136,7 +136,7 @@ fn ocr_execution(
 impl RuntimeContainedTask<'_> {
     pub(super) fn begin_diagnostic(&mut self) -> Result<(), RequestFailure> {
         let header = TaskDiagnosticHeader {
-            schema_version: TASK_DIAGNOSTIC_SCHEMA.to_owned(),
+            schema_version: TASK_DIAGNOSTIC_SCHEMA_V2.to_owned(),
             request_id: self.control.request_id,
             correlation_id: self.request.correlation_id(),
             task_id: *self.task_id.transport(),
@@ -632,6 +632,36 @@ impl RuntimeContainedTask<'_> {
                             rank,
                         },
                     }),
+                )?;
+            }
+        }
+        if let Some(digest) = &target.color_digest {
+            self.diagnostic(
+                Some(index),
+                Payload::ColorDigest(Box::new(TaskDiagnosticColorDigestData {
+                    algorithm: digest.algorithm.clone(),
+                    columns: digest.columns,
+                    rows: digest.rows,
+                    active_cells: digest.active_cells,
+                    mean_milli: digest.mean_milli,
+                    max_cell: digest.max_cell,
+                    worst_cell: digest.worst_cell,
+                    max_mean_milli: digest.max_mean_milli,
+                    max_cell_threshold: digest.max_cell_threshold,
+                    observed_cells: digest.observed_cells.clone(),
+                })),
+            )?;
+        }
+        // Every member in declaration order, each with its own child rows.
+        if let Some(composite) = &target.composite {
+            for (member_index, member) in composite.members.iter().enumerate() {
+                self.diagnostic_target(
+                    Some(index),
+                    &member.evaluation,
+                    TaskDiagnosticTargetSource::CompositeMember {
+                        composite_target_id: target.id.clone(),
+                        member_index,
+                    },
                 )?;
             }
         }
