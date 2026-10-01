@@ -199,7 +199,7 @@ impl IdentifierIssuer {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| IdentifierIssuanceError::new("identifier_clock_invalid"))?;
         let nonce = NEXT_ISSUER_NONCE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| IdentifierIssuanceError::new("identifier_issuer_exhausted"))?;
@@ -216,7 +216,7 @@ impl IdentifierIssuer {
     fn next_bytes(&self) -> Result<[u8; 16], IdentifierIssuanceError> {
         let sequence = self
             .next_sequence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| IdentifierIssuanceError::new("identifier_sequence_exhausted"))?;
