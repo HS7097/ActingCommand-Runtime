@@ -678,7 +678,11 @@ fn b3_v2_rejections_rows_and_identity() {
             v2(
                 &instance,
                 valid,
-                json!([target("gems-floor", &gems, 1_000, adjust())]),
+                json!([with(
+                    target("gems-floor", &gems, 1_000, adjust()),
+                    "importance_milli",
+                    json!(100)
+                )]),
             ),
         ),
         (
@@ -1038,6 +1042,9 @@ fn b6_freshness_and_wake() {
     for (case, current, credits_expiry, valid_until) in [
         ("inventory_lapses_first", 0, NOW + 30 * 60_000, NOW + DAY),
         ("policy_lapses_first", 0, NOW + 2 * HOUR, NOW + HOUR),
+        // Lapses within the 40 s before the next trigger occurrence, so the wake is visible.
+        ("inventory_lapses_in_20s", 0, NOW + 20_000, NOW + DAY),
+        ("policy_lapses_in_30s", 0, NOW + HOUR, NOW + 30_000),
         (
             "base_weight_only_satisfied",
             100_000,
