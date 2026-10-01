@@ -1149,6 +1149,7 @@ mod tests {
                 height: 4,
             }),
             defaults: RecognitionDefaults::default(),
+            candidate_layouts: Vec::new(),
             targets: vec![
                 RecognitionTarget::Template(TemplateTarget {
                     id: "fixture/template_anchor".to_string(),
@@ -1950,6 +1951,7 @@ mod tests {
                 height: 16,
             }),
             defaults: RecognitionDefaults::default(),
+            candidate_layouts: Vec::new(),
             targets: vec![
                 RecognitionTarget::Color(ColorTarget {
                     id: "fixture/home_anchor".to_string(),
