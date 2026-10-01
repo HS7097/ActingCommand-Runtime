@@ -1,11 +1,9 @@
-name: one-off 308 G2 rust on 1.98.1 (to be reverted)
+name: one-off 308 G2 Clippy inventory on 1.99.0 (to be reverted)
 
-# One-off evidence for Workflow #308 G2. The CI job `rust` of ci.yml, unchanged except that the
-# toolchain is pinned to rustc 1.98.1, the toolchain of the last green CI runs (main daf566ea,
-# the D3 head 095629df). On rustc 1.99.0 (2026-09-28) main a03ef172 itself fails Clippy in
-# actingcommand-contract, outside this PR; the job clippy-1-99-inventory lists every Clippy
-# warning of the workspace on the current stable toolchain without failing on it. Reverted right
-# after its run.
+# One-off evidence for Workflow #308 G2. Main a03ef172 fails the CI Clippy step on rustc 1.99.0
+# (2026-09-28), outside this PR. This job lists every Clippy warning of the workspace on the
+# current stable toolchain without denying it (the previous run's list was empty because cargo
+# colored its output). Reverted right after its run.
 on:
   pull_request:
     branches: [main]
@@ -14,98 +12,6 @@ permissions:
   contents: read
 
 jobs:
-  rust-pinned:
-    name: rust on rustc 1.98.1
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        id: toolchain
-        with:
-          toolchain: 1.98.1
-          components: clippy, rustfmt
-      - name: Toolchain in use
-        run: |
-          rustc -V
-          cargo -V
-          cargo clippy -V
-      - name: Rust cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-trybuild-clean-v1-pinned-1.98.1-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-trybuild-clean-v1-pinned-1.98.1-${{ steps.toolchain.outputs.cachekey }}-
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Build locked workspace
-        run: cargo build --locked
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
-      - name: Test
-        id: test
-        shell: pwsh
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          cargo build --locked -p actingledger --bin actingledger
-          if ($LASTEXITCODE -ne 0) {
-            throw "actingledger build failed with exit code $LASTEXITCODE"
-          }
-          $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
-
-          cargo test --workspace --exclude actingcommand-actingd --exclude actingcommand-runtime-client --no-fail-fast
-          $workspaceExitCode = $LASTEXITCODE
-          Write-Host "Workspace excluding actingd and runtime-client exit code: $workspaceExitCode"
-
-          cargo test -p actingcommand-runtime-client --no-fail-fast -- --test-threads=1
-          $runtimeClientExitCode = $LASTEXITCODE
-          Write-Host "runtime-client package tests exit code: $runtimeClientExitCode"
-
-          cargo test --workspace --bin actingcommand-actingd --no-fail-fast
-          $actingdExitCode = $LASTEXITCODE
-          Write-Host "actingd binary tests exit code: $actingdExitCode"
-
-          cargo --config 'profile.test.opt-level=3' --config 'profile.test.debug-assertions=true' --config 'profile.test.overflow-checks=true' --config 'profile.test.debug=2' test --workspace --test process --no-fail-fast -- --test-threads=1
-          $processExitCode = $LASTEXITCODE
-          Write-Host "process integration tests exit code: $processExitCode"
-
-          if ($workspaceExitCode -ne 0 -or $runtimeClientExitCode -ne 0 -or $actingdExitCode -ne 0 -or $processExitCode -ne 0) {
-            exit 1
-          }
-          exit 0
-      - name: Test observation
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: pwsh
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::runtime_input_proxy_renews_before_short_lease_expiry -- --exact --test-threads=1
-          $heartbeatObservationExitCode = $LASTEXITCODE
-          Write-Host "Heartbeat proxy observation test exit code: $heartbeatObservationExitCode"
-
-          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::long_input_extends_only_its_response_wait -- --exact --test-threads=1
-          $longInputObservationExitCode = $LASTEXITCODE
-          Write-Host "Long input observation test exit code: $longInputObservationExitCode"
-
-          if ($heartbeatObservationExitCode -ne 0 -or $longInputObservationExitCode -ne 0) {
-            exit 1
-          }
-          exit 0
-      - name: Remove trybuild cache artifacts
-        if: always()
-        shell: pwsh
-        run: |
-          if (Test-Path -LiteralPath target/tests) {
-            Remove-Item -LiteralPath target/tests -Recurse -Force -ErrorAction Stop
-          }
   clippy-1-99-inventory:
     name: clippy inventory on current stable
     runs-on: windows-latest
@@ -120,11 +26,13 @@ jobs:
         shell: bash
         run: |
           set +e
-          cargo clippy --workspace --all-targets --keep-going --message-format=short -- -W warnings > clippy.txt 2>&1
+          cargo clippy --workspace --all-targets --keep-going --color never --message-format=short -- -W warnings > clippy.txt 2>&1
           code=$?
           echo "clippy exit code (warnings not denied): $code"
           grep -E '^(crates|apps|tools|providers|tests|benchmarks).*: (warning|error)' clippy.txt | sort -u > inventory.txt
           echo "INVENTORY count=$(wc -l < inventory.txt)"
           sed 's/^/INVENTORY /' inventory.txt
           echo "INVENTORY pack-containment source files: $(grep -cE 'pack-containment.src.source.(mod|declarations).rs' inventory.txt)"
+          echo "clippy.txt lines=$(wc -l < clippy.txt) warning_or_error_lines=$(grep -cE ': (warning|error)' clippy.txt)"
+          tail -n 15 clippy.txt | sed 's/^/TAIL /'
           exit $code
