@@ -851,6 +851,10 @@ struct OperationGuard {
     verify_template: Option<String>,
     #[serde(default)]
     color_probe: Option<String>,
+    /// A named check (a `composite` target) guards the input, as in Runtime admission and the
+    /// package build. Lab only validates guards; the Runtime kernel evaluates them.
+    #[serde(default)]
+    check: Option<String>,
 }
 
 impl OperationGuard {
@@ -877,10 +881,9 @@ impl OperationGuard {
             )));
         }
         validate_guard_rect(self.expected_rect, &control.resolution)?;
-        let has_verify_target = self.verify_template.is_some() || self.color_probe.is_some();
-        if !has_verify_target {
+        if self.verify_template.is_none() && self.color_probe.is_none() && self.check.is_none() {
             return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' guard requires verify_template or color_probe"
+                "operation '{operation_id}' guard requires verify_template, color_probe or check"
             )));
         }
         Ok(())

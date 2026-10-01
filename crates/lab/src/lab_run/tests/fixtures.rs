@@ -104,6 +104,7 @@ fn test_color_guard() -> OperationGuard {
         },
         verify_template: None,
         color_probe: Some("target/button".to_string()),
+        check: None,
     }
 }
 

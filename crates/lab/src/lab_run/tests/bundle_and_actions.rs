@@ -227,6 +227,7 @@ fn offset_click_rejects_color_probe_guard() {
         },
         verify_template: None,
         color_probe: Some("target/button".to_string()),
+        check: None,
     });
     operation.click = Some(OperationClick {
         kind: "offset".to_string(),
