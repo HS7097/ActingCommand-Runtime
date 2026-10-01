@@ -204,6 +204,37 @@ fn convert(entries: &Entries) -> Result<(ParseOutputs, Value), String> {
     Ok((outputs, canonical))
 }
 
+/// The package's sources: each sealed task with every drag click's `from_rect` / `to_rect`
+/// returned to the source fields `from` / `to`, the one canonicalization the source grammar
+/// does not accept (G2 one-off).
+fn source_entries(entries: &Entries) -> Entries {
+    let mut sources = entries.clone();
+    for (path, bytes) in sources.iter_mut() {
+        if !(path.starts_with("resources/operations/") && path.ends_with("/task.json")) {
+            continue;
+        }
+        let mut task: Value = serde_json::from_slice(bytes).expect("task json");
+        let mut restored = 0;
+        for operation in task["operations"].as_array_mut().into_iter().flatten() {
+            let Some(click) = operation.get_mut("click").and_then(Value::as_object_mut) else {
+                continue;
+            };
+            if click.get("kind").and_then(Value::as_str) != Some("drag") {
+                continue;
+            }
+            if let (Some(from), Some(to)) = (click.remove("from_rect"), click.remove("to_rect")) {
+                click.insert("from".to_owned(), from);
+                click.insert("to".to_owned(), to);
+                restored += 1;
+            }
+        }
+        if restored > 0 {
+            *bytes = serde_json::to_vec(&task).expect("task bytes");
+        }
+    }
+    sources
+}
+
 fn expected(zip: &[u8]) -> ExternalExpectedSha256 {
     ExternalExpectedSha256::parse_hex(&digest_bytes(zip))
         .unwrap_or_else(|error| panic!("{error:?}"))
@@ -362,7 +393,7 @@ fn one_off_308g4_control_packages_without_select() {
     emit(&format!("bundle={BUNDLE_SHA256} packs={}", packs.len()));
     for (path, zip, entries) in &packs {
         // D: derived documents of the sources and admission of the sealed package.
-        let derived = match convert(entries) {
+        let derived = match convert(&source_entries(entries)) {
             Ok((outputs, canonical)) => format!(
                 "pack_schema={} pages_schema={} navigation_schema={} index_schema={} primitives_schema={} pack={} pages={} navigation={} index={} primitives={} canonical_task={}",
                 outputs.pack["schema_version"],
