@@ -310,6 +310,8 @@ pub enum EventType {
     TaskRecognitionCompleted,
     #[serde(rename = "task.entry_preflight")]
     TaskEntryPreflight,
+    #[serde(rename = "task.selection_evaluated")]
+    TaskSelectionEvaluated,
     #[serde(rename = "task.effect_intent")]
     TaskEffectIntent,
     #[serde(rename = "task.effect_completed")]
@@ -498,6 +500,7 @@ impl EventType {
             | Self::TaskRecognitionStarted
             | Self::TaskRecognitionCompleted
             | Self::TaskEntryPreflight
+            | Self::TaskSelectionEvaluated
             | Self::TaskEffectIntent
             | Self::TaskEffectCompleted
             | Self::TaskStepFinished
