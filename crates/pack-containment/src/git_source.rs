@@ -478,7 +478,7 @@ pub(super) fn snapshot(
         snapshot.insert(path.clone(), bytes);
     }
     reader.check_time()?;
-    // Extra worktree files cannot become undeclared inputs to conversion.
+    // Extra worktree files cannot become undeclared inputs to parsing.
     let mut pending = vec![locator.clone()];
     let mut visited = 0;
     let mut observed_files = BTreeSet::new();

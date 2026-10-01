@@ -2653,8 +2653,8 @@ struct BridgeOwner {
     definitions: &'static [BridgeDefinition],
 }
 
-/// C1: the owner table. pack-containment owns the pure source-conversion core (the entries
-/// resource-tooling converts through); resource-tooling owns the package build, the
+/// C1: the owner table. pack-containment owns the pure source-parsing core (the entries
+/// resource-tooling parses through); resource-tooling owns the package build, the
 /// content-directory digest and bundle (Workflow #288 A2b) and the MAA task graph compiler;
 /// Lab's package_build.rs defines exactly the environment bridge listed here, each bridge
 /// calling its resource-tooling entry and nothing of pack-containment.
@@ -2663,9 +2663,9 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
         module: "pack-containment",
         file: "crates/pack-containment/src/source/mod.rs",
         definitions: &[
-            owner_entry("OperationConverter::build_all"),
-            owner_entry("OperationConverter::build_selected"),
-            owner_entry("OperationConverter::canonical_task"),
+            owner_entry("OperationParser::build_all"),
+            owner_entry("OperationParser::build_selected"),
+            owner_entry("OperationParser::canonical_task"),
             owner_entry("source_file_requests"),
             owner_entry("validate_phases_bundle"),
             owner_entry("validate_post_admission_ocr_bundle"),
@@ -2822,7 +2822,7 @@ fn lab_catalog_in_signature(source: &SourceFacts, function: &FunctionFacts) -> b
 }
 
 /// C1: whether a resolved reference of a Lab bridge reaches pack-containment directly: a path
-/// into that crate, or a call of one of its source-conversion core entries.
+/// into that crate, or a call of one of its source-parsing core entries.
 fn reaches_pack_containment(reference: &FunctionReference, core_entries: &[&str]) -> bool {
     reference_path(reference)
         .and_then(|path| path.first())

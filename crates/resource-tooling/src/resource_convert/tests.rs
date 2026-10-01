@@ -181,7 +181,7 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
 
 #[test]
 fn build_pages_derives_variant_any_of_only_without_positive_page_rule() {
-    let mut converter = OperationConverter {
+    let mut converter = OperationParser {
         root: PathBuf::from("."),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -231,7 +231,7 @@ fn build_pages_derives_variant_any_of_only_without_positive_page_rule() {
 
 #[test]
 fn build_pages_matches_authoritative_mail_page_rule_output() {
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: PathBuf::from("."),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -329,7 +329,7 @@ fn build_pages_matches_authoritative_mail_page_rule_output() {
 
 #[test]
 fn build_pages_applies_page_rules() {
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: PathBuf::from("."),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -376,7 +376,7 @@ fn build_pages_applies_page_rules() {
 
 #[test]
 fn build_pages_rejects_unknown_page_rule() {
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: PathBuf::from("."),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -407,7 +407,7 @@ fn build_pages_rejects_unknown_page_rule() {
 
 #[test]
 fn build_pages_materializes_page_referenced_only_by_error_pages() {
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: PathBuf::from("."),
         game: "neutral".to_string(),
         server: "test".to_string(),
@@ -471,7 +471,7 @@ fn build_pages_materializes_and_validates_scheduling_outcome_references() {
             "operations": []
         }),
     };
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: PathBuf::from("."),
         game: "neutral".to_string(),
         server: "test".to_string(),
@@ -492,7 +492,7 @@ fn build_pages_materializes_and_validates_scheduling_outcome_references() {
             .any(|page| page["id"] == "neutral/result")
     );
 
-    let invalid = OperationConverter {
+    let invalid = OperationParser {
         bundles: vec![bundle("invalid outcome key")],
         ..converter
     };
@@ -562,7 +562,7 @@ fn update_error_page_fixture_task(root: &Path, update: impl FnOnce(&mut Value)) 
 #[test]
 fn error_page_only_reference_is_consumed_by_formal_detector() {
     let root = write_error_page_fixture();
-    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let converter = OperationParser::load(root.path(), None, None, None).unwrap();
     let outputs = converter.build_all().unwrap();
     let evaluator = actingcommand_recognition_pack::RecognitionEvaluator::new(
         root.path().to_path_buf(),
@@ -586,11 +586,11 @@ fn error_page_only_reference_is_consumed_by_formal_detector() {
 #[test]
 fn error_page_conversion_is_byte_deterministic() {
     let root = write_error_page_fixture();
-    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let converter = OperationParser::load(root.path(), None, None, None).unwrap();
 
     let first = converter.build_all().unwrap();
     let second = converter.build_all().unwrap();
-    let serialize = |outputs: ConvertOutputs| {
+    let serialize = |outputs: ParseOutputs| {
         serde_json::to_vec(&json!({
             "pack": outputs.pack,
             "pages": outputs.pages,
@@ -617,7 +617,7 @@ fn invalid_error_page_identifiers_fail_loud() {
             task["error_pages"] = error_pages;
         });
 
-        let error = OperationConverter::load(root.path(), None, None, None).expect_err(case);
+        let error = OperationParser::load(root.path(), None, None, None).expect_err(case);
 
         if case == "wrong-shape" {
             assert_eq!(error.code, "resource_declaration_invalid");
@@ -670,7 +670,7 @@ fn finite_page_sets_are_normalized_materialized_and_not_truncated() {
         ]);
     });
 
-    let converter = OperationConverter::load(root.path(), None, None, None).expect("load");
+    let converter = OperationParser::load(root.path(), None, None, None).expect("load");
     let outputs = converter.build_all().expect("convert finite sets");
     let selected = converter
         .build_selected(&["error-page-check".to_string()])
@@ -714,7 +714,7 @@ fn finite_page_sets_are_normalized_materialized_and_not_truncated() {
     );
 
     let repeated = converter.build_all().expect("repeat finite-set conversion");
-    let serialize = |outputs: &ConvertOutputs| {
+    let serialize = |outputs: &ParseOutputs| {
         serde_json::to_vec(&json!({
             "pack": &outputs.pack,
             "pages": &outputs.pages,
@@ -739,7 +739,7 @@ fn singleton_page_declarations_keep_legacy_scalar_shapes() {
         )]);
     });
 
-    let converter = OperationConverter::load(root.path(), None, None, None).expect("load");
+    let converter = OperationParser::load(root.path(), None, None, None).expect("load");
     let outputs = converter.build_all().expect("singleton conversion");
     let canonical = converter
         .canonical_task("error-page-check")
@@ -782,7 +782,7 @@ fn destructive_actions_keep_exact_pre_normalization_null_semantics() {
         ]);
     });
 
-    let converter = OperationConverter::load(root.path(), None, None, None).expect("load");
+    let converter = OperationParser::load(root.path(), None, None, None).expect("load");
     let navigation = converter.build_navigation().expect("navigation");
     let destructive = navigation["destructive_actions"]
         .as_array()
@@ -844,7 +844,7 @@ fn invalid_finite_page_declarations_fail_closed() {
             }
         });
 
-        let error = OperationConverter::load(root.path(), None, None, None)
+        let error = OperationParser::load(root.path(), None, None, None)
             .and_then(|converter| converter.build_all())
             .expect_err(case);
         if case == "malformed-destination" {
@@ -892,7 +892,7 @@ fn malformed_expect_after_declarations_fail_closed() {
             )]);
         });
 
-        let error = OperationConverter::load(root.path(), None, None, None)
+        let error = OperationParser::load(root.path(), None, None, None)
             .and_then(|converter| converter.build_all())
             .expect_err(case);
         if matches!(case, "not-an-object" | "missing-page-id") {
@@ -921,7 +921,7 @@ fn error_page_rule_and_asset_references_fail_loud() {
     update_error_page_fixture_task(root.path(), |task| {
         task["page_rules"]["failure"] = json!({"required": ["page/missing"]});
     });
-    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let converter = OperationParser::load(root.path(), None, None, None).unwrap();
     let error = converter.build_all().expect_err("missing page-rule target");
     assert!(error.message.contains("page/missing"));
 
@@ -931,8 +931,8 @@ fn error_page_rule_and_asset_references_fail_loud() {
             .join("operations/error-page-check/assets/FAILURE.png"),
     )
     .unwrap();
-    let error = OperationConverter::load(root.path(), None, None, None)
-        .expect_err("missing error-page asset");
+    let error =
+        OperationParser::load(root.path(), None, None, None).expect_err("missing error-page asset");
     assert!(error.message.contains("FAILURE.png"));
     assert!(error.message.contains("missing on disk"));
 }
@@ -966,7 +966,7 @@ fn selected_build_requires_error_page_definition_in_selected_closure() {
         .unwrap(),
     )
     .unwrap();
-    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let converter = OperationParser::load(root.path(), None, None, None).unwrap();
 
     let error = converter
         .build_selected(&["selected-only".to_string()])
@@ -978,7 +978,7 @@ fn selected_build_requires_error_page_definition_in_selected_closure() {
 
 #[test]
 fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: PathBuf::from("."),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -1094,7 +1094,7 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
 
 #[test]
 fn build_pack_includes_color_probe_targets() {
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: PathBuf::from("."),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -1158,7 +1158,7 @@ fn valid_ocr_declaration(id: &str) -> Value {
     })
 }
 
-fn ocr_test_converter(schema_version: &str, ocr_targets: Option<Value>) -> OperationConverter {
+fn ocr_test_converter(schema_version: &str, ocr_targets: Option<Value>) -> OperationParser {
     let mut data = json!({
         "schema_version": schema_version,
         "task_id": "ocr-check",
@@ -1168,7 +1168,7 @@ fn ocr_test_converter(schema_version: &str, ocr_targets: Option<Value>) -> Opera
     if let Some(ocr_targets) = ocr_targets {
         data["ocr_targets"] = ocr_targets;
     }
-    OperationConverter {
+    OperationParser {
         root: PathBuf::from("."),
         game: "neutral".to_string(),
         server: "test".to_string(),
@@ -1405,7 +1405,7 @@ fn selected_build_retains_required_ocr_target_closure() {
         )
         .unwrap();
     }
-    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let converter = OperationParser::load(root.path(), None, None, None).unwrap();
 
     let outputs = converter
         .build_selected(&["selected".to_string()])
@@ -1427,7 +1427,7 @@ fn selected_build_retains_required_ocr_target_closure() {
     source["page_rules"]["selected-page"]["optional"] =
         json!(["ocr/selected", "page/unselected-page"]);
     fs::write(&path, serde_json::to_vec(&source).unwrap()).unwrap();
-    let selected = OperationConverter::load(root.path(), None, None, None)
+    let selected = OperationParser::load(root.path(), None, None, None)
         .unwrap()
         .build_selected(&["selected".into()])
         .unwrap();
@@ -1456,7 +1456,7 @@ fn selected_build_retains_required_ocr_target_closure() {
     for anchor in ["missing", "ocr/selected"] {
         source["ocr_targets"][0]["region"]["anchor_target_id"] = json!(anchor);
         fs::write(&path, serde_json::to_vec(&source).unwrap()).unwrap();
-        OperationConverter::load(root.path(), None, None, None)
+        OperationParser::load(root.path(), None, None, None)
             .unwrap()
             .build_selected(&["selected".into()])
             .expect_err("missing or non-template anchor rejected by canonical admission");
@@ -1467,7 +1467,7 @@ fn selected_build_retains_required_ocr_target_closure() {
 fn build_pack_includes_verify_template_targets() {
     let root = write_error_page_fixture();
     let bundle_dir = root.path().join("operations/error-page-check");
-    let mut converter = OperationConverter {
+    let mut converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "neutral".to_string(),
         server: "test".to_string(),
@@ -1869,7 +1869,7 @@ fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
 fn maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets() {
     let (root, maa_dir) = write_synthetic_maa_convert_fixture();
 
-    let mut converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let mut converter = OperationParser::load(root.path(), None, None, None).unwrap();
     converter.load_maa_task_overlays(&maa_dir).unwrap();
     let outputs = converter.build_all().unwrap();
     let target = outputs.pack.pointer("/targets/0").unwrap();
@@ -2206,7 +2206,7 @@ fn resource_convert_rejects_missing_coordinate_space_before_writing_outputs() {
 #[test]
 fn default_operation_bundle_mode_does_not_apply_maa_overlay_fields() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.clone(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2252,7 +2252,7 @@ fn build_primitives_synthesizes_guard_from_operation_verify_template() {
     let task_dir = root.path().join("operations/daily-check");
     fs::create_dir_all(task_dir.join("assets")).unwrap();
     fs::write(task_dir.join("assets/VERIFY_READY.png"), b"png").unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2322,7 +2322,7 @@ fn build_primitives_synthesizes_guard_from_source_anchor_without_operation_verif
     let task_dir = root.path().join("operations/open-terminal");
     fs::create_dir_all(task_dir.join("assets")).unwrap();
     fs::write(task_dir.join("assets/HOME.png"), b"png").unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2387,7 +2387,7 @@ fn build_primitives_synthesizes_any_page_guard_from_matching_anchor_template() {
     let task_dir = root.path().join("operations/return-home");
     fs::create_dir_all(task_dir.join("assets")).unwrap();
     fs::write(task_dir.join("assets/HOME_BUTTON.png"), b"png").unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "azurlane".to_string(),
         server: "jp".to_string(),
@@ -2442,7 +2442,7 @@ fn build_primitives_synthesizes_guard_from_source_anchor_without_verify_template
     let task_dir = root.path().join("operations/open-menu");
     fs::create_dir_all(task_dir.join("assets")).unwrap();
     fs::write(task_dir.join("assets/HOME.png"), b"png").unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2499,7 +2499,7 @@ fn build_primitives_rejects_rect_and_specific_rect_without_guard_source() {
         let root = tempfile::tempdir().unwrap();
         let task_dir = root.path().join(format!("operations/open-menu-{kind}"));
         fs::create_dir_all(&task_dir).unwrap();
-        let converter = OperationConverter {
+        let converter = OperationParser {
             root: root.path().to_path_buf(),
             game: "arknights".to_string(),
             server: "cn".to_string(),
@@ -2540,7 +2540,7 @@ fn build_primitives_rejects_drag_without_guard_source() {
     let root = tempfile::tempdir().unwrap();
     let task_dir = root.path().join("operations/open-menu-drag");
     fs::create_dir_all(&task_dir).unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2592,7 +2592,7 @@ fn build_primitives_rejects_point_and_long_press_without_guard_source() {
         let root = tempfile::tempdir().unwrap();
         let task_dir = root.path().join(format!("operations/open-menu-{kind}"));
         fs::create_dir_all(&task_dir).unwrap();
-        let converter = OperationConverter {
+        let converter = OperationParser {
             root: root.path().to_path_buf(),
             game: "arknights".to_string(),
             server: "cn".to_string(),
@@ -2633,7 +2633,7 @@ fn build_primitives_allows_explicit_trusted_unguarded_long_press() {
     let root = tempfile::tempdir().unwrap();
     let task_dir = root.path().join("operations/open-menu-long-press");
     fs::create_dir_all(&task_dir).unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2679,7 +2679,7 @@ fn build_primitives_allows_explicit_trusted_unguarded_drag() {
     let root = tempfile::tempdir().unwrap();
     let task_dir = root.path().join("operations/open-menu-drag");
     fs::create_dir_all(&task_dir).unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2755,7 +2755,7 @@ fn build_primitives_synthesizes_guard_from_operation_verify_template_click_rect(
     let task_dir = root.path().join("operations/return-home");
     fs::create_dir_all(task_dir.join("assets")).unwrap();
     fs::write(task_dir.join("assets/HOME_ICON.png"), b"png").unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "bluearchive".to_string(),
         server: "jp".to_string(),
@@ -2809,7 +2809,7 @@ fn build_primitives_rejects_unmatched_verify_template_without_rect_guard_source(
     let task_dir = root.path().join("operations/daily-check");
     fs::create_dir_all(task_dir.join("assets")).unwrap();
     fs::write(task_dir.join("assets/VERIFY_READY.png"), b"png").unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -2853,7 +2853,7 @@ fn build_primitives_allows_explicit_trusted_unguarded_coordinate() {
     let root = tempfile::tempdir().unwrap();
     let task_dir = root.path().join("operations/daily-check");
     fs::create_dir_all(&task_dir).unwrap();
-    let converter = OperationConverter {
+    let converter = OperationParser {
         root: root.path().to_path_buf(),
         game: "arknights".to_string(),
         server: "cn".to_string(),

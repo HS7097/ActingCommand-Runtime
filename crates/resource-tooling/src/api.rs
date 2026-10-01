@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 /// A source entry or all generated package payloads may use at most 32 MiB.
 /// The supported minimum packaging environment reserves 512 MiB of process
-/// headroom; this one-sixteenth share leaves room for conversion, ZIP state,
+/// headroom; this one-sixteenth share leaves room for parsing, ZIP state,
 /// and validation while source assets use the fixed streaming buffer.
 pub const DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 
