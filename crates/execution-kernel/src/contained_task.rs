@@ -1477,7 +1477,7 @@ pub enum ContainedTaskTrace {
         selection: Box<actingcommand_contract::TaskSelectionRecord>,
         /// The attempt already ended the run with the runtime's own fatal capture error, which
         /// the interpreter returns unchanged whether or not this record is written: a runtime
-        /// keeps a failure to write it and reports it with that error.
+        /// reports a failure to write it itself.
         run_ending: bool,
     },
     EffectIntent {

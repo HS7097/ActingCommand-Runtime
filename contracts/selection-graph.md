@@ -378,12 +378,17 @@ for every record, without a further record.
 
 A fatal failure of the runtime's capture of F2 (on the host, a device capture failure after
 `capture.failed`) ends the run, and its decision is still recorded: the record is appended
-after `capture.failed` and before `task.failed`, and the task fails with the runtime's original
-error. When that record cannot be written, including when it fails its own validation, the
-task still fails with the original error; the host joins the record's failure to it as the
-related failure `selection_record` in its native detail, and the runtime is poisoned when the
-record's failure poisons it. A capture failure its runtime cannot classify forbids further
-records and returns without one.
+after `capture.failed` and before the run's terminal events, and the task fails with the
+runtime's original error. When that record cannot be written (the task's deadline passed or
+it was cancelled or paused during the capture, the record fails its own validation, or its
+append fails), the task still fails with the original error and its code, on a manual and on
+a scheduled run alike. The host records the refusal when it happens, before the run's terminal
+events: one `runtime.failed` lifecycle record linked to the run, with stage
+`runtime.lifecycle.selection_record` and the refusal's own code and detail. The runtime is
+poisoned when the refusal poisons it. Only when the ledger refuses that record as well does the
+host join the refusal to the run's failure as the related failure `selection_record` in its
+native detail, and poison the runtime. A capture failure its runtime cannot classify forbids
+further records and returns without one.
 
 ### Offline
 

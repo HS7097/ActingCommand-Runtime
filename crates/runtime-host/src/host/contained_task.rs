@@ -663,10 +663,11 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) task_timing: task_timing::TaskTimingObserver,
     pub(super) diagnostic_step: Option<task_diagnostic::DiagnosticStep>,
     pub(super) diagnostic_physical: Option<ActionId>,
-    /// Workflow #308: why a `run_ending` select record was not written, and whether that
-    /// poisons the runtime. The interpreter returns the run-ending capture error instead, and
-    /// the run joins this failure to it as `selection_record`.
-    unwritten_selection_record: Option<(RuntimeHostError, bool)>,
+    /// Workflow #308: a `run_ending` select record that could not be written. Its failure is
+    /// recorded in the ledger when it happens; this keeps whether it poisons the runtime, and
+    /// the failure itself when the ledger refused that record too, for the run to join to its
+    /// own failure.
+    unwritten_selection_record: Option<(bool, Option<RuntimeHostError>)>,
 }
 
 struct EntryRecoveryRuntime<'a, 'host> {
@@ -1688,6 +1689,31 @@ impl RuntimeContainedTask<'_> {
             )
             .with_task_id(self.task_id)
             .with_run_id(self.run_id)
+    }
+
+    /// Workflow #308: the interpreter returns the run-ending capture error, not the failure of
+    /// a `run_ending` select record, so that failure is recorded here as it happens: one
+    /// `runtime.failed` lifecycle record (stage `runtime.lifecycle.selection_record`, the
+    /// failure's own code and detail) linked to the run, before the run's terminal events and
+    /// without touching the run's failure. When the ledger refuses that record as well, the
+    /// failure is kept for the run to join to its own failure, which then poisons the runtime.
+    fn record_unwritten_selection(&mut self, failure: &RequestFailure) {
+        let error = failure
+            .error
+            .as_ref()
+            .clone()
+            .with_failure_stage("runtime.lifecycle.selection_record");
+        let unrecorded = self
+            .host
+            .append_lifecycle_failure(
+                RuntimeLifecycleFailureStage::OperationCleanup,
+                RuntimeLifecycleFailure::Host(&error),
+                self.links(),
+                None,
+            )
+            .err()
+            .map(|ledger| error.with_related_failure("selection_record_ledger", &ledger));
+        self.unwritten_selection_record = Some((failure.poison_runtime, unrecorded));
     }
 
     fn append_task(
@@ -3037,14 +3063,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
 
     fn record(&mut self, mut trace: ContainedTaskTrace) -> Result<(), Self::Error> {
         // Workflow #308: the interpreter does not return a `run_ending` select record's failure
-        // (it returns the run-ending capture error); the run keeps it and joins it.
+        // (it returns the run-ending capture error); it is recorded as it happens.
         if let ContainedTaskTrace::SelectionEvaluated { run_ending, .. } = &mut trace
             && std::mem::take(run_ending)
         {
             let recorded = self.record(trace);
             if let Err(failure) = &recorded {
-                self.unwritten_selection_record =
-                    Some((failure.error.as_ref().clone(), failure.poison_runtime));
+                self.record_unwritten_selection(failure);
             }
             return recorded;
         }
@@ -5136,23 +5161,34 @@ impl HostShared {
             execution
         };
         // Workflow #308: a select record that could not be written after the confirmation
-        // capture ended the run is reported with that run-ending failure, never dropped.
-        if let Some((record_error, poison)) = runtime.unwritten_selection_record.take() {
+        // capture ended the run is already in the ledger as its own failure; the run's failure
+        // keeps its code, carries its poison, and joins it only when the ledger refused it.
+        if let Some((poison, unrecorded)) = runtime.unwritten_selection_record.take() {
             match &mut execution {
                 Err(
                     ContainedTaskRunError::Boundary(failure)
                     | ContainedTaskRunError::NonfatalOperation(failure),
                 ) => {
-                    *failure.error = failure
-                        .error
-                        .as_ref()
-                        .clone()
-                        .with_related_failure("selection_record", &record_error);
-                    failure.poison_runtime |= poison;
+                    if let Some(record_error) = &unrecorded {
+                        *failure.error = failure
+                            .error
+                            .as_ref()
+                            .clone()
+                            .with_related_failure("selection_record", record_error);
+                    }
+                    failure.poison_runtime |= poison || unrecorded.is_some();
                 }
+                // The interpreter returns a run-ending error whenever it leaves a select record
+                // to the runtime; anything else is an invariant breach and ends the runtime.
                 _ => {
                     execution = Err(ContainedTaskRunError::Boundary(
-                        RequestFailure::poison_without_terminal(record_error),
+                        RequestFailure::poison_without_terminal(unrecorded.unwrap_or_else(|| {
+                            RuntimeHostError::fatal(
+                                "contained_task_selection_record_unreturned",
+                                "run_contained_task",
+                                RuntimeErrorCode::RuntimeFatal,
+                            )
+                        })),
                     ));
                 }
             }
