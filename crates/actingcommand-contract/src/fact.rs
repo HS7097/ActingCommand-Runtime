@@ -543,7 +543,7 @@ pub(crate) fn validate_fact_invalidation(
     Ok(())
 }
 
-fn validate_fact_key(value: &str) -> Result<(), SanitizationError> {
+pub(crate) fn validate_fact_key(value: &str) -> Result<(), SanitizationError> {
     const FAMILIES: [&str; 8] = [
         "identity.",
         "display.",

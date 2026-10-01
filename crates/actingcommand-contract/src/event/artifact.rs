@@ -15,7 +15,11 @@ pub const EFFECTIVE_CONFIGURATION_SCHEMA: &str =
     "actingcommand.runtime.effective-task-configuration.v1";
 pub const MAX_EFFECTIVE_CONFIGURATION_BYTES: u64 = 1_048_576;
 
+/// The first task stream schema. Readers still accept it with its closed v1 row set.
 pub const TASK_DIAGNOSTIC_SCHEMA: &str = "actingcommand.runtime.task-diagnostic.v1";
+/// The task stream schema the Runtime writes: v1 plus `color_digest` rows and
+/// `composite_member` target sources.
+pub const TASK_DIAGNOSTIC_SCHEMA_V2: &str = "actingcommand.runtime.task-diagnostic.v2";
 pub const MAX_TASK_DIAGNOSTIC_RECORD_BYTES: usize = 1_048_576;
 pub const MAX_TASK_DIAGNOSTIC_PAGE_RECORDS: usize = 64;
 
@@ -46,6 +50,7 @@ pub enum TaskDiagnosticKind {
     StepElapsed,
     Artifact,
     Terminal,
+    ColorDigest,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +111,8 @@ pub enum TaskDiagnosticPayload {
     StepElapsed(TaskDiagnosticStepElapsedData),
     Artifact(Box<TaskDiagnosticArtifactData>),
     Terminal(TaskDiagnosticTerminalData),
+    /// task-diagnostic.v2: child of a `color_digest` target row.
+    ColorDigest(Box<TaskDiagnosticColorDigestData>),
 }
 
 // Decode the bounded wire record strictly before exposing its typed payload.
@@ -159,6 +166,9 @@ impl<'de> Deserialize<'de> for TaskDiagnosticRecord {
                 serde_json::from_value(wire.data).map_err(de::Error::custom)?,
             ),
             TaskDiagnosticKind::Terminal => TaskDiagnosticPayload::Terminal(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::ColorDigest => TaskDiagnosticPayload::ColorDigest(
                 serde_json::from_value(wire.data).map_err(de::Error::custom)?,
             ),
         };
@@ -248,6 +258,12 @@ pub enum TaskDiagnosticTargetSource {
     Guard {
         phase: String,
     },
+    /// task-diagnostic.v2: a member's own target row under its composite target row.
+    /// `member_index` is the member's 0-based position in the composite's declaration.
+    CompositeMember {
+        composite_target_id: String,
+        member_index: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -271,6 +287,24 @@ pub struct TaskDiagnosticColorData {
     pub expected: [u8; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<crate::OcrRegionRect>,
+}
+
+/// task-diagnostic.v2: the actual `color_digest.v1` evaluation of the parent target row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticColorDigestData {
+    pub algorithm: String,
+    pub columns: u32,
+    pub rows: u32,
+    pub active_cells: u32,
+    pub mean_milli: u32,
+    pub max_cell: u32,
+    pub worst_cell: u32,
+    pub max_mean_milli: u32,
+    /// The declared `max_cell` threshold; null when the target declares none.
+    pub max_cell_threshold: Option<u32>,
+    /// The digest of the evaluated frame, in the declaration's lowercase hex form.
+    pub observed_cells: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

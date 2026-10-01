@@ -475,6 +475,123 @@ pub struct OcrFieldDictionaryReference {
     pub sha256: String,
 }
 
+/// Readings one task may declare (`contracts/resource-readings.md`).
+pub const MAX_RESOURCE_READINGS: usize = 16;
+/// The largest value a reading may declare: 2^53 - 1, exact in every JSON consumer.
+pub const MAX_RESOURCE_READING_VALUE: u64 = (1 << 53) - 1;
+
+/// One operation `resource_readings` entry (schema 0.8 and 0.9, Workflow #335 S5): the integer
+/// the Runtime reads from `target_id` on the successful terminal frame of `page_id` and writes
+/// as the instance fact `fact_key`. The declaration never enters an event, artifact or report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceReadingDeclaration {
+    pub id: String,
+    pub fact_key: String,
+    pub page_id: String,
+    pub target_id: String,
+    pub trim: OcrFieldTrim,
+    pub value: ResourceReadingType,
+    pub minimum_confidence_milli: u16,
+    pub valid_for_ms: u64,
+}
+
+/// The closed set of reading value types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ResourceReadingType {
+    UnsignedInteger {
+        min: u64,
+        max: u64,
+        #[serde(
+            default,
+            skip_serializing_if = "OcrUnsignedIntegerFormat::is_ascii_decimal"
+        )]
+        format: OcrUnsignedIntegerFormat,
+    },
+}
+
+impl ResourceReadingDeclaration {
+    /// The shared rule of one declaration. The declaration gate checks the same rules field by
+    /// field first; each reason names the field it rejects.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let identifier = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_-/.:".contains(&c))
+        };
+        if !identifier(&self.id) {
+            return Err("resource_reading_id_invalid");
+        }
+        if !(self.fact_key.starts_with("resource.") || self.fact_key.starts_with("inventory."))
+            || crate::fact::validate_fact_key(&self.fact_key).is_err()
+        {
+            return Err("resource_reading_fact_key_invalid");
+        }
+        if !identifier(&self.page_id) || self.page_id == "any" {
+            return Err("resource_reading_page_id_invalid");
+        }
+        if !identifier(&self.target_id) {
+            return Err("resource_reading_target_id_invalid");
+        }
+        let ResourceReadingType::UnsignedInteger { min, max, .. } = self.value;
+        if max > MAX_RESOURCE_READING_VALUE {
+            return Err("resource_reading_value_max_invalid");
+        }
+        if min > max {
+            return Err("resource_reading_value_min_invalid");
+        }
+        if !(1..=1_000).contains(&self.minimum_confidence_milli) {
+            return Err("resource_reading_minimum_confidence_invalid");
+        }
+        if !(crate::MIN_FACT_TTL_MS..=crate::MAX_FACT_TTL_MS).contains(&self.valid_for_ms) {
+            return Err("resource_reading_valid_for_invalid");
+        }
+        Ok(())
+    }
+
+    /// Trims and parses one observed text with the declared value type and range. This is the
+    /// only reading parser; Workflow #308 slice 2 reuses it.
+    pub fn parse(&self, text: &str) -> Result<u64, OcrFieldReason> {
+        let text = match self.trim {
+            OcrFieldTrim::WhitespaceV1 => text.trim(),
+        };
+        let ResourceReadingType::UnsignedInteger { min, max, format } = self.value;
+        format.parse(text, min, max)
+    }
+}
+
+/// One task's `resource_readings`: 1..=16 valid entries with unique ids and fact keys.
+pub fn validate_resource_readings(
+    readings: &[ResourceReadingDeclaration],
+) -> Result<(), &'static str> {
+    if readings.is_empty() || readings.len() > MAX_RESOURCE_READINGS {
+        return Err("resource_readings_count_invalid");
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut fact_keys = std::collections::BTreeSet::new();
+    for reading in readings {
+        reading.validate()?;
+        if !ids.insert(reading.id.as_str()) {
+            return Err("resource_reading_id_duplicate");
+        }
+        if !fact_keys.insert(reading.fact_key.as_str()) {
+            return Err("resource_reading_fact_key_duplicate");
+        }
+    }
+    Ok(())
+}
+
+/// An OCR confidence as integer milli, `floor(clamp(confidence, 0, 1) * 1000)`. A missing or
+/// non-finite confidence has none. This is the only conversion; Workflow #308 slice 2 reuses it.
+pub fn ocr_confidence_milli(confidence: Option<f32>) -> Option<u16> {
+    confidence
+        .filter(|confidence| confidence.is_finite())
+        .map(|confidence| (confidence.clamp(0.0, 1.0) * 1_000.0).floor() as u16)
+}
+
 impl OcrFieldsDeclaration {
     /// A task without input can only collect fields on its declared terminal pages.
     pub fn validate_zero_input_task(

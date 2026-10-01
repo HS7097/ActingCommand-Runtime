@@ -106,8 +106,10 @@ field, while `json_path` and the line and column point at the nearest preceding
 value (the existing parser's behaviour).
 
 The block is a declaration. The compiler validates it and hashes it with the
-catalog; the evaluator does not read it in this revision, so a catalog with a
-valuation ranks exactly as the same catalog without one.
+catalog. The evaluator reads it only for an instance with an active
+`actingcommand.resource-targets.v2` policy (Workflow #335 S2b,
+`contracts/resource-targets.md`, "Resource weights (v2)"); every other instance
+ranks exactly as with the same catalog without a valuation.
 
 The bounds above are checked when the catalog is compiled (`compile_catalog`,
 `actinglab scheduling compile`, Runtime activation and startup reload).
@@ -335,6 +337,13 @@ decision gains a reason.
      `heavy_scene_budget_deferred`, an admission eligibility code,
      `score_deferred`, `task_cooldown_active`, `trigger_false`, …); `none`
      without a reason.
+
+A stored `actingcommand.resource-targets.v2` policy is named
+`targets=active.v2:<sha>@<applied_at>` or `expired.v2:<sha>@<applied_at>`; while
+it is active the target fields carry the candidate's resource term instead
+(`target=<R>`, `target_id=<override id|*>`, `mode=<override|adjust>`) and
+`rank_breakdown` ends with ` offset_kept=<0|1>`, as
+`contracts/resource-targets.md`, "Resource weights (v2)", states.
 
 Bounds, every truncation marked: a chain of `L` reasons gains `rank_breakdown`,
 `decision_record` and at most `min(8, 128 - L - 2)` candidates when

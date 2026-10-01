@@ -9,6 +9,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `global-ledger-query.md` — shared query predicates, indexes, bounded watch and read-only event pages.
 - `task-flow.schema.json` — declarative task-flow schema.
 - `ocr-fields.md` — operation 0.8 typed post-admission fields and task-run projection.
+- `resource-readings.md` — the `task.json` family `resource_readings`: declaration and version gate, the kernel reading on the successful terminal frame, and its failure codes.
 - `task-diagnostic-stream.md` — task-owned raw evaluation records, verified streaming and bounded read-only export.
 - `device-diagnostic-budget.md` — owner-epoch Shadow diagnostics, source references and bounded close summaries.
 - `nemu-owned-resource-close.md` — fenced connection retirement and bounded completion of Runtime-owned Nemu resources.
@@ -24,7 +25,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `candidate-projection.md` — `actingcommand.candidate-projection.v1`: one layout's candidate set on one frame, its IDs, hash, budgets and public/controlled forms.
 - `color-digest.md` — `color_digest.v1`: the integer color-layout digest of one declared rectangle, its golden values and error codes, and its package declaration (task source entry, derived recognition pack `0.7` `color_digest` target, admission pointers).
 - `selection-graph.md` — the #308 selection graph; section Checks: named composite checks (recognition pack `0.7` `composite` targets), their evaluation and where they may be used; section Records: the `task.selection_evaluated` ledger record and its evaluator mirror.
-- `resource-targets.md` — the instance resource target policy: the v1 document, its rejection reasons, the `ApplyResourceTargets` entry and receipts, and its storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation").
+- `resource-targets.md` — the instance resource target policy: the frozen v1 and the valuation-aware v2 documents, their rejection reasons, the `ApplyResourceTargets` entry and receipts, and their storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation", with "Resource weights (v2)").
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
