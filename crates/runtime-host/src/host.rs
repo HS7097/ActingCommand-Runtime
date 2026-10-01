@@ -2291,6 +2291,7 @@ impl RuntimeHost {
                     selected_scheduling_outcome: None,
                     capture_summary: None,
                     task_timing: None,
+                    resource_readings: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -2376,6 +2377,7 @@ impl RuntimeHost {
                     selected_scheduling_outcome,
                     capture_summary: None,
                     task_timing: None,
+                    resource_readings: None,
                 },
             )
             .map(|event| terminal(&event))

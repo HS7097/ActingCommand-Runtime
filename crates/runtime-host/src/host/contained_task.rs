@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::facts::FactPublicationPurpose;
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use actingcommand_contract::{
@@ -8,7 +9,8 @@ use actingcommand_contract::{
     TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation, TaskGeometryPhase,
     TaskGeometryRecheckTrigger,
 };
-use actingcommand_execution_kernel::CaptureGeometrySessionRef;
+use actingcommand_execution_kernel::{CaptureGeometrySessionRef, ResourceReadingValue};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 /// How often an instance pause re-reads its instance's in-flight contained runs (and, in stage
@@ -85,6 +87,146 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) selected_scheduling_outcome: Option<String>,
     pub(super) capture_summary: Option<CapturePipelineSummary>,
     pub(super) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
+    /// Readings taken on the successful terminal frame (Workflow #335 S5b); in memory only.
+    pub(super) resource_readings: Option<ContainedTaskResourceReadings>,
+}
+
+/// The resource readings a run took on its successful terminal frame (Workflow #335 S5b),
+/// carried in memory from the kernel trace to the terminal, which publishes each one as an
+/// instance fact. Never serialized.
+#[derive(Clone)]
+pub(super) struct ContainedTaskResourceReadings {
+    /// The fact scope: the run's registered instance alias.
+    pub(super) instance_alias: String,
+    /// The admitted package's entry task id (`source_detector`).
+    pub(super) task_label: String,
+    /// The admitted package identity as SHA-256 hex (`resource_bundle_hash`).
+    pub(super) resource_bundle_hash: String,
+    /// The terminal frame's device capture time (`observed_at_unix_ms`).
+    pub(super) captured_at: SystemTime,
+    pub(super) frame_id: IssuedFrameId,
+    /// In declaration order.
+    pub(super) readings: Vec<ResourceReadingValue>,
+}
+
+/// Workflow #335 S5b: the instance fact of one reading. The scope is the run's instance, the
+/// observation time the terminal frame's capture time; the TTL is the declared `valid_for_ms`
+/// from the detector contract. `None` for a reading the fact record cannot hold (an integer
+/// beyond `i64`, an expiry beyond `u64`).
+fn resource_reading_fact_record(
+    readings: &ContainedTaskResourceReadings,
+    reading: &ResourceReadingValue,
+    observed_at_unix_ms: u64,
+    run_text: &str,
+    frame_text: &str,
+) -> Option<FactRecord> {
+    let declaration = &reading.declaration;
+    Some(FactRecord {
+        scope: FactScope::Instance {
+            instance_id: readings.instance_alias.clone(),
+        },
+        key: declaration.fact_key.clone(),
+        content: FactContent::Inline {
+            value: ContractFactValue::Integer(i64::try_from(reading.value).ok()?),
+        },
+        observed_at_unix_ms,
+        expires_at_unix_ms: Some(observed_at_unix_ms.checked_add(declaration.valid_for_ms)?),
+        ttl_policy: Some(actingcommand_contract::FactTtlPolicy {
+            minimum_ms: declaration.valid_for_ms,
+            maximum_ms: declaration.valid_for_ms,
+            source: actingcommand_contract::FactTtlSource::DetectorContract,
+        }),
+        confidence_milli: reading.confidence_milli,
+        source_detector: format!(
+            "resource_reading:{}/{}",
+            readings.task_label, declaration.id
+        ),
+        source_snapshot_id: format!("run:{run_text}/frame:{frame_text}/{}", declaration.id),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: readings.resource_bundle_hash.clone(),
+        invalidate_on: Vec::new(),
+    })
+}
+
+/// Workflow #335 S5b: `resource_bundle_hash` of a reading: the content directory digest, the
+/// sealed ZIP digest, or SHA-256 of a source tree reference's prefixed wire JSON.
+fn resource_reading_bundle_hash(package: &actingcommand_contract::PackageRef) -> String {
+    match package {
+        actingcommand_contract::PackageRef::ContentDirectory(reference) => reference.sha256.clone(),
+        actingcommand_contract::PackageRef::LegacyZipSha256(hash) => hash.clone(),
+        actingcommand_contract::PackageRef::GitSourceTree(_) => format!(
+            "{:x}",
+            Sha256::digest(package.prefixed_wire_value().to_string().as_bytes())
+        ),
+    }
+}
+
+/// The canonical text of a typed identifier (`run_<hex>`, `frame_<hex>`).
+fn resource_reading_identifier_text(
+    identifier: &impl serde::Serialize,
+) -> Result<String, RequestFailure> {
+    serde_json::to_value(identifier)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| RequestFailure::poison_without_terminal(runtime_identifier_error()))
+}
+
+/// Workflow #335 S5b: the `<id>:<reason>` of a reading the kernel could not take, or of a
+/// declaration it refused, is the receipt's native detail.
+fn resource_reading_failure_detail(code: &str, detail: Option<&str>) -> Option<String> {
+    if matches!(
+        code,
+        "contained_task_resource_reading_unresolved" | "contained_task_resource_reading_invalid"
+    ) {
+        detail.map(str::to_owned)
+    } else {
+        None
+    }
+}
+
+/// Workflow #335 S5b: rewrites a successful terminal whose readings were refused to the
+/// failure `code` (as a refused settlement projection is) and returns the failure answered
+/// after that terminal, with `detail` as native detail.
+fn refuse_resource_readings(
+    draft: &mut ContainedTaskTerminalDraft,
+    code: &'static str,
+    detail: String,
+) -> RequestFailure {
+    draft.outcome = TaskOutcome::Failure;
+    draft.final_page = None;
+    draft.failure_code = Some(code);
+    draft.failure_severity = draft.projection_failure_severity;
+    draft.scheduling_outcome = None;
+    draft.selected_scheduling_outcome = None;
+    RequestFailure::request(
+        RuntimeHostError::request(
+            code,
+            "append_contained_task_terminal",
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_native_detail(detail),
+        RuntimeReceiptState::Failed,
+        None,
+    )
+}
+
+fn resource_reading_poison(code: &'static str) -> RequestFailure {
+    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+        code,
+        "run_contained_task",
+        RuntimeErrorCode::RuntimeFatal,
+    ))
+}
+
+/// The terminal checks under the fact write gate: an already committed terminal of the run
+/// (its rejection is appended) or the open chain's summaries and settlement projection.
+enum ContainedTaskTerminalCheck {
+    AlreadyCommitted(Box<PersistedEvent>),
+    Open {
+        summary_committed: bool,
+        requested_summary: Option<actingcommand_contract::CaptureSummaryRecord>,
+        projection: Result<Option<SchedulingDisposition>, RequestFailure>,
+    },
 }
 
 pub(super) struct ContainedRunControl {
@@ -484,6 +626,11 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// `task.server` once `task.package_admitted` is appended.
     declared_game_server: (String, String),
     pub(super) last_frame_id: Option<IssuedFrameId>,
+    /// The device capture time of the frame `last_frame_id` names.
+    last_frame_captured_at: Option<SystemTime>,
+    /// The resource readings trace, accepted once before `Finalizing` (Workflow #335 S5b):
+    /// the terminal frame's capture time and id, and the readings.
+    taken_resource_readings: Option<(SystemTime, IssuedFrameId, Vec<ResourceReadingValue>)>,
     geometry_session: Option<CaptureGeometrySessionRef>,
     geometry_frame: Option<TaskGeometryFrame>,
     geometry_initial: Option<(CaptureExtent, CaptureGeometryObservation)>,
@@ -2526,6 +2673,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         };
                         self.capture_evidence.persisted(frame_index, &reference)?;
                         self.last_frame_id = Some(frame_id);
+                        self.last_frame_captured_at = Some(frame.captured_at);
                         self.last_capture_input_action_id = input_action_id;
                         self.last_capture_acquire_us = frame.capture_acquire_us();
                         if self.configuration_records > 0 && !self.configuration_capture_recorded {
@@ -3368,25 +3516,31 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     .any(|f| f.privacy == actingcommand_contract::OcrFieldPrivacy::Personal);
                 self.record_post_admission_ocr_comparison(report, frames, &outcome, personal)
             }
-            // #335 S5a placeholder until the S5b bridge publishes readings as instance facts: a
-            // run whose readings were taken fails before Finalizing, writes no fact and does
-            // not poison the Runtime.
-            ContainedTaskTrace::ResourceReadings { .. } => {
-                let error = RuntimeHostError::request(
-                    "contained_task_resource_reading_unsupported",
-                    "run_contained_task",
-                    RuntimeErrorCode::BackendOperationFailed,
-                );
-                Err(RequestFailure {
-                    state: RuntimeReceiptState::Failed,
-                    terminal: None,
-                    poison_runtime: false,
-                    task_failure: Some(TaskFailureEvidence {
-                        code: error.code(),
-                        severity: EventSeverity::Warning,
-                    }),
-                    error: Box::new(error),
-                })
+            // Workflow #335 S5b: the readings of the terminal frame, accepted once before
+            // Finalizing and only from the last captured frame; the terminal publishes them.
+            ContainedTaskTrace::ResourceReadings {
+                captured_at,
+                readings,
+            } => {
+                if self.finalizing.is_some() || self.taken_resource_readings.is_some() {
+                    return Err(resource_reading_poison(
+                        "contained_task_resource_reading_duplicate",
+                    ));
+                }
+                let (Some(frame_id), Some(frame_captured_at)) =
+                    (self.last_frame_id, self.last_frame_captured_at)
+                else {
+                    return Err(resource_reading_poison(
+                        "contained_task_resource_reading_frame_missing",
+                    ));
+                };
+                if frame_captured_at != captured_at {
+                    return Err(resource_reading_poison(
+                        "contained_task_resource_reading_frame_mismatch",
+                    ));
+                }
+                self.taken_resource_readings = Some((captured_at, frame_id, readings));
+                Ok(())
             }
             ContainedTaskTrace::Finalizing { outcome } => {
                 let stability_finalization_invalid = match (
@@ -3545,6 +3699,10 @@ fn contained_task_declaration_failure(
     error: actingcommand_execution_kernel::ContainedTaskError,
 ) -> RequestFailure {
     let mut failure = contained_task_package_failure(error.code());
+    if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail()) {
+        let refused = *failure.error;
+        failure.error = Box::new(refused.with_native_detail(detail));
+    }
     if let Some(issue) = error.declaration_issue() {
         // Declaration parsing happens only after the source snapshot or ZIP identity was verified.
         failure.error.lifecycle.resource_declaration = Some(Box::new(
@@ -4437,6 +4595,19 @@ impl HostShared {
             }
             startup_package::HostPackageRun::ReturnHome => failure,
         })?;
+        // Workflow #335 S5b: a startup or return-home package writes no instance facts; one
+        // that declares resource readings is refused before any lease and any input.
+        if prepared.has_resource_readings() {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "contained_task_resource_reading_run_kind_unsupported",
+                    "run_startup_package",
+                    RuntimeErrorCode::PackageInvalid,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
         let run_links = RuntimeRunLinks::new(task_id, run_id);
         self.append_scheduled_request_lifecycle(
             &task_request_message,
@@ -4792,6 +4963,8 @@ impl HostShared {
             control: Arc::clone(&control),
             declared_game_server: (prepared.game().to_owned(), prepared.server().to_owned()),
             last_frame_id: None,
+            last_frame_captured_at: None,
+            taken_resource_readings: None,
             geometry_session: None,
             geometry_frame: None,
             geometry_initial: None,
@@ -4936,6 +5109,7 @@ impl HostShared {
         }
         let finalizing = runtime.finalizing;
         let executed_steps = runtime.executed_steps;
+        let taken_resource_readings = runtime.taken_resource_readings.take();
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
         let outcome = match execution {
@@ -4995,6 +5169,7 @@ impl HostShared {
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
                             task_timing: Some(task_timing.clone()),
+                            resource_readings: None,
                         },
                     )?;
                     if scheduled {
@@ -5076,6 +5251,7 @@ impl HostShared {
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
                             task_timing: Some(task_timing.clone()),
+                            resource_readings: None,
                         },
                     )?;
                     failure.terminal = Some(terminal(&event));
@@ -5145,18 +5321,24 @@ impl HostShared {
                         selected_scheduling_outcome: None,
                         capture_summary: Some(capture_summary),
                         task_timing: Some(task_timing.clone()),
+                        resource_readings: None,
                     },
                 )?;
+                let mut task_error = RuntimeHostError::request(
+                    error.code(),
+                    "run_contained_task",
+                    if error.code() == "application_effect_requires_assigned_application" {
+                        RuntimeErrorCode::InvalidRequest
+                    } else {
+                        RuntimeErrorCode::BackendOperationFailed
+                    },
+                );
+                if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail())
+                {
+                    task_error = task_error.with_native_detail(detail);
+                }
                 let mut failure = RequestFailure::request(
-                    RuntimeHostError::request(
-                        error.code(),
-                        "run_contained_task",
-                        if error.code() == "application_effect_requires_assigned_application" {
-                            RuntimeErrorCode::InvalidRequest
-                        } else {
-                            RuntimeErrorCode::BackendOperationFailed
-                        },
-                    ),
+                    task_error,
                     if error.code() == "application_effect_requires_assigned_application" {
                         RuntimeReceiptState::Denied
                     } else {
@@ -5230,6 +5412,18 @@ impl HostShared {
                 selected_scheduling_outcome: outcome.selected_scheduling_outcome,
                 capture_summary: Some(capture_summary),
                 task_timing: Some(task_timing),
+                resource_readings: taken_resource_readings.map(
+                    |(captured_at, frame_id, readings)| ContainedTaskResourceReadings {
+                        instance_alias: instance_alias.to_owned(),
+                        task_label: prepared.task_label().to_owned(),
+                        resource_bundle_hash: resource_reading_bundle_hash(
+                            prepared.package_sha256(),
+                        ),
+                        captured_at,
+                        frame_id,
+                        readings,
+                    },
+                ),
             },
         )?;
         match self.release_lease(
@@ -6070,149 +6264,30 @@ impl HostShared {
                         &error,
                     ))
                 })?;
+            // Workflow #335 S5b: a successful terminal that took resource readings first runs the
+            // live pool check, the terminal checks and the publication (stages 0-2); then this
+            // original flow runs again in full (stage 3). Every other terminal runs it alone.
+            let reading_failure = match draft.resource_readings.take() {
+                Some(readings) if draft.outcome == TaskOutcome::Success => self
+                    .publish_contained_task_resource_readings(
+                        request, token, &links, &mut draft, readings,
+                    )?,
+                _ => None,
+            };
             let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
                 .map_err(RequestFailure::poison_without_terminal)?;
-            let chain_events = self
-                .ledger
-                .query(EventQuery {
-                    instance_id: Some(token.instance_id()),
-                    correlation_id: Some(request.correlation_id()),
-                    task_id: Some(*draft.task_id.transport()),
-                    run_id: Some(*draft.run_id.transport()),
-                    lease_id: Some(token.lease_id()),
-                    ..EventQuery::default()
-                })
-                .map_err(|_| {
-                    RequestFailure::poison_without_terminal(ledger_error(
-                        "check_contained_task_terminal",
-                    ))
-                })?;
-            let terminals = chain_events
-                .iter()
-                .filter_map(|event| match event.payload() {
-                    EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
-                        TaskSemanticFact::TerminalCommitted { outcome, .. } => Some(*outcome),
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            if let [committed_outcome] = terminals.as_slice() {
-                let rejected = self
-                    .append_event_under_fact_gate(
-                        EventSeverity::Error,
-                        EventSource::Runtime,
-                        OriginModule::Runtime,
-                        EventActor::Runtime,
-                        links.clone(),
-                        TaskPayloadDraft::semantic(
-                            TaskSemanticFact::TerminalRejected {
-                                committed_outcome: *committed_outcome,
-                                attempted_outcome: draft.outcome,
-                                reason: "terminal_already_committed".to_string(),
-                            },
-                            AuditInput::new(),
-                        ),
-                    )
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                self.synchronize_fact_store_under_gate()
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                drop(gate);
-                self.observe_pipeline_event(&rejected)
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                return Err(RequestFailure::request(
-                    RuntimeHostError::request(
-                        "contained_task_terminal_already_committed",
-                        "append_contained_task_terminal",
-                        RuntimeErrorCode::InvalidRequest,
-                    ),
-                    RuntimeReceiptState::Denied,
-                    Some(terminal(&rejected)),
-                ));
-            }
-            if terminals.len() > 1 {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::fatal(
-                        "contained_task_terminal_state_inconsistent",
-                        "append_contained_task_terminal",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ),
-                ));
-            }
-            let existing_summary_events = chain_events
-                .iter()
-                .filter(|event| event.event_type() == EventType::CaptureSummaryCommitted)
-                .collect::<Vec<_>>();
-            if existing_summary_events.len() > 1 {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::fatal(
-                        "capture_summary_state_inconsistent",
-                        "append_contained_task_terminal",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ),
-                ));
-            }
-            let existing_summary = existing_summary_events
-                .first()
-                .map(|event| {
-                    if event.origin().source() != EventSource::Runtime
-                        || event.origin().module() != OriginModule::CapturePipeline
-                        || event.origin().actor() != EventActor::Runtime
-                    {
-                        return Err(RequestFailure::poison_without_terminal(
-                            RuntimeHostError::fatal(
-                                "capture_summary_state_conflict",
-                                "append_contained_task_terminal",
-                                RuntimeErrorCode::RuntimeFatal,
-                            ),
-                        ));
+            let (summary_committed, requested_summary, projection) =
+                match self.check_contained_task_terminal(request, token, &draft, &links)? {
+                    ContainedTaskTerminalCheck::AlreadyCommitted(rejected) => {
+                        drop(gate);
+                        return Err(self.contained_task_terminal_already_committed(&rejected));
                     }
-                    let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) =
-                        event.payload()
-                    else {
-                        return Err(RequestFailure::poison_without_terminal(
-                            RuntimeHostError::fatal(
-                                "capture_summary_state_inconsistent",
-                                "append_contained_task_terminal",
-                                RuntimeErrorCode::RuntimeFatal,
-                            ),
-                        ));
-                    };
-                    Ok(payload.summary())
-                })
-                .transpose()?;
-            let requested_summary = draft
-                .capture_summary
-                .as_ref()
-                .map(capture_summary_record)
-                .transpose()
-                .map_err(|error| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        error.code(),
-                        "append_contained_task_terminal",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-            if let (Some(existing), Some(requested)) =
-                (existing_summary, requested_summary.as_ref())
-                && existing != requested
-            {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::fatal(
-                        "capture_summary_state_conflict",
-                        "append_contained_task_terminal",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ),
-                ));
-            }
-            let projection = select_scheduling_disposition(
-                &chain_events,
-                draft.outcome,
-                draft.final_page.as_deref(),
-                draft.executed_steps,
-                draft.scheduling_outcome.as_ref(),
-                draft.selected_scheduling_outcome.as_deref(),
-            );
+                    ContainedTaskTerminalCheck::Open {
+                        summary_committed,
+                        requested_summary,
+                        projection,
+                    } => (summary_committed, requested_summary, projection),
+                };
             let (scheduling_disposition, projection_failure) = match projection {
                 Ok(disposition) => (disposition, None),
                 // A rejected projection still owes the run a terminal fact: commit it as failed.
@@ -6232,9 +6307,7 @@ impl HostShared {
                 Err(failure) => return Err(failure),
             };
             let mut appended = Vec::with_capacity(3);
-            if existing_summary.is_none()
-                && let Some(summary) = requested_summary
-            {
+            if !summary_committed && let Some(summary) = requested_summary {
                 appended.push(
                     self.append_event_under_fact_gate(
                         EventSeverity::Info,
@@ -6343,6 +6416,10 @@ impl HostShared {
                 failure.terminal = Some(terminal(&terminal_event));
                 return Err(failure);
             }
+            if let Some(mut failure) = reading_failure {
+                failure.terminal = Some(terminal(&terminal_event));
+                return Err(failure);
+            }
             Ok(terminal_event)
         })();
         result.map_err(|mut failure: RequestFailure| {
@@ -6351,5 +6428,313 @@ impl HostShared {
             }
             failure
         })
+    }
+
+    /// The terminal checks, under the fact write gate the caller holds: the run's chain, an
+    /// already committed terminal (its rejection is appended here), the capture summary and
+    /// the settlement projection.
+    fn check_contained_task_terminal(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        draft: &ContainedTaskTerminalDraft,
+        links: &EventLinksDraft,
+    ) -> Result<ContainedTaskTerminalCheck, RequestFailure> {
+        let chain_events = self
+            .ledger
+            .query(EventQuery {
+                instance_id: Some(token.instance_id()),
+                correlation_id: Some(request.correlation_id()),
+                task_id: Some(*draft.task_id.transport()),
+                run_id: Some(*draft.run_id.transport()),
+                lease_id: Some(token.lease_id()),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error(
+                    "check_contained_task_terminal",
+                ))
+            })?;
+        let terminals = chain_events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                    TaskSemanticFact::TerminalCommitted { outcome, .. } => Some(*outcome),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if let [committed_outcome] = terminals.as_slice() {
+            let rejected = self
+                .append_event_under_fact_gate(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links.clone(),
+                    TaskPayloadDraft::semantic(
+                        TaskSemanticFact::TerminalRejected {
+                            committed_outcome: *committed_outcome,
+                            attempted_outcome: draft.outcome,
+                            reason: "terminal_already_committed".to_string(),
+                        },
+                        AuditInput::new(),
+                    ),
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+            self.synchronize_fact_store_under_gate()
+                .map_err(RequestFailure::poison_without_terminal)?;
+            return Ok(ContainedTaskTerminalCheck::AlreadyCommitted(Box::new(
+                rejected,
+            )));
+        }
+        if terminals.len() > 1 {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_terminal_state_inconsistent",
+                    "append_contained_task_terminal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let existing_summary_events = chain_events
+            .iter()
+            .filter(|event| event.event_type() == EventType::CaptureSummaryCommitted)
+            .collect::<Vec<_>>();
+        if existing_summary_events.len() > 1 {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "capture_summary_state_inconsistent",
+                    "append_contained_task_terminal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let existing_summary = existing_summary_events
+            .first()
+            .map(|event| {
+                if event.origin().source() != EventSource::Runtime
+                    || event.origin().module() != OriginModule::CapturePipeline
+                    || event.origin().actor() != EventActor::Runtime
+                {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            "capture_summary_state_conflict",
+                            "append_contained_task_terminal",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ),
+                    ));
+                }
+                let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) =
+                    event.payload()
+                else {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            "capture_summary_state_inconsistent",
+                            "append_contained_task_terminal",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ),
+                    ));
+                };
+                Ok(payload.summary())
+            })
+            .transpose()?;
+        let requested_summary = draft
+            .capture_summary
+            .as_ref()
+            .map(capture_summary_record)
+            .transpose()
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    error.code(),
+                    "append_contained_task_terminal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        if let (Some(existing), Some(requested)) = (existing_summary, requested_summary.as_ref())
+            && existing != requested
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "capture_summary_state_conflict",
+                    "append_contained_task_terminal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let projection = select_scheduling_disposition(
+            &chain_events,
+            draft.outcome,
+            draft.final_page.as_deref(),
+            draft.executed_steps,
+            draft.scheduling_outcome.as_ref(),
+            draft.selected_scheduling_outcome.as_deref(),
+        );
+        Ok(ContainedTaskTerminalCheck::Open {
+            summary_committed: existing_summary.is_some(),
+            requested_summary,
+            projection,
+        })
+    }
+
+    /// Answers a terminal attempt after its run's terminal was committed, once the fact write
+    /// gate is released: the appended rejection is observed and the attempt is denied.
+    fn contained_task_terminal_already_committed(
+        &self,
+        rejected: &PersistedEvent,
+    ) -> RequestFailure {
+        if let Err(error) = self.observe_pipeline_event(rejected) {
+            return RequestFailure::poison_without_terminal(error);
+        }
+        RequestFailure::request(
+            RuntimeHostError::request(
+                "contained_task_terminal_already_committed",
+                "append_contained_task_terminal",
+                RuntimeErrorCode::InvalidRequest,
+            ),
+            RuntimeReceiptState::Denied,
+            Some(terminal(rejected)),
+        )
+    }
+
+    /// Workflow #335 S5b, stages 0-2 of a successful terminal that took resource readings; the
+    /// caller then runs the original terminal flow (stage 3).
+    ///
+    /// - Stage 0, no lock held while the pools are read: the active catalog read as the policy
+    ///   forward projection reads it. A `ledger_fact` pool observing a reading's key in the
+    ///   run's instance scope refuses the readings
+    ///   (`contained_task_resource_reading_live_pool_unsupported`, detail `<id>:<pool>`).
+    /// - Stage 1, under the fact write gate, then released: the terminal checks. An already
+    ///   committed terminal is answered as before and a refused settlement projection is left
+    ///   to the original rewrite; neither publishes.
+    /// - Stage 2, no lock held: each reading is its own observation through `publish_facts`
+    ///   (Ordinary purpose, Runtime origin, system links), in declaration order. A non-fatal
+    ///   refusal stops there (earlier readings stay published) and refuses the readings
+    ///   (`contained_task_resource_reading_rejected`, detail `<id>:<fact store code>`); a fatal
+    ///   one, already marked by `publish_facts`, poisons the Runtime.
+    ///
+    /// A refusal rewrites the draft to that failure and returns it, to be answered after the
+    /// failure terminal.
+    fn publish_contained_task_resource_readings(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        links: &EventLinksDraft,
+        draft: &mut ContainedTaskTerminalDraft,
+        readings: ContainedTaskResourceReadings,
+    ) -> Result<Option<RequestFailure>, RequestFailure> {
+        let scope = actingcommand_policy::ScopeSelector::Instance {
+            instance_id: readings.instance_alias.clone(),
+        };
+        let catalog = lock(&self.policy, "check_resource_reading_pools")
+            .map_err(RequestFailure::poison_without_terminal)?
+            .active_loaded();
+        let live_pool = catalog.as_ref().and_then(|catalog| {
+            readings.readings.iter().find_map(|reading| {
+                catalog
+                    .compiled()
+                    .catalog()
+                    .pools
+                    .pools
+                    .iter()
+                    .find(|pool| {
+                        matches!(
+                            pool.value_source,
+                            actingcommand_policy::PoolValueSource::LedgerFact { .. }
+                        ) && pool.scope == scope
+                            && matches!(
+                                &pool.observation,
+                                actingcommand_policy::ObservationRef::Fact { fact_key }
+                                    if *fact_key == reading.declaration.fact_key
+                            )
+                    })
+                    .map(|pool| format!("{}:{}", reading.declaration.id, pool.id))
+            })
+        });
+        if let Some(detail) = live_pool {
+            return Ok(Some(refuse_resource_readings(
+                draft,
+                "contained_task_resource_reading_live_pool_unsupported",
+                detail,
+            )));
+        }
+        let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        match self.check_contained_task_terminal(request, token, draft, links)? {
+            ContainedTaskTerminalCheck::AlreadyCommitted(rejected) => {
+                drop(gate);
+                return Err(self.contained_task_terminal_already_committed(&rejected));
+            }
+            ContainedTaskTerminalCheck::Open {
+                projection: Ok(_), ..
+            } => {}
+            ContainedTaskTerminalCheck::Open {
+                projection: Err(failure),
+                ..
+            } => {
+                return if failure.error.code().starts_with("contained_task_outcome_") {
+                    Ok(None)
+                } else {
+                    Err(failure)
+                };
+            }
+        }
+        drop(gate);
+        let observed_at_unix_ms = readings
+            .captured_at
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "system_clock_invalid")
+            .and_then(|elapsed| {
+                u64::try_from(elapsed.as_millis()).map_err(|_| "system_clock_overflow")
+            })
+            .map_err(|code| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    code,
+                    "publish_resource_readings",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        let run_text = resource_reading_identifier_text(draft.run_id.transport())?;
+        let frame_text = resource_reading_identifier_text(readings.frame_id.transport())?;
+        let mut records = Vec::with_capacity(readings.readings.len());
+        for reading in &readings.readings {
+            let Some(record) = resource_reading_fact_record(
+                &readings,
+                reading,
+                observed_at_unix_ms,
+                &run_text,
+                &frame_text,
+            ) else {
+                return Ok(Some(refuse_resource_readings(
+                    draft,
+                    "contained_task_resource_reading_rejected",
+                    format!("{}:fact_observation_invalid", reading.declaration.id),
+                )));
+            };
+            records.push((reading.declaration.id.as_str(), record));
+        }
+        for (reading_id, record) in records {
+            match self.publish_facts(
+                actingcommand_contract::FactObservation {
+                    records: vec![record],
+                },
+                None,
+                FactPublicationPurpose::Ordinary,
+            ) {
+                Ok(_) => {}
+                Err(error) if error.is_fatal() => {
+                    return Err(RequestFailure::poison_without_terminal(error));
+                }
+                Err(error) => {
+                    return Ok(Some(refuse_resource_readings(
+                        draft,
+                        "contained_task_resource_reading_rejected",
+                        format!("{reading_id}:{}", error.code()),
+                    )));
+                }
+            }
+        }
+        Ok(None)
     }
 }

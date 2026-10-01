@@ -188,6 +188,13 @@ non-negative integer with a positive confidence (at least the pool's minimum for
 `low_confidence`, `expired`, `invalid_value` that applies. A pending target is applied and
 waits for an observation; it is not an error.
 
+The observation can come from an agent's `PublishFact` or, automatically, from a package's
+resource reading (Workflow #335 S5b, `contracts/resource-readings.md`). A package that declares
+a reading of the pool's `fact_key` writes that record after a successful run on the reading
+page, with the declared lifetime. The target then turns from `awaiting_observation` to
+`computed`, and back to `expired` once the lifetime has passed. The Runtime does not schedule
+readings; the agent decides when to run the reading task again.
+
 `RuntimeReceipt::validate` binds both shapes: a rejection requires Denied, no terminal, no
 result, error `InvalidRequest` and no resource declaration; an applied result requires
 Completed and a terminal equal to `{version, event_id}`, and
