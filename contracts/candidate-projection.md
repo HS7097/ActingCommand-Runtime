@@ -11,7 +11,9 @@ The recognition pack produces a projection from a scene and a pack through one e
 in-task select step, the online observation and the offline Lab share; the same scene and
 pack give byte-identical output everywhere. A feature that needs a provider the offline Lab
 does not have fails with `candidate_feature_provider_missing`. Implementation status: the
-contract types and the ledger record exist; the producer arrives with a later #308 slice.
+contract types, the ledger record and the producer for `fixed_slots` layouts exist (section
+Generation); `repeated_anchor` layouts, the observation outputs and the select step arrive with
+later #308 slices.
 
 ## Shape
 
@@ -101,6 +103,10 @@ is truncated.
 | Compact JSON of one core projection | 32 KiB | `CANDIDATE_PROJECTION_MAX_BYTES` | same (`projection_bytes`) |
 | Compact JSON of every public candidate set of one observation | 32 KiB | `CANDIDATE_SETS_MAX_BYTES` | `candidate_sets_budget_exceeded` (`candidate_sets_bytes`), raised when the observation is built, not when an artifact is written |
 
+The layout counts per page and per package are checked when the recognition pack is admitted
+([selection-graph.md](selection-graph.md), section Candidate layouts); the producer checks the
+candidate, feature and provider-evaluation budgets again before it evaluates anything.
+
 The observation total keeps a Lab terminal record within its 256 KiB artifact: the before
 observation holds a 32 KiB page projection, 64 KiB of facts and 32 KiB of candidate sets,
 and the after observation holds 32 KiB and 64 KiB and no candidate sets. An evidence
@@ -139,6 +145,40 @@ one:
 A shape violation is `invalid_candidate_projection` with the field it concerns. The public
 form is validated the same way, except that the hash cannot be recomputed, and exactly the
 personal candidates withhold their features.
+
+## Generation
+
+`SceneEvaluation::project_candidates(layout_id)` of the recognition pack
+(`crates/recognition-pack/src/candidate_layout.rs`) is the only producer. Its inputs are the
+scene and the admitted pack, nothing else; the layouts it reads are declared as in
+[selection-graph.md](selection-graph.md), section Candidate layouts.
+
+1. The pack declares a `fixed_slots` layout `layout_id`, or the projection fails with
+   `candidate_layout_unknown`. The frame has the pack's coordinate space, or it fails with
+   `invalid_candidate_projection` (`frame`).
+2. Before anything is evaluated, the slots, the features and the OCR and NN evaluations the
+   layout needs are within their budgets, or it fails with
+   `candidate_projection_budget_exceeded` (`candidates`, `features`, `provider_evaluations`).
+   The OCR and NN evaluations are one per distinct OCR or NN target the slots read and one per
+   OCR or NN member of each distinct composite they read.
+3. Slot `k` becomes candidate `{layout_id}#{k:02}` with `instance_index` `k`, `actionable`
+   `true`, and the slot's `rect` and `click`.
+4. For each declared feature, in declaration order, that the slot maps to a target, the target
+   is evaluated through the frame's scene evaluation, the same one pages use; each distinct
+   target is evaluated once per projection, and a template reuses the frame's template result.
+   The feature takes the target's `passed` verdict as a boolean or its `measure_milli` as an
+   integer, with the target's `confidence`, as the table in selection-graph.md defines.
+5. A measure or confidence the backend does not give is absent: a `measure_milli` feature of
+   an OCR result without a confidence, or of an NN result without a selected score, is left out
+   of the candidate, and a `passed` feature then carries `confidence` `null`. Nothing is
+   defaulted.
+6. Any evaluation error fails the whole projection: `candidate_feature_provider_missing` when
+   the target, or a member of a composite target, needs an OCR or NN provider the evaluator was
+   built without, and `candidate_feature_failed` otherwise, including a measure that has no
+   finite integer milli value. The detail names the target and the recognition error code, and
+   the recognition error, with its PP-OCR reports and region evidence, travels with the
+   failure. No partial projection is returned.
+7. `CandidateProjection::new` checks the candidates, seals the hash and checks the byte budget.
 
 ## Consumers
 

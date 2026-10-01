@@ -19,6 +19,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod candidate_layout;
+
+pub use candidate_layout::{
+    CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
+    CandidateFeatureDeclaration, CandidateFeatureValue, CandidateLayout,
+    CandidateProjectionFailure, CandidateSlot,
+};
+
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
 
 const MAX_VISION_TIMEOUT_MS: u64 = 60_000;
@@ -31,8 +39,8 @@ const MAX_OCR_BLOCKS: usize = 1_024;
 const MAX_VISION_RESULTS: usize = 1_024;
 const MAX_TEMPLATE_REGION_EVALUATIONS: usize = 64;
 const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
-/// The only schema that declares `color_digest` and `composite` targets and a per-target
-/// color `max_distance`. Every other construct keeps its schema 0.6 rules.
+/// The only schema that declares `color_digest` and `composite` targets, a per-target color
+/// `max_distance` and `candidate_layouts`. Every other construct keeps its schema 0.6 rules.
 const SCHEMA_0_7: &str = "0.7";
 const COMPOSITE_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
 
@@ -215,6 +223,9 @@ pub struct RecognitionPack {
     #[serde(default)]
     pub defaults: RecognitionDefaults,
     pub targets: Vec<RecognitionTarget>,
+    /// Schema 0.7: the candidate layouts the pack's pages declare; absent means none.
+    #[serde(default)]
+    pub candidate_layouts: Vec<CandidateLayout>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -2049,6 +2060,16 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             ));
         }
     }
+    if schema != SCHEMA_0_7 && root.contains_key("candidate_layouts") {
+        return Err(RecognitionPackError::fatal(format!(
+            "schema {schema} recognition pack declares candidate_layouts, which requires schema_version '{SCHEMA_0_7}'"
+        ))
+        .at_declaration(
+            "/candidate_layouts".to_string(),
+            actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+        ));
+    }
+    // Past the gate above, only a schema 0.7 root can hold `candidate_layouts`.
     reject_unknown_fields(
         root,
         &[
@@ -2059,6 +2080,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             "coordinate_space",
             "defaults",
             "targets",
+            "candidate_layouts",
         ],
         "",
     )?;
@@ -2273,6 +2295,9 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                 }
             }
         }
+    }
+    if let Some(layouts) = root.get("candidate_layouts") {
+        candidate_layout::validate_candidate_layouts_wire(layouts)?;
     }
     Ok(())
 }
@@ -2588,6 +2613,7 @@ fn validate_pack(
             }
         }
     }
+    candidate_layout::validate_candidate_layouts(pack, errors);
 }
 
 /// Algorithm, grid, grid fit, cells and exclusion list of a digest declaration. The region
@@ -4743,6 +4769,7 @@ mod tests {
                 height: 20,
             }),
             defaults: RecognitionDefaults::default(),
+            candidate_layouts: Vec::new(),
             targets: Vec::new(),
         }
     }
