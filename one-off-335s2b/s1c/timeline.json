@@ -1,0 +1,11 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "bluearchive.jp.rd0927",
+    "catalog_version": 2,
+    "approval_refs": [
+      "approval:bluearchive-jp-rd0927-v2"
+    ]
+  },
+  "events": []
+}
