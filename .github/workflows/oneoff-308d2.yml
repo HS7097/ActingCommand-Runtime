@@ -1,0 +1,90 @@
+# One-off (to be reverted), Workflow #308 D2 evidence.
+name: one-off 308 D2
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  d2_one_off:
+    runs-on: windows-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: D2 (a) v1 read by both readers, (b) v2 from a 0.7 pack, (c) 0.6 pack diagnostic difference
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          BASE_SHA: 6ae8954897d9292b4adc87b95b70ff3ed784ee9a
+          IMPL_SHA: 21aee64d0157abe6c5a1723393a9257999b51406
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Invoke-Checked([string] $Code, [string] $Exe, [string[]] $Arguments) {
+            & $Exe @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "${Code}: $Exe $($Arguments -join ' ') exited $LASTEXITCODE"
+            }
+          }
+          $keep = Join-Path $env:RUNNER_TEMP 'd2-roots'
+          New-Item -ItemType Directory -Force -Path $keep | Out-Null
+          function Invoke-Flow([string] $Name, [string] $Test, [string] $Scenario, [bool] $Ignored) {
+            $env:D2_KEEP_STATE_ROOT = Join-Path $keep $Name
+            if ($Scenario) { $env:D2_SCENARIO = $Scenario }
+            $arguments = @('test', '--locked', '-p', 'actingcommand-actingctl', '--test', 'c4_process', $Test, '--', '--exact', '--nocapture', '--test-threads=1')
+            if ($Ignored) { $arguments += '--ignored' }
+            try {
+              Invoke-Checked "d2_flow_failed_$Name" 'cargo' $arguments
+            } finally {
+              Remove-Item -LiteralPath Env:D2_KEEP_STATE_ROOT -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath Env:D2_SCENARIO -ErrorAction SilentlyContinue
+            }
+            Write-Host "d2 kept $Name"
+          }
+          $head = (git rev-parse HEAD).Trim()
+          $mergeBase = (git merge-base origin/main HEAD).Trim()
+          Write-Host "d2 head $head control $env:BASE_SHA merge-base $mergeBase implementation $env:IMPL_SHA"
+          if ($mergeBase -ne $env:BASE_SHA) { throw "d2_merge_base_moved: $mergeBase" }
+          # The flows' test files are the merge-base's own plus this one-off only.
+          Invoke-Checked 'd2_flow_files_differ' 'git' @('diff', '--exit-code', '--stat', $env:BASE_SHA, $env:IMPL_SHA, '--', 'apps/actingctl/tests/c4_process.rs', 'tests/support/c4_runtime.rs')
+
+          $neutral = 'actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit'
+          $bundle = 'one_off_d2_bundle_notice_home_task_run'
+
+          # Head: actingledger and the three flows.
+          Invoke-Checked 'd2_head_ledger_build_failed' 'cargo' @('build', '--locked', '-p', 'actingledger', '--bin', 'actingledger')
+          $headLedger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe').Path
+          Invoke-Flow 'head-neutral' $neutral '' $false
+          Invoke-Flow 'head-sealed' $bundle 'sealed' $true
+          Invoke-Flow 'head-pack07' $bundle 'pack07' $true
+
+          # Control: the exact merge-base with the same flow files, its own Runtime and actingledger.
+          $base = Join-Path $env:RUNNER_TEMP 'd2-base'
+          Invoke-Checked 'd2_base_worktree_failed' 'git' @('worktree', 'add', '--detach', $base, $env:BASE_SHA)
+          Copy-Item -LiteralPath 'apps/actingctl/tests/c4_process.rs' -Destination (Join-Path $base 'apps/actingctl/tests/c4_process.rs') -Force
+          Copy-Item -LiteralPath 'tests/support/c4_runtime.rs' -Destination (Join-Path $base 'tests/support/c4_runtime.rs') -Force
+          Push-Location -LiteralPath $base
+          try {
+            Invoke-Checked 'd2_base_status_failed' 'git' @('status', '--short')
+            $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'd2-base-target'
+            Invoke-Flow 'base-neutral' $neutral '' $false
+            Invoke-Flow 'base-sealed' $bundle 'sealed' $true
+            Invoke-Checked 'd2_base_ledger_build_failed' 'cargo' @('build', '--locked', '-p', 'actingledger', '--bin', 'actingledger')
+          } finally {
+            Remove-Item -LiteralPath Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+            Pop-Location
+          }
+          $baseLedger = (Resolve-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'd2-base-target/debug/actingledger.exe')).Path
+          Get-ChildItem -LiteralPath $keep -Recurse -File | ForEach-Object {
+            Write-Host "d2 kept file $($_.FullName.Substring($keep.Length)) $($_.Length) bytes"
+          }
+
+          Invoke-Checked 'd2_compare_failed' 'python' @('one-off-308d2/compare.py', $baseLedger, $headLedger, $keep)

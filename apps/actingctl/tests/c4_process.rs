@@ -257,6 +257,350 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
             "close"
         ]
     );
+    // One-off (to be reverted), Workflow #308 D2: keep this end-to-end state root.
+    if let Some(keep) = std::env::var_os("D2_KEEP_STATE_ROOT") {
+        d2_copy_tree(root.path(), Path::new(&keep));
+    }
+}
+
+// One-off (to be reverted), Workflow #308 D2 evidence. The notice-to-home task package of the
+// public umbrella bundle runs end to end through the Runtime and actingctl on frames composed
+// of the package's own images at their declared rectangles: the event reminder with the HUD
+// shown, then, after the OK tap, the home screen. `sealed` runs the published package as it is
+// (pack schema 0.6); `pack07` adds a schema 0.7 color digest of the home cafe label (authored
+// from the home frame) and a composite of that digest and the home template, which the home page
+// requires. The state root is kept for the forensic comparison of the one-off job.
+const D2_ARCHIVE_URL: &str =
+    "https://github.com/HS7097/ActingCommand/archive/536f048a3cac26ddbb0391895391f98967704cb0.zip";
+const D2_BUNDLE_SHA256: &str = "df524eac6290c4c0b435f3872a89e12dbe4f49e37555fa102bf96dd71b696af8";
+const D2_FRAME: (usize, usize) = (1280, 720);
+const D2_DIGEST_REGION: (usize, usize, usize, usize) = (77, 680, 49, 18);
+const D2_GRID: (usize, usize) = (8, 8);
+
+type D2Entries = std::collections::BTreeMap<String, Vec<u8>>;
+
+fn d2_copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("create kept state root");
+    for entry in fs::read_dir(from).expect("read state root") {
+        let entry = entry.expect("state root entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("state root entry type").is_dir() {
+            d2_copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("copy state root file");
+        }
+    }
+}
+
+fn d2_unzip(bytes: &[u8]) -> D2Entries {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
+    let mut entries = D2Entries::new();
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).expect("zip entry");
+        if file.is_dir() {
+            continue;
+        }
+        let name = file.name().to_owned();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).expect("read zip entry");
+        entries.insert(name, data);
+    }
+    entries
+}
+
+fn d2_zip(entries: &D2Entries) -> Vec<u8> {
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in entries {
+        writer
+            .start_file(name.as_str(), options)
+            .expect("zip entry");
+        writer.write_all(data).expect("zip contents");
+    }
+    writer.finish().expect("finish zip").into_inner()
+}
+
+fn d2_entry_path(entries: &D2Entries, suffix: &str) -> String {
+    entries
+        .keys()
+        .find(|path| path.ends_with(suffix))
+        .unwrap_or_else(|| panic!("no entry ending with {suffix}"))
+        .clone()
+}
+
+fn d2_json(entries: &D2Entries, suffix: &str) -> Value {
+    serde_json::from_slice(&entries[&d2_entry_path(entries, suffix)]).expect("package JSON")
+}
+
+fn d2_target<'a>(pack: &'a Value, id: &str) -> &'a Value {
+    pack["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .find(|target| target["id"] == id)
+        .unwrap_or_else(|| panic!("target {id} missing"))
+}
+
+/// An RGB8 frame showing each listed template target's own image at its declared rectangle;
+/// every other pixel is black.
+fn d2_compose(entries: &D2Entries, pack: &Value, ids: &[&str]) -> Vec<u8> {
+    let (width, height) = D2_FRAME;
+    let mut canvas = vec![0_u8; width * height * 3];
+    for id in ids {
+        let declared = d2_target(pack, id);
+        let path = declared["template_path"].as_str().expect("template_path");
+        let image = actingcommand_device::Frame::from_png(
+            entries[&format!("resources/{path}")].clone(),
+            actingcommand_device::CaptureBackendName::AdbScreencap,
+        )
+        .expect("decode template image");
+        assert_eq!(
+            image.pixel_format,
+            actingcommand_device::PixelFormat::Rgba8,
+            "{path}"
+        );
+        let x = declared["region"]["x"].as_u64().expect("x") as usize;
+        let y = declared["region"]["y"].as_u64().expect("y") as usize;
+        assert_eq!(
+            declared["region"]["width"].as_u64(),
+            Some(u64::from(image.width)),
+            "{id}"
+        );
+        for row in 0..image.height as usize {
+            for column in 0..image.width as usize {
+                let source = (row * image.width as usize + column) * 4;
+                let target = ((y + row) * width + x + column) * 3;
+                canvas[target..target + 3].copy_from_slice(&image.pixels[source..source + 3]);
+            }
+        }
+    }
+    canvas
+}
+
+fn d2_png(canvas: &[u8]) -> Vec<u8> {
+    actingcommand_device::Frame::from_pixels(
+        D2_FRAME.0 as u32,
+        D2_FRAME.1 as u32,
+        canvas.to_vec(),
+        actingcommand_device::PixelFormat::Rgb8,
+        actingcommand_device::CaptureBackendName::AdbScreencap,
+    )
+    .expect("composed frame")
+    .encode_png_fast()
+    .expect("encode composed frame")
+}
+
+/// `color_digest.v1` of the region, pixel by pixel as contracts/color-digest.md states it.
+fn d2_digest(canvas: &[u8]) -> String {
+    let (x, y, width, height) = D2_DIGEST_REGION;
+    let (columns, rows) = D2_GRID;
+    let mut hex = String::new();
+    for row in 0..rows {
+        for column in 0..columns {
+            let (x0, x1) = (
+                x + column * width / columns,
+                x + (column + 1) * width / columns,
+            );
+            let (y0, y1) = (y + row * height / rows, y + (row + 1) * height / rows);
+            let count = ((x1 - x0) * (y1 - y0)) as u64;
+            let mut sums = [0_u64; 3];
+            for pixel_y in y0..y1 {
+                for pixel_x in x0..x1 {
+                    let offset = (pixel_y * D2_FRAME.0 + pixel_x) * 3;
+                    for (channel, sum) in sums.iter_mut().enumerate() {
+                        *sum += u64::from(canvas[offset + channel]);
+                    }
+                }
+            }
+            for sum in sums {
+                hex.push_str(&format!("{:02x}", sum / (8 * count)));
+            }
+        }
+    }
+    hex
+}
+
+/// The package with its derived pack and page set replaced and the manifest hashes renewed.
+fn d2_rebuild(entries: &D2Entries, pack: &Value, pages: &Value) -> Vec<u8> {
+    let mut package = entries.clone();
+    let pack_path = d2_entry_path(entries, ".pack.json");
+    let pages_path = d2_entry_path(entries, ".pages.json");
+    package.insert(pack_path.clone(), serde_json::to_vec(pack).expect("pack"));
+    package.insert(
+        pages_path.clone(),
+        serde_json::to_vec(pages).expect("pages"),
+    );
+    let mut manifest = d2_json(entries, "resources/manifest.json");
+    for file in manifest["files"].as_array_mut().expect("manifest files") {
+        let path = format!("resources/{}", file["path"].as_str().expect("file path"));
+        if path == pack_path || path == pages_path {
+            file["sha256"] =
+                serde_json::json!(format!("sha256:{}", Sha256Hash::digest(&package[&path])));
+        }
+    }
+    package.insert(
+        "resources/manifest.json".to_owned(),
+        serde_json::to_vec(&manifest).expect("manifest"),
+    );
+    d2_zip(&package)
+}
+
+#[test]
+#[ignore = "one-off (to be reverted): Workflow #308 D2 evidence, run by its own CI job"]
+fn one_off_d2_bundle_notice_home_task_run() {
+    let scenario = std::env::var("D2_SCENARIO").expect("D2_SCENARIO");
+    let keep = std::env::var_os("D2_KEEP_STATE_ROOT").expect("D2_KEEP_STATE_ROOT");
+    let download = Command::new("curl")
+        .args(["-sSfL", "--retry", "3", D2_ARCHIVE_URL])
+        .output()
+        .expect("start curl");
+    assert!(
+        download.status.success(),
+        "curl failed: {} {}",
+        download.status,
+        String::from_utf8_lossy(&download.stderr)
+    );
+    let archive = d2_unzip(&download.stdout);
+    let (bundle_name, bundle_bytes) = archive
+        .iter()
+        .find(|(path, _)| path.contains("/bundles/") && path.ends_with(".zip"))
+        .expect("bundle in the archive");
+    assert_eq!(
+        Sha256Hash::digest(bundle_bytes).to_string(),
+        D2_BUNDLE_SHA256,
+        "{bundle_name}"
+    );
+    let bundle = d2_unzip(bundle_bytes);
+    let index: Value = serde_json::from_slice(&bundle["bundle.json"]).expect("bundle.json");
+    let declared = index["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| {
+            pack["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with(".notice_home.zip"))
+        })
+        .expect("notice package in the bundle");
+    let package_path = declared["path"].as_str().expect("path");
+    let sealed = bundle[package_path].clone();
+    assert_eq!(
+        Sha256Hash::digest(&sealed).to_string(),
+        declared["sha256"].as_str().expect("sha256")
+    );
+    let entries = d2_unzip(&sealed);
+    let pack = d2_json(&entries, ".pack.json");
+    let pages = d2_json(&entries, ".pages.json");
+    let reminder = d2_compose(
+        &entries,
+        &pack,
+        &[
+            "ui/event_reminder_hud_cafe",
+            "ui/event_reminder_hud_work",
+            "ui/event_reminder_header",
+            "page/event_reminder_visible",
+            "ui/event_reminder_ok",
+        ],
+    );
+    let home = d2_compose(&entries, &pack, &["page/home", "ui/notice_home_work"]);
+    let home_page = pages["pages"]
+        .as_array()
+        .expect("pages")
+        .iter()
+        .map(|page| page["id"].as_str().expect("page id").to_owned())
+        .find(|id| id.ends_with("/home"))
+        .expect("home page");
+    let root = TempDir::new().expect("tempdir");
+    let zip = match scenario.as_str() {
+        "sealed" => sealed.clone(),
+        "pack07" => {
+            let cells = d2_digest(&home);
+            let (x, y, width, height) = D2_DIGEST_REGION;
+            let mut pack07 = pack.clone();
+            pack07["schema_version"] = serde_json::json!("0.7");
+            let targets = pack07["targets"].as_array_mut().expect("targets");
+            targets.push(serde_json::json!({
+                "type": "color_digest",
+                "id": "digest/home_cafe",
+                "region": {"x": x, "y": y, "width": width, "height": height},
+                "algorithm": "color_digest.v1",
+                "columns": D2_GRID.0,
+                "rows": D2_GRID.1,
+                "cells": cells,
+                "exclude_cells": [],
+                "max_mean_milli": 1500,
+                "max_cell": 12
+            }));
+            targets.push(serde_json::json!({
+                "type": "composite",
+                "id": "check/home",
+                "mode": "all_of",
+                "members": ["digest/home_cafe", "page/home"]
+            }));
+            let mut pages07 = pages.clone();
+            for page in pages07["pages"].as_array_mut().expect("pages") {
+                if page["id"] == home_page.as_str() {
+                    page["required"] = serde_json::json!(["check/home", "ui/notice_home_work"]);
+                    page["optional"] = serde_json::json!(["digest/home_cafe"]);
+                }
+            }
+            println!("D2 declared digest/home_cafe cells={cells}");
+            println!(
+                "D2 declared 0.7 targets {} {}",
+                d2_target(&pack07, "digest/home_cafe"),
+                d2_target(&pack07, "check/home")
+            );
+            fs::write(root.path().join("d2-declared-cells.txt"), cells.as_bytes())
+                .expect("write declared cells");
+            d2_rebuild(&entries, &pack07, &pages07)
+        }
+        other => panic!("unknown D2_SCENARIO {other}"),
+    };
+    fs::write(root.path().join("sealed.png"), d2_png(&reminder)).expect("write first frame");
+    fs::write(root.path().join("after-tap.png"), d2_png(&home)).expect("write tapped frame");
+    let package = root.path().join("task.zip");
+    fs::write(&package, &zip).expect("write package");
+    let expected_sha256 = Sha256Hash::digest(&zip).to_string();
+    println!("D2 scenario={scenario} package={package_path} sha256={expected_sha256}");
+    let mut runtime = support::RuntimeChild::spawn_for_instance(
+        root.path(),
+        "c4_runtime_child_process",
+        "neutral.instance",
+    );
+    runtime.wait_ready(root.path());
+    let output = run_json(
+        env!("CARGO_BIN_EXE_actingctl"),
+        [
+            "task-run",
+            "--state-root",
+            root.path().to_str().expect("state root"),
+            "--instance",
+            "neutral.instance",
+            "--package",
+            package.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    println!(
+        "D2 scenario={scenario} result={}",
+        output["receipt"]["result"]
+    );
+    assert_eq!(
+        output["receipt"]["result"]["kind"],
+        "contained_task_completed"
+    );
+    assert_eq!(
+        output["receipt"]["result"]["final_page"],
+        home_page.as_str()
+    );
+    runtime.assert_alive();
+    runtime.stop_clean();
+    println!(
+        "D2 scenario={scenario} backend events {:?}",
+        support::backend_events(root.path())
+    );
+    d2_copy_tree(root.path(), Path::new(&keep));
 }
 
 #[test]
