@@ -651,6 +651,9 @@ fn target_geometry(
                     RecognitionTarget::Ocr(target) => (&target.id, target.click),
                     RecognitionTarget::Nn(target) => (&target.id, target.click),
                     RecognitionTarget::ClickOnly(target) => (&target.id, Some(target.click)),
+                    // A digest verifies a place and a composite is a check; neither is clicked.
+                    RecognitionTarget::ColorDigest(target) => (&target.id, None),
+                    RecognitionTarget::Composite(target) => (&target.id, None),
                 };
                 (id == &value.id).then_some(click)
             })

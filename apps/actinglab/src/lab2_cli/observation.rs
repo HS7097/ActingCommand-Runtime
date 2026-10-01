@@ -239,7 +239,12 @@ fn resolve(
         .target_kind(target_id)
         .map_err(|error| CliError::package_invalid(error.to_string()))?
     {
-        TargetKind::Template | TargetKind::Color => {
+        // A digest or composite is evaluated like a color target and, having no template
+        // match, gives no geometry.
+        TargetKind::Template
+        | TargetKind::Color
+        | TargetKind::ColorDigest
+        | TargetKind::Composite => {
             let evaluated = evaluator
                 .evaluate_target(scene, target_id)
                 .map_err(|error| CliError::usage(error.to_string()))?;

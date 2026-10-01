@@ -893,7 +893,7 @@ fn capabilities_are_offline() {
     );
     assert_eq!(
         data["schema_domains"]["recognition_pack"]["supported"],
-        json!(["0.1", "0.3", "0.4", "0.5", "0.6"])
+        json!(["0.1", "0.3", "0.4", "0.5", "0.6", "0.7"])
     );
     assert_eq!(
         data["schema_domains"]["control"]["supported"],

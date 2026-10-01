@@ -135,6 +135,8 @@ pub struct ProjectionCatalog {
     pub pages: BTreeSet<String>,
     field_privacy: BTreeMap<FieldKey, Privacy>,
     relative_anchors: BTreeMap<String, String>,
+    /// Composite checks and the members they evaluate.
+    composite_members: BTreeMap<String, Vec<String>>,
 }
 
 fn rows<'a>(value: &'a Value, key: &str) -> LabResult<&'a [Value]> {
@@ -220,6 +222,7 @@ impl ProjectionCatalog {
             pages: BTreeSet::new(),
             field_privacy: BTreeMap::new(),
             relative_anchors: BTreeMap::new(),
+            composite_members: BTreeMap::new(),
         };
         for target in rows(pack, "targets")? {
             unique(&mut catalog.targets, id(target, "id")?)?;
@@ -231,6 +234,18 @@ impl ProjectionCatalog {
                     id(target, "id")?,
                     id(&target["region"], "anchor_target_id")?,
                 );
+            }
+            if target.get("type").and_then(Value::as_str) == Some("composite") {
+                let members = rows(target, "members")?
+                    .iter()
+                    .map(|member| {
+                        member
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| invalid("projection composite member must be an ID"))
+                    })
+                    .collect::<LabResult<Vec<_>>>()?;
+                catalog.composite_members.insert(id(target, "id")?, members);
             }
         }
         for page in rows(pages, "pages")? {
@@ -466,6 +481,27 @@ impl VerifiedProjectionMetadata {
         if !self.catalog.targets.contains(target) {
             return None;
         }
+        // A composite evaluates its members, so a personal member makes the composite personal.
+        let personal = self.classified_personal(target)
+            || self
+                .catalog
+                .composite_members
+                .get(target)
+                .is_some_and(|members| {
+                    members
+                        .iter()
+                        .any(|member| self.classified_personal(member))
+                });
+        Some(if personal {
+            Privacy::Personal
+        } else {
+            Privacy::Public
+        })
+    }
+
+    /// A personal classification on the target, a field bound to it, or a target sharing its
+    /// relative OCR anchor.
+    fn classified_personal(&self, target: &str) -> bool {
         let root = self
             .catalog
             .relative_anchors
@@ -480,22 +516,20 @@ impl VerifiedProjectionMetadata {
                     .get(candidate)
                     .is_some_and(|anchor| anchor == root)
         };
-        let personal =
-            self.declaration
-                .targets
+        self.declaration
+            .targets
+            .iter()
+            .any(|entry| related(&entry.target_id) && entry.privacy == Privacy::Personal)
+            || self
+                .declaration
+                .fields
                 .iter()
-                .any(|entry| related(&entry.target_id) && entry.privacy == Privacy::Personal)
-                || self.declaration.fields.iter().any(|entry| {
-                    related(&entry.field.target_id) && entry.privacy == Privacy::Personal
-                })
-                || self.catalog.field_privacy.iter().any(|(field, privacy)| {
-                    related(&field.target_id) && *privacy == Privacy::Personal
-                });
-        Some(if personal {
-            Privacy::Personal
-        } else {
-            Privacy::Public
-        })
+                .any(|entry| related(&entry.field.target_id) && entry.privacy == Privacy::Personal)
+            || self
+                .catalog
+                .field_privacy
+                .iter()
+                .any(|(field, privacy)| related(&field.target_id) && *privacy == Privacy::Personal)
     }
 
     pub fn catalog(&self) -> &ProjectionCatalog {
