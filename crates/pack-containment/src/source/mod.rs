@@ -1684,8 +1684,33 @@ impl OperationParser {
     }
 
     /// Every target a `page_rules` entry names in `required`, `optional`, `forbidden` or
-    /// `any_of`: the page gates of the generated pages besides their template anchors.
+    /// `any_of`: the page gates of the generated pages besides their template anchors. A check
+    /// a page gate names evaluates its members, so its members are page-gate targets too.
     fn page_rule_target_ids(&self) -> BTreeSet<String> {
+        let mut targets = self.direct_page_rule_target_ids();
+        let members = self
+            .bundles
+            .iter()
+            .flat_map(|bundle| array_field(&bundle.data, "checks"))
+            .filter(|check| {
+                check
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| targets.contains(id))
+            })
+            .flat_map(|check| {
+                array_field(check, "all_of")
+                    .iter()
+                    .chain(array_field(check, "any_of"))
+            })
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        targets.extend(members);
+        targets
+    }
+
+    fn direct_page_rule_target_ids(&self) -> BTreeSet<String> {
         let mut targets = BTreeSet::new();
         for rule in self
             .bundles
