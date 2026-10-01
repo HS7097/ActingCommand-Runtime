@@ -101,14 +101,15 @@ impl VisionProvider for DigitsProvider {
     }
 }
 
-/// Schema 0.8 zero-input fields on home (the observation package shape), optional readings.
+/// Schema 0.8 zero-input fields on home (the observation package shape) at the physical 16x9
+/// fixture geometry, optional readings.
 fn observation_package(with_readings: bool) -> Vec<u8> {
     let mut task = serde_json::json!({
         "schema_version": "0.8",
         "task_id": "task",
         "game": "neutral",
         "server_scope": ["test"],
-        "coordinate_space": {"width": 2, "height": 1},
+        "coordinate_space": {"width": 16, "height": 9},
         "target_page": "home",
         "scheduling_outcome": {"mappings": [
             {"outcome_key": "fields_recorded", "effect": "no_designated_effect", "terminal_pages": ["home"]}
@@ -148,7 +149,7 @@ fn observation_package(with_readings: bool) -> Vec<u8> {
         "execution_mode": "navigable_route",
         "game": "neutral",
         "server": "test",
-        "resolution": {"width": 2, "height": 1},
+        "resolution": {"width": 16, "height": 9},
         "entry_task_id": "task",
         "capture_interval_ms": 1,
         "step_timeout_ms": 1000,
@@ -159,7 +160,7 @@ fn observation_package(with_readings: bool) -> Vec<u8> {
         "schema_version": "0.6",
         "game": "neutral",
         "server": "test",
-        "coordinate_space": {"width": 2, "height": 1},
+        "coordinate_space": {"width": 16, "height": 9},
         "defaults": {"color_max_distance": 0.0},
         "targets": [
             {"type": "color", "id": "page/home", "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": [255, 0, 0]},
@@ -202,6 +203,8 @@ fn observation_package(with_readings: bool) -> Vec<u8> {
 fn one_off_s5a_k8_host_placeholder_refuses_taken_readings() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    // The Host's task geometry check needs the physical 16x9 fixture frame.
+    state.physical_task_geometry.store(true, Ordering::Release);
     let vision = Arc::new(DigitsProvider::default());
     let host = RuntimeHost::start(
         config(&root),
