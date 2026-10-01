@@ -2,16 +2,46 @@
 
 use super::{Bundle, CliError, CliOutcome, ParseFiles, SourceRead};
 use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
+use actingcommand_recognition::color_digest::{
+    self, ColorDigest, ColorDigestAlgorithm, ColorDigestGrid, MAX_GRID_AXIS,
+};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+/// Members of one `checks` entry (`contracts/selection-graph.md`, section Checks).
+const CHECK_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
 
 struct Declaration<'a> {
     file: &'a Path,
     schema: Option<&'a str>,
 }
 
+/// A refusal of `bundle`'s `task.json` at `pointer`, for a rule the parser checks while it
+/// derives the pack, where the referenced targets may come from other tasks.
+pub(super) fn task_declaration_error(
+    bundle: &Bundle,
+    pointer: &str,
+    reason: ResourceDeclarationReason,
+    detail: &str,
+) -> CliError {
+    let file = bundle.task_json_path();
+    let mut error = Declaration {
+        file: &file,
+        schema: bundle.data.get("schema_version").and_then(Value::as_str),
+    }
+    .error(pointer, reason);
+    error.message = format!("{}; {detail}", error.message);
+    error
+}
+
 impl Declaration<'_> {
+    /// Task schemas `0.6` through `0.9`, which accept the declarations of pack schema `0.7`
+    /// (`checks`, color digests, per-target `max_distance` and `guard.check`).
+    fn schema_0_6_or_later(&self) -> bool {
+        matches!(self.schema, Some("0.6" | "0.7" | "0.8" | "0.9"))
+    }
+
     fn control(&self, value: &Value) -> CliOutcome<()> {
         let object = self.object(
             value,
@@ -556,8 +586,15 @@ impl Declaration<'_> {
                 "expected_rect",
                 "verify_template",
                 "color_probe",
+                "check",
             ],
         )?;
+        if object.contains_key("check") && !self.schema_0_6_or_later() {
+            return Err(self.error(
+                &child(pointer, "check"),
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
         for field in ["page_id", "target_id"] {
             self.string(
                 self.required(object, pointer, field)?,
@@ -568,7 +605,7 @@ impl Declaration<'_> {
             self.required(object, pointer, "expected_rect")?,
             &child(pointer, "expected_rect"),
         )?;
-        for field in ["verify_template", "color_probe"] {
+        for field in ["verify_template", "color_probe", "check"] {
             if let Some(value) = object.get(field).filter(|value| !value.is_null()) {
                 self.string(value, &child(pointer, field))?;
             }
@@ -673,6 +710,7 @@ impl Declaration<'_> {
         pointer: &str,
         family: &str,
         canonical: bool,
+        frame: [u64; 2],
     ) -> CliOutcome<()> {
         let fields: &[&str] = match family {
             "anchors" => &[
@@ -702,7 +740,14 @@ impl Declaration<'_> {
                 "maa_task_id",
                 "provenance",
             ],
-            "color_probes" => &["id", "region", "expected", "provenance"],
+            "color_probes" => &[
+                "id",
+                "region",
+                "expected",
+                "max_distance",
+                "digest",
+                "provenance",
+            ],
             "ocr_targets" => &[
                 "id",
                 "region",
@@ -746,6 +791,7 @@ impl Declaration<'_> {
                 "languages" => self.strings(value, &pointer)?,
                 "expected" if family == "ocr_targets" => self.strings(value, &pointer)?,
                 "expected" => self.color(value, &pointer)?,
+                "max_distance" => self.max_distance(value, &pointer)?,
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
@@ -753,7 +799,8 @@ impl Declaration<'_> {
                     return Err(self.error(&pointer, ResourceDeclarationReason::UnconsumedField));
                 }
                 "color_check" if !value.is_null() => {
-                    let check = self.object(value, &pointer, &["region", "expected"])?;
+                    let check =
+                        self.object(value, &pointer, &["region", "expected", "max_distance"])?;
                     let region = self.required(check, &pointer, "region")?;
                     if region.get("mode").is_some() {
                         self.source_region(region, &child(&pointer, "region"), true)?;
@@ -764,6 +811,9 @@ impl Declaration<'_> {
                         self.required(check, &pointer, "expected")?,
                         &child(&pointer, "expected"),
                     )?;
+                    if let Some(distance) = check.get("max_distance") {
+                        self.max_distance(distance, &child(&pointer, "max_distance"))?;
+                    }
                 }
                 _ => {}
             }
@@ -782,7 +832,217 @@ impl Declaration<'_> {
                 self.required(object, pointer, field)?;
             }
         } else if family == "color_probes" {
-            self.required(object, pointer, "expected")?;
+            // A color probe matches a mean color (`expected`) or verifies a digest, never both.
+            match (object.get("expected"), object.get("digest")) {
+                (_, None) => {
+                    self.required(object, pointer, "expected")?;
+                }
+                (None, Some(digest)) => {
+                    if object.contains_key("max_distance") {
+                        return Err(self.error(
+                            &child(pointer, "max_distance"),
+                            ResourceDeclarationReason::UnconsumedField,
+                        ));
+                    }
+                    self.color_digest(
+                        digest,
+                        &child(pointer, "digest"),
+                        self.required(object, pointer, "region")?,
+                        &child(pointer, "region"),
+                        frame,
+                    )?;
+                }
+                (Some(_), Some(_)) => {
+                    return Err(self.error(
+                        &child(pointer, "digest"),
+                        ResourceDeclarationReason::InvalidValue,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A per-target color threshold of pack schema `0.7`: a finite number `>= 0`.
+    fn max_distance(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if !self.schema_0_6_or_later() {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let distance = value
+            .as_f64()
+            .ok_or_else(|| self.error(pointer, ResourceDeclarationReason::InvalidType))?;
+        if distance < 0.0 || !(distance as f32).is_finite() {
+            return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        Ok(())
+    }
+
+    /// A `color_digest.v1` declaration (`contracts/color-digest.md`): an absolute region
+    /// inside the coordinate space, a grid that fits it, and cells, exclusions and thresholds
+    /// that parse. Nothing is defaulted, clipped or normalized.
+    fn color_digest(
+        &self,
+        value: &Value,
+        pointer: &str,
+        region: &Value,
+        region_pointer: &str,
+        frame: [u64; 2],
+    ) -> CliOutcome<()> {
+        if !self.schema_0_6_or_later() {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(
+            value,
+            pointer,
+            &[
+                "algorithm",
+                "columns",
+                "rows",
+                "cells",
+                "exclude_cells",
+                "max_mean_milli",
+                "max_cell",
+            ],
+        )?;
+        let extent = self.digest_region(region, region_pointer, frame)?;
+        let algorithm_pointer = child(pointer, "algorithm");
+        let algorithm = self
+            .required(object, pointer, "algorithm")?
+            .as_str()
+            .ok_or_else(|| {
+                self.error(&algorithm_pointer, ResourceDeclarationReason::InvalidType)
+            })?;
+        ColorDigestAlgorithm::parse(algorithm)
+            .map_err(|_| self.error(&algorithm_pointer, ResourceDeclarationReason::InvalidValue))?;
+        let mut axes = [0_u32; 2];
+        for ((axis, field), length) in axes.iter_mut().zip(["columns", "rows"]).zip(extent) {
+            let field_pointer = child(pointer, field);
+            let count = self.digest_u32(self.required(object, pointer, field)?, &field_pointer)?;
+            if !(1..=MAX_GRID_AXIS).contains(&count) || u64::from(count) > length {
+                return Err(self.error(&field_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            *axis = count;
+        }
+        let grid = ColorDigestGrid::new(axes[0], axes[1])
+            .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
+        let cells_pointer = child(pointer, "cells");
+        let cells = self
+            .required(object, pointer, "cells")?
+            .as_str()
+            .ok_or_else(|| self.error(&cells_pointer, ResourceDeclarationReason::InvalidType))?;
+        ColorDigest::from_hex(grid, cells)
+            .map_err(|_| self.error(&cells_pointer, ResourceDeclarationReason::InvalidValue))?;
+        if let Some(exclude) = object.get("exclude_cells") {
+            let exclude_pointer = child(pointer, "exclude_cells");
+            let mut excluded = Vec::new();
+            for (index, cell) in self.array(exclude, &exclude_pointer)?.iter().enumerate() {
+                excluded.push(self.digest_u32(cell, &child(&exclude_pointer, &index.to_string()))?);
+            }
+            color_digest::validate_exclude_cells(grid, &excluded).map_err(|_| {
+                self.error(&exclude_pointer, ResourceDeclarationReason::InvalidValue)
+            })?;
+        }
+        self.digest_u32(
+            self.required(object, pointer, "max_mean_milli")?,
+            &child(pointer, "max_mean_milli"),
+        )?;
+        if let Some(max_cell) = object.get("max_cell") {
+            self.digest_u32(max_cell, &child(pointer, "max_cell"))?;
+        }
+        Ok(())
+    }
+
+    /// The width and height of the rectangle a digest samples. A `rect` region lies entirely
+    /// inside the coordinate space with a non-negative origin and a positive size; a
+    /// `full_frame` region is the whole coordinate space. Template-relative regions were
+    /// already refused for color probes.
+    fn digest_region(
+        &self,
+        region: &Value,
+        pointer: &str,
+        frame: [u64; 2],
+    ) -> CliOutcome<[u64; 2]> {
+        if region.get("mode").and_then(Value::as_str) == Some("full_frame") {
+            return Ok(frame);
+        }
+        let rect_pointer = child(pointer, "rect");
+        let mut values = [0_u64; 4];
+        for (slot, field) in values.iter_mut().zip(["x", "y", "width", "height"]) {
+            let field_pointer = child(&rect_pointer, field);
+            let value = region
+                .pointer(&format!("/rect/{field}"))
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+            *slot = u64::try_from(value)
+                .ok()
+                .filter(|value| *value > 0 || matches!(field, "x" | "y"))
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidValue)
+                })?;
+        }
+        let [x, y, width, height] = values;
+        if x.checked_add(width).is_none_or(|end| end > frame[0])
+            || y.checked_add(height).is_none_or(|end| end > frame[1])
+        {
+            return Err(self.error(&rect_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        Ok([width, height])
+    }
+
+    fn digest_u32(&self, value: &Value, pointer: &str) -> CliOutcome<u32> {
+        let value = value
+            .as_u64()
+            .ok_or_else(|| self.error(pointer, ResourceDeclarationReason::InvalidType))?;
+        u32::try_from(value)
+            .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))
+    }
+
+    /// The `checks` family (`contracts/selection-graph.md`, section Checks): each check names
+    /// 2..=8 distinct member targets under exactly one of `all_of` and `any_of`. Whether each
+    /// member exists, and is not itself a check, is checked against the derived pack.
+    fn checks(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        for (index, check) in self.array(value, pointer)?.iter().enumerate() {
+            let pointer = child(pointer, &index.to_string());
+            let object = self.object(check, &pointer, &["id", "all_of", "any_of"])?;
+            self.string(
+                self.required(object, &pointer, "id")?,
+                &child(&pointer, "id"),
+            )?;
+            let mode = match (object.contains_key("all_of"), object.contains_key("any_of")) {
+                (true, false) => "all_of",
+                (false, true) => "any_of",
+                (true, true) => {
+                    return Err(self.error(
+                        &child(&pointer, "any_of"),
+                        ResourceDeclarationReason::InvalidValue,
+                    ));
+                }
+                (false, false) => {
+                    return Err(self.error(
+                        &child(&pointer, "all_of"),
+                        ResourceDeclarationReason::MissingField,
+                    ));
+                }
+            };
+            let members_pointer = child(&pointer, mode);
+            let members = self.array(&object[mode], &members_pointer)?;
+            if !CHECK_MEMBERS.contains(&members.len()) {
+                return Err(self.error(&members_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            let mut seen = BTreeSet::new();
+            for (member_index, member) in members.iter().enumerate() {
+                let member_pointer = child(&members_pointer, &member_index.to_string());
+                let member = member.as_str().ok_or_else(|| {
+                    self.error(&member_pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+                if !seen.insert(member) {
+                    return Err(
+                        self.error(&member_pointer, ResourceDeclarationReason::InvalidValue)
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -1591,6 +1851,7 @@ impl Declaration<'_> {
                 "verify_templates",
                 "color_probes",
                 "ocr_targets",
+                "checks",
                 "page_rules",
             ],
         )?;
@@ -1631,16 +1892,21 @@ impl Declaration<'_> {
         {
             return Err(self.error("/ocr_targets", ResourceDeclarationReason::UnconsumedField));
         }
+        if object.contains_key("checks") && !self.schema_0_6_or_later() {
+            return Err(self.error("/checks", ResourceDeclarationReason::UnconsumedField));
+        }
         if !canonical || object.contains_key("server_scope") {
             self.strings(self.required(object, "", "server_scope")?, "/server_scope")?;
         }
         let space = self.required(object, "", "coordinate_space")?;
         let space = self.object(space, "/coordinate_space", &["width", "height"])?;
-        for field in ["width", "height"] {
-            self.unsigned(
-                self.required(space, "/coordinate_space", field)?,
-                &child("/coordinate_space", field),
-            )?;
+        let mut frame = [0_u64; 2];
+        for (bound, field) in frame.iter_mut().zip(["width", "height"]) {
+            let pointer = child("/coordinate_space", field);
+            *bound = self
+                .required(space, "/coordinate_space", field)?
+                .as_u64()
+                .ok_or_else(|| self.error(&pointer, ResourceDeclarationReason::InvalidType))?;
         }
         for (field, value) in object {
             let pointer = child("", field);
@@ -1674,9 +1940,11 @@ impl Declaration<'_> {
                             &child(&pointer, &index.to_string()),
                             field,
                             canonical,
+                            frame,
                         )?;
                     }
                 }
+                "checks" => self.checks(value, &pointer)?,
                 "page_rules" => {
                     let rules = value.as_object().ok_or_else(|| {
                         self.error(&pointer, ResourceDeclarationReason::InvalidType)

@@ -22,6 +22,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `runtime-fact-store.md` — the Runtime's own fact records (disjoint from instance facts), the memory-only store, and ledger-only persistence.
 - `selection-policy.md` — the declared selection document, its canonical identity, and the pure evaluator's semantics.
 - `candidate-projection.md` — `actingcommand.candidate-projection.v1`: one layout's candidate set on one frame, its IDs, hash, budgets and public/controlled forms.
+- `color-digest.md` — `color_digest.v1`: the integer color-layout digest of one declared rectangle, its golden values and error codes, and its package declaration (task source entry, derived recognition pack `0.7` `color_digest` target, admission pointers).
 - `selection-graph.md` — the #308 selection graph; section Checks: named composite checks (recognition pack `0.7` `composite` targets), their evaluation and where they may be used; section Records: the `task.selection_evaluated` ledger record and its evaluator mirror.
 - `resource-targets.md` — the instance resource target policy: the v1 document, its rejection reasons, the `ApplyResourceTargets` entry and receipts, and its storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation").
 - `server-keys.md` — persisted server variant key policy.

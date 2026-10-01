@@ -7,8 +7,8 @@ never locates anything. It carries no game identity. Every step uses integer ari
 so the same pixels always give the same digest, distance and verdict.
 `actingcommand_recognition::color_digest` implements this section.
 
-This document freezes the algorithm. The package declaration (source and derived JSON),
-admission pointers, adoption rule, authoring path and diagnostic records are frozen by the
+This document freezes the algorithm and the package declaration (source and derived JSON,
+admission pointers). The adoption rule, authoring path and diagnostic records are frozen by
 later slices of [Workflow #308](https://github.com/HS7097/ActingCommand-Workflow/issues/308).
 
 ## Algorithm
@@ -101,3 +101,70 @@ The observed digest `1a0c06090a0d` compared with it, no cell excluded: `d = (1, 
 
 Partition: a width of 10 split into `C = 3` columns gives `[0, 3)`, `[3, 6)` and
 `[6, 10)`, column widths 3, 3 and 4.
+
+## Package declaration
+
+### Source
+
+A task source (`task.json`, task schema `0.6` through `0.9`) declares a digest as a
+`color_probes` entry that carries `digest` instead of `expected`:
+
+```json
+{"id": "digest/menu_bar",
+ "region": {"mode": "rect", "rect": {"x": 0, "y": 664, "width": 1280, "height": 56}},
+ "digest": {"algorithm": "color_digest.v1", "columns": 8, "rows": 8,
+            "cells": "<384 lowercase hex digits>", "exclude_cells": [5, 13],
+            "max_mean_milli": 1500, "max_cell": 12}}
+```
+
+- `region` is `{"mode": "rect", "rect": {...}}` or `{"mode": "full_frame"}`, the whole
+  coordinate space. Template-relative regions are refused.
+- `algorithm`, `columns`, `rows`, `cells` and `max_mean_milli` are required; `exclude_cells`
+  and `max_cell` are optional. Nothing has a default.
+- A color probe declares exactly one of `expected` and `digest`, and a digest entry has no
+  `max_distance`. An optional `provenance` object is kept as before.
+- The digest ID shares the target namespace (`resource-declarations.md`, section Pack schema
+  `0.7` declarations).
+
+### Derived
+
+The parser derives one `color_digest` target into `pack.json`, which is then written at
+schema `0.7` (`selection-graph.md`, section Pack schema `0.7`):
+
+```json
+{"type": "color_digest", "id": "digest/menu_bar",
+ "region": {"x": 0, "y": 664, "width": 1280, "height": 56},
+ "algorithm": "color_digest.v1", "columns": 8, "rows": 8,
+ "cells": "<384 lowercase hex digits>", "exclude_cells": [5, 13],
+ "max_mean_milli": 1500, "max_cell": 12}
+```
+
+- `region` is always an absolute rectangle; `full_frame` becomes `x = 0`, `y = 0` and the
+  coordinate space's width and height.
+- `exclude_cells` is always written, empty when the source omits it; `max_cell` only when
+  declared.
+- The pack declares its `coordinate_space`, and the evaluated frame must have exactly that
+  size.
+
+### Admission
+
+The source parser refuses an invalid entry with the task's `task.json` and the JSON pointer
+of the field, below `/color_probes/<i>`:
+
+| Pointer | Refused when | Reason |
+| --- | --- | --- |
+| `/digest` | declared together with `expected`; or the task schema is below `0.6` | `InvalidValue`; `UnconsumedField` |
+| `/max_distance` | declared on a digest entry | `UnconsumedField` |
+| `/region/mode` | not `rect` or `full_frame` | `InvalidValue` |
+| `/region/rect/x`, `/y`, `/width`, `/height` | not an integer; a negative origin; a size below 1 | `InvalidType`; `InvalidValue` |
+| `/region/rect` | the rectangle leaves the coordinate space | `InvalidValue` |
+| `/digest/algorithm` | not exactly `color_digest.v1` | `InvalidValue` |
+| `/digest/columns`, `/digest/rows` | outside `1..=32`, or more than the region's width or height | `InvalidValue` |
+| `/digest/cells` | the wrong length for the grid, a character other than `0-9a-f`, or a byte above `0x1f` | `InvalidValue` |
+| `/digest/exclude_cells` | not strictly ascending, outside the grid, or no active cell left | `InvalidValue` |
+| `/digest/max_mean_milli`, `/digest/max_cell` | not an unsigned 32-bit integer | `InvalidType`; `InvalidValue` |
+| `/digest/<field>` | any other field | `UnknownField` |
+| `/id` | the ID is already declared by a different target | `InvalidValue` |
+
+A missing required field is `MissingField` at its pointer. Loading the derived pack checks
+the target again and fails with the error codes of the algorithm above.

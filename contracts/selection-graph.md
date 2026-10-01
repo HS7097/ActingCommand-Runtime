@@ -13,9 +13,10 @@ unit. The check states which targets it combines, and so which backends; each me
 its own threshold. No package is forced onto a single backend.
 
 Implementation status: recognition pack schema `0.7` admits and evaluates `composite` and
-`color_digest` targets and per-target color `max_distance`. The source side (the `checks`
-family, digest entries and `max_distance` in task sources, `guard.check`, and a digest
-named by `guard.color_probe`) is admitted by the source parser in a later #308 slice.
+`color_digest` targets and per-target color `max_distance`. The source parser admits the
+`checks` family, digest entries and `max_distance` in task sources, `guard.check`, and a
+digest named by `guard.color_probe` (`resource-declarations.md`, section Pack schema `0.7`
+declarations).
 
 ### Declaration
 
