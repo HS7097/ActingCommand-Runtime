@@ -128,8 +128,8 @@ pub enum SchedulingDocumentKind {
     Timeline,
     /// The optional fifth document: an `actingcommand.selection-policy.v1` scoring policy.
     Selection,
-    /// An instance's `actingcommand.resource-targets.v1` policy (Workflow #308 RT-S1a); not a
-    /// catalog document, parsed by the same declaration parser.
+    /// An instance's `actingcommand.resource-targets.v1` or `.v2` policy (Workflow #308 RT-S1a,
+    /// #335 S2b); not a catalog document, parsed by the same declaration parser.
     ResourceTargets,
 }
 
