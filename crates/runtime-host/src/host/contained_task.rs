@@ -5143,13 +5143,11 @@ impl HostShared {
                     ContainedTaskRunError::Boundary(failure)
                     | ContainedTaskRunError::NonfatalOperation(failure),
                 ) => {
-                    failure.error = Box::new(
-                        failure
-                            .error
-                            .as_ref()
-                            .clone()
-                            .with_related_failure("selection_record", &record_error),
-                    );
+                    *failure.error = failure
+                        .error
+                        .as_ref()
+                        .clone()
+                        .with_related_failure("selection_record", &record_error);
                     failure.poison_runtime |= poison;
                 }
                 _ => {
