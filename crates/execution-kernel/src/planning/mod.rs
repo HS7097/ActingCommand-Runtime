@@ -567,6 +567,7 @@ mod tests {
                 height: 16,
             }),
             defaults: RecognitionDefaults::default(),
+            candidate_layouts: Vec::new(),
             targets: vec![
                 RecognitionTarget::Color(ColorTarget {
                     id: "fixture/home_anchor".to_string(),

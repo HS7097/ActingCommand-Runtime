@@ -1858,6 +1858,15 @@ impl PreparedContainedTask {
         detector
             .validate(&evaluator)
             .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
+        evaluator
+            .pack()
+            .validate_candidate_layout_pages(|page_id| detector.contains_page(page_id))
+            .map_err(|error| {
+                ContainedTaskError::with_detail(
+                    "contained_task_recognition_invalid",
+                    error.message(),
+                )
+            })?;
         program.validate(&control, &bundle, &detector)?;
         let entry_page = program.required_home_entry_page(&control, &detector)?;
         let post_admission_ocr =

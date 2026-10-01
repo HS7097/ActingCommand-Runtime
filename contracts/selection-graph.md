@@ -2,9 +2,9 @@
 
 This document collects the selection graph of
 [Workflow #308](https://github.com/HS7097/ActingCommand-Workflow/issues/308). Each section is
-frozen by the #308 slice that adds it; this revision holds the sections **Checks** and
-**Records**. Nodes, edges, gates and selection are frozen by later #308 slices. No
-game-specific values are part of this contract.
+frozen by the #308 slice that adds it; this revision holds the sections **Checks**,
+**Candidate layouts** and **Records**. Nodes, edges, gates and selection are frozen by later
+#308 slices. No game-specific values are part of this contract.
 
 ## Checks
 
@@ -109,6 +109,93 @@ target without a region, and a color digest target with its declared region.
 - Inversion belongs to the gate.
 - Numeric gates on OCR field values, such as a value at or above a threshold, are not part
   of v0.9. They are a registered gap, not an implied behavior.
+
+## Candidate layouts
+
+A candidate layout declares, for one page, where the candidates of a select step lie and which
+feature values each candidate carries. On one frame it yields a candidate projection
+([candidate-projection.md](candidate-projection.md)), which a selection policy evaluates.
+
+Implementation status: recognition pack schema `0.7` admits `fixed_slots` layouts and the
+recognition pack projects them. The source side (the `candidate_layouts` family of `task.json`
+and its derivation into `pack.json`) and `repeated_anchor` layouts are frozen and admitted by
+later #308 slices.
+
+### Pack schema `0.7`
+
+The derived `pack.json` carries the layouts in its top-level `candidate_layouts`:
+
+```json
+"candidate_layouts": [
+  {"id": "layout/main_slots", "page_id": "list_page", "kind": "fixed_slots",
+   "features": [
+     {"name": "open", "value": "passed"},
+     {"name": "marked", "value": "passed"},
+     {"name": "mark_score", "value": "measure_milli"}],
+   "slots": [
+     {"rect":  {"x": 214, "y": 204, "width": 176, "height": 90},
+      "click": {"x": 224, "y": 214, "width": 156, "height": 60},
+      "targets": {"open": "state/slot_0_open", "marked": "ui/slot_0_mark", "mark_score": "ui/slot_0_mark"}}]}]
+```
+
+- Only recognition pack schema `0.7` accepts the key. A pack of any other schema that has it
+  is rejected with `UnconsumedField` at `/candidate_layouts`. An absent key means no layouts,
+  and a pack without layouts loads and judges exactly as before.
+- Unknown fields and wrong JSON types are rejected with the pointer of the field, and so are a
+  `kind` other than `fixed_slots` and a feature `value` other than `passed` or
+  `measure_milli`.
+- A slot's `targets` maps a feature name to the ID of one of the pack's own targets, the
+  derived target ID, as a check member does. A slot may leave a declared feature out; that
+  feature is then absent from the slot's candidate, and the selection policy's `on_unknown`
+  decides.
+- Each slot reads existing targets. Evaluating one template over the regions of several slots
+  is not used by `fixed_slots` layouts.
+- A layout declares no privacy. A candidate's privacy derives from the targets its features
+  read ([candidate-projection.md](candidate-projection.md)).
+
+### Rules
+
+The recognition pack checks every rule that needs only the pack when its evaluator is built.
+Each failure message starts with the pointer of the offending field.
+
+| Rule | Pointer |
+|---|---|
+| The ID matches `^[a-z0-9][a-z0-9_./-]{0,63}$` and is unique in the pack. | `/candidate_layouts/i/id` |
+| The page ID is non-empty, at most 256 bytes and free of control characters; a page has at most 4 layouts. | `/candidate_layouts/i/page_id` |
+| A pack has at most 64 layouts. | `/candidate_layouts` |
+| The kind is `fixed_slots`. | `/candidate_layouts/i/kind` |
+| 1 to 8 features, with distinct names matching `^[a-z][a-z0-9_]{0,31}$`. | `/candidate_layouts/i/features`, `…/features/j/name` |
+| 1 to 64 slots. | `/candidate_layouts/i/slots` |
+| `rect` and `click` have a non-negative origin and a positive size and lie entirely inside `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` |
+| Each `targets` key is a declared feature; its target exists and is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target, never `click_only`; a `measure_milli` feature never reads a composite. | `…/slots/k/targets/<name>` |
+| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read. | `/candidate_layouts/i/slots` |
+
+`coordinate_space` is required for every pack schema, so layouts need no rule of their own for
+it.
+
+The pack has no pages. A loader that holds the page set checks that each layout's `page_id`
+is a declared page, after it has validated the page set against the pack, and rejects the
+package with a message that names `/candidate_layouts/i/page_id`: contained task admission
+with `contained_task_recognition_invalid`, and online observation preparation with
+`observation_resources_invalid`.
+
+### Feature values
+
+| Target kind | `passed` | `measure_milli` | `confidence` |
+|---|---|---|---|
+| `template` | verdict | `floor(score × 1000)` | `floor(score × 1000)` |
+| `color` | verdict | `floor(distance × 1000)` | `null` |
+| `color_digest` | verdict | `mean_milli` | `null` |
+| `composite` | verdict | not allowed | `null` |
+| `ocr` | verdict | `ocr_confidence_milli(confidence)` | `ocr_confidence_milli(confidence)` |
+| `nn` | verdict | `floor(selected_score × 1000)` | `floor(selected_score × 1000)` |
+
+A `passed` feature is a boolean and a `measure_milli` feature an integer. An OCR confidence goes
+through `ocr_confidence_milli`, `floor(clamp(confidence, 0, 1) * 1000)`, the one conversion that
+resource readings use as well ([resource-readings.md](resource-readings.md)); every other score
+is widened from `f32` to `f64` before it is multiplied. An OCR result without a confidence or an
+NN result without a selected score has no measure and no confidence: its `measure_milli` feature
+is absent and its `confidence` is `null`; no value is defaulted.
 
 ## Records
 

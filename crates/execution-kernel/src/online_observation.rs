@@ -151,6 +151,10 @@ impl PreparedPageObservation {
         detector
             .validate(evaluator)
             .map_err(|error| invalid(error.message()))?;
+        evaluator
+            .pack()
+            .validate_candidate_layout_pages(|page_id| detector.contains_page(page_id))
+            .map_err(|error| invalid(error.message()))?;
         for target in targets {
             if evaluator
                 .target_kind(target)
