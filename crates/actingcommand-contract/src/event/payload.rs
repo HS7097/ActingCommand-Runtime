@@ -19,6 +19,8 @@ mod recovery_ladder;
 pub use recovery_ladder::*;
 mod device_self_check;
 pub use device_self_check::*;
+mod task_selection;
+pub use task_selection::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -3384,6 +3386,12 @@ pub enum TaskSemanticFact {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase: Option<crate::TaskPhaseEvidence>,
     },
+    /// Workflow #308: one select step's decision, recorded before any input.
+    SelectionEvaluated {
+        step_index: u32,
+        operation_label: String,
+        selection: Box<TaskSelectionRecord>,
+    },
     EffectIntent {
         step_index: u32,
         operation_label: String,
@@ -4019,6 +4027,7 @@ impl TaskSemanticFact {
             | Self::EntryRecoveryFailed { .. }
             | Self::EntryTargetDisposition { .. } => EventType::TaskEntryPreflight,
             Self::StepStarted { .. } => EventType::TaskStepStarted,
+            Self::SelectionEvaluated { .. } => EventType::TaskSelectionEvaluated,
             Self::EffectIntent { .. } => EventType::TaskEffectIntent,
             Self::EffectCompleted { .. } => EventType::TaskEffectCompleted,
             Self::StepFinished { .. } => EventType::TaskStepFinished,
@@ -4149,6 +4158,15 @@ impl TaskSemanticFact {
                 validate_task_step(*step_index)?;
                 validate_task_semantic_label(operation_label, "operation_label")?;
                 validate_task_semantic_label(from_page, "from_page")?;
+            }
+            Self::SelectionEvaluated {
+                step_index,
+                operation_label,
+                selection,
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+                selection.validate()?;
             }
             Self::EffectIntent {
                 step_index,
@@ -10850,7 +10868,8 @@ impl EventPayload {
     }
 
     /// Workflow #191 B1-S1: bounds that measure the current encoding — a `runtime.fact_snapshot`
-    /// part and a `fact.published` observation, each at most 512 KiB. Write side only:
+    /// part and a `fact.published` observation, each at most 512 KiB, and a
+    /// `task.selection_evaluated` record, at most 64 KiB (Workflow #308). Write side only:
     /// `EventDraft::sanitize` calls it right after `validate`. A decoded record is never
     /// re-serialized for a bound, so an additive field cannot invalidate a stored record.
     pub(crate) fn validate_write_bounds(&self) -> Result<(), SanitizationError> {
@@ -10862,6 +10881,12 @@ impl EventPayload {
                 records: value.records().cloned().collect(),
             }
             .validate(),
+            Self::Task(TaskPayload::Semantic(value)) => match value.fact() {
+                TaskSemanticFact::SelectionEvaluated { selection, .. } => {
+                    selection.validate_for_append()
+                }
+                _ => Ok(()),
+            },
             _ => Ok(()),
         }
     }

@@ -3299,6 +3299,7 @@ fn task_fact_kind(fact: &TaskSemanticFact) -> &'static str {
         TaskSemanticFact::EntryRecoveryFailed { .. } => "entry_recovery_failed",
         TaskSemanticFact::EntryTargetDisposition { .. } => "entry_target_disposition",
         TaskSemanticFact::StepStarted { .. } => "step_started",
+        TaskSemanticFact::SelectionEvaluated { .. } => "selection_evaluated",
         TaskSemanticFact::EffectIntent { .. } => "effect_intent",
         TaskSemanticFact::EffectCompleted { .. } => "effect_completed",
         TaskSemanticFact::StepFinished { .. } => "step_finished",
