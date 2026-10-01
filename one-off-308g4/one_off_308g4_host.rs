@@ -86,7 +86,7 @@ fn select_package() -> Vec<u8> {
     }))
     .expect("manifest JSON");
     let task = serde_json::to_vec(&serde_json::json!({
-        "schema_version": "0.7",
+        "schema_version": "0.6",
         "task_id": "task",
         "game": SELECT_GAME,
         "server_scope": [SELECT_SERVER],
