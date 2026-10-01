@@ -386,6 +386,17 @@ tasks (as v1), then its inventory in the time-validity projected facts (as v1). 
 whose pool no longer declares it (a catalog update removed `valuation` or `gap`) makes the
 target *unresolved*: it contributes no shortfall weight and says so, never silently zero.
 
+A target without `tasks` *lapses* when the active catalog no longer supports it on the
+instance: its pool no longer resolves (`unknown_resource`, `resource_not_observable`,
+`resource_out_of_scope`), or no task whose scope covers the instance and that no instance
+override disables produces the pool (`no_producing_task`). A lapsed target weighs nothing and
+is listed as `<id>@<pool>:<why>` in `resource_target_tasks_unevaluable` on every candidate of
+the instance, beside the v1-style `<target>/<task>:<why>` items of named tasks that can have no
+candidate. Only these catalog-level failures are listed: a producing task that is merely held
+back this round (trigger, feedback stop, cooldown, placement, budget) is not a lapse. A target
+with `tasks` whose pool no longer resolves shows `resource_target_unmapped:<id>` on its named
+candidates, as v1.
+
 For an enabled instance `i` and a candidate `k` (a task that passed trigger, feedback stop,
 cooldown and placement), with exact integers, 128-bit intermediates and truncation:
 
@@ -441,7 +452,7 @@ projections run the same evaluator and include the resource term.
 
 | Code | Detail |
 | --- | --- |
-| policy level (as v1, at most one) | `resource_target_policy_ignored`, `resource_target_policy_unreadable` or `resource_target_tasks_unevaluable`; after expiry `resource_target_policy_expired` on every candidate the policy would weigh |
+| policy level (as v1, at most one) | `resource_target_policy_ignored`, `resource_target_policy_unreadable` or `resource_target_tasks_unevaluable` (items in target order, `<target>/<task>:<why>` for a named task as v1 and `<id>@<pool>:<unknown_resource\|resource_not_observable\|resource_out_of_scope\|no_producing_task>` for a lapsed target without `tasks`, joined by `,`, at most 1010 bytes, the rest as `+<n>more`), on every candidate of the instance; after expiry `resource_target_policy_expired` on every candidate the policy would weigh |
 | `resource_targets` | the targets covering the candidate in document order, joined by `; `, each `<id>@<pool>:applied current=<c> at_least=<T> gap=<g> step=<S> importance=<I> gap_weight=<Γ>[ capped]`, `<id>@<pool>:satisfied current=<c> at_least=<T> gap=0 gap_weight=0`, `<id>@<pool>:pending reason=<missing\|expired\|low_confidence\|invalid_value> gap_weight=pending` or `<id>@<pool>:unresolved why=<valuation_missing\|gap_missing> gap_weight=0` |
 | `resource_target_unmapped:<id>` | as v1, for a task a target names explicitly |
 | `resource_target_override:<id>` | `superseded score=<s\|none>; offset=<o> kept (manual_offset=keep); utility kept` or `superseded score=<s\|none> offset=<o> (manual_offset=supersede); utility kept` |

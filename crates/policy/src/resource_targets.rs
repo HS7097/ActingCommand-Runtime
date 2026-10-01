@@ -1862,8 +1862,11 @@ enum ResolvedPolicy {
 struct ResolvedV2 {
     /// The resource term of every catalog task whose scope covers the instance.
     terms: BTreeMap<String, ResourceTerm>,
-    /// As for v1: named tasks that can have no candidate on the instance.
-    unevaluable: Vec<(String, String, &'static str)>,
+    /// The `resource_target_tasks_unevaluable` items, in target order: as for v1 each named
+    /// task that can have no candidate on the instance (`<target>/<task>:<why>`), and each
+    /// target without `tasks` that lapsed at catalog level (`<target>@<pool>:<why>`): its
+    /// pool no longer resolves, or no task of the instance produces it.
+    unevaluable: Vec<String>,
     /// The term of a candidate without an entry above: nothing weighed.
     empty: ResourceTerm,
 }
@@ -2112,23 +2115,40 @@ fn resolve_v2(
                 ),
             );
         };
+        let mut lapsed = |why: &str| {
+            unevaluable.push(format!("{}@{}:{why}", target.id, target.resource));
+        };
         let (pool, fact_key) = match resolve_target_pool(catalog, &target.resource, instance) {
             Ok(found) => found,
             Err((reason, _)) => {
                 let why = resolution_why(reason)?;
+                if target.tasks.is_none() {
+                    lapsed(why);
+                }
                 for task in target.tasks.iter().flatten() {
                     match target_task(catalog, task, instance) {
                         Ok(_) => mark_unmapped(task, why),
-                        Err(reason) => unevaluable.push((
-                            target.id.clone(),
-                            task.clone(),
-                            resolution_why(reason)?,
+                        Err(reason) => unevaluable.push(format!(
+                            "{}/{task}:{}",
+                            target.id,
+                            resolution_why(reason)?
                         )),
                     }
                 }
                 continue;
             }
         };
+        // A target without `tasks` covers the producing candidates; when no task of the
+        // instance produces its pool in the active catalog it can weigh nothing, and says so.
+        // A producing task only gated this round is not a lapse.
+        if target.tasks.is_none()
+            && !catalog.catalog().tasks.tasks.iter().any(|task| {
+                task_on_instance(task, instance).is_ok() && per_run_production(task, &pool.id) >= 1
+            })
+        {
+            lapsed("no_producing_task");
+            continue;
+        }
         let named = match &target.tasks {
             None => None,
             Some(tasks) => {
@@ -2139,10 +2159,10 @@ fn resolve_v2(
                             named.insert(task.as_str());
                         }
                         Err(Reason::UnmappedTask) => mark_unmapped(task, "task_not_producing"),
-                        Err(reason) => unevaluable.push((
-                            target.id.clone(),
-                            task.clone(),
-                            resolution_why(reason)?,
+                        Err(reason) => unevaluable.push(format!(
+                            "{}/{task}:{}",
+                            target.id,
+                            resolution_why(reason)?
                         )),
                     }
                 }
@@ -2521,7 +2541,7 @@ impl InstanceTargets {
                 (_, ResolvedPolicy::ActiveV2(resolved)) if !resolved.unevaluable.is_empty() => {
                     Some(DecisionReason {
                         code: "resource_target_tasks_unevaluable".to_owned(),
-                        detail: unevaluable_detail(&resolved.unevaluable),
+                        detail: bounded_list(String::new(), &resolved.unevaluable, ","),
                     })
                 }
                 _ => None,
