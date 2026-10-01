@@ -45,6 +45,10 @@ pub enum SourceRead {
     Metadata,
     Bytes,
     BoundedBytes(u64),
+    /// A select step's selection-policy document, read within the given byte limit and
+    /// validated as a policy, never as an OCR truth set (`contracts/selection-graph.md`,
+    /// section Select step).
+    SelectionPolicy(u64),
 }
 
 /// Collect dependencies without reading files. Invalid declarations are rejected by
@@ -59,6 +63,15 @@ pub fn source_file_requests(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceRead>
                     (SourceRead::Bytes, _) | (_, SourceRead::Bytes) => SourceRead::Bytes,
                     (SourceRead::BoundedBytes(a), SourceRead::BoundedBytes(b)) => {
                         SourceRead::BoundedBytes(a.max(b))
+                    }
+                    (SourceRead::SelectionPolicy(a), SourceRead::SelectionPolicy(b)) => {
+                        SourceRead::SelectionPolicy(a.max(b))
+                    }
+                    // A file named both as a policy and as a truth set or dictionary keeps the
+                    // other read, whose validation then refuses the policy document.
+                    (SourceRead::BoundedBytes(limit), SourceRead::SelectionPolicy(_))
+                    | (SourceRead::SelectionPolicy(_), SourceRead::BoundedBytes(limit)) => {
+                        SourceRead::BoundedBytes(limit)
                     }
                     (SourceRead::Metadata, next) => next,
                     (current, SourceRead::Metadata) => current,
@@ -78,6 +91,18 @@ pub fn source_file_requests(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceRead>
         for operation in array_field(&bundle.data, "operations") {
             if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
                 add(bundle.dir.join(template), SourceRead::Metadata);
+            }
+            if let Some(path) = operation
+                .pointer("/select/policy/path")
+                .and_then(Value::as_str)
+                .filter(|path| safe_task_local_resource_path(path))
+            {
+                add(
+                    bundle.dir.join(path),
+                    SourceRead::SelectionPolicy(
+                        actingcommand_selection_policy::MAX_DOCUMENT_BYTES as u64,
+                    ),
+                );
             }
         }
         if bundle.data["schema_version"].as_str() == Some("0.8") {
@@ -433,7 +458,7 @@ impl OperationParser {
             };
             let normalized_expect_after =
                 normalized_expect_after(&bundle.task_json_path(), operation)?;
-            let (click, guard, application) = self.operation_effect(bundle, operation)?;
+            let (click, guard, application, select) = self.operation_effect(bundle, operation)?;
             let trusted_coordinate = operation
                 .get("unguarded_trusted_coordinate")
                 .and_then(Value::as_bool)
@@ -441,7 +466,10 @@ impl OperationParser {
             let object = operation.as_object_mut().ok_or_else(|| {
                 CliError::package_invalid(format!("task '{task_id}' operation must be an object"))
             })?;
-            if application.is_null() {
+            if !select.is_null() {
+                // A select step keeps its select and its declared guard; no click is inferred.
+                object.remove("click");
+            } else if application.is_null() {
                 object.insert("click".to_string(), click);
             } else {
                 // The application effect stays as declared; no click and no guard are inferred.
@@ -1106,8 +1134,12 @@ impl OperationParser {
         let mut edge_order = Vec::<String>::new();
         for bundle in &self.bundles {
             for operation in array_field(&bundle.data, "operations") {
-                // An application effect is not a tap: it never becomes a navigation edge.
-                if !is_page_change(operation) || is_application_effect(operation) {
+                // An application effect is not a tap, and a select step taps a candidate chosen
+                // at run time: neither becomes a navigation edge, so no route passes one.
+                if !is_page_change(operation)
+                    || is_application_effect(operation)
+                    || is_select_effect(operation)
+                {
                     continue;
                 }
                 let edge_id = required_string(operation, "id")?;
@@ -1168,7 +1200,10 @@ impl OperationParser {
         let mut page_operations = Vec::new();
         for bundle in &self.bundles {
             for operation in array_field(&bundle.data, "operations") {
-                if operation.get("to") != Some(&Value::Null) || is_application_effect(operation) {
+                if operation.get("to") != Some(&Value::Null)
+                    || is_application_effect(operation)
+                    || is_select_effect(operation)
+                {
                     continue;
                 }
                 let verify_template = operation
@@ -1306,7 +1341,8 @@ impl OperationParser {
                     .map(template_target_id)
                     .map(Value::String)
                     .unwrap_or(Value::Null);
-                let (click, guard, application) = self.operation_effect(bundle, operation)?;
+                let (click, guard, application, select) =
+                    self.operation_effect(bundle, operation)?;
                 let mut primitive = ordered_map([
                     ("id", Value::String(operation_id)),
                     ("task_id", Value::String(bundle.task_id.clone())),
@@ -1351,10 +1387,13 @@ impl OperationParser {
                             .unwrap_or_else(|| Value::Array(Vec::new())),
                     ),
                 ]);
-                // Click primitives keep their exact shape; only an application effect adds
-                // its field (slice #316-B3).
+                // Click primitives keep their exact shape; only an application effect (slice
+                // #316-B3) or a select step (Workflow #308) adds its field.
                 if !application.is_null() {
                     primitive.insert("application".to_string(), application);
+                }
+                if !select.is_null() {
+                    primitive.insert("select".to_string(), select);
                 }
                 primitives.push(Value::Object(primitive));
             }
@@ -1376,21 +1415,56 @@ impl OperationParser {
         ]))
     }
 
-    /// The canonical `(click, guard, application)` of one operation: a click operation gets
-    /// its inferred guard and canonical click with `application` null; an `application`
-    /// effect (slice #316-B3) carries no click and no guard, and refuses one that was declared.
+    /// The canonical `(click, guard, application, select)` of one operation: a click operation
+    /// gets its inferred guard and canonical click with `application` and `select` null; an
+    /// `application` effect (slice #316-B3) carries no click and no guard, and refuses one that
+    /// was declared; a select step (Workflow #308) carries no click, its declared guard and its
+    /// `select` as declared.
     fn operation_effect(
         &self,
         bundle: &Bundle,
         operation: &Value,
-    ) -> CliOutcome<(Value, Value, Value)> {
+    ) -> CliOutcome<(Value, Value, Value, Value)> {
+        if let Some(select) = operation.get("select").filter(|value| !value.is_null()) {
+            let operation_id = required_string(operation, "id")?;
+            if operation.get("click").is_some_and(|value| !value.is_null())
+                || is_application_effect(operation)
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{operation_id}' carries a select step and another effect"
+                )));
+            }
+            if operation
+                .get("unguarded_trusted_coordinate")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{operation_id}' select step cannot be an unguarded trusted coordinate"
+                )));
+            }
+            let guard = operation
+                .get("guard")
+                .filter(|value| !value.is_null())
+                .ok_or_else(|| {
+                    CliError::package_invalid(format!(
+                        "operation '{operation_id}' select step requires a declared guard"
+                    ))
+                })?;
+            return Ok((
+                Value::Null,
+                canonicalize_guard_page_id(&self.game, guard)?,
+                Value::Null,
+                select.clone(),
+            ));
+        }
         let Some(application) = operation
             .get("application")
             .filter(|value| !value.is_null())
         else {
             let guard = self.operation_guard(bundle, operation)?;
             let click = self.operation_click(bundle, operation, &guard)?;
-            return Ok((click, guard, Value::Null));
+            return Ok((click, guard, Value::Null, Value::Null));
         };
         let operation_id = required_string(operation, "id")?;
         if operation.get("click").is_some_and(|value| !value.is_null()) {
@@ -1416,7 +1490,7 @@ impl OperationParser {
                 "operation '{operation_id}' application.action must be launch, restart or stop"
             )));
         }
-        Ok((Value::Null, Value::Null, application.clone()))
+        Ok((Value::Null, Value::Null, application.clone(), Value::Null))
     }
 
     fn operation_click(
@@ -1848,9 +1922,29 @@ fn is_application_effect(operation: &Value) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
+/// Whether the operation is a select step (Workflow #308) instead of a click.
+fn is_select_effect(operation: &Value) -> bool {
+    operation
+        .get("select")
+        .is_some_and(|value| !value.is_null())
+}
+
 fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<String>) {
     let task_json_path = bundle.task_json_path();
     let path = task_json_path.as_path();
+    // A select step's shape is the declaration gate's; it carries no other effect.
+    if is_select_effect(operation) {
+        if operation.get("click").is_some_and(|value| !value.is_null())
+            || is_application_effect(operation)
+        {
+            errors.push(format!(
+                "{}: op {:?} carries a select step and another effect",
+                path.display(),
+                operation.get("id").and_then(Value::as_str)
+            ));
+        }
+        return;
+    }
     if let Some(application) = operation
         .get("application")
         .filter(|value| !value.is_null())

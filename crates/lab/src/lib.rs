@@ -60,6 +60,7 @@ pub use actingcommand_execution_kernel::{
     OfflineSimulationResult, PreparedContainedTask, RecoveryAction, RecoveryExecError,
     RecoveryExecutionReport, RecoveryGraph, RecoveryNode, RecoveryResult, RecoveryRuntime,
     RecoverySignal, RecoveryStatus, execute_recovery_graph, simulate_contained_task,
+    simulate_contained_task_at,
 };
 
 pub use actingcommand_execution_kernel::{

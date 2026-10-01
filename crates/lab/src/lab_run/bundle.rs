@@ -542,6 +542,9 @@ struct Operation {
     click: Option<OperationClick>,
     #[serde(default)]
     application: Option<OperationApplication>,
+    /// A select step (Workflow #308), which the Lab runner refuses explicitly.
+    #[serde(default)]
+    select: Option<Value>,
     #[serde(default)]
     verify_template: Option<String>,
     #[serde(default)]
@@ -637,8 +640,19 @@ impl Operation {
     }
 
     /// Exactly one effect (slice #316-B3): `Some(click)` for a click operation, `None` for a
-    /// validated `application` effect, which carries neither guard nor trusted coordinate.
+    /// validated `application` effect, which carries neither guard nor trusted coordinate. A
+    /// select step (Workflow #308) runs in the Runtime's contained task only; this runner
+    /// refuses it with `lab_run_select_unsupported`.
     fn validate_effect_shape(&self) -> CliOutcome<Option<&OperationClick>> {
+        if self.select.is_some() {
+            return Err(CliError::not_implemented(
+                "lab_run_select_unsupported",
+                format!(
+                    "operation '{}' is a select step, which the Lab package runner does not execute; the Runtime's contained task does",
+                    self.id
+                ),
+            ));
+        }
         match (&self.click, &self.application) {
             (Some(click), None) => Ok(Some(click)),
             (None, Some(application)) => {

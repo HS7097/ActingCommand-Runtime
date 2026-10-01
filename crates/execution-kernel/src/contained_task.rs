@@ -41,7 +41,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+mod selection;
 mod timing;
+pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
     ContainedTaskBoundaryIdentity, ContainedTaskBoundaryTiming, ContainedTaskEvaluationTiming,
     ContainedTaskTimingContext, observe_instant_span,
@@ -1467,6 +1469,17 @@ pub enum ContainedTaskTrace {
         from_page: String,
         phase: Option<TaskPhaseEvidence>,
     },
+    /// Workflow #308: one select step attempt's decision, recorded once before any input and
+    /// before any failure return (`contracts/selection-graph.md`, section Select step).
+    SelectionEvaluated {
+        step_index: u32,
+        operation_label: String,
+        selection: Box<actingcommand_contract::TaskSelectionRecord>,
+        /// The attempt already ended the run with the runtime's own fatal capture error, which
+        /// the interpreter returns unchanged whether or not this record is written: a runtime
+        /// reports a failure to write it itself.
+        run_ending: bool,
+    },
     EffectIntent {
         step_index: u32,
         operation_label: String,
@@ -1689,6 +1702,16 @@ pub trait ContainedTaskRuntime {
         Ok(ApplicationEffectSupport::Unsupported)
     }
 
+    /// Workflow #308: the instance fact snapshot and the evaluation instant of one select step.
+    /// A runtime without them reports `Unavailable`, and the interpreter fails the step with
+    /// `selection_state_unavailable` before any input.
+    fn selection_state(
+        &mut self,
+        _request: SelectionStateRequest,
+    ) -> Result<SelectionState, Self::Error> {
+        Ok(SelectionState::Unavailable)
+    }
+
     /// Transports the already computed results; implementations must not evaluate them again.
     fn record_page_evaluations(
         &mut self,
@@ -1845,7 +1868,7 @@ impl PreparedContainedTask {
             .cloned()
             .ok_or_else(|| ContainedTaskError::new("contained_task_control_missing"))?;
         let control = parse_task_control_declaration(control)?;
-        let program: TaskProgram = serde_json::from_value(bundle.operation().clone())
+        let mut program: TaskProgram = serde_json::from_value(bundle.operation().clone())
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
         let evaluator = bundle
             .evaluator()
@@ -1868,6 +1891,7 @@ impl PreparedContainedTask {
                 )
             })?;
         program.validate(&control, &bundle, &detector)?;
+        selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
         let entry_page = program.required_home_entry_page(&control, &detector)?;
         let post_admission_ocr =
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
@@ -1929,6 +1953,14 @@ impl PreparedContainedTask {
     /// Whether the task declares `resource_readings`; offline simulation does not read them.
     pub const fn has_resource_readings(&self) -> bool {
         self.program.resource_readings.is_some()
+    }
+
+    /// Whether the task has a select step (Workflow #308).
+    pub fn has_select_steps(&self) -> bool {
+        self.program
+            .operations
+            .iter()
+            .any(|operation| operation.select.is_some())
     }
 
     pub fn required_home_entry_page(&self) -> Option<&str> {
@@ -2345,12 +2377,29 @@ impl PreparedContainedTask {
                             let observation = observation.as_ref().ok_or_else(|| {
                                 ContainedTaskError::new("contained_task_page_unknown")
                             })?;
-                            let (guard, target) = match operation.guard_outcome(
-                                &self.control,
-                                observation,
-                                &self.evaluator,
-                                runtime,
-                            ) {
+                            // A select step (Workflow #308) chooses its candidate and confirms
+                            // it on a fresh frame, whose input context then binds the tap; a
+                            // click is guarded on the step's own frame.
+                            let pre_input = if operation.select.is_some() {
+                                self.select_attempt(
+                                    runtime,
+                                    operation,
+                                    observation,
+                                    step_index,
+                                    observation_timing,
+                                )
+                                .map(|selected| (selected.guard.clone(), None, Some(selected)))
+                            } else {
+                                operation
+                                    .guard_outcome(
+                                        &self.control,
+                                        observation,
+                                        &self.evaluator,
+                                        runtime,
+                                    )
+                                    .map(|(guard, target)| (guard, target, None))
+                            };
+                            let (guard, target, selected) = match pre_input {
                                 Ok(outcome) => outcome,
                                 Err(ContainedTaskRunError::Task(error)) => {
                                     let Some(policy) = retry_policy.as_ref() else {
@@ -2389,14 +2438,24 @@ impl PreparedContainedTask {
                             let action_seed = runtime
                                 .action_seed(step_index, &operation_id)
                                 .map_err(ContainedTaskRunError::operation::<R>)?;
-                            let click = operation.click.as_ref().ok_or_else(|| {
-                                ContainedTaskError::new("contained_task_operation_invalid")
-                            })?;
-                            let (action, sampling) = click.input_action(
-                                &self.control.resolution,
-                                target.as_ref(),
-                                action_seed,
-                            )?;
+                            let (action, sampling, input_context) = match selected {
+                                Some(selected) => {
+                                    let (action, sampling) = selected
+                                        .input_action(&self.control.resolution, action_seed)?;
+                                    (action, sampling, selected.frame.input_context)
+                                }
+                                None => {
+                                    let click = operation.click.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new("contained_task_operation_invalid")
+                                    })?;
+                                    let (action, sampling) = click.input_action(
+                                        &self.control.resolution,
+                                        target.as_ref(),
+                                        action_seed,
+                                    )?;
+                                    (action, sampling, observation.input_context.clone())
+                                }
+                            };
                             runtime
                                 .record(ContainedTaskTrace::EffectIntent {
                                     step_index,
@@ -2416,7 +2475,7 @@ impl PreparedContainedTask {
                                     .into());
                             }
                             runtime
-                                .input(action, observation.input_context.clone())
+                                .input(action, input_context)
                                 .map_err(ContainedTaskRunError::operation::<R>)?;
                         }
                         let boundary =
@@ -3094,6 +3153,23 @@ impl PreparedContainedTask {
         required_entry_page: Option<&str>,
         timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
+        self.capture_frame(runtime, Some(ocr_collector), required_entry_page, timing)
+    }
+
+    /// One capture and its page recognition, recorded as every capture is, at the
+    /// `CapturePage` timing boundary. Without `ocr_collector` it is a select step's
+    /// confirmation frame (Workflow #308): it feeds neither the stability sampling nor the
+    /// post-admission OCR collector.
+    fn capture_frame<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: Option<&mut PostAdmissionOcrCollector<'_>>,
+        required_entry_page: Option<&str>,
+        timing: ContainedTaskTimingContext,
+    ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
+        let feeds_collectors = ocr_collector.is_some();
+        let mut unfed = PostAdmissionOcrCollector::default();
+        let ocr_collector = ocr_collector.unwrap_or(&mut unfed);
         let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
         let identity = runtime.task_boundary_identity(boundary);
         let capture_started = Instant::now();
@@ -3106,6 +3182,7 @@ impl PreparedContainedTask {
                 .control
                 .stability_termination
                 .as_ref()
+                .filter(|_| feeds_collectors)
                 .map(|declaration| stability_sample(&frame, declaration))
                 .transpose()?;
             runtime
@@ -5142,11 +5219,18 @@ struct TaskOperation {
     to: Option<PageDeclaration>,
     #[serde(default)]
     expect_after: Option<TaskOperationExpectation>,
-    /// Exactly one of `click` and `application` carries the effect.
+    /// Exactly one of `click`, `application` and `select` carries the effect.
     #[serde(default)]
     click: Option<TaskClick>,
     #[serde(default)]
     application: Option<TaskApplicationEffect>,
+    /// A select step (Workflow #308): a candidate of a layout chosen by a policy document.
+    #[serde(default)]
+    select: Option<selection::TaskSelect>,
+    /// The admitted select step, set by contained task admission and never read from the
+    /// package.
+    #[serde(skip)]
+    prepared_select: Option<Box<selection::PreparedSelect>>,
     #[serde(default)]
     on_error: Option<String>,
     #[serde(default)]
@@ -5231,8 +5315,8 @@ impl TaskOperation {
         {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
         }
-        match (&self.click, &self.application) {
-            (Some(click), None) => {
+        match (&self.click, &self.application, &self.select) {
+            (Some(click), None, None) => {
                 match (&self.guard, self.unguarded_trusted_coordinate) {
                     (Some(_), true) | (None, false) => {
                         return Err(ContainedTaskError::new("contained_task_guard_missing"));
@@ -5243,7 +5327,27 @@ impl TaskOperation {
                 click.validate(&control.resolution, self.guard.as_ref(), schema_version)
             }
             // An application effect has no coordinate: nothing to guard, nothing to trust.
-            (None, Some(_)) if self.guard.is_none() && !self.unguarded_trusted_coordinate => Ok(()),
+            (None, Some(_), None) if self.guard.is_none() && !self.unguarded_trusted_coordinate => {
+                Ok(())
+            }
+            // A select step declares a guard of any admitted kind and its postcondition, and is
+            // never a trusted coordinate; its layout and policy are admitted with the pack.
+            (None, None, Some(select)) => {
+                let guard = match (&self.guard, self.unguarded_trusted_coordinate) {
+                    (Some(guard), false) if self.expect_after.is_some() => guard,
+                    _ => {
+                        return Err(ContainedTaskError::with_detail(
+                            "contained_task_select_invalid",
+                            format!(
+                                "operation={} requires a declared guard, an expect_after and no unguarded trusted coordinate",
+                                self.id
+                            ),
+                        ));
+                    }
+                };
+                guard.validate(self, control)?;
+                select.validate(&self.id)
+            }
             _ => Err(ContainedTaskError::new("contained_task_operation_invalid")),
         }
     }

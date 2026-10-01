@@ -9,6 +9,7 @@ use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason
 use actingcommand_recognition::color_digest::{
     self, ColorDigest, ColorDigestAlgorithm, ColorDigestGrid, MAX_GRID_AXIS,
 };
+use actingcommand_selection_policy::{SelectionPolicy, ValueType};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -357,6 +358,7 @@ impl Declaration<'_> {
                 "expect_after",
                 "click",
                 "application",
+                "select",
                 "on_error",
                 "retryable",
                 "max_attempts",
@@ -409,22 +411,37 @@ impl Declaration<'_> {
                 &child(pointer, field),
             )?;
         }
-        // Exactly one effect: `click`, or the `application` effect of slice #316-B3.
+        // Exactly one effect: `click`, the `application` effect of slice #316-B3, or a select
+        // step (Workflow #308; task schema `0.6` and later).
+        if object.contains_key("select") && !self.schema_0_6_or_later() {
+            return Err(self.error(
+                &child(pointer, "select"),
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
         match (
             object.get("click").filter(|value| !value.is_null()),
             object.get("application").filter(|value| !value.is_null()),
+            object.get("select").filter(|value| !value.is_null()),
         ) {
-            (Some(click), None) => self.click(click, &child(pointer, "click"), canonical)?,
-            (None, Some(application)) => {
+            (Some(click), None, None) => self.click(click, &child(pointer, "click"), canonical)?,
+            (None, Some(application), None) => {
                 self.application(application, &child(pointer, "application"))?;
             }
-            (Some(_), Some(_)) => {
+            (None, None, Some(select)) => self.select_step(object, select, pointer)?,
+            (Some(_), Some(_), None) => {
                 return Err(self.error(
                     &child(pointer, "application"),
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }
-            (None, None) => {
+            (_, _, Some(_)) => {
+                return Err(self.error(
+                    &child(pointer, "select"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            (None, None, None) => {
                 let click = self.required(object, pointer, "click")?;
                 self.click(click, &child(pointer, "click"), canonical)?;
             }
@@ -503,6 +520,55 @@ impl Declaration<'_> {
         self.string(action, &pointer)?;
         if !matches!(action.as_str(), Some("launch" | "restart" | "stop")) {
             return Err(self.error(&pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        Ok(())
+    }
+
+    /// A select step (`contracts/selection-graph.md`, section Select step):
+    /// `{"layout_id", "policy": {"path", "sha256"}}`, where the layout ID has the candidate
+    /// layout grammar and the policy is a task-local `policies/<name>.json` document sealed by
+    /// the SHA-256 of its bytes. The step is guarded and confirmed: it declares its `guard` and
+    /// its `expect_after`, and is never an unguarded trusted coordinate. Whether the layout and
+    /// the policy fit the task is checked with the policy document (`select_policy`).
+    fn select_step(
+        &self,
+        operation: &Map<String, Value>,
+        value: &Value,
+        pointer: &str,
+    ) -> CliOutcome<()> {
+        let select_pointer = child(pointer, "select");
+        let select = self.object(value, &select_pointer, &["layout_id", "policy"])?;
+        let layout_pointer = child(&select_pointer, "layout_id");
+        let layout_id = self.required(select, &select_pointer, "layout_id")?;
+        self.string(layout_id, &layout_pointer)?;
+        if validate_candidate_layout_id(layout_id.as_str().unwrap_or_default()).is_err() {
+            return Err(self.error(&layout_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        let policy_pointer = child(&select_pointer, "policy");
+        let policy = self.required(select, &select_pointer, "policy")?;
+        self.json_reference(policy, &policy_pointer)?;
+        if !policy["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("policies/") && path.ends_with(".json"))
+        {
+            return Err(self.error(
+                &child(&policy_pointer, "path"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+        for field in ["guard", "expect_after"] {
+            if operation.get(field).is_none_or(Value::is_null) {
+                return Err(self.error(
+                    &child(pointer, field),
+                    ResourceDeclarationReason::MissingField,
+                ));
+            }
+        }
+        if operation.get("unguarded_trusted_coordinate") == Some(&Value::Bool(true)) {
+            return Err(self.error(
+                &child(pointer, "unguarded_trusted_coordinate"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
         }
         Ok(())
     }
@@ -1395,7 +1461,7 @@ pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutco
             .entry(&name)
             .ok_or_else(|| dependency.error("", ResourceDeclarationReason::InvalidValue))?;
         let limit = match read {
-            SourceRead::BoundedBytes(limit) => limit,
+            SourceRead::BoundedBytes(limit) | SourceRead::SelectionPolicy(limit) => limit,
             SourceRead::Bytes => operation
                 .data
                 .pointer("/post_admission_ocr/limits/max_total_bytes")
@@ -1410,6 +1476,10 @@ pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutco
         };
         if bytes.len() as u64 > limit {
             return Err(dependency.error("", ResourceDeclarationReason::InvalidValue));
+        }
+        if let SourceRead::SelectionPolicy(_) = read {
+            select_policy(&declaration, &operation, &path, Path::new(&name), bytes)?;
+            continue;
         }
         let value: Value = serde_json::from_slice(bytes)
             .map_err(|_| dependency.error("", ResourceDeclarationReason::InvalidValue))?;
@@ -1553,6 +1623,11 @@ pub fn declaration_file_requests(bundles: &[Bundle]) -> CliOutcome<BTreeMap<Path
         for (path, read) in super::source_file_requests(std::slice::from_ref(bundle)) {
             let limit = match read {
                 SourceRead::Metadata => continue,
+                // A policy document keeps its own read category and limit.
+                SourceRead::SelectionPolicy(limit) => {
+                    requests.insert(path, SourceRead::SelectionPolicy(limit));
+                    continue;
+                }
                 SourceRead::Bytes => bundle.data["post_admission_ocr"]["limits"]["max_total_bytes"]
                     .as_u64()
                     .ok_or_else(|| {
@@ -1579,6 +1654,11 @@ pub fn declaration_file_requests(bundles: &[Bundle]) -> CliOutcome<BTreeMap<Path
 /// Declaration validation never reads template metadata, images or models.
 pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliOutcome<()> {
     let requests = declaration_file_requests(std::slice::from_ref(bundle))?;
+    let task_file = bundle.task_json_path();
+    let task = Declaration {
+        file: &task_file,
+        schema: bundle.data.get("schema_version").and_then(Value::as_str),
+    };
     for (path, read) in requests {
         let mut declaration = Declaration {
             file: &path,
@@ -1587,10 +1667,14 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
         let bytes = files
             .read(&path)
             .map_err(|_| declaration.error("", ResourceDeclarationReason::InvalidValue))?;
-        if let SourceRead::BoundedBytes(limit) = read
+        if let SourceRead::BoundedBytes(limit) | SourceRead::SelectionPolicy(limit) = read
             && bytes.len() as u64 > limit
         {
             return Err(declaration.error("", ResourceDeclarationReason::InvalidValue));
+        }
+        if let SourceRead::SelectionPolicy(_) = read {
+            select_policy(&task, bundle, &path, &path, bytes)?;
+            continue;
         }
         let value: Value = serde_json::from_slice(bytes)
             .map_err(|_| declaration.error("", ResourceDeclarationReason::InvalidValue))?;
@@ -1603,7 +1687,171 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
     Ok(())
 }
 
+/// The policy document `file` that select steps of `bundle` name at `requested`
+/// (`contracts/selection-graph.md`, section Select step). It is read as the selection-policy
+/// crate reads a document: decoded, refused when its canonical form would be ambiguous
+/// (floats, unsafe integers, duplicate keys), then validated. Each select step that names it
+/// must seal its bytes with `policy.sha256` and name a candidate layout its own task declares
+/// on the step's `from` page; the document must apply to that layout, read only features the
+/// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
+/// require exactly one candidate. The parser's declaration gate and contained task admission
+/// both run this check, so an author sees the refusal before a package is built.
+fn select_policy(
+    task: &Declaration<'_>,
+    bundle: &Bundle,
+    requested: &Path,
+    file: &Path,
+    bytes: &[u8],
+) -> CliOutcome<()> {
+    let refuse_document = |pointer: &str, detail: String| {
+        Declaration { file, schema: None }.refuse(
+            pointer,
+            ResourceDeclarationReason::InvalidValue,
+            &detail,
+        )
+    };
+    if bytes.len() > actingcommand_selection_policy::MAX_DOCUMENT_BYTES {
+        return Err(refuse_document(
+            "",
+            format!(
+                "{} bytes exceed the {}-byte policy document limit",
+                bytes.len(),
+                actingcommand_selection_policy::MAX_DOCUMENT_BYTES
+            ),
+        ));
+    }
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| refuse_document("", format!("not JSON: {error}")))?;
+    let document = Declaration {
+        file,
+        schema: value.get("schema_version").and_then(Value::as_str),
+    };
+    let refuse = |pointer: &str, detail: String| {
+        document.refuse(pointer, ResourceDeclarationReason::InvalidValue, &detail)
+    };
+    let policy: SelectionPolicy = serde_json::from_value(value.clone())
+        .map_err(|error| refuse("", format!("not a selection policy document: {error}")))?;
+    actingcommand_selection_policy::parse_canonical_json(bytes)
+        .map_err(|error| refuse("", format!("not canonical: {error}")))?;
+    policy
+        .validate()
+        .map_err(|error| refuse("", format!("invalid selection policy: {error}")))?;
+    let digest = crate::Sha256Hash::digest(bytes).to_string();
+    let game = bundle
+        .data
+        .get("game")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    for (index, operation) in super::array_field(&bundle.data, "operations")
+        .iter()
+        .enumerate()
+    {
+        let Some(select) = operation.get("select").filter(|value| !value.is_null()) else {
+            continue;
+        };
+        if select
+            .pointer("/policy/path")
+            .and_then(Value::as_str)
+            .is_none_or(|path| bundle.dir.join(path) != requested)
+        {
+            continue;
+        }
+        let pointer = format!("/operations/{index}/select");
+        if select.pointer("/policy/sha256").and_then(Value::as_str) != Some(digest.as_str()) {
+            return Err(task.refuse(
+                &format!("{pointer}/policy/sha256"),
+                ResourceDeclarationReason::InvalidValue,
+                &format!("the policy document's bytes hash to {digest}"),
+            ));
+        }
+        let layout_id = select
+            .get("layout_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Some(layout) = super::array_field(&bundle.data, "candidate_layouts")
+            .iter()
+            .find(|layout| layout.get("id").and_then(Value::as_str) == Some(layout_id))
+        else {
+            return Err(task.refuse(
+                &format!("{pointer}/layout_id"),
+                ResourceDeclarationReason::InvalidValue,
+                &format!("the task declares no candidate layout '{layout_id}'"),
+            ));
+        };
+        let from = operation
+            .get("from")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let page = layout
+            .get("page_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if super::normalize_page_rule_id(game, from) != super::normalize_page_rule_id(game, page) {
+            return Err(task.refuse(
+                &format!("{pointer}/layout_id"),
+                ResourceDeclarationReason::InvalidValue,
+                &format!(
+                    "candidate layout '{layout_id}' belongs to page '{page}'; the step runs from '{from}'"
+                ),
+            ));
+        }
+        if policy.applies_to.candidate_layout_id != layout_id {
+            return Err(refuse(
+                "/applies_to/candidate_layout_id",
+                format!(
+                    "the policy applies to candidate layout '{}'; the select step {pointer} evaluates '{layout_id}'",
+                    policy.applies_to.candidate_layout_id
+                ),
+            ));
+        }
+        for (field_index, field) in policy.fields.iter().enumerate() {
+            let feature = super::array_field(layout, "features")
+                .iter()
+                .find(|feature| {
+                    feature.get("name").and_then(Value::as_str) == Some(field.name.as_str())
+                })
+                .and_then(|feature| feature.get("value").and_then(Value::as_str));
+            match (feature, &field.value_type) {
+                (Some("passed"), ValueType::Boolean)
+                | (Some("measure_milli"), ValueType::Integer) => {}
+                (None, _) => {
+                    return Err(refuse(
+                        &format!("/fields/{field_index}/name"),
+                        format!(
+                            "'{}' is not a feature of candidate layout '{layout_id}'",
+                            field.name
+                        ),
+                    ));
+                }
+                (Some(value), _) => {
+                    return Err(refuse(
+                        &format!("/fields/{field_index}/value_type"),
+                        format!(
+                            "feature '{}' of candidate layout '{layout_id}' is {value}: a passed feature is boolean and a measure_milli feature integer",
+                            field.name
+                        ),
+                    ));
+                }
+            }
+        }
+        if policy.selection.required_count != 1 {
+            return Err(refuse(
+                "/selection/required_count",
+                "a select step chooses exactly one candidate".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Declaration<'_> {
+    /// [`Self::error`] with a detail appended to its message.
+    fn refuse(&self, pointer: &str, reason: ResourceDeclarationReason, detail: &str) -> CliError {
+        let mut error = self.error(pointer, reason);
+        error.message = format!("{}; {detail}", error.message);
+        error
+    }
+
     fn scheduling(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         let object = self.object(value, pointer, &["designated_operation", "mappings"])?;
         if let Some(operation) = object

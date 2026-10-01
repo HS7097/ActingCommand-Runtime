@@ -5,9 +5,9 @@
 use crate::{
     ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
     ContainedTaskRuntime, ContainedTaskTrace, InputFrameContext, ObservedFrame,
-    PreparedContainedTask,
+    PreparedContainedTask, SelectionState, SelectionStateRequest,
 };
-use actingcommand_contract::InputAction;
+use actingcommand_contract::{InputAction, InstanceFactContext, InstanceFactSnapshot};
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
@@ -16,6 +16,12 @@ use std::error::Error;
 use std::fmt;
 
 const FIXTURE_EXHAUSTED_CODE: &str = "offline_fixture_exhausted";
+/// The instance an offline select step's empty fact snapshot names.
+const OFFLINE_INSTANCE: &str = "offline.simulation";
+/// The empty fact snapshot of an offline select step. An offline run has no ledger; the
+/// snapshot names the first position, and its record is never appended anywhere.
+const OFFLINE_SNAPSHOT_ID: &str = "snapshot:offline:empty";
+const OFFLINE_SNAPSHOT_POSITION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OfflineRecognitionResult {
@@ -59,6 +65,10 @@ pub struct OfflineSimulationResult {
     pub post_admission_ocr: OfflinePostAdmissionOcrStatus,
     pub recognition: Vec<OfflineRecognitionResult>,
     pub decision: OfflineDecision,
+    /// The instant a select step evaluated at (Workflow #308): the caller's, read when the
+    /// dry run started. Present only when a select step was evaluated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_now_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -112,11 +122,32 @@ impl Error for OfflineSimulationError {}
 
 /// Runs the production contained-task interpreter while intercepting its first effect intent.
 /// No device backend can be injected through this boundary, and `input` never performs an effect.
+/// Without an instant a select step is refused with `selection_state_unavailable`; see
+/// [`simulate_contained_task_at`].
 pub fn simulate_contained_task(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    let mut runtime = OfflineRuntime::new(frames);
+    simulate(task, frames, None)
+}
+
+/// [`simulate_contained_task`] with the caller's instant for a select step (Workflow #308): the
+/// step evaluates with an empty fact snapshot at `now_unix_ms`, confirms on the same saved
+/// frame it was evaluated on, and the result carries the instant.
+pub fn simulate_contained_task_at(
+    task: &PreparedContainedTask,
+    frames: Vec<Frame>,
+    now_unix_ms: u64,
+) -> Result<OfflineSimulationResult, OfflineSimulationError> {
+    simulate(task, frames, Some(now_unix_ms))
+}
+
+fn simulate(
+    task: &PreparedContainedTask,
+    frames: Vec<Frame>,
+    now_unix_ms: Option<u64>,
+) -> Result<OfflineSimulationResult, OfflineSimulationError> {
+    let mut runtime = OfflineRuntime::new(frames, now_unix_ms, task.has_select_steps());
     let decision = if runtime.frames.is_empty() {
         OfflineDecision::Refused {
             code: "offline_fixture_missing".to_string(),
@@ -183,6 +214,7 @@ pub fn simulate_contained_task(
         &task_id,
         &runtime.recognition,
         &decision,
+        runtime.selection_now_unix_ms,
     )?;
     Ok(OfflineSimulationResult {
         mode: "offline_simulation",
@@ -202,6 +234,7 @@ pub fn simulate_contained_task(
         },
         recognition: runtime.recognition,
         decision,
+        selection_now_unix_ms: runtime.selection_now_unix_ms,
     })
 }
 
@@ -213,6 +246,9 @@ struct DecisionFingerprintProjection<'a> {
     task_id: &'a str,
     recognition: &'a [OfflineRecognitionResult],
     decision: &'a OfflineDecision,
+    /// Bound only when a select step evaluated, so every other fingerprint is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection_now_unix_ms: Option<u64>,
 }
 
 fn fingerprint_decision(
@@ -221,6 +257,7 @@ fn fingerprint_decision(
     task_id: &str,
     recognition: &[OfflineRecognitionResult],
     decision: &OfflineDecision,
+    selection_now_unix_ms: Option<u64>,
 ) -> Result<String, OfflineSimulationError> {
     const DOMAIN: &[u8] = b"ActingCommand package offline first decision v1\0";
     let encoded = serde_json::to_vec(&DecisionFingerprintProjection {
@@ -230,6 +267,7 @@ fn fingerprint_decision(
         task_id,
         recognition,
         decision,
+        selection_now_unix_ms,
     })
     .map_err(|error| {
         OfflineSimulationError::with_detail(
@@ -255,15 +293,29 @@ struct OfflineRuntime {
     capture_count: usize,
     recognition: Vec<OfflineRecognitionResult>,
     planned: Option<PlannedEffect>,
+    /// The caller's instant for a select step; without one a select step is unavailable.
+    now_unix_ms: Option<u64>,
+    /// Set once a select step evaluated.
+    selection_now_unix_ms: Option<u64>,
+    /// A package with a select step keeps a copy of the last saved frame captured, which the
+    /// step's confirmation capture repeats.
+    retains_last_frame: bool,
+    last_frame: Option<Frame>,
+    confirmation_repeats_last_frame: bool,
 }
 
 impl OfflineRuntime {
-    fn new(frames: Vec<Frame>) -> Self {
+    fn new(frames: Vec<Frame>, now_unix_ms: Option<u64>, retains_last_frame: bool) -> Self {
         Self {
             frames: frames.into(),
             capture_count: 0,
             recognition: Vec::new(),
             planned: None,
+            now_unix_ms,
+            selection_now_unix_ms: None,
+            retains_last_frame,
+            last_frame: None,
+            confirmation_repeats_last_frame: false,
         }
     }
 }
@@ -278,12 +330,53 @@ impl ContainedTaskRuntime for OfflineRuntime {
     type Error = OfflineBoundary;
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
-        let frame = self
-            .frames
-            .pop_front()
-            .ok_or(OfflineBoundary::FixtureExhausted)?;
+        // A select step's confirmation frame is the saved frame it was evaluated on.
+        let frame = if std::mem::take(&mut self.confirmation_repeats_last_frame) {
+            self.last_frame
+                .as_ref()
+                .ok_or(OfflineBoundary::Invariant(
+                    "offline_simulation_confirmation_frame_missing",
+                ))?
+                .try_clone()
+                .map_err(|_| OfflineBoundary::Invariant("offline_simulation_frame_copy_failed"))?
+        } else {
+            let frame = self
+                .frames
+                .pop_front()
+                .ok_or(OfflineBoundary::FixtureExhausted)?;
+            if self.retains_last_frame {
+                self.last_frame = Some(frame.try_clone().map_err(|_| {
+                    OfflineBoundary::Invariant("offline_simulation_frame_copy_failed")
+                })?);
+            }
+            frame
+        };
         self.capture_count += 1;
         Ok(frame.into())
+    }
+
+    fn selection_state(
+        &mut self,
+        request: SelectionStateRequest,
+    ) -> Result<SelectionState, Self::Error> {
+        let Some(now_unix_ms) = self.now_unix_ms else {
+            return Ok(SelectionState::Unavailable);
+        };
+        self.selection_now_unix_ms = Some(now_unix_ms);
+        self.confirmation_repeats_last_frame = true;
+        Ok(SelectionState::Snapshot {
+            snapshot: InstanceFactSnapshot {
+                snapshot_id: OFFLINE_SNAPSHOT_ID.to_owned(),
+                ledger_position: OFFLINE_SNAPSHOT_POSITION,
+                context: InstanceFactContext {
+                    instance_id: OFFLINE_INSTANCE.to_owned(),
+                    server_id: request.server,
+                    game_id: request.game,
+                },
+                records: Vec::new(),
+            },
+            now_unix_ms,
+        })
     }
 
     fn input(
@@ -980,6 +1073,7 @@ mod tests {
             task.task_label(),
             &recognition,
             &decision,
+            None,
         )
         .expect("effecting decision fingerprint");
         EffectingDecision {

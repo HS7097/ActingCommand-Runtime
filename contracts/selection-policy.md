@@ -190,6 +190,34 @@ chooser:
   compile time with this crate's `validate`, so an invalid document rejects the
   whole catalog instead of being skipped.
 
+## In-task consumer
+
+A select step of a contained task (see [the selection graph](selection-graph.md), section
+"Select step") consumes a document of its own package as a chooser:
+
+- The document is a task file at `policies/<name>.json`, sealed by the SHA-256 of its bytes,
+  read with this crate's rules in this order: the 512 KiB limit, the typed decode, the
+  canonical form and `validate`. The parser checks it while authoring and Runtime admission
+  again before any run.
+- Candidates are the actionable candidates of the step layout's candidate projection
+  ([candidate-projection.md](candidate-projection.md)), identified by their candidate IDs
+  `<layout_id>#NN`. Each feature is a field of its name: a `passed` feature is a `boolean`, a
+  `measure_milli` feature an `integer`. The document's `fields` are features of that layout
+  with those types, and `applies_to.candidate_layout_id` is the step's layout. A candidate whose
+  feature is absent has no such field, and the document's `on_unknown` decides. `confidence` is
+  not handed to the evaluator in v1.
+- The fact snapshot is `from_instance_snapshot` of the instance's own ledger-pinned fact
+  snapshot, which the host takes for the step; the evaluation instant is the host's clock
+  when the snapshot is taken. The evaluator still reads no clock and no ledger.
+- `selection.required_count` is `1`: a step chooses exactly one candidate. Only a `selected`
+  outcome leads to an input; every other outcome fails the step (`selection_not_selected`).
+  The zero-padded candidate IDs make `candidate_id` a stable last tie-break key.
+- The decision is recorded whole in `task.selection_evaluated`, with `policy_sha256`,
+  `input_sha256` and the document's package SHA-256.
+
+This crate is unchanged by that use: the scheduling consumer's `catalog_hash`, which depends on
+the document's serialization, keeps its value.
+
 ## Offline tool
 
 `selection-eval --policy <file> --candidates <file> --facts <file>

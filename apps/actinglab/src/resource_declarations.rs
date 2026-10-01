@@ -330,8 +330,8 @@ impl DeclarationReader {
         {
             self.maa_declarations(parent.parent().unwrap_or(Path::new("")))?;
             "maa_semantic_declarations"
-        } else if self.validate_task_dependency(path)? {
-            "operation_json_dependency"
+        } else if let Some(family) = self.validate_task_dependency(path)? {
+            family
         } else {
             return Err(invalid(
                 path,
@@ -679,7 +679,10 @@ impl DeclarationReader {
         Ok(true)
     }
 
-    fn validate_task_dependency(&mut self, path: &Path) -> CliOutcome<bool> {
+    /// The family of a task-local JSON dependency, validated through its task: a select step's
+    /// `selection_policy` document or an `operation_json_dependency` (truth set, dictionary);
+    /// `None` when no task requests the path.
+    fn validate_task_dependency(&mut self, path: &Path) -> CliOutcome<Option<&'static str>> {
         for ancestor in path.ancestors().skip(1) {
             if ancestor
                 .parent()
@@ -697,14 +700,17 @@ impl DeclarationReader {
                     dir: ancestor.to_path_buf(),
                     data: data.clone(),
                 };
-                if declaration_file_requests(std::slice::from_ref(&bundle))?.contains_key(path) {
-                    self.task(&task, data)?;
-                    return Ok(true);
-                }
-                return Ok(false);
+                let family =
+                    match declaration_file_requests(std::slice::from_ref(&bundle))?.get(path) {
+                        Some(SourceRead::SelectionPolicy(_)) => "selection_policy",
+                        Some(_) => "operation_json_dependency",
+                        None => return Ok(None),
+                    };
+                self.task(&task, data)?;
+                return Ok(Some(family));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     fn task(&mut self, path: &Path, data: Value) -> CliOutcome<()> {
@@ -723,7 +729,8 @@ impl DeclarationReader {
         let requests = declaration_file_requests(std::slice::from_ref(&bundle))?;
         let mut files = BTreeMap::new();
         for (dependency, read) in requests {
-            let SourceRead::BoundedBytes(limit) = read else {
+            let (SourceRead::BoundedBytes(limit) | SourceRead::SelectionPolicy(limit)) = read
+            else {
                 return Err(invalid(
                     &dependency,
                     "declaration parser requested a non-JSON read",

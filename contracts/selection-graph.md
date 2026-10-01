@@ -3,8 +3,8 @@
 This document collects the selection graph of
 [Workflow #308](https://github.com/HS7097/ActingCommand-Workflow/issues/308). Each section is
 frozen by the #308 slice that adds it; this revision holds the sections **Checks**,
-**Candidate layouts** and **Records**. Nodes, edges, gates and selection are frozen by later
-#308 slices. No game-specific values are part of this contract.
+**Candidate layouts**, **Select step** and **Records**. Nodes, edges and gates are frozen by
+later #308 slices. No game-specific values are part of this contract.
 
 ## Checks
 
@@ -237,6 +237,169 @@ is widened from `f32` to `f64` before it is multiplied. An OCR result without a 
 NN result without a selected score has no measure and no confidence: its `measure_milli` feature
 is absent and its `confidence` is `null`; no value is defaulted.
 
+## Select step
+
+A select step is an operation whose effect is one tap on a candidate that a selection policy
+chooses, at run time, among the candidates a layout of the step's page projects.
+
+Implementation status: the source parser admits the `select` effect and its policy document,
+contained task admission and the interpreter execute it, and the host appends its
+`task.selection_evaluated` record. Lab's own package reader (`lab validate`, and the Lab
+validation of a task schema `0.6`/`0.7` package that `package dry-run` runs) refuses a select
+step with `lab_run_select_unsupported`.
+
+### Declaration
+
+```json
+{"id": "choose_slot", "from": "list_page", "to": "detail_page",
+ "select": {"layout_id": "layout/main_slots",
+            "policy": {"path": "policies/main_slots.json", "sha256": "<64 lowercase hex>"}},
+ "guard": {"page_id": "list_page", "target_id": "ui/close",
+           "expected_rect": {"x": 1124, "y": 86, "width": 30, "height": 31},
+           "verify_template": "assets/close.png"},
+ "expect_after": {"page_id": "detail_page", "timeout_ms": 10000, "interval_ms": 500},
+ "retryable": false, "max_attempts": 1, "retry_interval_ms": 1, "post_delay_ms": 200}
+```
+
+- `select` is the third effect of an operation: exactly one of `click`, `application` and
+  `select` is declared. It is accepted for task schema `0.6` through `0.9`; an older schema
+  refuses it with `UnconsumedField` at `/operations/<i>/select`.
+- `layout_id` names a candidate layout that the same task declares on the step's `from` page.
+- `policy` is a selection-policy document ([selection-policy.md](selection-policy.md)) at
+  `policies/<name>.json` in the task's directory, sealed by `sha256`, the SHA-256 of its bytes
+  (64 lowercase hex digits). The document is part of the package like every task file.
+- `guard` is required. It may be any guard the parser and admission accept:
+  `verify_template`, `color_probe` (a color or a color digest target) or `check`. The rule
+  that a `target`, `target_center` or `offset` click needs a template guard does not apply. The
+  guard is judged on the confirmation frame.
+- `expect_after` is required, and `unguarded_trusted_coordinate` is refused.
+
+These rules are checked by the declaration gate (`resource validate` and every parse) and
+again by contained task admission, which runs the same declaration validation on the sealed
+task. Each refusal names its file and the JSON pointer of the offending field:
+
+| Rule | Pointer | File |
+| --- | --- | --- |
+| `select` holds exactly `layout_id` and `policy`, of the right JSON types. | the field | `task.json` |
+| `layout_id` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/operations/<i>/select/layout_id` | `task.json` |
+| `policy` is `{path, sha256}`: a safe task-local `policies/<name>.json` path and 64 lowercase hex digits. | `…/select/policy/path`, `…/select/policy/sha256` | `task.json` |
+| No other effect is declared. | `/operations/<i>/select` | `task.json` |
+| `guard` and `expect_after` are declared (`MissingField`); `unguarded_trusted_coordinate` is not `true`. | `/operations/<i>/guard`, `…/expect_after`, `…/unguarded_trusted_coordinate` | `task.json` |
+| The document's bytes hash to `policy.sha256`. | `/operations/<i>/select/policy/sha256` | `task.json` |
+| The task declares the layout, and the layout's page is the step's `from` page. | `/operations/<i>/select/layout_id` | `task.json` |
+| The document is at most 512 KiB, decodes as a selection-policy document, has an unambiguous canonical form (no floats, no unsafe integers, no duplicate keys) and validates, in that order. | the document | the policy |
+| `applies_to.candidate_layout_id` is the step's `layout_id`. | `/applies_to/candidate_layout_id` | the policy |
+| Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
+| `selection.required_count` is `1`. | `/selection/required_count` | the policy |
+
+`actinglab resource validate` reports a policy document with the family `selection_policy`.
+
+Contained task admission then checks the step against the loaded package and refuses it before
+any input with its own codes:
+
+| Code | When |
+| --- | --- |
+| `contained_task_select_invalid` | The step lacks its guard or `expect_after`, is a trusted coordinate, or its `select` is malformed; or the layout is not a layout of the recognition pack, or not on the step's `from` page. |
+| `contained_task_select_policy_missing` | The document is not in the package. |
+| `contained_task_select_policy_hash_mismatch` | The SHA-256 of the document's bytes in the package differs from `policy.sha256`. The bytes are hashed directly, not looked up in a manifest, so a ZIP and a content-directory package are sealed the same way. |
+| `contained_task_select_policy_invalid` | The document does not read as a selection-policy document. |
+| `contained_task_select_policy_mismatch` | The document does not apply to the layout, as above. |
+
+The sealed binding of a select step is therefore the document path and SHA-256 inside the
+package, the package's own identity (its ZIP SHA-256 or content-directory digest) and the
+direct byte hash. A per-request policy binding is not part of v1.
+
+### Derived documents
+
+- A select step becomes no navigation edge and no page operation, so no route passes one.
+- Its primitive keeps the shape of a click primitive with `click: null` and the declared
+  `guard`, and adds the `select` object as declared. The primitives stay at schema `0.6`.
+- The sealed task (`canonical_task`) keeps `select` and the declared `guard` (its page ID
+  canonicalized as for every guard); no click is inferred.
+- The operation index is unchanged.
+
+### Execution
+
+One attempt of a select step runs, before any input:
+
+1. The step's frame F1 (the frame the step was dispatched on, recognized as its `from` page) is
+   projected with the step's layout: the projection P1 and its `candidate_set_sha256` H1.
+2. The runtime supplies the instance fact snapshot and the evaluation instant. The host reads
+   its policy inputs and releases them, takes the instance's snapshot under the fact write gate
+   (`instance_fact_snapshot`) and samples its clock; it holds no policy lock. The snapshot's
+   context is the instance alias with the game and server of the instance's configured policy
+   identity, or of the package's `control.json` when none is configured.
+3. The policy is evaluated over P1's actionable candidates, each feature a field of its name (a
+   `passed` feature a boolean, a `measure_milli` feature an integer), with the snapshot's facts
+   at that instant.
+4. When the outcome is `selected` (one candidate), a confirmation frame F2 is captured and
+   recognized like every frame, with its capture and recognition records and the `CapturePage`
+   timing boundary, but it feeds neither the stability sampling nor the post-admission OCR
+   collector. F2 must be the step's page, the step's guard must pass on F2, and the projection
+   P2 of F2 must hash to H1.
+5. The decision is recorded once as `task.selection_evaluated` (section Records).
+6. On a match, one tap is sampled inside the chosen candidate's `click` rectangle (taken from
+   P2, equal to P1's since the hashes are equal) as a `rect` click is sampled, with the step's
+   action seed. `task.effect_intent` records it and the input follows, bound to F2's committed
+   input frame.
+7. The step's `expect_after` is awaited as for every step.
+
+Any outcome other than `selected` (`empty`, `insufficient`, `ambiguous`, `unknown`) is the v1
+fallback, an abort: the step fails with `selection_not_selected` and detail
+`<kind>:<outcome_key>`. A policy document never names a task. One candidate is chosen per step;
+choosing several, fallback choices and data tables are not part of v1.
+
+Every selection failure happens before the input and takes the pre-execution guard path: the
+first attempt fails, with neither retry nor recovery, as a failed click guard does. A
+task-level retry belongs to the scheduler. A select step adds one capture and one recognition
+to its step, within the task's timeout.
+
+| Failure | Code | Record |
+| --- | --- | --- |
+| F1 cannot be projected | `candidate_projection_budget_exceeded`, `candidate_feature_failed`, `candidate_feature_provider_missing`, `invalid_candidate_projection` | none |
+| The runtime has no snapshot or instant, or an invalid one | `selection_state_unavailable` | none |
+| The snapshot's game or server is not the package's | `selection_fact_context_mismatch` | none |
+| The evaluator refuses its inputs, or the decision cannot be mirrored into the record | `selection_evaluation_failed` | none |
+| The outcome is not `selected` | `selection_not_selected` | `not_attempted` |
+| F2 is not the step's page | `selection_page_changed` | `page_changed` |
+| The guard fails on F2 | the guard's own code | `guard_failed` with that code |
+| F2 cannot be captured, validated or recognized, or projected | that failure's code | `capture_failed` with that code |
+| The runtime's capture of F2 fails, nonfatally or fatally | the runtime's own error, unchanged | `capture_failed` with `selection_confirmation_capture_failed` |
+| P2 hashes differently | `selection_projection_mismatch` | `mismatched` |
+| The record exceeds 64 KiB or is invalid | `selection_record_too_large`, or the record's own validation code | none |
+
+A failure before the decision writes no `task.selection_evaluated` record, because the record
+holds a decision. It is reported where every task failure is: the run's terminal event
+(`task.failed`) carries the code, the task diagnostic stream's terminal record carries the code
+and its detail, the client's receipt carries the code, and the step's `task.step_started`
+precedes it in the ledger. A record that cannot be written (too large or invalid) is reported
+the same way, and no input follows. A failure of the runtime's own record path ends the run as
+for every record, without a further record.
+
+A fatal failure of the runtime's capture of F2 (on the host, a device capture failure after
+`capture.failed`) ends the run, and its decision is still recorded: the record is appended
+after `capture.failed` and before the run's terminal events, and the task fails with the
+runtime's original error. When that record cannot be written (the task's deadline passed or
+it was cancelled or paused during the capture, the record fails its own validation, or its
+append fails), the task still fails with the original error and its code, on a manual and on
+a scheduled run alike. The host records the refusal when it happens, before the run's terminal
+events: one `runtime.failed` lifecycle record linked to the run, with stage
+`runtime.lifecycle.selection_record` and the refusal's own code and detail. The runtime is
+poisoned when the refusal poisons it. Only when the ledger refuses that record as well does the
+host join the refusal to the run's failure as the related failure `selection_record` in its
+native detail, and poison the runtime. A capture failure its runtime cannot classify forbids
+further records and returns without one.
+
+### Offline
+
+`package dry-run` evaluates a select step with an empty fact snapshot
+(`snapshot:offline:empty` at position 1 of no ledger, instance `offline.simulation`, the
+package's game and server) at the instant the Lab process read when the dry run started, and
+confirms on the same saved frame. The result carries that instant as `selection_now_unix_ms`,
+and the decision fingerprint binds it, only when a select step was evaluated; every other
+result and fingerprint is unchanged. The kernel's `dry_run_select` evaluates one select step on
+one saved frame with given facts and instant, for the `actinglab select` tool of a later slice.
+
 ## Records
 
 ### `task.selection_evaluated`
@@ -249,10 +412,9 @@ A select step records its decision in the task ledger as the event
  "selection": { … }}
 ```
 
-Each select attempt appends exactly one, before any input and before any failure return.
-Implementation status: the event type, the fact and the record exist; no producer appends
-them yet. The host emits them with the in-task select step of a later #308 slice. A package
-without a select step never produces the event.
+Each select attempt that reaches a decision appends exactly one, before any input and before
+any failure return (section Select step). The host appends it linked to the step's action and
+to the last frame the attempt read. A package without a select step never produces the event.
 
 The record has the shape of a `policy.*` decision: identity hashes and a complete breakdown.
 
@@ -260,7 +422,7 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | --- | --- |
 | `layout_id`, `page_id` | The evaluated layout and its page; equal to the projection's. |
 | `projection` | The full core candidate projection of the step's frame ([candidate-projection.md](candidate-projection.md)), including its `candidate_set_sha256`. |
-| `policy.path` | The package-relative policy document path the step declares. |
+| `policy.path` | The package-relative path of the policy document the step declares, `operations/<task>/<declared path>` below the resource root. |
 | `policy.package_sha256` | SHA-256 of the document's bytes in the package, the step's declared `sha256` (64 lowercase hex). |
 | `policy.policy_sha256` | The evaluator's canonical document identity, `sha256:<hex>`. |
 | `policy.policy_id` | The document's `policy_id`. |

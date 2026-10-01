@@ -663,6 +663,11 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) task_timing: task_timing::TaskTimingObserver,
     pub(super) diagnostic_step: Option<task_diagnostic::DiagnosticStep>,
     pub(super) diagnostic_physical: Option<ActionId>,
+    /// Workflow #308: a `run_ending` select record that could not be written. Its failure is
+    /// recorded in the ledger when it happens; this keeps whether it poisons the runtime, and
+    /// the failure itself when the ledger refused that record too, for the run to join to its
+    /// own failure.
+    unwritten_selection_record: Option<(bool, Option<RuntimeHostError>)>,
 }
 
 struct EntryRecoveryRuntime<'a, 'host> {
@@ -764,6 +769,13 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         operation_label: &str,
     ) -> Result<Option<u64>, Self::Error> {
         self.inner.action_seed(step_index, operation_label)
+    }
+
+    fn selection_state(
+        &mut self,
+        request: actingcommand_execution_kernel::SelectionStateRequest,
+    ) -> Result<actingcommand_execution_kernel::SelectionState, Self::Error> {
+        self.inner.selection_state(request)
     }
 
     fn input(
@@ -1679,6 +1691,31 @@ impl RuntimeContainedTask<'_> {
             .with_run_id(self.run_id)
     }
 
+    /// Workflow #308: the interpreter returns the run-ending capture error, not the failure of
+    /// a `run_ending` select record, so that failure is recorded here as it happens: one
+    /// `runtime.failed` lifecycle record (stage `runtime.lifecycle.selection_record`, the
+    /// failure's own code and detail) linked to the run, before the run's terminal events and
+    /// without touching the run's failure. When the ledger refuses that record as well, the
+    /// failure is kept for the run to join to its own failure, which then poisons the runtime.
+    fn record_unwritten_selection(&mut self, failure: &RequestFailure) {
+        let error = failure
+            .error
+            .as_ref()
+            .clone()
+            .with_failure_stage("runtime.lifecycle.selection_record");
+        let unrecorded = self
+            .host
+            .append_lifecycle_failure(
+                RuntimeLifecycleFailureStage::OperationCleanup,
+                RuntimeLifecycleFailure::Host(&error),
+                self.links(),
+                None,
+            )
+            .err()
+            .map(|ledger| error.with_related_failure("selection_record_ledger", &ledger));
+        self.unwritten_selection_record = Some((failure.poison_runtime, unrecorded));
+    }
+
     fn append_task(
         &self,
         severity: EventSeverity,
@@ -1745,6 +1782,17 @@ impl RuntimeContainedTask<'_> {
                 operation_label,
                 from_page,
                 phase,
+            },
+            ContainedTaskTrace::SelectionEvaluated {
+                step_index,
+                operation_label,
+                selection,
+                run_ending,
+            } => ContainedTaskTrace::SelectionEvaluated {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                selection,
+                run_ending,
             },
             ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -2866,6 +2914,48 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(Some(action_seed))
     }
 
+    /// Workflow #308: the instance's fact snapshot and the host clock for one select step. The
+    /// context is this instance's alias with the game and server of its configured policy
+    /// identity, or of the package's `control.json` when none is configured; the interpreter
+    /// refuses a context that differs from the package's. The policy inputs are read and
+    /// released before the fact write gate is taken; no policy lock is held.
+    fn selection_state(
+        &mut self,
+        _request: actingcommand_execution_kernel::SelectionStateRequest,
+    ) -> Result<actingcommand_execution_kernel::SelectionState, Self::Error> {
+        self.ensure_active()?;
+        let configured = {
+            let inputs = lock(&self.host.policy_inputs, "read_selection_state")?;
+            inputs.as_ref().and_then(|inputs| {
+                inputs
+                    .instance_identities()
+                    .find(|identity| identity.instance_id == self.instance_alias)
+                    .map(|identity| (identity.game_id.to_owned(), identity.server_id.to_owned()))
+            })
+        };
+        let (game_id, server_id) = configured.unwrap_or_else(|| self.declared_game_server.clone());
+        let failure = |error: RuntimeHostError| {
+            if error.is_fatal() {
+                RequestFailure::poison_without_terminal(error)
+            } else {
+                RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+            }
+        };
+        let snapshot = self
+            .host
+            .instance_fact_snapshot(InstanceFactContext {
+                instance_id: self.instance_alias.to_owned(),
+                server_id,
+                game_id,
+            })
+            .map_err(failure)?;
+        let now_unix_ms = self.host.clock.sample().map_err(failure)?.unix_ms;
+        Ok(actingcommand_execution_kernel::SelectionState::Snapshot {
+            snapshot,
+            now_unix_ms,
+        })
+    }
+
     fn committed_input_frame(
         &mut self,
         reference: actingcommand_contract::InputFrameReference,
@@ -2971,7 +3061,18 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(ApplicationEffectSupport::Performed)
     }
 
-    fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+    fn record(&mut self, mut trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        // Workflow #308: the interpreter does not return a `run_ending` select record's failure
+        // (it returns the run-ending capture error); it is recorded as it happens.
+        if let ContainedTaskTrace::SelectionEvaluated { run_ending, .. } = &mut trace
+            && std::mem::take(run_ending)
+        {
+            let recorded = self.record(trace);
+            if let Err(failure) = &recorded {
+                self.record_unwritten_selection(failure);
+            }
+            return recorded;
+        }
         if !matches!(&trace, ContainedTaskTrace::PackageAdmitted { .. }) {
             self.ensure_active()?;
         }
@@ -3347,6 +3448,42 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     ),
                 )?;
                 self.begin_diagnostic_step(step_index, *action_id.transport(), diagnostic_started)
+            }
+            // Workflow #308: one select attempt's decision, appended before any input or
+            // failure return, linked to its step and to the last frame it read.
+            ContainedTaskTrace::SelectionEvaluated {
+                step_index,
+                operation_label,
+                selection,
+                run_ending: _,
+            } => {
+                // The interpreter validates a record it can still fail the task with; a
+                // `run_ending` record reaches this check unvalidated.
+                selection.validate_for_append().map_err(|error| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        error.code(),
+                        "record_contained_task_selection",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                let action_id =
+                    contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
+                let mut links = self.links().with_action_id(action_id);
+                if let Some(frame_id) = self.last_frame_id {
+                    links = links.with_frame_id(frame_id);
+                }
+                self.append_task(
+                    EventSeverity::Info,
+                    links,
+                    TaskPayloadDraft::semantic(
+                        TaskSemanticFact::SelectionEvaluated {
+                            step_index,
+                            operation_label,
+                            selection,
+                        },
+                        AuditInput::new(),
+                    ),
+                )
             }
             ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -5002,6 +5139,7 @@ impl HostShared {
             ),
             diagnostic_step: None,
             diagnostic_physical: None,
+            unwritten_selection_record: None,
         };
         // Zero-input fields confirm the required entry in the interpreter's first capture.
         let mut execution = if let Err(failure) = runtime
@@ -5022,6 +5160,39 @@ impl HostShared {
             let execution = prepared.run(&mut runtime);
             execution
         };
+        // Workflow #308: a select record that could not be written after the confirmation
+        // capture ended the run is already in the ledger as its own failure; the run's failure
+        // keeps its code, carries its poison, and joins it only when the ledger refused it.
+        if let Some((poison, unrecorded)) = runtime.unwritten_selection_record.take() {
+            match &mut execution {
+                Err(
+                    ContainedTaskRunError::Boundary(failure)
+                    | ContainedTaskRunError::NonfatalOperation(failure),
+                ) => {
+                    if let Some(record_error) = &unrecorded {
+                        *failure.error = failure
+                            .error
+                            .as_ref()
+                            .clone()
+                            .with_related_failure("selection_record", record_error);
+                    }
+                    failure.poison_runtime |= poison || unrecorded.is_some();
+                }
+                // The interpreter returns a run-ending error whenever it leaves a select record
+                // to the runtime; anything else is an invariant breach and ends the runtime.
+                _ => {
+                    execution = Err(ContainedTaskRunError::Boundary(
+                        RequestFailure::poison_without_terminal(unrecorded.unwrap_or_else(|| {
+                            RuntimeHostError::fatal(
+                                "contained_task_selection_record_unreturned",
+                                "run_contained_task",
+                                RuntimeErrorCode::RuntimeFatal,
+                            )
+                        })),
+                    ));
+                }
+            }
+        }
         if let Err(ContainedTaskRunError::Task(error)) = &execution {
             runtime
                 .task_timing
