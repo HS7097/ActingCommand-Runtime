@@ -186,13 +186,15 @@ with `contained_task_recognition_invalid`, and online observation preparation wi
 | `color` | verdict | `floor(distance × 1000)` | `null` |
 | `color_digest` | verdict | `mean_milli` | `null` |
 | `composite` | verdict | not allowed | `null` |
-| `ocr` | verdict | `floor(confidence × 1000)` | `floor(confidence × 1000)` |
+| `ocr` | verdict | `ocr_confidence_milli(confidence)` | `ocr_confidence_milli(confidence)` |
 | `nn` | verdict | `floor(selected_score × 1000)` | `floor(selected_score × 1000)` |
 
-A `passed` feature is a boolean and a `measure_milli` feature an integer. A score is widened
-from `f32` to `f64` before it is multiplied. An OCR result without a confidence or an NN result
-without a selected score has no measure and no confidence: its `measure_milli` feature is
-absent and its `confidence` is `null`; no value is defaulted.
+A `passed` feature is a boolean and a `measure_milli` feature an integer. An OCR confidence goes
+through `ocr_confidence_milli`, `floor(clamp(confidence, 0, 1) * 1000)`, the one conversion that
+resource readings use as well ([resource-readings.md](resource-readings.md)); every other score
+is widened from `f32` to `f64` before it is multiplied. An OCR result without a confidence or an
+NN result without a selected score has no measure and no confidence: its `measure_milli` feature
+is absent and its `confidence` is `null`; no value is defaulted.
 
 ## Records
 

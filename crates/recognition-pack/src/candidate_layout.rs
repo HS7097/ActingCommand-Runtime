@@ -368,7 +368,7 @@ fn confidence_milli(
 }
 
 /// `measure_milli`: template `floor(score*1000)`, color `floor(distance*1000)`, color digest
-/// `mean_milli`, OCR `floor(confidence*1000)` and NN `floor(selected_score*1000)`.
+/// `mean_milli`, OCR the shared confidence conversion and NN `floor(selected_score*1000)`.
 fn measure_milli(evaluation: &TargetEvaluation) -> Result<Option<i64>, CandidateProjectionFailure> {
     match evaluation.kind {
         TargetKind::Template => template_score_milli(evaluation).map(Some),
@@ -399,15 +399,15 @@ fn template_score_milli(evaluation: &TargetEvaluation) -> Result<i64, CandidateP
     floor_milli(&evaluation.id, template.score)
 }
 
+/// The OCR confidence through the one shared conversion of the contract crate
+/// (`contracts/resource-readings.md`), so a reading and a feature of the same OCR result agree.
 fn ocr_confidence_milli(
     evaluation: &TargetEvaluation,
 ) -> Result<Option<i64>, CandidateProjectionFailure> {
     let ocr = evaluation.ocr.as_deref().ok_or_else(|| {
         CandidateProjectionFailure::unmeasurable(evaluation, "carries no OCR evidence")
     })?;
-    ocr.confidence
-        .map(|confidence| floor_milli(&evaluation.id, confidence))
-        .transpose()
+    Ok(actingcommand_contract::ocr_confidence_milli(ocr.confidence).map(i64::from))
 }
 
 fn nn_score_milli(
@@ -421,7 +421,7 @@ fn nn_score_milli(
         .transpose()
 }
 
-/// `floor(value * 1000)`, computed in `f64`.
+/// `floor(value * 1000)`, computed in `f64`, for template, color and NN values.
 fn floor_milli(target_id: &str, value: f32) -> Result<i64, CandidateProjectionFailure> {
     let milli = (f64::from(value) * 1000.0).floor();
     if !milli.is_finite() || milli.abs() >= MILLI_MAGNITUDE_LIMIT {

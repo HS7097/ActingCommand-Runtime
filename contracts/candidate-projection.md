@@ -174,8 +174,8 @@ scene and the admitted pack, nothing else; the layouts it reads are declared as 
    defaulted.
 6. Any evaluation error fails the whole projection: `candidate_feature_provider_missing` when
    the target, or a member of a composite target, needs an OCR or NN provider the evaluator was
-   built without, and `candidate_feature_failed` otherwise, including a measure that has no
-   finite integer milli value. The detail names the target and the recognition error code, and
+   built without, and `candidate_feature_failed` otherwise, including a template, color or NN
+   value that has no finite integer milli value. The detail names the target and the recognition error code, and
    the recognition error, with its PP-OCR reports and region evidence, travels with the
    failure. No partial projection is returned.
 7. `CandidateProjection::new` checks the candidates, seals the hash and checks the byte budget.
