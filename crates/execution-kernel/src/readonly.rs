@@ -828,6 +828,7 @@ mod tests {
                     },
                     expected: [255, 0, 0],
                     click: None,
+                    max_distance: None,
                 }),
                 RecognitionTarget::ClickOnly(ClickOnlyTarget {
                     id: "home_button".to_string(),
