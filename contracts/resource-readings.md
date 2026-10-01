@@ -6,9 +6,8 @@ confidence it accepts, how long the reading stays valid and the instance fact ke
 The Runtime reads only what the package declares and writes each reading back as an instance
 fact. It never writes a `produces` amount, a weight or any other amount computed by the policy.
 
-This document covers the declaration, its admission and the kernel reading (slice S5a). The
-host bridge that publishes the readings as instance facts is slice S5b; until it lands, a run
-that takes a reading fails as described in "Host" below.
+This document covers the declaration, its admission and the kernel reading (slice S5a), and the
+host bridge that publishes the readings as instance facts (slice S5b, "Host" below).
 
 ## Declaration
 
@@ -122,10 +121,119 @@ refused with the same code and the rule's reason as detail.
 
 ## Host
 
-Slice S5a has no fact writer. The host answers the reading trace with the request failure
-`contained_task_resource_reading_unsupported`: the run ends before `Finalizing` with a failure
-terminal carrying that code, no `fact.published` is appended and the Runtime is not poisoned.
-Slice S5b replaces this with the publication through `publish_facts`.
+Only the host writes readings, through `publish_facts`, the instance fact store's one
+publication path; no write site is added.
+
+**The trace.** The host accepts `ResourceReadings` once per run and only before `Finalizing`,
+and only for the frame it captured last: the trace's `captured_at` must equal the capture time
+the host kept with that frame's id. A second trace or one after `Finalizing`
+(`contained_task_resource_reading_duplicate`), a trace before any frame
+(`contained_task_resource_reading_frame_missing`) or of another frame
+(`contained_task_resource_reading_frame_mismatch`) poisons the Runtime. The readings then travel
+in memory on the run's terminal draft.
+
+**Run kinds.** A manual `task-run` and a policy dispatch both write. A startup package or a
+stuck-recovery return-home package that declares readings is refused after admission, before
+any lease and any input, with the request failure
+`contained_task_resource_reading_run_kind_unsupported` (recorded as that package's
+`runtime.failed`, `host_code=...`). A bound recovery entry and `recognize_only` take no
+readings.
+
+**The record.** Each reading is one `fact.published` with one record:
+
+| Field | Value |
+| --- | --- |
+| `scope` | `{"kind": "instance", "instance_id": <the run's registered instance alias>}` |
+| `key` | `fact_key` |
+| `content` | inline `integer`, the reading |
+| `observed_at_unix_ms` | the terminal frame's device capture time in Unix ms. It is wall clock time, the clock domain of the Runtime clock that refuses an observation in the future |
+| `expires_at_unix_ms` | `observed_at_unix_ms + valid_for_ms` |
+| `ttl_policy` | `{"minimum_ms": valid_for_ms, "maximum_ms": valid_for_ms, "source": "detector_contract"}` |
+| `confidence_milli` | the reading's `ocr_confidence_milli` |
+| `source_detector` | `resource_reading:<entry task id>/<reading id>` |
+| `source_snapshot_id` | `run:<run id>/frame:<frame id>/<reading id>`, the canonical `run_<hex>` and `frame_<hex>` ids |
+| `schema_version` | `fact.v1` |
+| `resource_bundle_hash` | a content directory's `sha256`; a sealed ZIP's SHA-256; for a source tree reference, SHA-256 of its prefixed wire JSON |
+| `invalidate_on` | `[]` |
+
+The event has source `runtime`, actor `runtime`, origin module `fact-store` and system links.
+It carries no run link: the run and the frame are named in `source_snapshot_id`.
+
+**When.** Only a terminal whose outcome is `Success` and that carries readings goes through the
+four stages below. Every other terminal, including every run without readings, runs the original
+terminal flow once, unchanged.
+
+0. No lock is held. The active catalog is read under the `policy` lock, as the policy forward
+   projection reads it, and the lock is released. If a pool with `value_source: ledger_fact`
+   observes a reading's `fact_key` in the run's instance scope, nothing is published and the
+   terminal becomes the failure `contained_task_resource_reading_live_pool_unsupported`. Only
+   pool bindings are read, never a score.
+1. Under `fact_write_gate`, the original checks run: the run's chain, an already committed
+   terminal, the capture summary and the settlement projection. Then the gate is released. An
+   already committed terminal is rejected as before; a refused projection is rewritten as before
+   (`contained_task_outcome_*`). Neither publishes. A successful projection of this terminal is
+   the confirmed settlement.
+2. No lock is held. Each reading, in declaration order, is published through `publish_facts`
+   (ordinary purpose) as its own single-record observation. A non-fatal refusal stops
+   publishing: the readings already written stay, and the terminal becomes the failure
+   `contained_task_resource_reading_rejected`. A fatal store failure poisons the Runtime, as for
+   every publication.
+3. The gate is taken again and the original flow runs in full: the chain, an already committed
+   terminal, the summary, the projection, the summary and terminal appends and the failed
+   terminal note.
+
+A refusal in stage 0 or 2 rewrites the terminal as a refused projection does: outcome `Failure`
+with that code, no final page, no settlement, and the projection failure severity (`warning`
+for a policy run). The receipt is `Failed` with that code, the detail as native detail and the
+failure terminal.
+
+`publish_facts` takes `fact_write_gate` itself, so nothing is published under the gate, and the
+`policy` lock is never taken under it. Between stage 2 and stage 3 another path can commit the
+run's terminal. Stage 3 then rejects the attempt as
+`contained_task_terminal_already_committed`, and the facts stay written: they are real
+observations of the terminal frame, and the rejection is reported on its own.
+
+**Ledger order.** `Finalizing` is the event `task.terminal_intent` and `TerminalCommitted` is
+`task.completed` or `task.failed`.
+
+- Success: the terminal frame's recognition, `Finalizing` (`success`), `fact.published` once
+  per reading, `capture.summary_committed`, `TerminalCommitted` (`success`).
+- Refused in stage 0 or 2: `Finalizing` (`success`), the readings published before the refusal,
+  `capture.summary_committed`, `TerminalCommitted` (`failure`). This is the same sequence as for
+  a refused settlement projection.
+
+**Failure codes.** `TerminalCommitted.failure_code` holds the code alone; the receipt's native
+detail holds the detail.
+
+| Code | When | Native detail | Reading why from the ledger |
+| --- | --- | --- | --- |
+| `contained_task_resource_reading_unresolved` | a reading does not hold, before `Finalizing` | `<id>:<reason>` | the OCR text and confidence in the task diagnostic |
+| `contained_task_resource_reading_invalid` | a declaration refused before any input | `<id>:<reason>` | the package admission refusal |
+| `contained_task_resource_reading_run_kind_unsupported` | a startup or return-home package declares readings | none | the package's `runtime.failed` |
+| `contained_task_resource_reading_live_pool_unsupported` | stage 0 | `<id>:<pool id>` | the active catalog's `ledger_fact` pool of that key |
+| `contained_task_resource_reading_rejected` | stage 2 | `<id>:<fact store code>` | see below |
+
+For `contained_task_resource_reading_rejected`, the fact store code can be traced in the ledger:
+
+- `fact_observation_not_newer`: a newer `fact.published` of the same scope and key.
+- `policy_fact_authority_conflict`: the configuration's `policy.facts` declares the key.
+- `fact_observation_incomplete_refresh`: the key's active record came from an observation with
+  other keys.
+- `fact_observation_in_future`: the Runtime clock is behind the device clock.
+- `fact_store_capacity_exceeded`: the count of active fact identities.
+
+The detail `<id>:fact_observation_invalid` also names a reading that a fact record cannot hold.
+
+A refused run is a failed run for the policy (`failure_streak`). None of these codes triggers
+stuck recovery.
+
+**Live pools.** Readings do not supply `ledger_fact` pools. Such a pool requires its records to
+carry `input.committed` and `input.failed` in `invalidate_on`, and a reading carries neither,
+so every later evaluation would fail with `pool_fact_invalidation_binding_missing`. Stage 0
+therefore refuses. If an active record without those invalidations exists for such a pool's
+key, recover by publishing a newer observation of the key by hand, with
+`invalidate_on: ["input.committed", "input.failed"]`; it must pass the input boundary check
+(`docs/live-fact-pools.md`).
 
 ## Scheduling connection
 

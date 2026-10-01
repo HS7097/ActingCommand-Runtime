@@ -341,6 +341,17 @@ active fact identities per instance. The evaluator scores it as `contracts/resou
 publication before RT-S1a could write, is never a policy: it is ignored with the reason
 `resource_target_policy_ignored` on the candidates of every instance it covers.
 
+## Resource reading facts
+
+Workflow #335 S5b. A package's resource readings (`contracts/resource-readings.md`) are
+written by the host, through `publish_facts`, after a run that succeeds on the reading page
+with a confirmed settlement. Each reading is one observation with one instance-scoped
+`resource.` or `inventory.` record. Its origin is the Runtime's own (source and actor `runtime`,
+origin module `fact-store`), with system links. The observation time is the terminal frame's
+capture time, the TTL is the declared `valid_for_ms` and `invalidate_on` is empty. The store
+accepts or refuses it like any other observation. No write site is added: the host terminal
+calls the existing `publish_facts`.
+
 ## Reading the seeds
 
 The per-instance read (`actingctl facts` without `--program`) is not built.
