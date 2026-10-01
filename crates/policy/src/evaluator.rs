@@ -16,9 +16,9 @@ use sha2::{Digest, Sha256};
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
-    FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ObservationRef, PoolSpec,
-    PredicateSpec, PrioritySelection, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec,
-    TaskTerminalState, TimelineEvent,
+    FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ManualOffset,
+    ObservationRef, PoolSpec, PredicateSpec, PrioritySelection, ResourceEffectSpec, ScopeSelector,
+    TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -962,6 +962,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                                         task_work.record = Some(RankRecord {
                                             base_total: candidate.rank.total_score,
                                             stage: None,
+                                            resources: None,
                                             promoted: false,
                                             affinity: candidate.affinity,
                                             tie_breaker: candidate.tie_breaker,
@@ -1211,6 +1212,8 @@ struct RankRecord {
     base_total: i64,
     /// `None` when the score stage left the candidate untouched.
     stage: Option<StageRecord>,
+    /// Every candidate of an instance with an active v2 resource target policy.
+    resources: Option<ResourceRecord>,
     promoted: bool,
     affinity: bool,
     tie_breaker: u64,
@@ -1224,8 +1227,30 @@ struct StageRecord {
     offset: i64,
     /// An applied resource target: `(id, mode, task target score)`.
     target: Option<(String, TargetMode, u64)>,
-    /// An applied override superseded the selection score and the manual offset.
+    /// An applied override superseded the selection score (and, unless a v2 override keeps
+    /// it, the manual offset).
     superseded: bool,
+}
+
+/// A candidate's resource term under an active v2 policy (Workflow #335 S2b).
+#[derive(Debug, Clone)]
+struct ResourceRecord {
+    /// `R`, zero for a candidate nothing of the policy weighs.
+    term: u64,
+    /// The effective override's target id.
+    override_id: Option<String>,
+    /// The manual offset stays in the effective score: always but under a `supersede` override.
+    offset_kept: bool,
+}
+
+impl ResourceRecord {
+    fn new(term: &crate::resource_targets::ResourceTerm) -> Self {
+        Self {
+            term: term.term_milli,
+            override_id: term.override_target.as_ref().map(|(id, _)| id.clone()),
+            offset_kept: !matches!(term.override_target, Some((_, ManualOffset::Supersede))),
+        }
+    }
 }
 
 /// The longest reason chain admission accepts; a longer one fails it fatally.
@@ -1375,7 +1400,11 @@ fn decision_record(
                 "why={why} state={state} total={} behind_by={} {} promoted={} tie_breaker={}",
                 related_rank.total_score,
                 i128::from(rank.total_score) - i128::from(related_rank.total_score),
-                rank_terms(related_rank, related_record.stage.as_ref()),
+                rank_terms(
+                    related_rank,
+                    related_record.stage.as_ref(),
+                    related_record.resources.as_ref()
+                ),
                 u8::from(related_record.promoted),
                 related_record.tie_breaker
             ),
@@ -1400,8 +1429,13 @@ fn last_reason_code(entry: &TaskWork) -> &str {
         .map_or("none", |reason| reason.code.as_str())
 }
 
-/// The ranking terms shared by `rank_breakdown` and a ranked `candidate_not_selected`.
-fn rank_terms(rank: &TaskRank, stage: Option<&StageRecord>) -> String {
+/// The ranking terms shared by `rank_breakdown` and a ranked `candidate_not_selected`. Under an
+/// active v2 policy `target` is the candidate's resource term `R`.
+fn rank_terms(
+    rank: &TaskRank,
+    stage: Option<&StageRecord>,
+    resources: Option<&ResourceRecord>,
+) -> String {
     format!(
         "priority={} aging_ms={} strategic_milli={} urgency_milli={} contention={} effective={} score={} utility={} offset={} target={}",
         rank.priority,
@@ -1413,9 +1447,12 @@ fn rank_terms(rank: &TaskRank, stage: Option<&StageRecord>) -> String {
         optional_milli(stage.and_then(|stage| stage.score)),
         stage.map_or(0, |stage| stage.utility),
         stage.map_or(0, |stage| stage.offset),
-        stage
-            .and_then(|stage| stage.target.as_ref())
-            .map_or_else(|| "none".to_owned(), |(_, _, score)| score.to_string()),
+        match resources {
+            Some(resources) => resources.term.to_string(),
+            None => stage
+                .and_then(|stage| stage.target.as_ref())
+                .map_or_else(|| "none".to_owned(), |(_, _, score)| score.to_string()),
+        },
     )
 }
 
@@ -1426,29 +1463,42 @@ fn rank_terms(rank: &TaskRank, stage: Option<&StageRecord>) -> String {
 /// while a better-ranked (promoted) entry was deferred.
 fn rank_breakdown_detail(rank: &TaskRank, record: &RankRecord, lead: Option<i128>) -> String {
     let stage = record.stage.as_ref();
-    let (target_id, mode) = stage
-        .and_then(|stage| stage.target.as_ref())
-        .map_or(("-", "-"), |(id, mode, _)| {
-            (id.as_str(), crate::resource_targets::mode_name(*mode))
-        });
+    let resources = record.resources.as_ref();
+    // Under an active v2 policy `target_id` names the effective override, `*` otherwise.
+    let (target_id, mode) = match resources {
+        Some(ResourceRecord {
+            override_id: Some(id),
+            ..
+        }) => (id.as_str(), "override"),
+        Some(_) => ("*", "adjust"),
+        None => stage
+            .and_then(|stage| stage.target.as_ref())
+            .map_or(("-", "-"), |(id, mode, _)| {
+                (id.as_str(), crate::resource_targets::mode_name(*mode))
+            }),
+    };
     let unsaturated = i128::from(rank.priority) * 1_000_000
         + i128::from(rank.aging_ms)
         + i128::from(rank.strategic_weight_milli) * 1_000
         + i128::from(rank.urgency_milli) * 1_000
         - i128::from(rank.contention_penalty)
         + i128::from(rank.effective_milli) * 1_000;
-    format!(
+    let mut detail = format!(
         "total={} base={} {} target_id={target_id} mode={mode} superseded={} promoted={} affinity={} tie_breaker={} saturated={} lead={}",
         rank.total_score,
         record.base_total,
-        rank_terms(rank, stage),
+        rank_terms(rank, stage, resources),
         u8::from(stage.is_some_and(|stage| stage.superseded)),
         u8::from(record.promoted),
         u8::from(record.affinity),
         record.tie_breaker,
         u8::from(unsaturated != i128::from(rank.total_score)),
         lead.map_or_else(|| "none".to_owned(), |lead| lead.to_string()),
-    )
+    );
+    if let Some(resources) = resources {
+        detail.push_str(&format!(" offset_kept={}", u8::from(resources.offset_kept)));
+    }
+    detail
 }
 
 /// The instance's stored target policy as its version `sha@applied_at`, or its state.
@@ -1465,6 +1515,16 @@ fn target_policy_field(policy: Option<&InstanceTargetPolicy>) -> String {
             ..
         }) => format!("expired:{policy_sha256}@{applied_at_unix_ms}"),
         Some(TargetPolicyState::Unreadable { code }) => format!("unreadable:{code}"),
+        Some(TargetPolicyState::ActiveV2 {
+            policy_sha256,
+            applied_at_unix_ms,
+            ..
+        }) => format!("active.v2:{policy_sha256}@{applied_at_unix_ms}"),
+        Some(TargetPolicyState::ExpiredV2 {
+            policy_sha256,
+            applied_at_unix_ms,
+            ..
+        }) => format!("expired.v2:{policy_sha256}@{applied_at_unix_ms}"),
         None => "none".to_owned(),
     };
     if let Some((scope_kind, observed_at_unix_ms)) = policy.and_then(|policy| policy.ignored) {
@@ -2002,16 +2062,32 @@ fn apply_priority_selection(
             targets.effect(&candidate.task_id)
         });
         let offset = effective_priority_offset(facts, &candidate.task_id, &candidate.instance_id);
+        // Under an active v2 policy a candidate enters the stage when its resource term is
+        // positive or an override covering it is effective (Workflow #335 S2b).
         if policy.is_none()
             && offset.is_none()
             && candidate.value_milli.is_none()
             && target.applied().is_none()
+            && !target
+                .resources()
+                .is_some_and(crate::resource_targets::ResourceTerm::takes_part)
         {
             // Released untouched: its rank record keeps `stage: None`.
+            let task_work = &mut work[candidate.work_index];
             if let Some(targets) = targets {
-                work[candidate.work_index]
-                    .reasons
-                    .extend(targets.reasons(&target, None, 0));
+                task_work.reasons.extend(targets.reasons(&target, None, 0));
+            }
+            if let Some(resources) = target.resources() {
+                task_work
+                    .record
+                    .as_mut()
+                    .ok_or_else(|| {
+                        PolicyEvaluationError::invalid(format!(
+                            "task '{}' reached the score stage without a rank record",
+                            candidate.task_id
+                        ))
+                    })?
+                    .resources = Some(ResourceRecord::new(resources));
             }
             ranked.push(candidate);
             continue;
@@ -2035,9 +2111,27 @@ fn apply_priority_selection(
             .and_then(|sum| sum.checked_add(offset_milli))
             .ok_or_else(overflow)?;
         // Adjust adds the task target score to the base; override replaces the selection
-        // score and the manual offset with it and keeps the utility term.
+        // score and the manual offset with it and keeps the utility term. A v2 resource term
+        // is added to the base, or under an effective override to the utility term and, unless
+        // the override supersedes it, the manual offset.
         let effective_milli = match target.applied() {
-            None => base_milli,
+            None => match target.resources() {
+                None => base_milli,
+                Some(resources) => {
+                    let term_milli = i64::try_from(resources.term_milli).map_err(|_| overflow())?;
+                    match &resources.override_target {
+                        None => base_milli.checked_add(term_milli),
+                        Some((_, ManualOffset::Keep)) => utility
+                            .utility_milli
+                            .checked_add(term_milli)
+                            .and_then(|sum| sum.checked_add(offset_milli)),
+                        Some((_, ManualOffset::Supersede)) => {
+                            utility.utility_milli.checked_add(term_milli)
+                        }
+                    }
+                    .ok_or_else(overflow)?
+                }
+            },
             Some(applied) => {
                 let task_target_milli =
                     i64::try_from(applied.task_target_milli).map_err(|_| overflow())?;
@@ -2083,7 +2177,9 @@ fn apply_priority_selection(
             .saturating_add(effective_milli.saturating_mul(1_000));
         candidate.rank.effective_milli = effective_milli;
         let applied = target.applied();
-        let overridden = applied.is_some_and(|applied| applied.mode == TargetMode::Override);
+        let resources = target.resources();
+        let overridden = applied.is_some_and(|applied| applied.mode == TargetMode::Override)
+            || resources.is_some_and(|resources| resources.override_target.is_some());
         // An unknown verdict or cost never defers or promotes; only a scored one meets the
         // thresholds. An applied override is never deferred or promoted either.
         let disposition = match (&thresholds, score_milli) {
@@ -2143,6 +2239,15 @@ fn apply_priority_selection(
                 applied.task_target_milli
             ));
         }
+        if let Some(resources) = resources {
+            detail.push_str(&format!(" resources={}", resources.term_milli));
+            if let Some((id, manual_offset)) = &resources.override_target {
+                detail.push_str(&format!(
+                    " override={id}:{}",
+                    crate::resource_targets::manual_offset_name(*manual_offset)
+                ));
+            }
+        }
         let task_work = &mut work[candidate.work_index];
         task_work.rank = Some(candidate.rank.clone());
         let record = task_work.record.as_mut().ok_or_else(|| {
@@ -2159,6 +2264,7 @@ fn apply_priority_selection(
                 .map(|applied| (applied.id.clone(), applied.mode, applied.task_target_milli)),
             superseded: overridden,
         });
+        record.resources = resources.map(ResourceRecord::new);
         record.promoted = matches!(
             disposition,
             ScoreDisposition::Promoted { .. } | ScoreDisposition::AgingCap { .. }
@@ -2211,6 +2317,25 @@ fn apply_priority_selection(
             .into_iter()
             .flatten()
             {
+                let wake = lapse.checked_add(1).ok_or_else(|| {
+                    PolicyEvaluationError::overflow("resource target wake overflowed")
+                })?;
+                if wake > time.unix_ms {
+                    task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
+                }
+            }
+        }
+        // A candidate a v2 policy moves is only as fresh as the policy and every inventory
+        // observation behind a shortfall weighing it, and wakes when one lapses.
+        if let Some(resources) = resources.filter(|resources| resources.takes_part()) {
+            for lapse in resources
+                .inventory_expiries
+                .iter()
+                .copied()
+                .chain([resources.valid_until_unix_ms])
+            {
+                candidate.facts_fresh_until_unix_ms =
+                    min_wake(candidate.facts_fresh_until_unix_ms, Some(lapse));
                 let wake = lapse.checked_add(1).ok_or_else(|| {
                     PolicyEvaluationError::overflow("resource target wake overflowed")
                 })?;

@@ -42,8 +42,13 @@ pub fn validate_catalog_declaration(
 ) -> Result<(), Box<CatalogDiagnostic>> {
     let (version, catalog, source_map) = match kind {
         SchedulingDocumentKind::Selection => return parse_selection_document(source).map(|_| ()),
+        // The same version probe as the formal entry: exactly the v2 string takes the v2 shape.
         SchedulingDocumentKind::ResourceTargets => {
-            return parse_document::<crate::ResourceTargetsDocument>(source, kind).map(|_| ());
+            return if crate::resource_targets::declares_v2(&source.bytes) {
+                parse_document::<crate::ResourceTargetsDocumentV2>(source, kind).map(|_| ())
+            } else {
+                parse_document::<crate::ResourceTargetsDocument>(source, kind).map(|_| ())
+            };
         }
         SchedulingDocumentKind::Tasks => {
             let parsed = parse_document::<crate::TasksDocument>(source, kind)?;

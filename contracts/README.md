@@ -23,7 +23,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `selection-policy.md` — the declared selection document, its canonical identity, and the pure evaluator's semantics.
 - `candidate-projection.md` — `actingcommand.candidate-projection.v1`: one layout's candidate set on one frame, its IDs, hash, budgets and public/controlled forms.
 - `selection-graph.md` — the #308 selection graph; section Checks: named composite checks (recognition pack `0.7` `composite` targets), their evaluation and where they may be used; section Records: the `task.selection_evaluated` ledger record and its evaluator mirror.
-- `resource-targets.md` — the instance resource target policy: the v1 document, its rejection reasons, the `ApplyResourceTargets` entry and receipts, and its storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation").
+- `resource-targets.md` — the instance resource target policy: the frozen v1 and the valuation-aware v2 documents, their rejection reasons, the `ApplyResourceTargets` entry and receipts, and their storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation", with "Resource weights (v2)").
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
