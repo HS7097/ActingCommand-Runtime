@@ -5410,6 +5410,9 @@ struct OperationGuard {
     verify_template: Option<String>,
     #[serde(default)]
     color_probe: Option<String>,
+    /// A named check (a `composite` target) guards the input (`selection-graph.md`).
+    #[serde(default)]
+    check: Option<String>,
 }
 
 impl OperationGuard {
@@ -5421,7 +5424,9 @@ impl OperationGuard {
         if self.page_id.trim().is_empty()
             || self.target_id.trim().is_empty()
             || !crate::page_anchor_matches(&control.game, &self.page_id, &operation.from)
-            || (self.verify_template.is_none() && self.color_probe.is_none())
+            || (self.verify_template.is_none()
+                && self.color_probe.is_none()
+                && self.check.is_none())
         {
             return Err(ContainedTaskError::new("contained_task_guard_invalid"));
         }
