@@ -364,7 +364,7 @@ to its step, within the task's timeout.
 | F2 is not the step's page | `selection_page_changed` | `page_changed` |
 | The guard fails on F2 | the guard's own code | `guard_failed` with that code |
 | F2 cannot be captured, validated or recognized, or projected | that failure's code | `capture_failed` with that code |
-| The runtime's capture of F2 fails | the runtime's code | `capture_failed` with `selection_confirmation_capture_failed` |
+| The runtime's capture of F2 fails, nonfatally or fatally | the runtime's own error, unchanged | `capture_failed` with `selection_confirmation_capture_failed` |
 | P2 hashes differently | `selection_projection_mismatch` | `mismatched` |
 | The record exceeds 64 KiB or is invalid | `selection_record_too_large`, or the record's own validation code | none |
 
@@ -375,6 +375,15 @@ and its detail, the client's receipt carries the code, and the step's `task.step
 precedes it in the ledger. A record that cannot be written (too large or invalid) is reported
 the same way, and no input follows. A failure of the runtime's own record path ends the run as
 for every record, without a further record.
+
+A fatal failure of the runtime's capture of F2 (on the host, a device capture failure after
+`capture.failed`) ends the run, and its decision is still recorded: the record is appended
+after `capture.failed` and before `task.failed`, and the task fails with the runtime's original
+error. When that record cannot be written, including when it fails its own validation, the
+task still fails with the original error; the host joins the record's failure to it as the
+related failure `selection_record` in its native detail, and the runtime is poisoned when the
+record's failure poisons it. A capture failure its runtime cannot classify forbids further
+records and returns without one.
 
 ### Offline
 

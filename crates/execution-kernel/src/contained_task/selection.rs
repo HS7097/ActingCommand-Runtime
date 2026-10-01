@@ -14,9 +14,9 @@
 
 use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
-    ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace, PageObservation,
-    PreparedContainedTask, Resolution, TaskControl, TaskOperation, TaskProgram,
-    safe_task_local_path, sampled_tap, scene_from_frame,
+    ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
+    ContainedTaskTrace, PageObservation, PreparedContainedTask, Resolution, TaskControl,
+    TaskOperation, TaskProgram, safe_task_local_path, sampled_tap, scene_from_frame,
 };
 use actingcommand_contract::{
     CandidateFeature, CandidateProjection, InputAction, InputSamplingEvidence,
@@ -48,7 +48,7 @@ const SELECTION_NOT_SELECTED: &str = "selection_not_selected";
 const SELECTION_PAGE_CHANGED: &str = "selection_page_changed";
 const SELECTION_PROJECTION_MISMATCH: &str = "selection_projection_mismatch";
 /// The confirmation code a record carries when the runtime's own capture of the confirmation
-/// frame fails; the task then fails with the runtime's error.
+/// frame fails, nonfatally or fatally; the task then fails with the runtime's error.
 const SELECTION_CONFIRMATION_CAPTURE_FAILED: &str = "selection_confirmation_capture_failed";
 /// A dry run's frame is not the step's page.
 const SELECT_PAGE_MISMATCH: &str = "select_page_mismatch";
@@ -378,13 +378,14 @@ fn mirror<T: Serialize, U: DeserializeOwned>(value: &T) -> Result<U, ContainedTa
         })
 }
 
+/// The decision's record, mirrored before the confirmation frame is captured; the attempt
+/// sets its `confirmation`.
 fn selection_record(
     prepared: &PreparedSelect,
     projection: &CandidateProjection,
     snapshot: &InstanceFactSnapshot,
     now_unix_ms: u64,
     decision: &SelectionDecision,
-    confirmation: TaskSelectionConfirmation,
 ) -> Result<TaskSelectionRecord, ContainedTaskError> {
     Ok(TaskSelectionRecord {
         layout_id: projection.layout_id().to_owned(),
@@ -405,7 +406,7 @@ fn selection_record(
         selected: decision.selected.clone(),
         verdicts: mirror(&decision.candidates)?,
         reasons: mirror(&decision.reasons)?,
-        confirmation,
+        confirmation: TaskSelectionConfirmation::NotAttempted,
     })
 }
 
@@ -423,7 +424,10 @@ impl PreparedContainedTask {
     /// exactly one `SelectionEvaluated` trace precedes the return, whether a candidate is
     /// confirmed or the attempt fails. Only a decision that cannot be recorded
     /// (`selection_record_too_large`, an invalid record) and a record boundary failure, which
-    /// forbids further records, return without one; neither reaches an input.
+    /// forbids further records, return without one; neither reaches an input. After a fatal
+    /// failure of the runtime's confirmation capture the record goes to the runtime as
+    /// `run_ending` and the capture's error is returned unchanged: a failure to write that
+    /// record, including the runtime's own validation of it, stays with the runtime.
     pub(super) fn select_attempt<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -486,6 +490,8 @@ impl PreparedContainedTask {
         }
         let facts = SelectionFactSnapshot::from_instance_snapshot(&snapshot, now_unix_ms);
         let decision = decide(&prepared.policy, &projection, &facts, now_unix_ms)?;
+        let mut record =
+            selection_record(prepared, &projection, &snapshot, now_unix_ms, &decision)?;
         let (confirmation, result): Confirmation<R::Error> = match chosen(&decision)? {
             None => (
                 TaskSelectionConfirmation::NotAttempted,
@@ -508,31 +514,33 @@ impl PreparedContainedTask {
                 timing,
             )?,
         };
-        let record = selection_record(
-            prepared,
-            &projection,
-            &snapshot,
-            now_unix_ms,
-            &decision,
-            confirmation,
-        )?;
-        record.validate_for_append().map_err(|error| {
-            ContainedTaskError::with_detail(error.code(), format!("field={}", error.field()))
-        })?;
-        runtime
-            .record(ContainedTaskTrace::SelectionEvaluated {
-                step_index,
-                operation_label: operation.id.clone(),
-                selection: Box::new(record),
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        result
+        record.confirmation = confirmation;
+        let run_ending = matches!(result, Err(ContainedTaskRunError::Boundary(_)));
+        if !run_ending {
+            record.validate_for_append().map_err(|error| {
+                ContainedTaskError::with_detail(error.code(), format!("field={}", error.field()))
+            })?;
+        }
+        let recorded = runtime.record(ContainedTaskTrace::SelectionEvaluated {
+            step_index,
+            operation_label: operation.id.clone(),
+            selection: Box::new(record),
+            run_ending,
+        });
+        match recorded {
+            Err(error) if !run_ending => Err(ContainedTaskRunError::Boundary(error)),
+            // A `run_ending` record's failure stays with the runtime; the capture's error is
+            // returned unchanged.
+            _ => result,
+        }
     }
 
     /// The confirmation of `candidate_id` on a fresh frame, captured and recognized like any
     /// frame but feeding neither stability sampling nor post-admission OCR: it is the step's
     /// page, the step's guard passes on it, and its candidate set hashes like the evaluated
-    /// `projection`. A record boundary failure returns as the outer error.
+    /// `projection`. A failure of the runtime's capture that it classifies nonfatal or fatal
+    /// is the confirmation `capture_failed`, returned unchanged after the record; any other
+    /// boundary failure returns as the outer error.
     fn confirm<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -558,6 +566,17 @@ impl PreparedContainedTask {
                         code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
                     },
                     Err(ContainedTaskRunError::NonfatalOperation(error)),
+                ));
+            }
+            // A fatal capture failure ends the run; the decision is still recorded.
+            Err(ContainedTaskRunError::Boundary(error))
+                if R::classify_error(&error) == ContainedTaskRuntimeErrorClass::Fatal =>
+            {
+                return Ok((
+                    TaskSelectionConfirmation::CaptureFailed {
+                        code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
+                    },
+                    Err(ContainedTaskRunError::Boundary(error)),
                 ));
             }
             Err(error) => return Err(error),
