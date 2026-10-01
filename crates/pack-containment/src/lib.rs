@@ -25,11 +25,15 @@ use std::sync::Arc;
 use zip::ZipArchive;
 
 mod content_dir;
-mod git_source;
 pub mod source;
 mod source_pack;
 
 pub type ContainmentResult<T> = Result<T, ContainmentError>;
+
+/// A source or package admission failure carrying only its stable code.
+fn source_error(code: &'static str) -> ContainmentError {
+    ContainmentError::SourceTree { code }
+}
 
 pub const DEFAULT_MAX_COMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_MAX_TOTAL_DECOMPRESSED_BYTES: u64 = 1024 * 1024 * 1024;
@@ -192,30 +196,29 @@ impl Containment {
     ) -> ContainmentResult<&LoadedBundle> {
         expected
             .validate()
-            .map_err(|_| git_source::source_error("package_reference_invalid"))?;
+            .map_err(|_| source_error("package_reference_invalid"))?;
         match expected {
             PackageRef::LegacyZipSha256(hash) => {
                 let file = std::fs::File::open(locator)
-                    .map_err(|_| git_source::source_error("package_open_failed"))?;
+                    .map_err(|_| source_error("package_open_failed"))?;
                 let metadata = file
                     .metadata()
-                    .map_err(|_| git_source::source_error("package_metadata_failed"))?;
+                    .map_err(|_| source_error("package_metadata_failed"))?;
                 if !metadata.is_file() || metadata.len() > self.limits.max_compressed_bytes {
-                    return Err(git_source::source_error("package_size_invalid"));
+                    return Err(source_error("package_size_invalid"));
                 }
                 let mut bytes = Vec::new();
                 file.take(self.limits.max_compressed_bytes.saturating_add(1))
                     .read_to_end(&mut bytes)
-                    .map_err(|_| git_source::source_error("package_read_failed"))?;
+                    .map_err(|_| source_error("package_read_failed"))?;
                 if std::time::Instant::now() >= deadline {
-                    return Err(git_source::source_error("package_deadline"));
+                    return Err(source_error("package_deadline"));
                 }
                 self.load_for(instance, &bytes, &Sha256Hash::parse_hex(hash)?, observation)
             }
-            PackageRef::GitSourceTree(reference) => {
-                let entries = git_source::snapshot(locator, reference, self.limits, deadline)?;
-                self.admit_source(instance, entries, expected.clone(), observation, deadline)
-            }
+            // Workflow #288 A4: the Git source-tree loader is retired. The reference still
+            // decodes and validates unchanged; loading it never reads the locator.
+            PackageRef::GitSourceTree(_) => Err(source_error("source_tree_loader_retired")),
             PackageRef::ContentDirectory(reference) => {
                 let (entries, verified) =
                     content_dir::snapshot(locator, reference, self.limits, deadline)?;
@@ -250,7 +253,7 @@ impl Containment {
     ) -> ContainmentResult<&LoadedBundle> {
         let (package, operation) = source_pack::compile(entries, self.limits, deadline)?;
         if std::time::Instant::now() >= deadline {
-            return Err(git_source::source_error("source_tree_deadline"));
+            return Err(source_error("source_tree_deadline"));
         }
         let bundle = LoadedBundle::from_memory_package(
             package,
@@ -260,7 +263,7 @@ impl Containment {
             Some(operation),
         )?;
         if std::time::Instant::now() >= deadline {
-            return Err(git_source::source_error("source_tree_deadline"));
+            return Err(source_error("source_tree_deadline"));
         }
         let bench = self
             .benches

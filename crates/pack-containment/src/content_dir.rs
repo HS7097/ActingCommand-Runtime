@@ -5,7 +5,6 @@
 //! then uses the same in-memory bytes and nothing is read from disk afterwards.
 
 use super::*;
-use crate::git_source::source_error;
 use actingcommand_contract::{
     ContentDirectory, ContentDirectoryVersion, content_directory_digest, digest_named,
     safe_source_path,

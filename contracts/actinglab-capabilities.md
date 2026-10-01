@@ -39,8 +39,8 @@ CLI envelope, legacy task, task operation, recognition pack, control and package
 reference. No common highest version is defined. Each resource still passes
 its existing version-specific validation; schema support does not prove an
 installed resource or provider is usable. Package references include the
-accepted typed Git source-tree and content-directory versions and the legacy
-ZIP digest form. The recognition pack domain lists `0.1` and `0.3` through
+accepted typed content-directory version and the legacy ZIP digest form; the
+retired Git source-tree form is not listed (its records still decode). The recognition pack domain lists `0.1` and `0.3` through
 `0.7`; a pack is written at `0.7` only when it declares a `color_digest` or
 `composite` target or a per-target color `max_distance` (`selection-graph.md`).
 
