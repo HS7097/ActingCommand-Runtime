@@ -47,6 +47,7 @@ jobs:
           TMP: ${{ runner.temp }}
         run: |
           $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path 'head/crates/execution-kernel/tests' | Out-Null
           Copy-Item -LiteralPath 'head/one-off-308g2/one_off_308g2.rs' -Destination 'head/crates/execution-kernel/tests/one_off_308g2.rs'
           Push-Location head
           & cargo test --locked -p actingcommand-execution-kernel --test one_off_308g2 -- --nocapture --test-threads=1 | Tee-Object -FilePath ../head.log
@@ -61,6 +62,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Write-Host "control at $((& git -C control rev-parse HEAD).Trim())"
+          New-Item -ItemType Directory -Force -Path 'control/crates/execution-kernel/tests' | Out-Null
           Copy-Item -LiteralPath 'head/one-off-308g2/one_off_308g2.rs' -Destination 'control/crates/execution-kernel/tests/one_off_308g2.rs'
           Push-Location control
           & cargo test --locked -p actingcommand-execution-kernel --test one_off_308g2 -- --nocapture --test-threads=1 | Tee-Object -FilePath ../control.log
