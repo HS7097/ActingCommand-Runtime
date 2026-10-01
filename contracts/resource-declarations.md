@@ -27,6 +27,13 @@ and `operation explain` keep their existing behavior.
 | `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
+A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
+(`contracts/resource-readings.md`); in `0.3`–`0.7` it is `UnconsumedField` @
+`/resource_readings`. The declaration gate reports each entry's field pointer
+(`/resource_readings/<i>/<field>`); the parser's source validation adds the page and target
+cross-references, each naming the entry's field pointer. No task schema, content-directory,
+`control.json`, `resources.json` or derived pack/pages version changes.
+
 The applications table may carry an optional top-level `label`: the game's display name for people, free text (bilingual `中文 / English` recommended) of 1-128 bytes after trimming, without control characters; consumers fall back to `game` when it is absent.
 
 Each `servers.<server>` entry of the applications table carries `application_id`,

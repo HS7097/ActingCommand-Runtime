@@ -197,7 +197,8 @@ pub fn simulate_contained_task(
         post_admission_ocr: OfflinePostAdmissionOcrStatus {
             declared: post_admission_ocr_declared,
             executed: false,
-            pending_real_execution: post_admission_ocr_declared,
+            // Declared OCR fields and resource readings are both read only by a real run.
+            pending_real_execution: post_admission_ocr_declared || task.has_resource_readings(),
         },
         recognition: runtime.recognition,
         decision,
