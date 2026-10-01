@@ -3,7 +3,8 @@
 //! One-off evidence for Workflow #308 D3, to be reverted. C2 parses every task package of a
 //! published bundle through the source parser and prints digests of the derived documents.
 //! C3 admits copies of one package that declare a check, color digests, a digest guard and a
-//! per-target color threshold, and refuses two realistic authoring mistakes.
+//! per-target color threshold, refuses two realistic authoring mistakes, and refuses a
+//! resource reading whose OCR target is a member of a check in a page gate.
 
 use actingcommand_contract::LabError;
 use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
@@ -471,7 +472,7 @@ fn with_task(base: &Entries, task: &Value) -> Result<Entries, String> {
     Ok(entries)
 }
 
-fn c3(base: &Entries, stamina: &Value) -> Result<Vec<String>, String> {
+fn c3(base: &Entries, stamina: &Value, credits: &Value) -> Result<Vec<String>, String> {
     let task = json_entry(base, &task_path(BASE_TASK))?;
     let game = text(&task, "game")?;
     let (home_asset, home_rect) = verify_template(&task, "ui/home_cafe_label")?;
@@ -503,7 +504,7 @@ fn c3(base: &Entries, stamina: &Value) -> Result<Vec<String>, String> {
 
     // 2. Home is declared by check(digest and page/home); the anchor stays.
     let mut digest_and_page = task.clone();
-    array_mut(&mut digest_and_page, "color_probes")?.push(home_digest);
+    array_mut(&mut digest_and_page, "color_probes")?.push(home_digest.clone());
     digest_and_page["checks"] = json!([
         {"id": "check/home", "all_of": ["digest/home_cafe_label", "page/home"]}
     ]);
@@ -547,6 +548,44 @@ fn c3(base: &Entries, stamina: &Value) -> Result<Vec<String>, String> {
         &["state/cafe_receive_ready", "state/cafe_receive_empty"],
         None,
     ));
+
+    // 5. A credits reading on home (#335 S5a) while home's page gate is a check over a digest
+    //    and an OCR target: refused when the reading's own target is a member of that check,
+    //    admitted when the check uses the other OCR target.
+    for (name, member) in [
+        ("reading_target_in_check_page_gate", "ocr/credits"),
+        ("reading_target_outside_check_page_gate", "ocr/stamina"),
+    ] {
+        let mut reading = task.clone();
+        array_mut(&mut reading, "anchors")?.retain(|anchor| anchor["id"].as_str() != Some("home"));
+        array_mut(&mut reading, "color_probes")?.push(home_digest.clone());
+        reading["ocr_targets"] = json!([stamina, credits]);
+        reading["checks"] = json!([
+            {"id": "check/home", "all_of": ["digest/home_cafe_label", member]}
+        ]);
+        reading["page_rules"]["home"]["required"] = json!(["check/home"]);
+        reading["resource_readings"] = json!([{
+            "id": "credits",
+            "fact_key": "resource.credits",
+            "page_id": "home",
+            "target_id": "ocr/credits",
+            "trim": "whitespace_v1",
+            "value": {
+                "type": "unsigned_integer",
+                "min": 0,
+                "max": 9_007_199_254_740_991_u64,
+                "format": "comma_grouped"
+            },
+            "minimum_confidence_milli": 900,
+            "valid_for_ms": 21_600_000
+        }]);
+        lines.push(c3_outcome(
+            name,
+            &with_task(base, &reading)?,
+            &["check/home"],
+            None,
+        ));
+    }
 
     // Mistake 1: the grid was changed to 4x8 but the cells were not recomputed.
     let mut grid_changed = digest_and_ocr.clone();
@@ -614,7 +653,11 @@ fn one_off_d3_source_checks_and_derived_identity() {
     let stamina = find_by_id(&readings, "ocr_targets", "ocr/stamina")
         .cloned()
         .unwrap_or_else(|| panic!("no ocr/stamina declaration"));
-    for line in c3(package(BASE_TASK), &stamina).unwrap_or_else(|error| panic!("{error}")) {
+    let credits = find_by_id(&readings, "ocr_targets", "ocr/credits")
+        .cloned()
+        .unwrap_or_else(|| panic!("no ocr/credits declaration"));
+    for line in c3(package(BASE_TASK), &stamina, &credits).unwrap_or_else(|error| panic!("{error}"))
+    {
         emit(&line);
     }
 }
