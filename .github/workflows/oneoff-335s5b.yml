@@ -1,0 +1,126 @@
+name: one-off 335 S5b (to be reverted)
+
+# One-off evidence for Workflow #335 S5b (model section 6, H1-H10). The control group is the PR's
+# exact merge-base 762dd274, built and run in the same job as the PR head. Reverted right after
+# its run; the PR's final diff contains neither this file nor one-off-335s5b/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  h:
+    name: H1-H10 control 762dd274 and head
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      CONTROL_SHA: 762dd274fabf95f89e4c06c19d73b482f7c5daff
+    steps:
+      - name: Check out the control commit (merge-base)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 762dd274fabf95f89e4c06c19d73b482f7c5daff
+          path: control
+          persist-credentials: false
+      - name: Check out the PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: H8 paths unchanged against the merge-base
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "H8 head $((& git -C head rev-parse HEAD).Trim()) merge-base $env:CONTROL_SHA"
+          $paths = @('crates/actingcommand-contract/src/event.rs', 'crates/actingcommand-contract/src/event', 'crates/ledger', 'crates/ledger-forensics', 'crates/runtime-state', 'crates/policy', 'tools')
+          $stat = & git -C head diff --stat $env:CONTROL_SHA HEAD -- @paths
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          Write-Host "H8 event/ledger/runtime-state/policy/tools diff lines: $(@($stat).Count)"
+          $stat | ForEach-Object { Write-Host "H8 $_" }
+          & git -C head diff --stat $env:CONTROL_SHA HEAD -- . ':(exclude)one-off-335s5b' ':(exclude).github/workflows/oneoff-335s5b.yml' | ForEach-Object { Write-Host "H8 product $_" }
+      - name: Head harness (H1-H6, H9, T2-T4, H10 head, BA head)
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & rustup default stable
+          if ($LASTEXITCODE -ne 0) { throw "rustup default failed with exit code $LASTEXITCODE" }
+          $env:ONE_OFF_335S5B_STATE = Join-Path $env:RUNNER_TEMP 'h7-state'
+          Copy-Item -LiteralPath 'head/one-off-335s5b/common.rs' -Destination 'head/crates/runtime-host/src/tests/one_off_335s5b_common.rs'
+          Copy-Item -LiteralPath 'head/one-off-335s5b/head.rs' -Destination 'head/crates/runtime-host/src/tests/one_off_335s5b_head.rs'
+          Add-Content -LiteralPath 'head/crates/runtime-host/src/tests.rs' -Value "mod one_off_335s5b_common;`nmod one_off_335s5b_head;"
+          Get-Content -LiteralPath 'head/one-off-335s5b/host_helper.rs' | Add-Content -LiteralPath 'head/crates/runtime-host/src/host.rs'
+          Push-Location head
+          & cargo test --locked -p actingcommand-runtime-host --lib tests::one_off_335s5b -- --nocapture --test-threads=1 | Tee-Object -FilePath ../head.log
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "head harness failed with exit code $code" }
+      - name: Control harness (H10 control, BA control, H7 reopen)
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:ONE_OFF_335S5B_STATE = Join-Path $env:RUNNER_TEMP 'h7-state'
+          Write-Host "control at $((& git -C control rev-parse HEAD).Trim())"
+          Copy-Item -LiteralPath 'head/one-off-335s5b/common.rs' -Destination 'control/crates/runtime-host/src/tests/one_off_335s5b_common.rs'
+          Copy-Item -LiteralPath 'head/one-off-335s5b/control.rs' -Destination 'control/crates/runtime-host/src/tests/one_off_335s5b_control.rs'
+          Add-Content -LiteralPath 'control/crates/runtime-host/src/tests.rs' -Value "mod one_off_335s5b_common;`nmod one_off_335s5b_control;"
+          Push-Location control
+          & cargo test --locked -p actingcommand-runtime-host --lib tests::one_off_335s5b -- --nocapture --test-threads=1 | Tee-Object -FilePath ../control.log
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "control harness failed with exit code $code" }
+      - name: Compare H10 and H7 lines
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($prefix in @('H10|', 'H7|record ')) {
+            $control = @(Get-Content -LiteralPath 'control.log' | Where-Object { $_.StartsWith($prefix) })
+            $head = @(Get-Content -LiteralPath 'head.log' | Where-Object { $_.StartsWith($prefix) })
+            Write-Host "COMPARE $prefix control=$($control.Count) head=$($head.Count)"
+            $different = 0
+            $count = [Math]::Max($control.Count, $head.Count)
+            for ($index = 0; $index -lt $count; $index++) {
+              $left = if ($index -lt $control.Count) { $control[$index] } else { '<none>' }
+              $right = if ($index -lt $head.Count) { $head[$index] } else { '<none>' }
+              if ($left -ceq $right) { Write-Host "MATCH $right" } else { $different++; Write-Host "DIFF control: $left"; Write-Host "DIFF head:    $right" }
+            }
+            Write-Host "COMPARE $prefix different=$different"
+          }
+      - name: H7 actingledger open, events, facts on both builds
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $stateDir = Join-Path $env:RUNNER_TEMP 'h7-state'
+          $state = Join-Path $stateDir 'state'
+          $latest = (Get-Content -LiteralPath (Join-Path $stateDir 'latest_sequence.txt')).Trim()
+          foreach ($label in @('control', 'head')) {
+            Push-Location $label
+            & cargo build --locked -p actingledger --bin actingledger
+            $build = $LASTEXITCODE
+            Pop-Location
+            if ($build -ne 0) { throw "actingledger build on $label failed with exit code $build" }
+            $exe = Join-Path $label 'target/debug/actingledger.exe'
+            & $exe --state-root $state open > "ledger-$label-open.txt"
+            Write-Host "H7 $label actingledger open exit=$LASTEXITCODE bytes=$((Get-Item "ledger-$label-open.txt").Length)"
+            & $exe --state-root $state events > "ledger-$label-events.txt"
+            $events = Get-Content -Raw -LiteralPath "ledger-$label-events.txt"
+            Write-Host "H7 $label actingledger events exit=$LASTEXITCODE fact.published=$(([regex]::Matches($events, 'fact\.published')).Count) resource_reading=$(([regex]::Matches($events, 'resource_reading:')).Count)"
+            & $exe --state-root $state facts --at $latest > "ledger-$label-facts.txt"
+            Write-Host "H7 $label actingledger facts --at $latest exit=$LASTEXITCODE bytes=$((Get-Item "ledger-$label-facts.txt").Length)"
+          }
+          $controlFacts = Get-Content -Raw -LiteralPath 'ledger-control-facts.txt'
+          $headFacts = Get-Content -Raw -LiteralPath 'ledger-head-facts.txt'
+          Write-Host "H7 facts output equal between control and head: $($controlFacts -ceq $headFacts)"
+          Get-Content -LiteralPath 'ledger-control-open.txt' -TotalCount 40 | ForEach-Object { Write-Host "H7 control open | $_" }
