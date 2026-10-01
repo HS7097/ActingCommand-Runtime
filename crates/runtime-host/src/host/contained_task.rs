@@ -766,6 +766,13 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.action_seed(step_index, operation_label)
     }
 
+    fn selection_state(
+        &mut self,
+        request: actingcommand_execution_kernel::SelectionStateRequest,
+    ) -> Result<actingcommand_execution_kernel::SelectionState, Self::Error> {
+        self.inner.selection_state(request)
+    }
+
     fn input(
         &mut self,
         action: InputAction,
@@ -1745,6 +1752,15 @@ impl RuntimeContainedTask<'_> {
                 operation_label,
                 from_page,
                 phase,
+            },
+            ContainedTaskTrace::SelectionEvaluated {
+                step_index,
+                operation_label,
+                selection,
+            } => ContainedTaskTrace::SelectionEvaluated {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                selection,
             },
             ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -2866,6 +2882,48 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(Some(action_seed))
     }
 
+    /// Workflow #308: the instance's fact snapshot and the host clock for one select step. The
+    /// context is this instance's alias with the game and server of its configured policy
+    /// identity, or of the package's `control.json` when none is configured; the interpreter
+    /// refuses a context that differs from the package's. The policy inputs are read and
+    /// released before the fact write gate is taken; no policy lock is held.
+    fn selection_state(
+        &mut self,
+        _request: actingcommand_execution_kernel::SelectionStateRequest,
+    ) -> Result<actingcommand_execution_kernel::SelectionState, Self::Error> {
+        self.ensure_active()?;
+        let configured = {
+            let inputs = lock(&self.host.policy_inputs, "read_selection_state")?;
+            inputs.as_ref().and_then(|inputs| {
+                inputs
+                    .instance_identities()
+                    .find(|identity| identity.instance_id == self.instance_alias)
+                    .map(|identity| (identity.game_id.to_owned(), identity.server_id.to_owned()))
+            })
+        };
+        let (game_id, server_id) = configured.unwrap_or_else(|| self.declared_game_server.clone());
+        let failure = |error: RuntimeHostError| {
+            if error.is_fatal() {
+                RequestFailure::poison_without_terminal(error)
+            } else {
+                RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+            }
+        };
+        let snapshot = self
+            .host
+            .instance_fact_snapshot(InstanceFactContext {
+                instance_id: self.instance_alias.to_owned(),
+                server_id,
+                game_id,
+            })
+            .map_err(failure)?;
+        let now_unix_ms = self.host.clock.sample().map_err(failure)?.unix_ms;
+        Ok(actingcommand_execution_kernel::SelectionState::Snapshot {
+            snapshot,
+            now_unix_ms,
+        })
+    }
+
     fn committed_input_frame(
         &mut self,
         reference: actingcommand_contract::InputFrameReference,
@@ -3347,6 +3405,32 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     ),
                 )?;
                 self.begin_diagnostic_step(step_index, *action_id.transport(), diagnostic_started)
+            }
+            // Workflow #308: one select attempt's decision, appended before any input or
+            // failure return, linked to its step and to the last frame it read.
+            ContainedTaskTrace::SelectionEvaluated {
+                step_index,
+                operation_label,
+                selection,
+            } => {
+                let action_id =
+                    contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
+                let mut links = self.links().with_action_id(action_id);
+                if let Some(frame_id) = self.last_frame_id {
+                    links = links.with_frame_id(frame_id);
+                }
+                self.append_task(
+                    EventSeverity::Info,
+                    links,
+                    TaskPayloadDraft::semantic(
+                        TaskSemanticFact::SelectionEvaluated {
+                            step_index,
+                            operation_label,
+                            selection,
+                        },
+                        AuditInput::new(),
+                    ),
+                )
             }
             ContainedTaskTrace::EffectIntent {
                 step_index,

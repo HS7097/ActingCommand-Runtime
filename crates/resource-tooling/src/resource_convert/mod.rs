@@ -599,19 +599,24 @@ fn capture_bundle_files(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceFile> {
             let bytes = match request {
                 SourceRead::Metadata => Err("source bytes were not requested".to_string()),
                 SourceRead::Bytes => fs::read(&path).map_err(|error| error.to_string()),
-                SourceRead::BoundedBytes(limit) => match &length {
-                    Ok(size) if *size <= limit => {
-                        let mut bytes = Vec::new();
-                        fs::File::open(&path)
-                            .and_then(|file| {
-                                file.take(size.saturating_add(1)).read_to_end(&mut bytes)
-                            })
-                            .map(|_| bytes)
-                            .map_err(|error| error.to_string())
+                SourceRead::BoundedBytes(limit) | SourceRead::SelectionPolicy(limit) => {
+                    match &length {
+                        Ok(size) if *size <= limit => {
+                            let mut bytes = Vec::new();
+                            fs::File::open(&path)
+                                .and_then(|file| {
+                                    file.take(size.saturating_add(1)).read_to_end(&mut bytes)
+                                })
+                                .map(|_| bytes)
+                                .map_err(|error| error.to_string())
+                        }
+                        Ok(_) if matches!(request, SourceRead::SelectionPolicy(_)) => {
+                            Err("selection_policy_limit_exceeded".to_string())
+                        }
+                        Ok(_) => Err("ocr_fields_dictionary_limit_exceeded".to_string()),
+                        Err(error) => Err(error.clone()),
                     }
-                    Ok(_) => Err("ocr_fields_dictionary_limit_exceeded".to_string()),
-                    Err(error) => Err(error.clone()),
-                },
+                }
             };
             (
                 path,

@@ -80,7 +80,10 @@ pub(super) fn compile(
                                 SourceRead::Metadata => {
                                     Err("metadata-only conversion input".to_owned())
                                 }
-                                SourceRead::BoundedBytes(limit) if bytes.len() as u64 > limit => {
+                                SourceRead::BoundedBytes(limit)
+                                | SourceRead::SelectionPolicy(limit)
+                                    if bytes.len() as u64 > limit =>
+                                {
                                     Err("conversion input exceeds declared limit".to_owned())
                                 }
                                 _ => Ok(bytes.clone()),

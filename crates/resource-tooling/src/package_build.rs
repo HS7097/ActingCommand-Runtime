@@ -3096,11 +3096,16 @@ struct Operation {
     from: String,
     #[serde(default)]
     to: Option<PageDeclaration>,
-    /// Exactly one of `click` and `application` carries the effect (slice #316-B3).
+    /// Exactly one of `click`, `application` (slice #316-B3) and `select` (Workflow #308)
+    /// carries the effect.
     #[serde(default)]
     click: Option<OperationClick>,
     #[serde(default)]
     application: Option<OperationApplication>,
+    /// A select step's `{layout_id, policy}`; its shape and policy are the parser's and
+    /// Runtime admission's.
+    #[serde(default)]
+    select: Option<Value>,
     #[serde(default)]
     verify_template: Option<String>,
     #[serde(default)]
@@ -3189,19 +3194,36 @@ impl Operation {
             )));
         }
         self.validate_flow()?;
-        if click.is_some() {
+        if click.is_some() || self.select.is_some() {
             self.validate_guard(control)
         } else {
             Ok(())
         }
     }
 
-    /// Exactly one effect (slice #316-B3): `Some(click)` for a click operation, `None` for a
-    /// validated `application` effect, which carries neither guard nor trusted coordinate.
+    /// Exactly one effect: `Some(click)` for a click operation, `None` for a validated
+    /// `application` effect (slice #316-B3), which carries neither guard nor trusted
+    /// coordinate, and `None` for a select step (Workflow #308), which declares its guard and
+    /// its `expect_after` and is never a trusted coordinate.
     fn validate_effect_shape(&self) -> CliOutcome<Option<&OperationClick>> {
-        match (&self.click, &self.application) {
-            (Some(click), None) => Ok(Some(click)),
-            (None, Some(application)) => {
+        match (&self.click, &self.application, &self.select) {
+            (Some(click), None, None) => Ok(Some(click)),
+            (None, None, Some(_)) => {
+                if self.guard.is_none() || self.unguarded_trusted_coordinate {
+                    return Err(CliError::package_invalid(format!(
+                        "operation '{}' select step requires a declared guard and no unguarded trusted coordinate",
+                        self.id
+                    )));
+                }
+                if self.expect_after.is_none() {
+                    return Err(CliError::package_invalid(format!(
+                        "operation '{}' select step requires expect_after",
+                        self.id
+                    )));
+                }
+                Ok(None)
+            }
+            (None, Some(application), None) => {
                 if !matches!(application.action.as_str(), "launch" | "restart" | "stop") {
                     return Err(CliError::package_invalid(format!(
                         "operation '{}' application.action must be launch, restart or stop",
@@ -3216,11 +3238,15 @@ impl Operation {
                 }
                 Ok(None)
             }
-            (Some(_), Some(_)) => Err(CliError::package_invalid(format!(
+            (Some(_), Some(_), None) => Err(CliError::package_invalid(format!(
                 "operation '{}' carries both click and application effects",
                 self.id
             ))),
-            (None, None) => Err(CliError::package_invalid(format!(
+            (_, _, Some(_)) => Err(CliError::package_invalid(format!(
+                "operation '{}' carries a select step and another effect",
+                self.id
+            ))),
+            (None, None, None) => Err(CliError::package_invalid(format!(
                 "operation '{}' missing click or application effect",
                 self.id
             ))),

@@ -7,7 +7,7 @@ use actingcommand_contract::{
 use actingcommand_device::{CaptureBackendName, Frame, parse_png_dimensions};
 use actingcommand_lab::{
     ExternalExpectedSha256, OfflineDecision, OfflineSimulationError, OfflineSimulationResult,
-    PreparedContainedTask, simulate_contained_task, validate_lab_package_bytes,
+    PreparedContainedTask, simulate_contained_task_at, validate_lab_package_bytes,
 };
 use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
 use serde::Serialize;
@@ -46,6 +46,18 @@ pub(super) fn capability() -> Value {
 }
 
 pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    // A select step evaluates at the Lab process's instant when the dry run starts.
+    let now_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        .filter(|now| *now > 0)
+        .ok_or_else(|| {
+            offline_error(
+                "offline_clock_invalid",
+                "the Lab process clock is before the Unix epoch".to_string(),
+            )
+        })?;
     let args = PackageDryRunArgs::parse(global, flags)?;
     let expected = ExternalExpectedSha256::parse_hex(&args.expected_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
@@ -70,8 +82,8 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         })?;
     let package_sha256 = prepared.package_sha256().clone();
     let fixture = load_fixture_sequence(&args.fixtures)?;
-    let simulation =
-        simulate_contained_task(&prepared, fixture.frames).map_err(map_simulation_error)?;
+    let simulation = simulate_contained_task_at(&prepared, fixture.frames, now_unix_ms)
+        .map_err(map_simulation_error)?;
     let refusal = match &simulation.decision {
         OfflineDecision::Refused { code, detail } => Some((code.clone(), detail.clone())),
         _ => None,
