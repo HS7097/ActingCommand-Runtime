@@ -145,6 +145,7 @@ uses none of them derives every document byte for byte as before.
 | `color_probes[].max_distance`, `anchors[].color_check.max_distance` | Optional finite number `>= 0`, the target's own color threshold. |
 | `color_probes[].digest` | A color digest entry (`color-digest.md`, section Package declaration). A color probe declares exactly one of `expected` and `digest`; a digest entry has no `max_distance`. |
 | `operations[].guard.check` | A string naming the check that guards the input; the guard evaluates its `target_id`, which is that check. |
+| `candidate_layouts[]` | `{"id", "page_id", "kind": "fixed_slots", "features": [...], "slots": [...]}`: the candidate layouts of a page the task declares (`selection-graph.md`, section Candidate layouts, Source declaration). Each slot's `rect` and `click` lie inside the task's `coordinate_space`; each slot target is a template, color, color digest, check, OCR or NN target of the derived pack, and a `measure_milli` feature never reads a check. |
 
 A check, like a color digest, is never clicked and never locates anything. `guard.check`
 requires the guard target to be a `composite` target. `guard.color_probe` accepts a color or a
@@ -157,12 +158,21 @@ is refused at the digest or check entry that reuses it (`/color_probes/<i>/id`,
 `/checks/<i>/id`), whichever family declared the ID first. The older families keep their
 first-declaration rule among themselves.
 
+Candidate layout IDs have their own namespace. The same layout ID with an identical derived
+definition, repeated by several tasks, is kept once; any other reuse is refused at
+`/candidate_layouts/<i>/id`.
+
 Refusals carry the task's `task.json` and the JSON pointer of the offending field, with the
 reason `InvalidValue`, `InvalidType`, `MissingField`, `UnknownField` or `UnconsumedField`. A
 check member that is not a target of the derived pack, or is another check, is refused at
 `/checks/<i>/all_of/<j>` (or `any_of`). Every check of the selected tasks needs its members in
-the same build.
+the same build. A candidate layout's structure and rectangles are checked by the declaration
+gate; its page is refused at `/candidate_layouts/<i>/page_id` when the declaring task does not
+declare that page, and a slot target that is not an evaluable target of the derived pack at
+`/candidate_layouts/<i>/slots/<k>/targets/<name>`. Every layout of the selected tasks needs its
+targets in the same build. The derived layout names its page by the full page-set ID
+`<game>/<page>`.
 
 Only `pack.json` is written at schema `0.7`, and only when it holds a `composite` or
-`color_digest` target or a per-target `max_distance`. The page set, navigation, operation
-index and primitives stay at `0.6`.
+`color_digest` target, a per-target `max_distance` or a candidate layout. The page set,
+navigation, operation index and primitives stay at `0.6`.

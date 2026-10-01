@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{Bundle, CliError, CliOutcome, ParseFiles, SourceRead};
+use actingcommand_contract::candidate_projection::{
+    CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_FEATURES,
+    validate_candidate_feature_name, validate_candidate_layout_id,
+};
 use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
 use actingcommand_recognition::color_digest::{
     self, ColorDigest, ColorDigestAlgorithm, ColorDigestGrid, MAX_GRID_AXIS,
@@ -37,7 +41,8 @@ pub(super) fn task_declaration_error(
 
 impl Declaration<'_> {
     /// Task schemas `0.6` through `0.9`, which accept the declarations of pack schema `0.7`
-    /// (`checks`, color digests, per-target `max_distance` and `guard.check`).
+    /// (`checks`, color digests, per-target `max_distance`, `guard.check` and
+    /// `candidate_layouts`).
     fn schema_0_6_or_later(&self) -> bool {
         matches!(self.schema, Some("0.6" | "0.7" | "0.8" | "0.9"))
     }
@@ -1047,6 +1052,127 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// The `candidate_layouts` family (`contracts/selection-graph.md`, section Candidate
+    /// layouts): each layout has an ID, a page, the kind `fixed_slots`, 1..=8 distinct
+    /// features and 1..=64 slots. A slot's `rect` and `click` lie inside the coordinate space
+    /// and each of its `targets` keys is a declared feature. Whether the page is one the task
+    /// declares, and whether each target exists in the derived pack, is checked while the pack
+    /// is derived.
+    fn candidate_layouts(&self, value: &Value, pointer: &str, frame: [u64; 2]) -> CliOutcome<()> {
+        for (index, layout) in self.array(value, pointer)?.iter().enumerate() {
+            let pointer = child(pointer, &index.to_string());
+            let object = self.object(
+                layout,
+                &pointer,
+                &["id", "page_id", "kind", "features", "slots"],
+            )?;
+            let id_pointer = child(&pointer, "id");
+            let id = self.required(object, &pointer, "id")?;
+            self.string(id, &id_pointer)?;
+            if validate_candidate_layout_id(id.as_str().unwrap_or_default()).is_err() {
+                return Err(self.error(&id_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            self.string(
+                self.required(object, &pointer, "page_id")?,
+                &child(&pointer, "page_id"),
+            )?;
+            let kind_pointer = child(&pointer, "kind");
+            let kind = self.required(object, &pointer, "kind")?;
+            self.string(kind, &kind_pointer)?;
+            if kind.as_str() != Some("fixed_slots") {
+                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            let features_pointer = child(&pointer, "features");
+            let features = self.array(
+                self.required(object, &pointer, "features")?,
+                &features_pointer,
+            )?;
+            if !(1..=CANDIDATE_PROJECTION_MAX_FEATURES).contains(&features.len()) {
+                return Err(self.error(&features_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            let mut names = BTreeSet::new();
+            for (feature_index, feature) in features.iter().enumerate() {
+                let feature_pointer = child(&features_pointer, &feature_index.to_string());
+                let feature = self.object(feature, &feature_pointer, &["name", "value"])?;
+                let name_pointer = child(&feature_pointer, "name");
+                let name = self.required(feature, &feature_pointer, "name")?;
+                self.string(name, &name_pointer)?;
+                let name = name.as_str().unwrap_or_default();
+                if validate_candidate_feature_name(name).is_err() || !names.insert(name) {
+                    return Err(self.error(&name_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+                let value_pointer = child(&feature_pointer, "value");
+                let value = self.required(feature, &feature_pointer, "value")?;
+                self.string(value, &value_pointer)?;
+                if !matches!(value.as_str(), Some("passed" | "measure_milli")) {
+                    return Err(self.error(&value_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+            }
+            let slots_pointer = child(&pointer, "slots");
+            let slots = self.array(self.required(object, &pointer, "slots")?, &slots_pointer)?;
+            if !(1..=CANDIDATE_PROJECTION_MAX_CANDIDATES).contains(&slots.len()) {
+                return Err(self.error(&slots_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            for (slot_index, slot) in slots.iter().enumerate() {
+                let slot_pointer = child(&slots_pointer, &slot_index.to_string());
+                let slot = self.object(slot, &slot_pointer, &["rect", "click", "targets"])?;
+                for field in ["rect", "click"] {
+                    self.frame_rect(
+                        self.required(slot, &slot_pointer, field)?,
+                        &child(&slot_pointer, field),
+                        frame,
+                    )?;
+                }
+                let targets_pointer = child(&slot_pointer, "targets");
+                let targets = self
+                    .required(slot, &slot_pointer, "targets")?
+                    .as_object()
+                    .ok_or_else(|| {
+                        self.error(&targets_pointer, ResourceDeclarationReason::InvalidType)
+                    })?;
+                for (name, target) in targets {
+                    let target_pointer = child(&targets_pointer, name);
+                    if !names.contains(name.as_str()) {
+                        return Err(
+                            self.error(&target_pointer, ResourceDeclarationReason::InvalidValue)
+                        );
+                    }
+                    self.string(target, &target_pointer)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A rectangle of integers with a non-negative origin and a positive size, each within the
+    /// range of a recognition pack rectangle, that lies entirely inside the coordinate space.
+    fn frame_rect(&self, value: &Value, pointer: &str, frame: [u64; 2]) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["x", "y", "width", "height"])?;
+        let mut values = [0_u64; 4];
+        for (slot, field) in values.iter_mut().zip(["x", "y", "width", "height"]) {
+            let field_pointer = child(pointer, field);
+            let value = self
+                .required(object, pointer, field)?
+                .as_i64()
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+            *slot = i32::try_from(value)
+                .ok()
+                .and_then(|value| u64::try_from(value).ok())
+                .filter(|value| *value > 0 || matches!(field, "x" | "y"))
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidValue)
+                })?;
+        }
+        let [x, y, width, height] = values;
+        // Each value fits an `i32`, so neither sum overflows.
+        if x + width > frame[0] || y + height > frame[1] {
+            return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        Ok(())
+    }
+
     fn color(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         let values = self.array(value, pointer)?;
         if values.len() != 3 {
@@ -1985,6 +2111,7 @@ impl Declaration<'_> {
                 "color_probes",
                 "ocr_targets",
                 "checks",
+                "candidate_layouts",
                 "page_rules",
             ],
         )?;
@@ -2027,6 +2154,12 @@ impl Declaration<'_> {
         }
         if object.contains_key("checks") && !self.schema_0_6_or_later() {
             return Err(self.error("/checks", ResourceDeclarationReason::UnconsumedField));
+        }
+        if object.contains_key("candidate_layouts") && !self.schema_0_6_or_later() {
+            return Err(self.error(
+                "/candidate_layouts",
+                ResourceDeclarationReason::UnconsumedField,
+            ));
         }
         if object.contains_key("resource_readings") && !matches!(self.schema, Some("0.8" | "0.9")) {
             return Err(self.error(
@@ -2085,6 +2218,7 @@ impl Declaration<'_> {
                     }
                 }
                 "checks" => self.checks(value, &pointer)?,
+                "candidate_layouts" => self.candidate_layouts(value, &pointer, frame)?,
                 "page_rules" => {
                     let rules = value.as_object().ok_or_else(|| {
                         self.error(&pointer, ResourceDeclarationReason::InvalidType)
