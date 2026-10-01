@@ -49,8 +49,9 @@ Each check derives one recognition target of type `composite`:
 ### Pack schema `0.7`
 
 Only `pack.json` is written at schema `0.7`, and only when it uses a construct of that
-version: a `composite` target, a `color_digest` target (see `color-digest.md`), or a
-per-target color `max_distance` (on a `color` target or a template's `color_check`). Every
+version: a `composite` target, a `color_digest` target (see `color-digest.md`), a
+per-target color `max_distance` (on a `color` target or a template's `color_check`), or a
+candidate layout (section Candidate layouts). Every
 other derived document, including the page set, stays at `0.6`. Packs of schema `0.1` and
 `0.3` through `0.6` load and judge exactly as before. A reader that accepts only `0.1`
 through `0.6` rejects a `0.7` pack explicitly, and a `0.7` construct in an older pack is
@@ -117,9 +118,48 @@ feature values each candidate carries. On one frame it yields a candidate projec
 ([candidate-projection.md](candidate-projection.md)), which a selection policy evaluates.
 
 Implementation status: recognition pack schema `0.7` admits `fixed_slots` layouts and the
-recognition pack projects them. The source side (the `candidate_layouts` family of `task.json`
-and its derivation into `pack.json`) and `repeated_anchor` layouts are frozen and admitted by
-later #308 slices.
+recognition pack projects them. The source parser admits the `candidate_layouts` family of
+`task.json` and derives it into `pack.json` (section Source declaration). `repeated_anchor`
+layouts are frozen and admitted by a later #308 slice.
+
+### Source declaration
+
+A task source declares its layouts in the top-level `candidate_layouts` family of `task.json`,
+in the shape of the pack below, with `page_id` naming one of the task's pages as everywhere
+else in `task.json` and `targets` naming derived target IDs, as check members do. The family
+is accepted for task schema `0.6` through `0.9`; the task schema version does not change. An
+older task schema refuses it with `UnconsumedField` at `/candidate_layouts`.
+
+The declaration gate (`resource validate` and every parse) checks each layout's structure
+against `task.json`'s own `coordinate_space`. The parser then checks the references while it
+derives the pack. Each refusal names the task's `task.json` and the pointer of the offending
+field:
+
+| Rule | Pointer | Checked by |
+| --- | --- | --- |
+| Exactly the fields `id`, `page_id`, `kind`, `features` and `slots`, of the right JSON types; unknown fields are refused. | the field | gate |
+| The ID matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/candidate_layouts/i/id` | gate |
+| The kind is `fixed_slots`. | `/candidate_layouts/i/kind` | gate |
+| 1 to 8 features `{name, value}`, with distinct names matching `^[a-z][a-z0-9_]{0,31}$` and a value of `passed` or `measure_milli`. | `…/features`, `…/features/j/name`, `…/features/j/value` | gate |
+| 1 to 64 slots `{rect, click, targets}`. | `/candidate_layouts/i/slots` | gate |
+| `rect` and `click` are integer rectangles with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` (a field's type or sign at `…/x` and so on) | gate |
+| Each `targets` key is a declared feature and each value a string. | `…/slots/k/targets/<name>` | gate |
+| The page is a page the declaring task itself declares (its `entry_page`, `target_page`, `error_pages`, `scheduling_outcome` terminal pages, or an operation's `from`, `to` or `expect_after.page_id`). Every build of the task therefore holds it. | `/candidate_layouts/i/page_id` | parser |
+| Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
+| The same layout ID with an identical derived definition, repeated by several tasks, is kept once; any other reuse of the ID is refused at the entry that reuses it. Layout IDs have their own namespace, separate from target IDs. | `/candidate_layouts/i/id` | parser |
+
+The derived layout keeps the source's structure, with two normalizations: `page_id` becomes the
+full page-set ID `<game>/<page>` that the page set declares and the load-site check compares
+exactly (an ID that already holds `/` is kept as written), and the fields of a layout, a
+feature, a slot and a rectangle are written in the order of the example below; a slot's
+`targets` keep their declared order. Layouts are written in the order the tasks declare them,
+after `targets`. The pack's own rules (layouts per page and per pack, OCR and NN evaluations per
+projection) are checked by the recognition pack when the derived pack is validated or loaded
+(section Rules).
+
+`pack.json` is written at schema `0.7` when it holds a layout; the page set, navigation,
+operation index and primitives stay at `0.6`. A source without layouts derives every document
+byte for byte as before.
 
 ### Pack schema `0.7`
 

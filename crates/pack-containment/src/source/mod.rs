@@ -23,7 +23,8 @@ const GENERATED_BY: &str = "actinglab resource convert";
 const CONVERTER_SCHEMA_VERSION: &str = "0.5";
 const OUTPUT_SCHEMA_VERSION: &str = "0.6";
 /// The schema `pack.json` alone is written at, and only when it uses a construct of that
-/// schema: a composite or color digest target, or a per-target color `max_distance`.
+/// schema: a composite or color digest target, a per-target color `max_distance`, or a
+/// candidate layout.
 const PACK_SCHEMA_0_7: &str = "0.7";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
@@ -950,14 +951,15 @@ impl OperationParser {
         }
         validate_check_members(&targets, &self.bundles)?;
         propagate_color_checks(&mut targets, &order);
+        let candidate_layouts = derive_candidate_layouts(&targets, &self.bundles, &self.game)?;
         let targets = order
             .iter()
             .filter_map(|id| targets.get(id).cloned())
             .collect::<Vec<_>>();
-        let pack = ordered_object([
+        let mut pack = ordered_object([
             (
                 "schema_version",
-                Value::String(pack_schema_version(&targets).to_string()),
+                Value::String(pack_schema_version(&targets, &candidate_layouts).to_string()),
             ),
             ("game", Value::String(self.game.clone())),
             ("server", Value::String(self.server.clone())),
@@ -966,6 +968,10 @@ impl OperationParser {
             ("defaults", Value::Object(recognition_defaults)),
             ("targets", Value::Array(targets)),
         ]);
+        // The key is written only when a layout is declared, so every other pack is unchanged.
+        if !candidate_layouts.is_empty() {
+            pack["candidate_layouts"] = Value::Array(candidate_layouts);
+        }
         validate_generated_ocr_targets(&self.root, &pack, files)?;
         Ok(pack)
     }
@@ -2359,15 +2365,155 @@ fn validate_check_members(targets: &HashMap<String, Value>, bundles: &[Bundle]) 
     Ok(())
 }
 
-/// `0.7` when a target uses a construct of pack schema `0.7`; otherwise the unchanged `0.6`.
-fn pack_schema_version(targets: &[Value]) -> &'static str {
-    let uses_0_7 = targets.iter().any(|target| {
-        matches!(
-            target.get("type").and_then(Value::as_str),
-            Some("composite" | "color_digest")
-        ) || target.get("max_distance").is_some()
-            || target.pointer("/color_check/max_distance").is_some()
-    });
+/// The pack's `candidate_layouts` (`contracts/selection-graph.md`, section Candidate layouts),
+/// derived from the declaring tasks in declaration order. The page becomes the full page-set
+/// ID `<game>/<page>` that the load-site check compares exactly, and it must be a page the
+/// declaring task itself declares, so every build of that task holds it. Each slot target is
+/// a target of the derived pack that can be evaluated, and a `measure_milli` feature never
+/// reads a composite. As for OCR targets, the same layout ID with an identical derived
+/// definition is kept once; any other reuse of the ID is refused at the reusing entry.
+fn derive_candidate_layouts(
+    targets: &HashMap<String, Value>,
+    bundles: &[Bundle],
+    game: &str,
+) -> CliOutcome<Vec<Value>> {
+    let mut layouts = Vec::<Value>::new();
+    for bundle in bundles {
+        let declared = array_field(&bundle.data, "candidate_layouts");
+        if declared.is_empty() {
+            continue;
+        }
+        // The pages `build_pages` derives from this task alone.
+        let mut pages = selected_available_page_ids(game, std::slice::from_ref(bundle))?;
+        for page in declared_scheduling_outcome_page_ids(bundle)? {
+            insert_selected_page_id(game, &page, &mut pages);
+        }
+        for (index, layout) in declared.iter().enumerate() {
+            let refuse = |field: &str, detail: &str| {
+                declarations::task_declaration_error(
+                    bundle,
+                    &format!("/candidate_layouts/{index}/{field}"),
+                    actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                    detail,
+                )
+            };
+            let id = required_string(layout, "id")?;
+            let page_id = normalize_page_rule_id(game, &required_string(layout, "page_id")?);
+            if !pages.contains(&page_id) {
+                return Err(refuse(
+                    "page_id",
+                    &format!(
+                        "candidate layout '{id}' names page '{page_id}', which this task does not declare"
+                    ),
+                ));
+            }
+            let mut features = Vec::new();
+            let mut values = HashMap::new();
+            for feature in array_field(layout, "features") {
+                let name = required_string(feature, "name")?;
+                let value = required_string(feature, "value")?;
+                values.insert(name.clone(), value.clone());
+                features.push(ordered_object([
+                    ("name", Value::String(name)),
+                    ("value", Value::String(value)),
+                ]));
+            }
+            let mut slots = Vec::new();
+            for (slot_index, slot) in array_field(layout, "slots").iter().enumerate() {
+                let declared_targets =
+                    required_field(slot, "targets")?
+                        .as_object()
+                        .ok_or_else(|| {
+                            CliError::package_invalid(
+                                "candidate layout slot targets must be an object",
+                            )
+                        })?;
+                let mut slot_targets = Map::new();
+                for (name, target_id) in declared_targets {
+                    let field = format!(
+                        "slots/{slot_index}/targets/{}",
+                        name.replace('~', "~0").replace('/', "~1")
+                    );
+                    let target_id = target_id.as_str().ok_or_else(|| {
+                        CliError::package_invalid("candidate layout slot target must be a string")
+                    })?;
+                    let kind = targets
+                        .get(target_id)
+                        .and_then(|target| target.get("type"))
+                        .and_then(Value::as_str);
+                    let detail = match (kind, values.get(name).map(String::as_str)) {
+                        (_, None) => {
+                            format!("'{name}' is not a feature of candidate layout '{id}'")
+                        }
+                        (Some("template" | "color" | "color_digest" | "ocr" | "nn"), _)
+                        | (Some("composite"), Some("passed")) => {
+                            slot_targets.insert(name.clone(), Value::String(target_id.to_owned()));
+                            continue;
+                        }
+                        (Some("composite"), _) => format!(
+                            "check '{target_id}' has no measure; a feature that reads a check is 'passed'"
+                        ),
+                        (Some(kind), _) => {
+                            format!(
+                                "a candidate feature cannot read the {kind} target '{target_id}'"
+                            )
+                        }
+                        (None, _) => {
+                            format!("target '{target_id}' is not a recognition target of the pack")
+                        }
+                    };
+                    return Err(refuse(&field, &detail));
+                }
+                slots.push(ordered_object([
+                    (
+                        "rect",
+                        canonical_ocr_rect(required_field(slot, "rect")?, "candidate slot rect")?,
+                    ),
+                    (
+                        "click",
+                        canonical_ocr_rect(required_field(slot, "click")?, "candidate slot click")?,
+                    ),
+                    ("targets", Value::Object(slot_targets)),
+                ]));
+            }
+            let derived = ordered_object([
+                ("id", Value::String(id.clone())),
+                ("page_id", Value::String(page_id)),
+                ("kind", required_field(layout, "kind")?.clone()),
+                ("features", Value::Array(features)),
+                ("slots", Value::Array(slots)),
+            ]);
+            match layouts
+                .iter()
+                .find(|existing| existing["id"] == derived["id"])
+            {
+                Some(existing) if existing == &derived => {}
+                Some(_) => {
+                    return Err(refuse(
+                        "id",
+                        &format!(
+                            "candidate layout id '{id}' conflicts with an earlier candidate layout"
+                        ),
+                    ));
+                }
+                None => layouts.push(derived),
+            }
+        }
+    }
+    Ok(layouts)
+}
+
+/// `0.7` when a target uses a construct of pack schema `0.7` or a candidate layout is declared;
+/// otherwise the unchanged `0.6`.
+fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'static str {
+    let uses_0_7 = !candidate_layouts.is_empty()
+        || targets.iter().any(|target| {
+            matches!(
+                target.get("type").and_then(Value::as_str),
+                Some("composite" | "color_digest")
+            ) || target.get("max_distance").is_some()
+                || target.pointer("/color_check/max_distance").is_some()
+        });
     if uses_0_7 {
         PACK_SCHEMA_0_7
     } else {
