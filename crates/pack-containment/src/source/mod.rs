@@ -22,9 +22,6 @@ use std::sync::Arc;
 const GENERATED_BY: &str = "actinglab resource convert";
 const CONVERTER_SCHEMA_VERSION: &str = "0.5";
 const OUTPUT_SCHEMA_VERSION: &str = "0.6";
-/// The schema `pack.json` alone is written at, and only when it uses a construct of that
-/// schema: a composite or color digest target, or a per-target color `max_distance`.
-const PACK_SCHEMA_0_7: &str = "0.7";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
 const MAX_TASK_STEPS: u32 = 1_000;
@@ -857,20 +854,13 @@ impl OperationParser {
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for color_probe in array_field(&bundle.data, "color_probes") {
-                // A digest entry derives a `color_digest` target below, with the new families.
-                if color_probe.get("digest").is_some() {
-                    continue;
-                }
                 let target_id = required_string(color_probe, "id")?;
-                let mut target = color_target(
+                let target = color_target(
                     &target_id,
                     region_to_pack(required_field(color_probe, "region")?)?,
                     required_field(color_probe, "expected")?.clone(),
                     None,
                 );
-                if let Some(max_distance) = color_probe.get("max_distance") {
-                    target["max_distance"] = max_distance.clone();
-                }
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for verify_template in array_field(&bundle.data, "verify_templates") {
@@ -918,53 +908,26 @@ impl OperationParser {
                 add_ocr_target(&mut targets, &mut order, target_id, target)?;
             }
         }
-        // Color digests and checks come after every other family, so an ID they reuse is
-        // found whichever family declared it first.
-        for bundle in &self.bundles {
-            for (index, color_probe) in array_field(&bundle.data, "color_probes").iter().enumerate()
-            {
-                if color_probe.get("digest").is_none() {
-                    continue;
-                }
-                let target = color_digest_target(color_probe, &self.coordinate_space)?;
-                add_declared_target(
-                    &mut targets,
-                    &mut order,
-                    target,
-                    bundle,
-                    &format!("/color_probes/{index}/id"),
-                )?;
-            }
-        }
-        for bundle in &self.bundles {
-            for (index, check) in array_field(&bundle.data, "checks").iter().enumerate() {
-                let (_, target) = composite_target(check)?;
-                add_declared_target(
-                    &mut targets,
-                    &mut order,
-                    target,
-                    bundle,
-                    &format!("/checks/{index}/id"),
-                )?;
-            }
-        }
-        validate_check_members(&targets, &self.bundles)?;
         propagate_color_checks(&mut targets, &order);
-        let targets = order
-            .iter()
-            .filter_map(|id| targets.get(id).cloned())
-            .collect::<Vec<_>>();
         let pack = ordered_object([
             (
                 "schema_version",
-                Value::String(pack_schema_version(&targets).to_string()),
+                Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
             ),
             ("game", Value::String(self.game.clone())),
             ("server", Value::String(self.server.clone())),
             ("locale", Value::String(self.locale.clone())),
             ("coordinate_space", self.coordinate_space.clone()),
             ("defaults", Value::Object(recognition_defaults)),
-            ("targets", Value::Array(targets)),
+            (
+                "targets",
+                Value::Array(
+                    order
+                        .iter()
+                        .filter_map(|id| targets.get(id).cloned())
+                        .collect(),
+                ),
+            ),
         ]);
         validate_generated_ocr_targets(&self.root, &pack, files)?;
         Ok(pack)
@@ -1684,33 +1647,8 @@ impl OperationParser {
     }
 
     /// Every target a `page_rules` entry names in `required`, `optional`, `forbidden` or
-    /// `any_of`: the page gates of the generated pages besides their template anchors. A check
-    /// a page gate names evaluates its members, so its members are page-gate targets too.
+    /// `any_of`: the page gates of the generated pages besides their template anchors.
     fn page_rule_target_ids(&self) -> BTreeSet<String> {
-        let mut targets = self.direct_page_rule_target_ids();
-        let members = self
-            .bundles
-            .iter()
-            .flat_map(|bundle| array_field(&bundle.data, "checks"))
-            .filter(|check| {
-                check
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| targets.contains(id))
-            })
-            .flat_map(|check| {
-                array_field(check, "all_of")
-                    .iter()
-                    .chain(array_field(check, "any_of"))
-            })
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        targets.extend(members);
-        targets
-    }
-
-    fn direct_page_rule_target_ids(&self) -> BTreeSet<String> {
         let mut targets = BTreeSet::new();
         for rule in self
             .bundles
@@ -2244,135 +2182,6 @@ fn color_target(id: &str, region: Value, expected: Value, click: Option<Value>) 
         target.insert("click".to_string(), click);
     }
     Value::Object(target)
-}
-
-/// The `color_digest` target of a `color_probes` entry that declares `digest`
-/// (`contracts/color-digest.md`). A `full_frame` region becomes the whole coordinate space;
-/// `exclude_cells` is always written and `max_cell` only when declared.
-fn color_digest_target(color_probe: &Value, coordinate_space: &Value) -> CliOutcome<Value> {
-    let digest = required_field(color_probe, "digest")?;
-    let mut target = ordered_map([
-        ("type", Value::String("color_digest".to_string())),
-        ("id", Value::String(required_string(color_probe, "id")?)),
-        (
-            "region",
-            region_to_guard_rect(required_field(color_probe, "region")?, coordinate_space)?,
-        ),
-        ("algorithm", required_field(digest, "algorithm")?.clone()),
-        ("columns", required_field(digest, "columns")?.clone()),
-        ("rows", required_field(digest, "rows")?.clone()),
-        ("cells", required_field(digest, "cells")?.clone()),
-        (
-            "exclude_cells",
-            digest
-                .get("exclude_cells")
-                .cloned()
-                .unwrap_or_else(|| Value::Array(Vec::new())),
-        ),
-        (
-            "max_mean_milli",
-            required_field(digest, "max_mean_milli")?.clone(),
-        ),
-    ]);
-    if let Some(max_cell) = digest.get("max_cell") {
-        target.insert("max_cell".to_string(), max_cell.clone());
-    }
-    Ok(Value::Object(target))
-}
-
-/// The `composite` target of one `checks` entry and the field that holds its members.
-fn composite_target(check: &Value) -> CliOutcome<(&'static str, Value)> {
-    let id = required_string(check, "id")?;
-    let (mode, members) = match (check.get("all_of"), check.get("any_of")) {
-        (Some(members), None) => ("all_of", members),
-        (None, Some(members)) => ("any_of", members),
-        _ => {
-            return Err(CliError::package_invalid(format!(
-                "check '{id}' must declare exactly one of all_of and any_of"
-            )));
-        }
-    };
-    Ok((
-        mode,
-        ordered_object([
-            ("type", Value::String("composite".to_string())),
-            ("id", Value::String(id)),
-            ("mode", Value::String(mode.to_string())),
-            ("members", members.clone()),
-        ]),
-    ))
-}
-
-/// Adds a color digest or check target. As for OCR targets, the same ID with an identical
-/// definition is kept once; any other reuse of an ID is refused at the declaring entry.
-fn add_declared_target(
-    targets: &mut HashMap<String, Value>,
-    order: &mut Vec<String>,
-    target: Value,
-    bundle: &Bundle,
-    pointer: &str,
-) -> CliOutcome<()> {
-    let id = required_string(&target, "id")?;
-    if let Some(existing) = targets.get(&id) {
-        if existing == &target {
-            return Ok(());
-        }
-        return Err(declarations::task_declaration_error(
-            bundle,
-            pointer,
-            actingcommand_contract::ResourceDeclarationReason::InvalidValue,
-            &format!("target id '{id}' conflicts with an earlier recognition target"),
-        ));
-    }
-    targets.insert(id.clone(), target);
-    order.push(id);
-    Ok(())
-}
-
-/// Every member of every check is an existing template, color, color digest, OCR or NN
-/// target of the pack; a check never nests another check. A refusal names the member entry.
-fn validate_check_members(targets: &HashMap<String, Value>, bundles: &[Bundle]) -> CliOutcome<()> {
-    for bundle in bundles {
-        for (index, check) in array_field(&bundle.data, "checks").iter().enumerate() {
-            let (mode, composite) = composite_target(check)?;
-            for (member_index, member) in array_field(&composite, "members").iter().enumerate() {
-                let kind = member
-                    .as_str()
-                    .and_then(|member| targets.get(member))
-                    .and_then(|target| target.get("type"))
-                    .and_then(Value::as_str);
-                let detail = match kind {
-                    Some("template" | "color" | "color_digest" | "ocr" | "nn") => continue,
-                    Some("composite") => "a check member cannot be another check".to_string(),
-                    Some(kind) => format!("a check member cannot be a {kind} target"),
-                    None => format!("check member {member} is not a recognition target"),
-                };
-                return Err(declarations::task_declaration_error(
-                    bundle,
-                    &format!("/checks/{index}/{mode}/{member_index}"),
-                    actingcommand_contract::ResourceDeclarationReason::InvalidValue,
-                    &detail,
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// `0.7` when a target uses a construct of pack schema `0.7`; otherwise the unchanged `0.6`.
-fn pack_schema_version(targets: &[Value]) -> &'static str {
-    let uses_0_7 = targets.iter().any(|target| {
-        matches!(
-            target.get("type").and_then(Value::as_str),
-            Some("composite" | "color_digest")
-        ) || target.get("max_distance").is_some()
-            || target.pointer("/color_check/max_distance").is_some()
-    });
-    if uses_0_7 {
-        PACK_SCHEMA_0_7
-    } else {
-        OUTPUT_SCHEMA_VERSION
-    }
 }
 
 fn ocr_target_declarations(bundle: &Bundle) -> CliOutcome<&[Value]> {
@@ -3271,12 +3080,10 @@ fn validate_generated_ocr_targets(root: &Path, pack: &Value, files: &ParseFiles)
             })
             .cloned(),
     );
-    // The subset keeps the generated pack's schema, so a relative anchor keeps its color check
-    // as written (`max_distance` included).
     let validation_pack = ordered_object([
         (
             "schema_version",
-            required_field(pack, "schema_version")?.clone(),
+            Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
         ),
         (
             "coordinate_space",
@@ -3684,7 +3491,7 @@ fn selected_available_target_ids(bundles: &[Bundle]) -> CliOutcome<BTreeSet<Stri
                 targets.insert(anchor_target_id(anchor_id));
             }
         }
-        for field in ["color_probes", "verify_templates", "checks"] {
+        for field in ["color_probes", "verify_templates"] {
             for declaration in array_field(&bundle.data, field) {
                 targets.insert(required_string(declaration, "id")?);
             }
@@ -3859,11 +3666,7 @@ fn color_check_to_pack(color_check: Option<&Value>, target_id: &str) -> CliOutco
         && let Some(region) = color_check.get("region")
     {
         if region.get("mode").and_then(Value::as_str) == Some("template_relative") {
-            require_exact_object(
-                color_check,
-                &["region", "expected", "max_distance"],
-                "relative color check",
-            )?;
+            require_exact_object(color_check, &["region", "expected"], "relative color check")?;
             object.insert("region".to_string(), ocr_region_to_pack(region)?);
             let check: actingcommand_recognition_pack::ColorCheck =
                 serde_json::from_value(output.clone()).map_err(|error| {
@@ -4173,20 +3976,10 @@ fn validate_parsed_guard_references(
             ));
         }
         if guard.get("color_probe").and_then(Value::as_str).is_some()
-            && !matches!(
-                target.get("type").and_then(Value::as_str),
-                Some("color" | "color_digest")
-            )
+            && target.get("type").and_then(Value::as_str) != Some("color")
         {
             errors.push(format!(
                 "operation '{operation_id}' guard.color_probe points to non-color target '{target_id}'"
-            ));
-        }
-        if guard.get("check").and_then(Value::as_str).is_some()
-            && target.get("type").and_then(Value::as_str) != Some("composite")
-        {
-            errors.push(format!(
-                "operation '{operation_id}' guard.check points to non-composite target '{target_id}'"
             ));
         }
         if operation.pointer("/click/kind").and_then(Value::as_str) == Some("offset") {
