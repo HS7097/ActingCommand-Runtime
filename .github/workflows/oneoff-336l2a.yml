@@ -139,5 +139,5 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
           $root = $env:RUNNER_TEMP
-          & python head/one-off-336l2a/evidence.py run (Join-Path $root 'work') (Join-Path $root 'new/runtime') (Join-Path $root 'new/tools') (Join-Path $root 'old/runtime') (Join-Path $root 'old/tools')
+          & python head/one-off-336l2a/evidence.py run (Join-Path $root 'work') (Join-Path $root 'new/runtime') (Join-Path $root 'new/tools') (Join-Path $root 'old/runtime') (Join-Path $root 'old/tools') (Resolve-Path head/contracts/scheduling/examples/catalog-a).Path
           if ($LASTEXITCODE -ne 0) { throw "evidence run failed with exit code $LASTEXITCODE" }

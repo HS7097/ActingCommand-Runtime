@@ -456,47 +456,70 @@ def lab_json(exe, args):
 # ---------------------------------------------------------------------------------------------
 # build: item 7 (package build --execution-mode linear_steps) and the game-prefixed legacy ZIP.
 
-def build(work, new_tools):
-    state = load_state(work)
-    lab = os.path.join(new_tools, "actinglab.exe")
-    out = os.path.join(work, "built", "linear_page.zip")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    code, value, raw, err = lab_json(lab, ["package", "build-task", "--repo", state["repo"], "--task", "linear_page",
+def build_task(lab, repo, task_id, out_dir, label):
+    """Builds one task; returns the published ZIP copied to a stable path, or None."""
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, task_id + ".zip")
+    code, value, raw, err = lab_json(lab, ["package", "build-task", "--repo", repo, "--task", task_id,
                                            "--game", GAME, "--server", SERVER, "--locale", "en-US",
                                            "--execution-mode", "linear_steps", "--out", out])
     data = (value or {}).get("data") or {}
-    say("E7", "package build-task --execution-mode linear_steps", "exit", code, "status", data.get("status"),
-        "execution_mode", data.get("execution_mode"), "included_tasks", data.get("included_tasks"),
+    say(label, "package build-task --execution-mode linear_steps", task_id, "exit", code, "status", data.get("status"),
+        "execution_mode", data.get("execution_mode"), "included_tasks", data.get("included_tasks"), "out", data.get("out"),
+        "validation.control", json.dumps((data.get("validation") or {}).get("control")),
         "error", short(json.dumps((value or {}).get("error")) if value else (raw or err), 900))
-    check("E7.build_written", code == 0 and data.get("status") == "written" and os.path.isfile(out), data.get("status"))
-    if not os.path.isfile(out):
-        save_state(work, state)
-        say("RESULT", "build failures", len(FAILURES), json.dumps(FAILURES))
-        return 1
-    with zipfile.ZipFile(out) as archive:
-        names = archive.namelist()
-        say("E7", "built ZIP entries", json.dumps(names))
-        control = json.loads(archive.read("control.json"))
-        say("E7", "built control.json", json.dumps(control))
-        check("E7.control_linear_steps", control.get("execution_mode") == "linear_steps", control.get("execution_mode"))
-        task_name = next(name for name in names if name.endswith("linear_page/task.json"))
-        task = json.loads(archive.read(task_name))
-        say("E7", "built task.json page_rules", json.dumps(task.get("page_rules")))
-        say("E7", "built task.json operation transition", json.dumps([op.get("transition") for op in task["operations"]]))
-        check("E7.selected_task_keeps_transition_page_rule", "transition_01" in (task.get("page_rules") or {}), json.dumps(sorted(task.get("page_rules") or {})))
-        page_sets = 0
+    check(f"{label}.build_written.{task_id}", code == 0 and data.get("status") == "written", data.get("status"))
+    # The logical output is published through the package publication state; the bytes are the
+    # newest ZIP under the output directory.
+    found = []
+    for folder, _dirs, names in os.walk(out_dir):
         for name in names:
-            if "page" in name.lower() and name.endswith(".json") and "task.json" not in name:
-                page_sets += 1
-                pages = json.loads(archive.read(name))
-                ids = [page.get("id") for page in pages.get("pages", [])] if isinstance(pages, dict) else None
-                say("E7", "built page set", name, json.dumps(pages)[:1500])
-                if ids is not None:
-                    check("E7.page_set_has_transition_page", f"{GAME}/transition_01" in ids and not any("step_01_c" in str(i) or "step_02_off" in str(i) for i in ids), json.dumps(ids))
-        check("E7.page_set_found", page_sets > 0, str(page_sets))
-    built_sha = hashlib.sha256(open(out, "rb").read()).hexdigest()
-    state["built"] = {"path": out, "sha256": built_sha}
-    say("E7", "built ZIP sha256", built_sha)
+            if name.endswith(".zip"):
+                path = os.path.join(folder, name)
+                found.append((os.path.getmtime(path), path))
+    say(label, "ZIP files under the output directory", json.dumps([path for _, path in sorted(found)]))
+    if not found:
+        return None
+    published = sorted(found)[-1][1]
+    stable = os.path.join(os.path.dirname(out_dir), task_id + "-published.zip")
+    shutil.copyfile(published, stable)
+    return stable
+
+
+def build(work, new_tools):
+    state = load_state(work)
+    lab = os.path.join(new_tools, "actinglab.exe")
+    out = build_task(lab, state["repo"], "linear_page", os.path.join(work, "built", "page"), "E7")
+    if out is None:
+        check("E7.published_zip_found", False, "")
+    else:
+        with zipfile.ZipFile(out) as archive:
+            names = archive.namelist()
+            say("E7", "built ZIP entries", json.dumps(names))
+            control = json.loads(archive.read("control.json"))
+            say("E7", "built control.json", json.dumps(control))
+            check("E7.control_linear_steps", control.get("execution_mode") == "linear_steps", control.get("execution_mode"))
+            task_name = next(name for name in names if name.endswith("linear_page/task.json"))
+            task = json.loads(archive.read(task_name))
+            say("E7", "built task.json page_rules", json.dumps(task.get("page_rules")))
+            say("E7", "built task.json operation transition", json.dumps([op.get("transition") for op in task["operations"]]))
+            check("E7.selected_task_keeps_transition_page_rule", "transition_01" in (task.get("page_rules") or {}),
+                  json.dumps(sorted(task.get("page_rules") or {})))
+            page_sets = 0
+            for name in names:
+                if name.endswith(".json") and "task.json" not in name and "page" in name.rsplit("/", 1)[-1].lower():
+                    page_sets += 1
+                    pages = json.loads(archive.read(name))
+                    ids = [page.get("id") for page in pages.get("pages", [])] if isinstance(pages, dict) else None
+                    say("E7", "built page set", name, short(json.dumps(pages), 2500))
+                    if ids is not None:
+                        check("E7.page_set_has_transition_page_and_only_the_selected_task",
+                              f"{GAME}/transition_01" in ids and not any("step_01_c" in str(i) or "step_02_off" in str(i) for i in ids),
+                              json.dumps(ids))
+            check("E7.page_set_found", page_sets > 0, str(page_sets))
+        built_sha = hashlib.sha256(open(out, "rb").read()).hexdigest()
+        state["built"] = {"path": out, "sha256": built_sha}
+        say("E7", "built ZIP sha256", built_sha)
 
     # A three-step package whose first `to` is written with the game prefix and whose second `from`
     # is not: the content-directory source parser derives page ids from the declared names, so the
@@ -507,14 +530,8 @@ def build(work, new_tools):
     write_bytes(os.path.join(three_repo, "operations", "linear_three", "task.json"), pretty(three_task))
     write_bytes(os.path.join(three_repo, "navigation", f"{GAME}.{SERVER}.navigation.json"),
                 pretty({"schema_version": "0.3", "control_points": [{"name": "home", "point": [1, 1]}]}))
-    built_three = os.path.join(work, "built", "linear_three.zip")
-    code, value, raw, err = lab_json(lab, ["package", "build-task", "--repo", three_repo, "--task", "linear_three",
-                                           "--game", GAME, "--server", SERVER, "--locale", "en-US",
-                                           "--execution-mode", "linear_steps", "--out", built_three])
-    say("E3", "build three-step legacy ZIP", "exit", code, short(json.dumps((value or {}).get("error")) if value else (raw or err), 600))
-    check("E3.three_built", code == 0 and os.path.isfile(built_three), "")
-    prefixed = os.path.join(work, "built", "linear_three_prefixed.zip")
-    if os.path.isfile(built_three):
+    built_three = build_task(lab, three_repo, "linear_three", os.path.join(work, "built", "three"), "E3")
+    if built_three is not None:
         with zipfile.ZipFile(built_three) as archive:
             entries = {info.filename: archive.read(info.filename) for info in archive.infolist() if not info.filename.endswith("/")}
         task_name = next(name for name in entries if name.endswith("linear_three/task.json"))
@@ -527,10 +544,14 @@ def build(work, new_tools):
         entries[task_name] = (json.dumps(task, indent=2) + "\n").encode("utf-8")
         manifest = json.loads(entries["resources/manifest.json"])
         relative = task_name[len("resources/"):]
+        resealed = 0
         for item in manifest["files"]:
             if item["path"] == relative:
                 item["sha256"] = "sha256:" + hashlib.sha256(entries[task_name]).hexdigest()
+                resealed += 1
+        check("E3.prefixed_manifest_resealed", resealed == 1, str(resealed))
         entries["resources/manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
+        prefixed = os.path.join(work, "built", "linear_three_prefixed.zip")
         write_bytes(prefixed, zip_bytes(entries))
         state["prefixed"] = {"path": prefixed, "sha256": hashlib.sha256(open(prefixed, "rb").read()).hexdigest()}
 
@@ -553,9 +574,10 @@ def build(work, new_tools):
         {"name": "transition-kind-unknown", "locator": packs["transition_kind_unknown"]["paths"]["json"],
          "reference": reference(packs["transition_kind_unknown"]["digest"]),
          "expect": "resource_declaration_invalid", "expect_detail": "/operations/0/transition/kind"},
-        {"name": "built-linear-page", "locator": out, "reference": built_sha,
-         "expect": "ok", "expect_detail": "mode=linear_steps", "first_frame": frames["a_mark"], "expect_decision": "step_01_click"},
     ]
+    if "built" in state:
+        admission.append({"name": "built-linear-page", "locator": state["built"]["path"], "reference": state["built"]["sha256"],
+                          "expect": "ok", "expect_detail": "mode=linear_steps", "first_frame": frames["a_mark"], "expect_decision": "step_01_click"})
     if "prefixed" in state:
         admission.append({"name": "prefixed-to-legacy-zip", "locator": state["prefixed"]["path"], "reference": state["prefixed"]["sha256"],
                           "expect": "ok", "expect_detail": "mode=linear_steps", "first_frame": frames["a"], "expect_decision": "step_01_click"})
@@ -567,15 +589,75 @@ def build(work, new_tools):
 
 
 # ---------------------------------------------------------------------------------------------
-# run: task-run on the fixture backend, ledgers both ways.
+# run: scheduled runs on the fixture backend (a fixture instance takes no direct task-run), and
+# the ledgers both ways.
 
-def write_config(path, state_root, frames, max_inputs):
+def catalog_documents(catalog_dir, every_ms):
+    def load(name):
+        with open(os.path.join(catalog_dir, name + ".json"), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    scope = {"kind": "instance", "instance_id": ALIAS}
+    tasks, pools, activity, timeline = (load(name) for name in ("tasks", "pools", "activity", "timeline"))
+    task = tasks["tasks"][0]
+    task["scope"] = scope
+    task["trigger"]["predicates"][0]["schedule"]["every_ms"] = every_ms
+    task["trigger"]["predicates"][1]["scope"] = scope
+    task["feedback_stop"] = {"kind": "clock", "schedule": {"kind": "at", "clock_source": {
+        "kind": "server", "timezone_id": "etc/utc", "utc_offset_minutes": 0, "dst_offset_minutes": 0,
+        "maintenance_drift_ms": 0}, "at_ms": 4102444800000}}
+    task["instance_overrides"] = []
+    pools["pools"][0]["scope"] = scope
+    profile = activity["profiles"][0]
+    profile["scope"] = scope
+    profile["windows"][0]["start_minute_of_day"] = 0
+    profile["windows"][0]["end_minute_of_day"] = 0
+    profile["minimum_interval_ms"] = 1
+    profile["maximum_interval_ms"] = 1
+    return {"tasks": tasks, "pools": pools, "activity": activity, "timeline": timeline}
+
+
+def write_config(config_dir, state_root, package_path, package_digest, frames, max_inputs, catalog_dir):
+    os.makedirs(os.path.join(config_dir, "policy"), exist_ok=False)
+    for name, document in catalog_documents(catalog_dir, 60000).items():
+        with open(os.path.join(config_dir, "policy", name + ".json"), "w", encoding="utf-8") as handle:
+            json.dump(document, handle, indent=2)
+    now = int(time.time() * 1000)
     config = {
         "schema_version": "actingcommand.actingd.config.v1",
         "state_root": state_root,
         "bind_host": "127.0.0.1",
         "bind_port": 0,
         "secret_fingerprint_salt": "oneoff-336-l2a-fixture-salt-value",
+        "policy": {
+            "facts": {
+                "ledger_position": 0,
+                "fact_snapshot_id": "snapshot:oneoff-336-l2a",
+                "facts": [], "outcomes": [], "tasks": [],
+                "instances": [{
+                    "instance_id": ALIAS, "server_id": SERVER, "game_id": GAME,
+                    "host_id": "fixture-host-a", "available": True,
+                    "capability_operation_ids": ["operation.observe"], "preferred_task_ids": [],
+                }],
+            },
+            "resources": {
+                "pools": [{"pool_id": "fixture-pool-a", "value": 10, "observed_at_unix_ms": now}],
+                "hosts": [{"host_id": "fixture-host-a", "cpu_available_milli": 1000, "gpu_available_milli": 1000,
+                           "io_available_milli": 1000, "host_responsiveness_basis_points": 10000,
+                           "third_party_pressure_basis_points": 0, "heavy_dispatch_limit": 1,
+                           "active_heavy_dispatches": 0}],
+            },
+            "catalog": {"tasks": "policy/tasks.json", "pools": "policy/pools.json",
+                        "activity": "policy/activity.json", "timeline": "policy/timeline.json"},
+            "catalog_approval_ids": ["approval:fixture-a"],
+            "procedure_manifest": [{
+                "procedure_ref": "procedure.observe",
+                "package_digest": package_digest,
+                "operation_id": "operation.observe",
+                "yield_points": ["after_observation"],
+                "scheduled_execution": {"mode": "fixture_simulation", "package_path": package_path},
+            }],
+        },
         "instances": [{
             "alias": ALIAS,
             "instance_id": INSTANCE_ID,
@@ -585,59 +667,60 @@ def write_config(path, state_root, frames, max_inputs):
             },
         }],
     }
+    path = os.path.join(config_dir, "actingd.json")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(config, handle, separators=(",", ":"))
-    return os.path.getsize(path)
+    return path
 
 
-def task_run(work, label, runtime_dir, package, ref_kind, ref_value, frame_names, max_inputs):
+def wait_for_minute_window():
+    """The interval trigger fires on whole minutes; one run per daemon needs a start early in a
+    minute and a shutdown before the next one."""
+    second = time.time() % 60
+    if second < 2:
+        time.sleep(2 - second)
+    elif second > 20:
+        time.sleep(62 - second)
+
+
+def scheduled_run(work, label, runtime_dir, package, package_digest, frame_names, max_inputs, catalog_dir, settle_s=20):
     state = load_state(work)
-    run_dir = os.path.join(work, "runs", label.replace(" ", "_"))
+    run_dir = os.path.join(work, "runs", re.sub(r"[^A-Za-z0-9_.-]", "_", label))
     state_root = os.path.join(run_dir, "state")
     os.makedirs(state_root)
-    config = os.path.join(run_dir, "actingd.json")
     frames = [state["frames"][name] for name in frame_names]
-    size = write_config(config, state_root, frames, max_inputs)
-    say(label, "config bytes", size, "frames", len(frames), json.dumps(frame_names), "max_inputs", max_inputs, "package", package)
+    config = write_config(os.path.join(run_dir, "config"), state_root, package, package_digest, frames, max_inputs, catalog_dir)
+    say(label, "config bytes", os.path.getsize(config), "frames", len(frames), json.dumps(frame_names), "max_inputs", max_inputs,
+        "package", package, "package_digest", json.dumps(package_digest))
     actingd = os.path.join(runtime_dir, "actingcommand-actingd.exe")
     actingctl = os.path.join(runtime_dir, "actingctl.exe")
-    receipt = None
-    receipt_text = ""
+    wait_for_minute_window()
     with open(os.path.join(run_dir, "actingd.out"), "wb") as out, open(os.path.join(run_dir, "actingd.err"), "wb") as err:
-        process = subprocess.Popen([actingd, "--config", config], stdout=out, stderr=err, cwd=run_dir)
+        process = subprocess.Popen([actingd, "--config", config], stdout=out, stderr=err, cwd=os.path.dirname(config))
         started = time.time()
         ready = False
-        while time.time() - started < 60 and process.poll() is None:
+        while time.time() - started < 30 and process.poll() is None:
             code, _, _ = run_exe([actingctl, "status", "--state-root", state_root], timeout=30)
             if code == 0:
                 ready = True
                 break
-            time.sleep(1)
-        say(label, "daemon ready", ready, "after_s", round(time.time() - started, 1))
+            time.sleep(0.5)
+        say(label, "daemon ready", ready, "after_s", round(time.time() - started, 1), "second of minute", round(started % 60, 1))
         if ready:
-            flag = "--package-ref" if ref_kind == "content" else "--expected-sha256"
-            began = time.time()
-            code, stdout, stderr = run_exe([actingctl, "task-run", "--state-root", state_root, "--instance", ALIAS,
-                                            "--package", package, flag, ref_value], timeout=300)
-            receipt_text = stdout + stderr
-            try:
-                receipt = json.loads(stdout)
-            except ValueError:
-                receipt = None
-            say(label, "task-run exit", code, "seconds", round(time.time() - began, 2), "stdout", short(stdout, 1500), "stderr", short(stderr, 600))
+            time.sleep(settle_s)
         code, shutdown_out, shutdown_err = run_exe([actingctl, "request-shutdown", "--state-root", state_root, "--wait", "60"], timeout=120)
-        say(label, "request-shutdown exit", code, short(shutdown_out, 300), short(shutdown_err, 300))
+        say(label, "request-shutdown exit", code, short(shutdown_err, 300))
         try:
             exit_code = process.wait(timeout=120)
         except subprocess.TimeoutExpired:
             process.kill()
             exit_code = "killed"
-    say(label, "actingd exit", exit_code)
+    say(label, "actingd exit", exit_code, "second of minute at exit", round(time.time() % 60, 1))
     if exit_code != 0:
         for stream in ("out", "err"):
             with open(os.path.join(run_dir, f"actingd.{stream}"), "rb") as handle:
                 say(label, "actingd " + stream, short(handle.read().decode("utf-8", "replace"), 1200))
-    return receipt, receipt_text, state_root
+    return state_root
 
 
 def ledger_events(ledger, root):
@@ -671,6 +754,14 @@ def facts_of(events):
     return facts
 
 
+def first_run(facts):
+    """The facts up to and including the first terminal fact: one dispatched run."""
+    for index, (_, _, fact) in enumerate(facts):
+        if fact["kind"] == "terminal_committed":
+            return facts[:index + 1]
+    return facts
+
+
 def find_key(value, key):
     if isinstance(value, dict):
         for name, item in value.items():
@@ -695,38 +786,14 @@ def print_facts(label, facts):
             detail = {key: fact.get(key) for key in ("outcome", "final_page", "executed_steps", "failure_code", "scheduling_disposition")}
             timing = fact.get("task_timing") or {}
             detail["task_failure"] = timing.get("task_failure")
-            detail["post_input_wait"] = list(find_key(timing, "post_input_wait"))
-            detail["postcondition_wait"] = list(find_key(timing, "postcondition_wait"))
-            detail["page_recognition_wait"] = list(find_key(timing, "page_recognition_wait"))
-            detail["retry_wait"] = list(find_key(timing, "retry_wait"))
+            for boundary in ("post_input_wait", "postcondition_wait", "page_recognition_wait", "retry_wait"):
+                detail[boundary] = [{key: summary.get(key) for key in ("status", "attempts", "total_us", "max_us")}
+                                    for summary in find_key(timing, boundary) if isinstance(summary, dict)]
         elif kind == "package_admitted":
             detail = {key: fact.get(key) for key in ("package_label", "task_label", "package_sha256")}
         else:
             detail = {key: value for key, value in fact.items() if key != "kind"}
         say(label, "fact", sequence, event_type, kind, short(json.dumps(detail, ensure_ascii=False), 1500))
-
-
-def run_case(work, label, runtime_dir, ledger, package, ref_kind, ref_value, frame_names, max_inputs):
-    receipt, receipt_text, root = task_run(work, label, runtime_dir, package, ref_kind, ref_value, frame_names, max_inputs)
-    events, failure = ledger_events(ledger, root)
-    if events is None:
-        say(label, "events", "failed", failure)
-        events = []
-    facts = facts_of(events)
-    print_facts(label, facts)
-    result = ((receipt or {}).get("receipt") or {}).get("result") or {}
-    say(label, "receipt result", short(json.dumps(result, ensure_ascii=False), 1500))
-    code = terminal(facts).get("failure_code")
-    if code:
-        for event in events:
-            text = json.dumps(event, ensure_ascii=False)
-            if code in text and "terminal_committed" not in text:
-                say(label, "event naming the failure", event.get("sequence"), event.get("event_type"), short(text, 1500))
-    export_code, export_out, export_err = run_exe([ledger, "--state-root", root, "export", "--task-evidence"])
-    for line in export_out.splitlines():
-        if code and code in line:
-            say(label, "task evidence naming the failure", short(line, 1500))
-    return result, facts, root, events, receipt_text + json.dumps(events, ensure_ascii=False) + export_out
 
 
 def kinds(facts, kind):
@@ -736,6 +803,30 @@ def kinds(facts, kind):
 def terminal(facts):
     found = kinds(facts, "terminal_committed")
     return found[-1] if found else {}
+
+
+def run_case(work, label, runtime_dir, ledger, package, package_digest, frame_names, max_inputs, catalog_dir):
+    root = scheduled_run(work, label, runtime_dir, package, package_digest, frame_names, max_inputs, catalog_dir)
+    events, failure = ledger_events(ledger, root)
+    if events is None:
+        say(label, "events", "failed", failure)
+        events = []
+    all_facts = facts_of(events)
+    runs = len(kinds(all_facts, "terminal_committed"))
+    facts = first_run(all_facts)
+    say(label, "ledger events", len(events), "task facts", len(all_facts), "terminal facts (runs)", runs)
+    print_facts(label, facts)
+    for event in events:
+        if event.get("event_type") in ("task.completed", "task.failed", "policy.execution_recorded"):
+            say(label, event["event_type"], event["sequence"], short(json.dumps(event.get("payload"), ensure_ascii=False), 1500))
+    code = terminal(facts).get("failure_code")
+    text = json.dumps(events, ensure_ascii=False)
+    export_code, export_out, export_err = run_exe([ledger, "--state-root", root, "export", "--task-evidence"])
+    if code:
+        for line in export_out.splitlines():
+            if code in line:
+                say(label, "task evidence naming the failure", short(line, 1500))
+    return facts, root, events, text + export_out
 
 
 def ledger_reads(label, ledger, root):
@@ -772,133 +863,141 @@ def normalize(value):
     return value
 
 
-def run(work, new_runtime, new_tools, old_runtime, old_tools):
+def completed(facts, executed_steps, final_page=None):
+    last = terminal(facts)
+    return (last.get("outcome") == "success" and last.get("executed_steps") == executed_steps
+            and (final_page is None or last.get("final_page") == final_page))
+
+
+def run(work, new_runtime, new_tools, old_runtime, old_tools, catalog_dir):
     state = load_state(work)
     packs = state["packs"]
     new_ledger = os.path.join(new_tools, "actingledger.exe")
     old_ledger = os.path.join(old_tools, "actingledger.exe")
     produced = []
 
-    # 1. The existing navigable_route pack: the same events on 885947c9 and on the product build.
+    def content(name):
+        return {"schema_version": SCHEMA_DIR, "sha256": packs[name]["digest"]}
+
+    # 1. The existing navigable_route pack: the same facts on 885947c9 and on the product build.
     toggle = packs["toggle"]
-    sequences = {}
+    sequences, task_sequences = {}, {}
     for build_label, runtime_dir in (("885947c9", old_runtime), ("product", new_runtime)):
-        result, facts, root, events, text = run_case(work, f"E1 {build_label} navigable_route", runtime_dir, new_ledger,
-                                               toggle["paths"]["dir"], "content", reference(toggle["digest"]),
-                                               ["off", "on", "on", "on"], 2)
-        check(f"E1.{build_label}.completed", result.get("kind") == "contained_task_completed", result.get("kind"))
+        facts, root, events, _ = run_case(work, f"E1 {build_label} navigable_route", runtime_dir, new_ledger,
+                                          toggle["paths"]["dir"], content("toggle"), ["off", "on", "on", "on"], 2, catalog_dir)
+        check(f"E1.{build_label}.completed", completed(facts, 1, f"{GAME}/toggle_on"), json.dumps(terminal(facts).get("outcome")))
+        sequences[build_label] = [normalize({"event_type": event_type, "fact": fact}) for _, event_type, fact in facts]
         task_events = [event for event in events if str(event.get("event_type", "")).startswith("task.")]
-        sequences[build_label] = [normalize({"event_type": event["event_type"], "payload": event.get("payload")}) for event in task_events]
-        say("E1", build_label, "task events", len(task_events), "types", json.dumps([event["event_type"] for event in task_events]))
+        task_sequences[build_label] = [normalize({"event_type": event["event_type"], "payload": event.get("payload")}) for event in task_events]
         if build_label == "product":
             produced.append(("E1 product navigable_route", root))
-    old_seq, new_seq = sequences["885947c9"], sequences["product"]
-    first_difference = next((index for index, (a, b) in enumerate(zip(old_seq, new_seq)) if a != b), None)
-    say("E1", "normalized task event sequences", "885947c9", len(old_seq), "product", len(new_seq), "first difference", first_difference)
-    if first_difference is not None:
-        say("E1", "885947c9 at difference", short(json.dumps(old_seq[first_difference]), 2000))
-        say("E1", "product at difference", short(json.dumps(new_seq[first_difference]), 2000))
-    check("E1.identical_task_events", len(old_seq) == len(new_seq) and first_difference is None and len(old_seq) > 0,
-          f"{len(old_seq)} vs {len(new_seq)}")
-    for index, entry in enumerate(new_seq):
-        say("E1", "normalized", index, short(json.dumps(entry), 600))
+    for name, collection in (("semantic facts of the run", sequences), ("all task.* events", task_sequences)):
+        old_seq, new_seq = collection["885947c9"], collection["product"]
+        first_difference = next((index for index, (a, b) in enumerate(zip(old_seq, new_seq)) if a != b), None)
+        say("E1", name, "885947c9", len(old_seq), "product", len(new_seq), "first difference", first_difference)
+        if first_difference is not None:
+            say("E1", name, "885947c9 at difference", short(json.dumps(old_seq[first_difference]), 2500))
+            say("E1", name, "product at difference", short(json.dumps(new_seq[first_difference]), 2500))
+        if name == "semantic facts of the run":
+            check("E1.identical_normalized_facts", len(old_seq) == len(new_seq) and first_difference is None and len(old_seq) > 0,
+                  f"{len(old_seq)} vs {len(new_seq)}")
+            for index, entry in enumerate(new_seq):
+                say("E1", "normalized fact", index, short(json.dumps(entry), 700))
+        else:
+            say("E1", "all task.* events identical after normalization", len(old_seq) == len(new_seq) and first_difference is None)
 
     # 2. Three containers x three intermediate kinds.
-    three, page, window = packs["three"], packs["page"], packs["window"]
-    result, facts, root, _, text = run_case(work, "E2 dir none", new_runtime, new_ledger, three["paths"]["dir"], "content",
-                                      reference(three["digest"]), ["a", "b", "c"], 4)
+    facts, root, _, _ = run_case(work, "E2 dir none", new_runtime, new_ledger, packs["three"]["paths"]["dir"], content("three"),
+                                 ["a", "b", "c"], 4, catalog_dir)
     produced.append(("E2 dir none", root))
-    check("E2.dir_none.completed", result.get("kind") == "contained_task_completed" and result.get("executed_steps") == 2
-          and result.get("final_page") == f"{GAME}/step_03_c", json.dumps(result))
+    check("E2.dir_none.completed", completed(facts, 2, f"{GAME}/step_03_c"), json.dumps(terminal(facts)))
     starts = kinds(facts, "step_started")
-    check("E2.dir_none.from_pages_are_detector_ids", [s.get("from_page") for s in starts] == [f"{GAME}/step_01_a", f"{GAME}/step_02_b"], json.dumps(starts))
+    check("E2.dir_none.from_pages_are_detector_ids", [s.get("from_page") for s in starts] == [f"{GAME}/step_01_a", f"{GAME}/step_02_b"],
+          json.dumps(starts))
     candidates = [fact.get("candidate_pages") for fact in kinds(facts, "recognition_started")]
-    check("E2.dir_none.single_candidates", candidates == [[f"{GAME}/step_01_a"], [f"{GAME}/step_02_b"], [f"{GAME}/step_03_c"]], json.dumps(candidates))
+    check("E2.dir_none.single_candidates", candidates == [[f"{GAME}/step_01_a"], [f"{GAME}/step_02_b"], [f"{GAME}/step_03_c"]],
+          json.dumps(candidates))
 
-    result, facts, root, _, text = run_case(work, "E2 zip page", new_runtime, new_ledger, page["paths"]["zip"], "content",
-                                      reference(page["digest"]), ["a_mark", "load", "b"], 4)
+    facts, root, _, _ = run_case(work, "E2 zip page", new_runtime, new_ledger, packs["page"]["paths"]["zip"], content("page"),
+                                 ["a_mark", "load", "b"], 4, catalog_dir)
     produced.append(("E2 zip page", root))
-    check("E2.zip_page.completed", result.get("kind") == "contained_task_completed" and result.get("executed_steps") == 1, json.dumps(result))
+    check("E2.zip_page.completed", completed(facts, 1, f"{GAME}/step_02_b"), json.dumps(terminal(facts)))
     candidates = [fact.get("candidate_pages") for fact in kinds(facts, "recognition_completed")]
     matched = [fact.get("matched_page") for fact in kinds(facts, "recognition_completed")]
     check("E2.zip_page.intermediate_seen", candidates == [[f"{GAME}/step_01_a"], [f"{GAME}/transition_01"], [f"{GAME}/step_02_b"]]
           and matched == [f"{GAME}/step_01_a", f"{GAME}/transition_01", f"{GAME}/step_02_b"], json.dumps([candidates, matched]))
 
-    result, facts, root, _, text = run_case(work, "E2 json window", new_runtime, new_ledger, window["paths"]["json"], "content",
-                                      reference(window["digest"]), ["a", "b"], 4)
+    facts, root, _, _ = run_case(work, "E2 json window", new_runtime, new_ledger, packs["window"]["paths"]["json"], content("window"),
+                                 ["a", "b"], 4, catalog_dir)
     produced.append(("E2 json window", root))
-    check("E2.json_window.completed", result.get("kind") == "contained_task_completed" and result.get("executed_steps") == 1, json.dumps(result))
-    post_input = list(find_key(terminal(facts).get("task_timing") or {}, "post_input_wait"))
-    values = [value for summary in post_input for value in find_key(summary, "max_us")] + \
-             [value for summary in post_input for value in find_key(summary, "total_us")]
-    say("E2", "json window post_input_wait summaries", json.dumps(post_input))
-    numbers = [value.get("value") if isinstance(value, dict) else value for value in values]
+    check("E2.json_window.completed", completed(facts, 1, f"{GAME}/step_02_b"), json.dumps(terminal(facts)))
+    summaries = [summary for summary in find_key(terminal(facts).get("task_timing") or {}, "post_input_wait") if isinstance(summary, dict)]
+    numbers = [summary.get(key) for summary in summaries for key in ("max_us", "total_us")]
+    say("E2", "json window post_input_wait summaries", json.dumps(summaries))
     check("E2.json_window.post_input_wait_at_least_1000ms", any(isinstance(n, int) and n >= 1_000_000 for n in numbers), json.dumps(numbers))
 
     # 3. Failures and retries.
-    result, facts, root, _, text = run_case(work, "E3 entry unmatched", new_runtime, new_ledger, three["paths"]["dir"], "content",
-                                      reference(three["digest"]), ["x"] * 12, 4)
+    facts, root, _, _ = run_case(work, "E3 entry unmatched", new_runtime, new_ledger, packs["three"]["paths"]["dir"], content("three"),
+                                 ["x"] * 12, 4, catalog_dir)
     produced.append(("E3 entry unmatched", root))
     check("E3.entry_unmatched", terminal(facts).get("failure_code") == "contained_task_linear_entry_unmatched"
           and terminal(facts).get("executed_steps") == 0 and not kinds(facts, "effect_intent"), json.dumps(terminal(facts).get("failure_code")))
 
-    result, facts, root, _, text = run_case(work, "E3 intermediate unobserved", new_runtime, new_ledger, page["paths"]["zip"], "content",
-                                      reference(page["digest"]), ["a_mark"] + ["b"] * 10, 4)
+    facts, root, _, _ = run_case(work, "E3 intermediate unobserved", new_runtime, new_ledger, packs["page"]["paths"]["zip"], content("page"),
+                                 ["a_mark"] + ["b"] * 10, 4, catalog_dir)
     produced.append(("E3 intermediate unobserved", root))
     check("E3.intermediate_unobserved", terminal(facts).get("failure_code") == "contained_task_linear_intermediate_unobserved"
           and len(kinds(facts, "effect_intent")) == 1, json.dumps(terminal(facts).get("failure_code")))
 
-    result, facts, root, _, text = run_case(work, "E3 next page never", new_runtime, new_ledger, three["paths"]["dir"], "content",
-                                      reference(three["digest"]), ["a"] * 12, 4)
+    facts, root, _, _ = run_case(work, "E3 next page never", new_runtime, new_ledger, packs["three"]["paths"]["dir"], content("three"),
+                                 ["a"] * 12, 4, catalog_dir)
     produced.append(("E3 next page never", root))
     check("E3.page_confirmation_failed", terminal(facts).get("failure_code") == "page_confirmation_failed"
           and terminal(facts).get("executed_steps") == 1, json.dumps(terminal(facts).get("failure_code")))
 
-    retry = packs["retry"]
-    result, facts, root, _, text = run_case(work, "E3 swallowed click retried", new_runtime, new_ledger, retry["paths"]["dir"], "content",
-                                      reference(retry["digest"]), ["a"] * 6 + ["b"] * 4, 4)
+    facts, root, _, _ = run_case(work, "E3 swallowed click retried", new_runtime, new_ledger, packs["retry"]["paths"]["dir"], content("retry"),
+                                 ["a"] * 6 + ["b"] * 4, 4, catalog_dir)
     produced.append(("E3 swallowed click retried", root))
     starts = [fact.get("step_index") for fact in kinds(facts, "step_started")]
-    finishes = [(fact.get("step_index"), fact.get("page_label")) for fact in kinds(facts, "step_finished")]
-    check("E3.retry.two_attempts_one_step", starts == [0, 0] and finishes == [(0, f"{GAME}/step_01_a"), (0, f"{GAME}/step_02_b")]
+    finishes = [[fact.get("step_index"), fact.get("page_label")] for fact in kinds(facts, "step_finished")]
+    check("E3.retry.two_attempts_one_step", starts == [0, 0] and finishes == [[0, f"{GAME}/step_01_a"], [0, f"{GAME}/step_02_b"]]
           and len(kinds(facts, "effect_intent")) == 2, json.dumps([starts, finishes]))
-    check("E3.retry.completed", result.get("kind") == "contained_task_completed" and result.get("executed_steps") == 1
-          and terminal(facts).get("executed_steps") == 1, json.dumps(result))
+    check("E3.retry.completed_executed_steps_1", completed(facts, 1, f"{GAME}/step_02_b"), json.dumps(terminal(facts)))
 
-    retry_page = packs["retry_page"]
-    result, facts, root, _, text = run_case(work, "E3 stuck loading", new_runtime, new_ledger, retry_page["paths"]["dir"], "content",
-                                      reference(retry_page["digest"]), ["a"] + ["load"] * 8, 4)
+    facts, root, _, text = run_case(work, "E3 stuck loading", new_runtime, new_ledger, packs["retry_page"]["paths"]["dir"], content("retry_page"),
+                                    ["a"] + ["load"] * 8, 4, catalog_dir)
     produced.append(("E3 stuck loading", root))
     check("E3.stuck_loading", terminal(facts).get("failure_code") == "page_confirmation_failed"
           and len(kinds(facts, "effect_intent")) == 1, json.dumps(terminal(facts).get("failure_code")))
-    check("E3.stuck_loading.detail_intermediate_seen", "intermediate_seen=true" in text, "")
+    say("E3", "stuck loading detail intermediate_seen=true found in ledger or task evidence", "intermediate_seen=true" in text)
 
-    result, facts, root, _, text = run_case(work, "E3 three-step fails at step 2", new_runtime, new_ledger, three["paths"]["dir"], "content",
-                                      reference(three["digest"]), ["a"] + ["b"] * 7, 4)
+    facts, root, _, _ = run_case(work, "E3 three-step fails at step 2", new_runtime, new_ledger, packs["three"]["paths"]["dir"], content("three"),
+                                 ["a"] + ["b"] * 7, 4, catalog_dir)
     produced.append(("E3 three-step fails at step 2", root))
     check("E3.fail_step_2_executed_2", terminal(facts).get("failure_code") == "page_confirmation_failed"
           and terminal(facts).get("executed_steps") == 2, json.dumps(terminal(facts)))
 
     if "prefixed" in state:
-        result, facts, root, _, text = run_case(work, "E3 prefixed to", new_runtime, new_ledger, state["prefixed"]["path"], "legacy",
-                                          state["prefixed"]["sha256"], ["a", "b", "c"], 4)
+        facts, root, _, _ = run_case(work, "E3 prefixed to", new_runtime, new_ledger, state["prefixed"]["path"],
+                                     "sha256:" + state["prefixed"]["sha256"], ["a", "b", "c"], 4, catalog_dir)
         produced.append(("E3 prefixed to", root))
-        check("E3.prefixed_to.completed", result.get("kind") == "contained_task_completed" and result.get("executed_steps") == 2, json.dumps(result))
+        check("E3.prefixed_to.completed", completed(facts, 2, f"{GAME}/step_03_c"), json.dumps(terminal(facts)))
 
     # 7. The built package runs.
     if "built" in state:
-        result, facts, root, _, text = run_case(work, "E7 built linear_page", new_runtime, new_ledger, state["built"]["path"], "legacy",
-                                          state["built"]["sha256"], ["a_mark", "load", "b"], 4)
+        facts, root, _, _ = run_case(work, "E7 built linear_page", new_runtime, new_ledger, state["built"]["path"],
+                                     "sha256:" + state["built"]["sha256"], ["a_mark", "load", "b"], 4, catalog_dir)
         produced.append(("E7 built linear_page", root))
-        check("E7.built_runs", result.get("kind") == "contained_task_completed" and result.get("executed_steps") == 1, json.dumps(result))
+        check("E7.built_runs", completed(facts, 1, f"{GAME}/step_02_b"), json.dumps(terminal(facts)))
 
     # 6. The v0.9.0 build refuses linear packages before PackageAdmitted.
-    for label, pack, expected in (("E6 v0.9.0 linear dir", packs["three"], "contained_task_control_invalid"),
-                                  ("E6 v0.9.0 linear dir with transition", packs["retry_page"], "resource_declaration_invalid")):
-        result, facts, root, events, text = run_case(work, label, old_runtime, old_ledger, pack["paths"]["dir"], "content",
-                                               reference(pack["digest"]), ["a", "b"], 2)
-        admitted = kinds(facts, "package_admitted")
-        check(f"{label.replace(' ', '_')}.refused", expected in text and not admitted, f"{expected} in receipt: {expected in text}; package_admitted facts {len(admitted)}")
+    for label, name, expected in (("E6 v0.9.0 linear dir", "three", "contained_task_control_invalid"),
+                                  ("E6 v0.9.0 linear dir with transition", "retry_page", "resource_declaration_invalid")):
+        facts, root, events, text = run_case(work, label, old_runtime, old_ledger, packs[name]["paths"]["dir"], content(name),
+                                             ["a", "b"], 2, catalog_dir)
+        admitted = kinds(facts_of(events), "package_admitted")
+        check(f"{label.replace(' ', '_')}.refused_before_package_admitted", expected in text and not admitted,
+              f"{expected} in ledger: {expected in text}; package_admitted facts {len(admitted)}")
 
     # 5. 885947c9 actingledger reads every ledger the product build wrote.
     for label, root in produced:
@@ -907,12 +1006,13 @@ def run(work, new_runtime, new_tools, old_runtime, old_tools):
         before = tree_hashes(copy)
         results = ledger_reads(f"E5 v0.9.0 actingledger on {label}", old_ledger, copy)
         after = tree_hashes(copy)
-        check(f"E5.old_reads.{label.replace(' ', '_')}", all(code == 0 and not corrupt for code, corrupt in results.values()), json.dumps(results))
-        check(f"E5.copy_unchanged.{label.replace(' ', '_')}", before == after, f"{len(before)} files")
+        slug = label.replace(" ", "_")
+        check(f"E5.old_reads.{slug}", all(code == 0 and not corrupt for code, corrupt in results.values()), json.dumps(results))
+        check(f"E5.copy_unchanged.{slug}", before == after, f"{len(before)} files")
         events_old, failure = ledger_events(old_ledger, copy)
         events_new, _ = ledger_events(new_ledger, root)
-        check(f"E5.old_pages_all_events.{label.replace(' ', '_')}", events_old is not None and events_new is not None
-              and len(events_old) == len(events_new), f"{len(events_old or [])} vs {len(events_new or [])} {failure}")
+        check(f"E5.old_pages_all_events.{slug}", events_old is not None and events_new is not None
+              and len(events_old) == len(events_new) and len(events_new) > 20, f"{len(events_old or [])} vs {len(events_new or [])} {failure}")
 
     say("RESULT", "failures", len(FAILURES), json.dumps(FAILURES))
     return 1 if FAILURES else 0
@@ -926,4 +1026,4 @@ if __name__ == "__main__":
         sys.exit(prepare(sys.argv[2]))
     if command == "build":
         sys.exit(build(sys.argv[2], sys.argv[3]))
-    sys.exit(run(*sys.argv[2:7]))
+    sys.exit(run(*sys.argv[2:8]))
