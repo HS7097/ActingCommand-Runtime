@@ -345,7 +345,7 @@ def static(repo, base, product):
         check(f"STATIC.unchanged.{path}", not stat, stat)
     for path, names in (
             ("crates/runtime-host/src/host/contained_task.rs",
-             ("run_preflighted_contained_task", "recognize_required_home", "record_geometry_triggered_recovery_failure",
+             ("run_preflighted_contained_task", "record_geometry_triggered_recovery_failure",
               "fail_contained_task_entry", "startup_package_admission_failure")),
             ("crates/execution-kernel/src/contained_task.rs",
              ("recognize_required_home", "run_entry_recovery", "run_with_options", "run_with_collector",

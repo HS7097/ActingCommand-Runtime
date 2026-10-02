@@ -105,6 +105,7 @@ jobs:
           & python head/one-off-336l2b/evidence.py static head $env:BASE_SHA $env:PRODUCT_SHA
           if ($LASTEXITCODE -ne 0) { throw "static failed with exit code $LASTEXITCODE" }
       - name: Prepare packages and frames
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
