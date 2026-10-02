@@ -403,13 +403,10 @@ def record_pipeline(new_runtime, new_lab, work):
             steps = [
                 ("start", ["record", "start", "--task-id", "toggle_rec", "--locale", "en-US"]),
                 ("capture --record", ["capture", "--record"]),
-                ("mark state/off", ["record", "mark", "--color", "state/off=10,10,1,1"]),
+                ("status after the refused capture", ["record", "status"]),
+                ("mark --frame (offline step 1, 64x36)", ["record", "mark", "--frame", os.path.join(work, "frames", "color-off.png"), "--color", "state/off=10,10,1,1"]),
                 ("do --capture --tap-rect --record", ["do", "--capture", "--tap-rect", "8,8,5,5", "--record", *package]),
-                ("capture --record (opens step 2)", ["capture", "--record"]),
-                ("drop step 2", ["record", "mark", "--drop-step", "2"]),
-                ("reopen step 1", ["record", "mark", "--reopen-step", "1"]),
-                ("do --capture --record again", ["do", "--capture", "--record", *package]),
-                ("capture --record after the redo", ["capture", "--record"]),
+                ("do --capture --record without a rectangle", ["do", "--capture", "--record", *package]),
                 ("status", ["record", "status"]),
             ]
             results = {}
@@ -422,17 +419,23 @@ def record_pipeline(new_runtime, new_lab, work):
                     results[label] = (code, {})
             start = results["start"][1].get("data") or {}
             check("E4.start_reachable", start.get("record_flag_reachable") is True, json.dumps(start.get("record_flag_reachable")))
-            capture = (results["capture --record"][1].get("data") or {}).get("record") or {}
-            check("E4.capture_record", results["capture --record"][0] == 0 and capture.get("status") == "frame_recorded" and capture.get("step") == 1, json.dumps(capture)[:300])
-            do_code, do_value = results["do --capture --tap-rect --record"]
-            do_record = ((do_value.get("data") or {}).get("record")) or (((do_value.get("error") or {}).get("details") or {}).get("record")) or {}
-            say("E4", "do record", json.dumps(do_record)[:3000])
-            check("E4.do_record", do_code == 0 and do_record.get("status") == "click_recorded" and do_record.get("step_closed") is True, f"exit {do_code}")
+            code, value = results["capture --record"]
+            message = ((value.get("error") or {}).get("message")) or ""
+            check("E4.capture_refused_by_runtime_for_fixture", code == 4 and "fixture_execution_scope_forbidden" in message, short(message, 300))
+            lab_after = ((results["status after the refused capture"][1].get("data") or {}).get("lab")) or {}
+            check("E4.nothing_recorded_after_refusal", lab_after.get("steps") == [] and lab_after.get("coordinate_space") is None, json.dumps(lab_after.get("steps")))
+            code, value = results["mark --frame (offline step 1, 64x36)"]
+            check("E4.offline_step_1", code == 0 and (value.get("data") or {}).get("step") == 1, f"exit {code}")
+            code, value = results["do --capture --tap-rect --record"]
+            message = ((value.get("error") or {}).get("message")) or ""
+            check("E4.do_planned_then_refused_by_runtime_for_fixture", code == 4 and "fixture_execution_scope_forbidden" in message, short(message, 300))
+            code, value = results["do --capture --record without a rectangle"]
+            check("E4.do_refused_before_press_without_rectangle", code == 3 and (value.get("error") or {}).get("code") == "record_step_click_missing", f"exit {code}")
             status = ((results["status"][1].get("data") or {}).get("lab")) or {}
             for step in status.get("steps", []):
-                say("E4", "status step", json.dumps({key: step.get(key) for key in ("index", "artifact_step", "dropped", "closed", "closed_by", "click")}))
+                say("E4", "status step", json.dumps({key: step.get(key) for key in ("index", "artifact_step", "closed", "click")}), "frames", len(step.get("frames", [])))
             first = next((step for step in status.get("steps", []) if step.get("index") == 1), {})
-            check("E4.redo_attempts", (first.get("click") or {}).get("attempts") == 1 and (first.get("click") or {}).get("executed") is True, json.dumps(first.get("click")))
+            check("E4.refused_click_not_recorded", first.get("click") is None and first.get("closed") is False and status.get("open_step") == 1, json.dumps(first.get("click")))
         code, out, err_text = run_exe([actingctl, "request-shutdown", "--state-root", runtime_root, "--wait", "60"], timeout=120)
         say("E4", "request-shutdown exit", code, short(out, 300), short(err_text, 300))
         try:
