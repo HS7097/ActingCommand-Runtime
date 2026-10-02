@@ -68,6 +68,7 @@ impl Declaration<'_> {
                 "max_steps",
                 "stop_on_confirmation",
                 "stability_termination",
+                "prerequisite_package_id",
             ],
         )?;
         if object.contains_key("phases")
@@ -95,8 +96,13 @@ impl Declaration<'_> {
                 {
                     self.unsigned(value, &pointer)?
                 }
-                "schema_version" | "package_id" | "execution_mode" | "game" | "server"
-                | "entry_task_id" => self.string(value, &pointer)?,
+                "schema_version"
+                | "package_id"
+                | "execution_mode"
+                | "game"
+                | "server"
+                | "entry_task_id"
+                | "prerequisite_package_id" => self.string(value, &pointer)?,
                 "resource_root" if !value.is_null() => self.string(value, &pointer)?,
                 _ => {}
             }

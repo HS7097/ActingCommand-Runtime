@@ -24,6 +24,9 @@ admitted only under `linear_steps`:
 "transition": {"kind": "window", "min_ms": 1000, "max_ms": 3000}
 ```
 
+`control.json` may also name a prerequisite package, `"prerequisite_package_id": "<package id>"`,
+admitted only under `linear_steps` ("Prerequisite packages" below).
+
 Omitting `transition` (or writing `null`) declares no intermediate state. The resource
 declaration check admits the field's shape (`kind` is `page` or `window`; `page_id` a string;
 `timeout_ms`, `interval_ms`, `min_ms` and `max_ms` unsigned integers; no other field) and
@@ -61,6 +64,7 @@ one operation is at fault; an existing check keeps its existing code.
 | a `scheduling_outcome`, when declared, has no designated operation | `designated_operation` |
 | every terminal page of that outcome is the target page | `terminal_page` |
 | the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
+| an application entry declares no `prerequisite_package_id` ("Prerequisite packages" below) | `prerequisite_with_application_entry` |
 
 Every operation still passes the existing operation checks (guard or trusted coordinate, click
 shape, retry fields, `post_delay_ms`); operation ids are unique (`contained_task_program_invalid`).
@@ -70,7 +74,8 @@ to none or to several is the
 existing `contained_task_page_set_invalid`. All comparisons use the resolved ids. A
 `transition` on an operation of any other mode is `contained_task_operation_invalid`. The
 page-graph checks (scheduling outcome coverage, phases) are not run, and a linear task has no
-required home entry page, so the host runs no entry preflight for it.
+required home entry page, so the host runs no home entry preflight for it; a task with a
+prerequisite package runs through the prerequisite gate instead ("Prerequisite packages" below).
 
 ## Execution
 
@@ -221,6 +226,132 @@ host's `application.failed` chain. The device error is fatal, so the task's term
 is `fatal`, as for an adb failure of a click, and the scheduling policy settles a fatal
 terminal as severe: the task pauses at its first such failure.
 
+## Prerequisite packages
+
+Workflow #336 R14 and R15. A linear package records its path from its first step; a package
+that should also run from elsewhere names, in `control.json`, the package that brings the screen
+to that first step:
+
+```json
+{"schema_version": "Lab-1y.control.v2", "package_id": "neutral.test.stage_select",
+ "execution_mode": "linear_steps", "prerequisite_package_id": "neutral.test.stage_page", "...": "..."}
+```
+
+**Declaration.** `prerequisite_package_id` is a string, not empty, at most 256 bytes, with no
+control character, other than the package's own `package_id`, and only under `linear_steps`.
+A violation is `contained_task_control_invalid` with detail `reason=prerequisite_id_invalid`,
+`reason=prerequisite_self` or `reason=prerequisite_requires_linear_steps`; an application entry
+that declares one is `contained_task_linear_invalid`, `reason=prerequisite_with_application_entry`
+(the entry recognizes nothing before its effect, so there is no first step to lead to). Only a
+hand-written `control.json` (or a later `record stop` option) carries the field: `package build`
+writes a fixed set of control fields, and `lab run` ignores the field and never runs a
+prerequisite package.
+
+**Resolution.** The package id names an entry of the `actingd` configuration's top-level
+`prerequisite_packages` (package id, package locator, content reference; see
+`actingd-check-config.md`, "Prerequisite packages"); nothing scans a package directory. The
+chain is resolved and every package admitted when the run is prepared: before any lease for a
+direct (`task-run`) run and for a startup package or a recovery ladder rung, inside the lease
+the policy already holds for a scheduled run. A `linear_steps` prerequisite package may name its
+own prerequisite package; a page-graph package ends the chain. Layer by layer, in this order:
+
+| Check | `failure_code` |
+|---|---|
+| the map has the package id | `contained_task_prerequisite_unbound` |
+| the package id is not already in the chain (the dependent package included) | `contained_task_prerequisite_cycle` |
+| at most three prerequisite packages besides the dependent package | `contained_task_prerequisite_depth_exceeded` |
+| the package is admitted against its content reference (the loader's code is attached as the related failure, a resource declaration rejection travels with it) | `contained_task_prerequisite_admission_failed` |
+| the admitted package's `package_id` is the map key | `contained_task_prerequisite_mismatch` |
+| the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings or designated scheduling operation; its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|designated_operation\|game\|server\|resolution>` |
+| the maximum steps of the whole chain and the dependent package add up to at most 1000 | `contained_task_prerequisite_step_limit` |
+
+Each refusal is denied (`package_invalid`) with detail `layer=<n> package_id=<id>`, writes no
+`task.*` record and has no task terminal, so it never starts the stuck-recovery ladder; a
+scheduled run's refusal is recorded with the policy's lease released, as any other preparation
+refusal. The admission deadline of a prerequisite package is the run's deadline (for a scheduled
+run, the one the run derives from its request and lease). A prerequisite package's
+`scheduling_outcome` without a designated operation is allowed and ignored. A request's
+`--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only. The
+map is read when `actingd` starts; a change needs a restart.
+
+**Gate.** A package whose chain is not empty runs through the entry gate instead of starting
+directly; a package without a prerequisite package starts as above. Layer `i` is a package `X_i`
+(`X_0` the dependent package) and its prerequisite package `X_(i+1)`:
+
+1. **First check, one frame.** One capture is evaluated for `X_i`'s first step's page only
+   (diagnostic phase `home_preflight`, no task timing). `EntryRecognition { Initial }` names that
+   page, followed by `EntryRecoveryDecision`. When the page passes, the layer is done and
+   `X_(i+1)` does not run.
+2. **Prerequisite package.** `EntryRecoveryPackageAdmitted { X_(i+1) }`; when `X_(i+1)` has a
+   prerequisite package itself, its own layer runs first. Then `EffectiveConfigurationFacts::
+   EntryRecovery { X_(i+1) }` (when the run recorded its initial configuration) and the package
+   runs inside the same run: same task, run and lease, its step indices following the steps
+   already run, its budget origin `entry_recovery`, its `PackageAdmitted`, `RunStarted` and
+   `Finalizing` not written. Its own failure code is carried out unchanged (a page-graph
+   package's `contained_task_page_unknown` still starts the ladder). It ends with
+   `EntryRecoveryCompleted { X_(i+1), final page, its own executed steps }`; its final page is not
+   compared with `X_i`'s pages, since page ids of different packages are not comparable.
+3. **Recheck, bounded wait.** `X_i`'s first step's page is evaluated on one frame at a time,
+   every capture interval of `X_i`, for at most `X_i`'s `step_timeout_ms`, since its markers may
+   still be fading in when the prerequisite package reached its own end. Each capture is a
+   `CapturePage` boundary and each sleep a `PageRecognitionWait` boundary of the gate's own
+   budget (origin `task` for `X_0`, `entry_recovery` above), in the preflight phase.
+   `EntryRecognition { PostRecovery }` follows; when the page did not pass, the run fails with
+   `contained_task_prerequisite_entry_unmatched`, detail `layer=<i> package_id=<X_i>
+   required_page=<page>`, timing `page_recognition` / `entry_recognition` with `limit_ms` the
+   step timeout.
+
+Each prerequisite package runs at most once per run. On any failure every prerequisite package
+opened and not yet closed gets one `EntryRecoveryFailed` with the failure code, innermost first,
+and the gate one `EntryTargetDisposition { FailClosed }`; a recognition failure, an unknown page
+or an input backend failure is recorded so even when the run spent its last execution budget,
+as the home entry recovery does. When every layer passed, `EntryTargetDisposition { Started }`
+is written, then the dependent package's `PackageAdmitted`, and the package runs with its step
+indices after the prerequisite packages' steps; on success `executed_steps` adds the
+prerequisite packages' steps. Its own first step is awaited again as above and normally passes
+at once. The host deadline still ends the run with `contained_task_deadline_exceeded` (or
+cancelled, paused) from any capture of the gate.
+
+**Ledger.** Only the existing `TaskEntryPreflight` facts and effective configuration records
+are written; a run has at most six effective configuration records (initial, one per
+prerequisite package, capture, input). The facts are told apart by these rules, with no layer
+field:
+
+- A `TaskEntryPreflight` fact belongs to the innermost prerequisite package that was opened by
+  `EntryRecoveryPackageAdmitted` and not yet closed by `EntryRecoveryCompleted` or
+  `EntryRecoveryFailed`; with none open it belongs to the dependent package. An
+  `EntryRecognition`'s `required_page` is that package's first step's page.
+- The packages of one chain have different package ids, so their content references differ;
+  each run prerequisite package has its own `EntryRecovery { package reference }` record.
+- Every package's step indices are a range of their own, as long as its
+  `EntryRecoveryCompleted.executed_steps`.
+
+A replayed direct request is answered from its ledger when its `EntryRecoveryPackageAdmitted`
+facts are at most three, all different, each the request's recovery binding or a package of the
+`prerequisite_packages` map; otherwise it is `contained_task_request_recovery_reused`.
+
+**Failure codes of the gate.**
+
+| Situation | `failure_code` | Starts the ladder |
+|---|---|---|
+| After the prerequisite package ran, the first step's page did not pass within `step_timeout_ms` | `contained_task_prerequisite_entry_unmatched` | no |
+| The prerequisite package ended without a final page (a safeguard) | `contained_task_prerequisite_final_page_missing` | no |
+| The steps run would exceed 1000 (a safeguard; preparation already checks) | `contained_task_prerequisite_step_limit` | no |
+| The prerequisite package failed | its own code | as that code does |
+| A recognition error of the gate | `contained_task_recognition_failed` | no |
+| A refusal at preparation (table above) | `contained_task_prerequisite_*` | no |
+
+No `contained_task_prerequisite_*` code starts the stuck-recovery ladder: the prerequisite
+package already reached its own end, so the game responds, and a first step that still does not
+pass points at a stale marker or a wrong declaration, which a restart does not repair.
+
+**What the gate cannot do.** A first step marked only by templates may pass on a frame dimmed by
+an overlay (a notice over the main interface), so the prerequisite package would not run: give
+the first step a marker that a dimmed frame does not pass, such as a color in a fixed bright
+area. A linear chain end does not accept a start that is already on its target page; a
+page-graph chain end succeeds with no step on its target page, so it is the better end of a
+chain. A flow whose first page appears only sometimes stays a page-graph package.
+
 ## Failure codes
 
 | Situation | `failure_code` | Timing (existing values) |
@@ -236,6 +367,7 @@ terminal as severe: the task pauses at its first such failure.
 | A recognition error | `contained_task_recognition_failed` | none |
 | A frame of another size | `contained_task_frame_resolution_mismatch` | none |
 | A package outside the admission rules | `contained_task_linear_invalid` (admission) | none |
+| The prerequisite gate ("Prerequisite packages" above) | `contained_task_prerequisite_*` | `page_recognition` / `entry_recognition` for `contained_task_prerequisite_entry_unmatched` |
 
 The new codes are strings; none of them starts the stuck-recovery ladder.
 
@@ -274,7 +406,11 @@ application entry, so its step has no pre-input frame evidence; the entry itself
 A build without this mode refuses a linear package before `PackageAdmitted`: the control's
 `execution_mode` is `contained_task_control_invalid`, and an operation's `transition` is
 first refused by the resource declaration check (`resource_declaration_invalid`, reason
-`UnknownField`).
+`UnknownField`). A build without prerequisite packages refuses a control that declares
+`prerequisite_package_id` the same way (`resource_declaration_invalid`, `UnknownField` at
+`/prerequisite_package_id`), before `PackageAdmitted` and, for a direct run, before any lease;
+its `actingd` refuses a configuration with `prerequisite_packages` (`config_decode_failed`) and
+does not start.
 
 ## Tools
 
@@ -283,14 +419,16 @@ the first operation's click, or a refusal. A package with an application operati
 refused, `application_effect_requires_assigned_application` with no capture, provided the frame
 list is not empty (an empty list is `offline_fixture_missing` before the interpreter). `package build --execution-mode linear_steps`,
 `lab run` and the Lab capability listing accept the mode; a built package is admitted by the
-rules above. `lab run` passes `transition` through unread.
+rules above. `lab run` passes `transition` through unread, ignores `prerequisite_package_id` and
+runs no prerequisite package; the offline simulation runs the package alone, without the gate.
 
 ## What a linear task cannot express
 
 Branches, occasional popups and loops of variable length: only the declared path runs. A run
-that does not start on the first step's page, including one already on the target page,
-fails with `contained_task_linear_entry_unmatched`, so a path whose first page does not always
-appear is not suited to a fixed-interval schedule. An intermediate state that only sometimes
+of a package without a prerequisite package that does not start on the first step's page,
+including one already on the target page, fails with `contained_task_linear_entry_unmatched`,
+so a path whose first page does not always appear is not suited to a fixed-interval schedule;
+a package with a prerequisite package runs it first ("Prerequisite packages" above). An intermediate state that only sometimes
 appears is declared as a window, or not at all.
 
 An application step always runs: there is no conditional restart, and the package cannot name

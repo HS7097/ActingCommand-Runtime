@@ -218,7 +218,7 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `scheduled_execution_instance_unknown`, `procedure_package_not_regular`,
 `procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
-`config_manifest_incomplete`),
+`config_manifest_incomplete`, the `prerequisite_package*` codes of "Prerequisite packages"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
 `invalid_governance_policy` and the other
@@ -274,6 +274,34 @@ The admitted `{ path, kind }` (`kind` is `file` or `directory`) is echoed here
 and reported by the instance status entry (`RuntimeInstanceStatus`,
 `ProjectInstanceView`) as `resource_package`, omitted when none is configured.
 Nothing else consumes it yet.
+
+## Prerequisite packages
+
+Workflow #336 L2b adds the optional top-level `prerequisite_packages`, the
+packages a `linear_steps` package may name as its `prerequisite_package_id`
+(`contracts/linear-steps.md`, "Prerequisite packages"):
+
+```json
+"prerequisite_packages":[{"package_id":"neutral.test.stage_page","package_path":"packages/neutral/<D>.zip","package_digest":{"schema_version":"actingcommand.package.content-directory.v1","sha256":"<D>"}}]
+```
+
+Each entry has exactly these three fields. `package_id` is not empty, at most
+256 bytes and has no control character (`prerequisite_package_id_invalid`); no
+two entries share one (`prerequisite_package_duplicate`); at most as many
+entries as a catalog has tasks (`prerequisite_packages_size_invalid`).
+`package_digest` takes the forms of a procedure binding's `package_digest`, and
+`package_path` is checked as a procedure binding's
+`scheduled_execution.package_path` is (a relative path resolves against the
+configuration file's directory), under its own codes:
+`prerequisite_package_unavailable`, `prerequisite_package_not_regular`,
+`prerequisite_package_container_unsupported`,
+`prerequisite_package_digest_invalid`, `prerequisite_package_request_invalid`.
+All of them fail at stage `assemble`. No package is opened or hashed here: a
+run admits each package against its reference when it resolves its chain. The
+map needs no `policy` section, so a manual `task-run` uses it too; it is not a
+configuration fact (neither the `config_manifest` nor the `config.*` runtime
+facts name it) and it is read once at startup, so a change needs a restart. A
+build that predates the field refuses it with `config_decode_failed`.
 
 ## Performance and device paths
 
