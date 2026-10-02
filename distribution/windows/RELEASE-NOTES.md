@@ -38,6 +38,26 @@ the open-source licenses in `NOTICE.txt`. Installed, they are in
 `<install root>\tools\platform-tools\adb.exe` is the adb that an instance with an
 empty `adb_path` uses.
 
+The daemon recognises an install root from its own path (`runtime\` with
+`BUILD-MANIFEST.json`, as acsetup installs it, also in acsetup's upgrade
+staging). There an instance without `adb_path`, explicit or discovery-bound,
+uses that adb; startup and `check-config` compare the SHA-256 of `adb.exe`,
+`AdbWinApi.dll` and `AdbWinUsbApi.dll` with the build's pin before the ledger
+opens and refuse with `adb_install_missing` or `adb_install_mismatch`, with no
+fallback; a discovery-bound `adb_path` may name the discovered MuMu adb or the
+install root's adb. Outside an install root behaviour is unchanged.
+`check-config` reports the adb as `adb_default`. See `INSTALL.md`, "Bundled adb".
+
+Before rolling back to v0.9.0, give every explicit instance without `adb_path`
+an adb that still exists afterwards (MuMu's own or a separate 37.0.1 copy, not
+the install root's), and remove an `adb_path` that names the install root's adb
+from discovery-bound instances; otherwise v0.9.0 refuses with
+`instance_config_invalid` or `instance_discovery_conflict`. When `ui\` is the
+working directory of a running adb server, v0.9.0's acsetup reports that the
+console must be closed first although it is closed; stop the adb server and
+retry (this disconnects other tools sharing port 5037), or roll back by hand
+(see `INSTALL.md`, "Upgrade boundary").
+
 Configuration uses `actingcommand.actingd.config.v1` and the existing
 `actingcommand-actingd --config <path>` entry. The supplied template has empty
 private state-root and salt values and no device instances; once `state_root`
@@ -48,7 +68,8 @@ and the exact source schema to provide a private configuration and any required
 provider dependencies before use.
 
 This distribution change adds packaging and documentation to the existing
-Actions build. It does not change daemon/client operation, install dependencies
+Actions build. Apart from the adb default above, it does not change
+daemon/client operation, install dependencies
 or services, or perform startup, state migration or device actions. Actions
 results establish only their recorded build and check outcomes; installation,
 provider availability, real-device behavior and functional acceptance require

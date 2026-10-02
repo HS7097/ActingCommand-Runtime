@@ -81,10 +81,15 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         provider,
         policy,
         resource_packages,
+        adb_requirement,
         ..
     } = config::load(&config_path)
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
+    // Workflow #337: the install root's adb check of `check-config`, before any side effect.
+    config::ac_adb::require(&adb_requirement).map_err(|rejection| {
+        ActingdError::config(rejection.code()).with_detail(rejection.to_string())
+    })?;
     // The same resource package admission as `check-config`, before any side effect.
     let resource_packages =
         config::validate_resource_packages(&resource_packages).map_err(|rejection| {
