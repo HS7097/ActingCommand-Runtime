@@ -385,6 +385,7 @@ impl Declaration<'_> {
                 "rect_move",
                 "maa_task",
                 "maa_task_id",
+                "transition",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -505,7 +506,52 @@ impl Declaration<'_> {
                     return Err(self.error(&pointer, ResourceDeclarationReason::UnconsumedField));
                 }
                 "rect_move" => self.rect_move(value, &pointer)?,
+                "transition" if !value.is_null() => self.transition(value, &pointer)?,
                 _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// An operation's intermediate state (Workflow #336, `linear_steps` only):
+    /// `{"kind":"page","page_id","timeout_ms"?,"interval_ms"?}` or
+    /// `{"kind":"window","min_ms","max_ms"}`. Runtime admission checks the values.
+    fn transition(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| self.error(pointer, ResourceDeclarationReason::InvalidType))?;
+        let kind_pointer = child(pointer, "kind");
+        match self.required(object, pointer, "kind")?.as_str() {
+            Some("page") => {
+                let object = self.object(
+                    value,
+                    pointer,
+                    &["kind", "page_id", "timeout_ms", "interval_ms"],
+                )?;
+                self.string(
+                    self.required(object, pointer, "page_id")?,
+                    &child(pointer, "page_id"),
+                )?;
+                for field in ["timeout_ms", "interval_ms"] {
+                    if let Some(value) = object.get(field).filter(|value| !value.is_null()) {
+                        self.unsigned(value, &child(pointer, field))?;
+                    }
+                }
+            }
+            Some("window") => {
+                let object = self.object(value, pointer, &["kind", "min_ms", "max_ms"])?;
+                for field in ["min_ms", "max_ms"] {
+                    self.unsigned(
+                        self.required(object, pointer, field)?,
+                        &child(pointer, field),
+                    )?;
+                }
+            }
+            Some(_) => {
+                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            None => {
+                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidType));
             }
         }
         Ok(())

@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+mod linear;
 mod selection;
 mod timing;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
@@ -2204,6 +2205,22 @@ impl PreparedContainedTask {
             },
         );
         runtime.observe_task_timing(observation_timing);
+        if self.control.execution_mode == linear::LINEAR_STEPS {
+            // Workflow #336: the admitted step plan, resolved again from the admitted program.
+            let plan = self
+                .program
+                .validate_linear(&self.control, &self.detector)?;
+            return self.run_linear_steps(
+                runtime,
+                ocr_collector,
+                &plan,
+                linear::LinearRun {
+                    step_timeout,
+                    capture_interval,
+                    timing: observation_timing,
+                },
+            );
+        }
         if self
             .program
             .operations
@@ -3750,7 +3767,7 @@ impl TaskControl {
             || self.entry_task_id.trim().is_empty()
             || !matches!(
                 self.execution_mode.as_str(),
-                "recognize_only" | "navigable_route" | "in_page_guard"
+                "recognize_only" | "navigable_route" | "in_page_guard" | "linear_steps"
             )
         {
             return Err(ContainedTaskError::new("contained_task_control_invalid"));
@@ -3912,6 +3929,10 @@ impl TaskProgram {
         {
             return Err(ContainedTaskError::new("contained_task_phases_invalid"));
         }
+        // Workflow #336: a step plan replaces the page-graph checks below.
+        if control.execution_mode == linear::LINEAR_STEPS {
+            return self.validate_linear(control, detector).map(|_| ());
+        }
         validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
         if self.operations.is_empty() {
@@ -3970,6 +3991,16 @@ impl TaskProgram {
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
             operation.validate(control, self.defaults, &self.schema_version)?;
+            if operation.transition.is_some() {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_operation_invalid",
+                    format!(
+                        "operation={} transition requires {}",
+                        operation.id,
+                        linear::LINEAR_STEPS
+                    ),
+                ));
+            }
             let destination_pages = operation.destination_pages()?;
             validate_page_references(&control.game, &destination_pages, detector)?;
             validate_page_set_overlap(
@@ -4087,6 +4118,10 @@ impl TaskProgram {
         control: &TaskControl,
         detector: &PageDetector,
     ) -> Result<Option<String>, ContainedTaskError> {
+        // Workflow #336: a step plan waits for its first step itself; no host entry preflight.
+        if control.execution_mode == linear::LINEAR_STEPS {
+            return Ok(None);
+        }
         Ok(self
             .entry_page
             .as_deref()
@@ -5266,6 +5301,10 @@ struct TaskOperation {
     guard: Option<OperationGuard>,
     #[serde(default)]
     unguarded_trusted_coordinate: bool,
+    /// Workflow #336: the declared intermediate state after this operation's input; admitted
+    /// only under `linear_steps`.
+    #[serde(default)]
+    transition: Option<linear::TaskTransition>,
 }
 
 impl TaskOperation {
