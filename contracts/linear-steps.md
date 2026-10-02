@@ -265,8 +265,9 @@ own prerequisite package; a page-graph package ends the chain. Layer by layer, i
 | the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings or designated scheduling operation; its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|designated_operation\|game\|server\|resolution>` |
 | the maximum steps of the whole chain and the dependent package add up to at most 1000 | `contained_task_prerequisite_step_limit` |
 
-Each refusal is denied (`package_invalid`) with detail `layer=<n> package_id=<id>`, writes no
-`task.*` record and has no task terminal, so it never starts the stuck-recovery ladder; a
+Each refusal is denied (`package_invalid`) with detail `layer=<n> package_id=<id>` (plus
+`declared_package_id=<id>` for a mismatch and `reason=<reason>` for an incompatible package; the
+step limit's detail is `maximum_executed_steps=<n>`), writes no `task.*` record and has no task terminal, so it never starts the stuck-recovery ladder; a
 scheduled run's refusal is recorded with the policy's lease released, as any other preparation
 refusal. The admission deadline of a prerequisite package is the run's deadline (for a scheduled
 run, the one the run derives from its request and lease). A prerequisite package's
