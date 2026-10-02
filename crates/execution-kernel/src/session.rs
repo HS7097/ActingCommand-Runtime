@@ -75,6 +75,9 @@ impl std::ops::Deref for ObservedFrame {
 
 enum SessionBackends {
     Pending,
+    /// A completed close attempt still owns its failure, including unconfirmed native
+    /// resources. The original owner's Close consumes this result without retrying it.
+    CloseFailed(Box<ExecutionKernelError>),
     Independent {
         input: Option<Box<dyn InputBackend>>,
         capture: Option<Box<dyn CaptureBackend>>,
@@ -93,6 +96,9 @@ impl SessionBackends {
         alias: &str,
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
+        if let Self::CloseFailed(error) = self {
+            return Err(error.as_ref().clone());
+        }
         if matches!(self, Self::Pending) {
             let mut observations = Vec::new();
             *self = match provider.open_nemu_session(alias, memory).map_err(|error| {
@@ -214,6 +220,11 @@ enum SessionCommand {
         action: ApplicationLifecycleAction,
         step: Arc<FencedWrite>,
         response: SyncSender<ExecutionKernelResult<()>>,
+    },
+    PrepareApplication {
+        authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
+        response: SyncSender<ExecutionKernelResult<ExecutionResourceCloseOutcome>>,
     },
     Close {
         authority: DeviceCloseAuthority,
@@ -542,6 +553,40 @@ impl ExecutionSession {
             .as_ref()
             .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
             .send(command(response))
+            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+        if let Err(error) = sent {
+            return finish_after_result(&mut state, Err(error));
+        }
+        match receiver.recv() {
+            Ok(result) => result,
+            Err(_) => finish_after_result(
+                &mut state,
+                Err(ExecutionKernelError::fatal(
+                    "execution_session_response_lost",
+                )),
+            ),
+        }
+    }
+
+    /// Retires independent backends under the original owner's close authority while
+    /// preserving this session and its generation. Paired Nemu keeps its owner.
+    pub(crate) fn prepare_application_resources(
+        &self,
+        authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
+    ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        ensure_open(&state)?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sent = state
+            .sender
+            .as_ref()
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .send(SessionCommand::PrepareApplication {
+                authority,
+                input_check,
+                response,
+            })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = sent {
             return finish_after_result(&mut state, Err(error));
@@ -1054,6 +1099,7 @@ fn run_session(
                 let result = (|| {
                     geometry_remaining(deadline)?;
                     let backend = match backends {
+                        SessionBackends::CloseFailed(error) => return Err(error.as_ref().clone()),
                         SessionBackends::Independent {
                             capture: Some(backend),
                             ..
@@ -1094,6 +1140,50 @@ fn run_session(
                     });
                 }
             }
+            SessionCommand::PrepareApplication {
+                authority,
+                input_check,
+                response,
+            } => {
+                pending_frame = None;
+                committed_frame = None;
+                // This call drops every witness/check reference before the response; Host
+                // must finish ResourceClose before it can issue the Business step.
+                let result = prepare_application_backends(backends, authority, input_check);
+                match result {
+                    Ok(outcome) => {
+                        if response.send(Ok(outcome)).is_err() {
+                            return Err(close_after_failure(
+                                backends.take(),
+                                ExecutionKernelError::fatal("execution_session_response_lost"),
+                                ResourceCloseOrder::CaptureFirst,
+                                DeviceCloseAuthority::LocalOnly,
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        needs_close.store(true, Ordering::Release);
+                        if response.send(Err(error.clone())).is_err() {
+                            return Err(close_after_failure(
+                                backends.take(),
+                                ExecutionKernelError::merge(
+                                    error,
+                                    ExecutionKernelError::fatal("execution_session_response_lost"),
+                                ),
+                                ResourceCloseOrder::CaptureFirst,
+                                DeviceCloseAuthority::LocalOnly,
+                            ));
+                        }
+                        return close_retained_after_failure(
+                            &receiver,
+                            needs_close,
+                            backends,
+                            error,
+                            ResourceCloseOrder::CaptureFirst,
+                        );
+                    }
+                }
+            }
             SessionCommand::ApplicationLifecycle {
                 action,
                 step,
@@ -1110,13 +1200,15 @@ fn run_session(
                             )
                         })
                     }
-                    _ => close_resources(
-                        backends.take(),
-                        DeviceCloseAuthority::LocalOnly,
-                        ResourceCloseOrder::CaptureFirst,
-                        None,
-                    )
-                    .map(|_| ()),
+                    SessionBackends::Pending
+                    | SessionBackends::Independent {
+                        input: None,
+                        capture: None,
+                    } => Ok(()),
+                    SessionBackends::CloseFailed(error) => Err(error.as_ref().clone()),
+                    SessionBackends::Independent { .. } => Err(ExecutionKernelError::fatal(
+                        "application_resource_close_required",
+                    )),
                 };
                 if let Err(error) = invalidation {
                     drop(step);
@@ -1226,6 +1318,28 @@ fn close_retained_after_failure(
     let mut geometry_response_lost = false;
     loop {
         match receiver.recv() {
+            Ok(SessionCommand::PrepareApplication {
+                authority,
+                input_check,
+                response,
+            }) => {
+                drop(input_check);
+                drop(authority);
+                // An earlier failure cannot be replaced by application preparation. Keep
+                // its actual backends/result until the original owner's terminal Close.
+                if response.send(Err(primary.clone())).is_ok() {
+                    continue;
+                }
+                return Err(close_after_failure(
+                    backends.take(),
+                    ExecutionKernelError::merge(
+                        primary,
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                    ),
+                    order,
+                    DeviceCloseAuthority::LocalOnly,
+                ));
+            }
             // Workflow #191 H: handled here explicitly; the catch-all below would close the
             // backends locally and bypass the Host's fenced close.
             Ok(SessionCommand::ForgetInputFrames { response }) => {
@@ -1394,6 +1508,7 @@ fn execute_input(
             _ => None,
         };
         let backend = match backends {
+            SessionBackends::CloseFailed(error) => return Err(error.as_ref().clone()),
             SessionBackends::Independent { input, .. } => {
                 if input.is_none() {
                     let opened = provider.open_input(instance_alias).map_err(|error| {
@@ -1457,6 +1572,7 @@ fn execute_capture(
     let mut observations = backends.prepare(provider, instance_alias, memory)?;
     let mut execute = || -> ExecutionKernelResult<Frame> {
         let backend = match backends {
+            SessionBackends::CloseFailed(error) => return Err(error.as_ref().clone()),
             SessionBackends::Independent { capture, .. } => {
                 if capture.is_none() {
                     let opened =
@@ -1626,6 +1742,31 @@ fn close_after_failure(
     }
 }
 
+fn prepare_application_backends(
+    backends: &mut SessionBackends,
+    authority: DeviceCloseAuthority,
+    input_check: Option<Arc<dyn InputOperationCheck>>,
+) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+    match backends {
+        SessionBackends::Pending | SessionBackends::Nemu(_) => {
+            Ok(ExecutionResourceCloseOutcome::confirmed(0))
+        }
+        SessionBackends::CloseFailed(error) => Err(error.as_ref().clone()),
+        SessionBackends::Independent { .. } => {
+            let result = close_resources(
+                backends.take(),
+                authority,
+                ResourceCloseOrder::CaptureFirst,
+                input_check,
+            );
+            if let Err(error) = &result {
+                *backends = SessionBackends::CloseFailed(Box::new(error.clone()));
+            }
+            result
+        }
+    }
+}
+
 fn close_resources(
     backends: SessionBackends,
     authority: DeviceCloseAuthority,
@@ -1634,6 +1775,7 @@ fn close_resources(
 ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
     let (capture, input) = match backends {
         SessionBackends::Pending => return Ok(ExecutionResourceCloseOutcome::confirmed(0)),
+        SessionBackends::CloseFailed(error) => return Err(*error),
         SessionBackends::Independent { capture, input } => (capture, input),
         SessionBackends::Nemu(pair) => {
             let NemuSessionBackends {

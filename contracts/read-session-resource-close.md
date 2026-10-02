@@ -40,6 +40,16 @@ and occurrence data, never a witness. Business input and application-lifecycle
 writes take the witness as described in the section below; their existing checks
 remain.
 
+Application preparation reuses this same Host begin/result/finish path for the
+existing Session's independent backends. Host holds instance admission until the
+subsequent Business application command returns, and finishes ResourceClose before
+issuing Business. The worker releases close authority/check references before its
+reply. Preparation preserves Session identity/generation and paired Nemu ownership,
+clears input frames, and caches any consumed-backend close failure for the original
+terminal Close. That failure never becomes an empty, successfully closed backend.
+Paired Nemu still invalidates its display in the application command. Original
+lease cleanup, cancellation, expiry and Unconfirmed owner retention remain in force.
+
 Readonly, monitor and contained-task capture failures share this close path under
 the instance admission mutex. They can reuse a current business lease only when
 its existing close checks permit it. That lease remains with its original cleanup

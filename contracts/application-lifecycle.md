@@ -16,6 +16,24 @@ the baseline for all three (`am force-stop`, `monkey ... LAUNCHER`, `dumpsys act
 activities`): a Nemu paired session, when one is open, neither starts applications nor
 answers the foreground question, and `device.connected` stays the only health anchor.
 
+Before the application write, Host holds the instance's existing admission mutex
+and prepares its retained Session through the original resource-close owner. A
+current ResourceClose step closes independent capture/input backends in their
+original order; every worker/check reference is released and that step finishes
+before Host admits the separate Business application step. The Session and its
+generation remain registered. Paired Nemu keeps its original owner and invalidates
+the display in the application command as before. Pending/committed input frames
+are cleared, and capture cannot reopen backends between preparation and the write.
+
+The existing lifecycle ResourceQuiescence fact records the prepared backend count;
+the owner remains InUse while its Session is retained. A failed preparation skips
+the application, keeps its original failure/secondary causes and, for an uncertain
+close, retains Unconfirmed and the fatal owner boundary. A consumed backend with a
+failed close remains a cached failure owned by that Session; terminal Close returns
+it without repeating the native attempt. Business and LocalOnly authority cannot
+substitute for ResourceClose. Unprepared independent backends are refused without
+taking them away from their close owner. No RPC or event schema is added.
+
 ## The `application` effect (task.json 0.6)
 
 An operation carries exactly one effect: the existing `click` object, or

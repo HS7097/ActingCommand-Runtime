@@ -520,8 +520,20 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
 fn application_lifecycle_owns_lease_effect_and_release_under_one_correlation() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    // Workflow #314 APPLICATION-CLOSE-AUTHORITY-v1: the existing independent capture
+    // fixture refuses Business/LocalOnly close, as in the original formal first red.
+    state
+        .require_fenced_capture_close
+        .store(true, Ordering::Release);
     let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
+    let observe = client.request(RuntimeOperation::ObserveReadonly {
+        instance_alias: "neutral.instance".into(),
+    });
+    assert_eq!(
+        client.send(&observe).state(),
+        RuntimeReceiptState::Completed
+    );
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
@@ -543,6 +555,11 @@ fn application_lifecycle_owns_lease_effect_and_release_under_one_correlation() {
         })
     ));
     assert_eq!(state.application_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+    assert_eq!(
+        state.unfenced_capture_close_count.load(Ordering::Acquire),
+        0
+    );
     assert_eq!(
         event_types_for_correlation(&mut client, correlation_id),
         vec![
@@ -555,6 +572,7 @@ fn application_lifecycle_owns_lease_effect_and_release_under_one_correlation() {
             EventType::LeaseGranted,
             EventType::SchedulerAdmitted,
             EventType::ApplicationIntent,
+            EventType::RuntimeLifecycleObserved,
             EventType::ApplicationCompleted,
             EventType::SchedulerAdmitted,
             EventType::LeaseTransitionIntent,
