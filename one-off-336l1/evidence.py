@@ -559,7 +559,8 @@ def run(work, new_runtime, new_tools, old_runtime, old_tools, catalog_dir):
         data = (value or {}).get("data") or {}
         say("E2", name, "exit", code, "state", data.get("state"), "page", data.get("page"), "matched", data.get("matched"),
             "frame", frame, "error", short(json.dumps((value or {}).get("error")) if value else err, 400))
-        check(f"E2.{name}", code == 0 and data.get("matched") is True and str(data.get("page", "")).endswith(page), data.get("page"))
+        # The default observe projection omits `matched`: `state` is "observed" only on a match.
+        check(f"E2.{name}", code == 0 and data.get("state") == "observed" and str(data.get("page", "")).endswith(page), data.get("page"))
 
     # 3. Refusals keep their own codes (the CLI message; the kernel codes are in the KERNEL lines).
     for case in cases["load"]:
