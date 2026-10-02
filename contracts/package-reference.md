@@ -119,6 +119,11 @@ ZIP rules:
   `content_zip_entry_invalid`.
 - A name must already be a `/`-separated relative path: no `\`, no `:`, no `..` segment and
   no leading `/` (`content_zip_entry_invalid`, the rule of ZIP package entries).
+- Entry names are paths from the archive root (`control.json`, not `<D>/control.json`): zip
+  the directory's contents, not the directory itself. Windows Explorer "Send to > Compressed
+  (zipped) folder" and `Compress-Archive -Path <D>` add a top-level `<D>/` and fail with
+  `content_directory_digest_mismatch`; `Compress-Archive -Path <D>\* -DestinationPath <D>.zip`
+  or Python `shutil.make_archive(<out>, "zip", root_dir=<D>)` put the entries at the root.
 - A symbolic link or any other non-regular entry fails `content_zip_entry_invalid`.
 - An archive that cannot be read, an encrypted entry, an unsupported compression method or
   damaged entry data fails `content_zip_invalid`.
@@ -143,14 +148,14 @@ The single JSON container, `actingcommand.package.content-json.v1`:
 
 Why one content has one digest in every container: the digest depends only on the table of
 paths and bytes, sorted by path, so ZIP compression, timestamps and entry order, and JSON key
-order, whitespace and escaping (`"é"` or `"é"`) take no part. A JSON string decodes to
+order, whitespace and escaping (`"\u00e9"` or `"é"`) take no part. A JSON string decodes to
 exactly one sequence of code points (unpaired surrogate escapes and non-UTF-8 input are
 refused) and has exactly one UTF-8 encoding. Nothing is normalized: line endings, byte-order
 marks inside a file and key order stay as they are. Extracting a ZIP, or writing every JSON
-string to its path as a file, gives a directory with the same digest; zipping a directory
-with `/`-separated UTF-8 names, or storing each file of an all-text directory as its string,
-gives a container with the same digest. Files stay strings rather than inline JSON objects so
-that the bytes, and the digest, never depend on how a serializer writes JSON.
+string to its path as a file, gives a directory with the same digest; zipping a directory's
+contents with `/`-separated UTF-8 names, or storing each file of an all-text directory as its
+string, gives a container with the same digest. Files stay strings rather than inline JSON
+objects so that the bytes, and the digest, never depend on how a serializer writes JSON.
 
 `actingcommand_pack_containment::expand_content_container` expands container bytes in
 memory under these rules; `Containment::load_content_entries` (and its
