@@ -1,5 +1,7 @@
 name: one-off 336 L2e (to be reverted)
 
+# Second run: item 1 only, with the corrected capture check; the other steps ran in the first run.
+
 # One-off evidence for Workflow #336 L2e (R24 amendment items 1-8 and the R25 admission refusal).
 # The new binaries are the Windows exact-SHA build artifacts of the product commit, the L2a ones
 # those of the L2a tip it is stacked on, and the old ones the Runtime v0.9.0 release assets
@@ -109,12 +111,13 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           & python head/one-off-336l2e/evidence.py prepare (Join-Path $env:RUNNER_TEMP 'work')
           if ($LASTEXITCODE -ne 0) { throw "prepare failed with exit code $LASTEXITCODE" }
-      - name: Fixture runs and ledgers (items 1, 2, 4, 5, 6)
+      - name: Fixture runs and ledgers (item 1 only, second run)
         if: ${{ !cancelled() }}
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
+          L2E_ONLY: E1
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
@@ -122,7 +125,7 @@ jobs:
           & python head/one-off-336l2e/evidence.py run (Join-Path $root 'work') (Join-Path $root 'new/runtime') (Join-Path $root 'new/tools') (Join-Path $root 'l2a/runtime') (Join-Path $root 'old/runtime') (Join-Path $root 'old/tools') (Resolve-Path head/contracts/scheduling/examples/catalog-a).Path
           if ($LASTEXITCODE -ne 0) { throw "evidence run failed with exit code $LASTEXITCODE" }
       - name: Kernel admission codes, offline decisions and in-process runs (product, items 2, 3, 7)
-        if: ${{ !cancelled() }}
+        if: ${{ false }}
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
@@ -138,7 +141,7 @@ jobs:
           Pop-Location
           if ($code -ne 0) { throw "kernel harness failed with exit code $code" }
       - name: Kernel admission codes on the L2a source (item 4 details)
-        if: ${{ !cancelled() }}
+        if: ${{ false }}
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
@@ -159,7 +162,7 @@ jobs:
           Pop-Location
           if ($code -ne 0) { throw "L2a kernel harness failed with exit code $code" }
       - name: Fake physical provider (item 8, optional)
-        if: ${{ !cancelled() }}
+        if: ${{ false }}
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}

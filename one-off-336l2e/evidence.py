@@ -724,10 +724,22 @@ def run(work, new_runtime, new_tools, l2a_runtime, old_runtime, old_tools, catal
                    and fact_kinds.index("package_admitted") < fact_kinds.index("run_started"))
         check(f"E1.{name}.admitted_then_refused", ordered and last.get("failure_code") == APPLICATION_REFUSAL,
               json.dumps([fact_kinds, last.get("failure_code")]))
+        # capture.summary_committed is the terminal's capture summary, written for every run; it
+        # is printed so that its counts show that no frame was captured.
+        for event in events:
+            if event.get("event_type") == "capture.summary_committed":
+                say(label, "capture.summary_committed", event["sequence"],
+                    short(json.dumps(event.get("payload"), ensure_ascii=False), 1600))
+        captures = [t for t in types if str(t).startswith("capture.") and t != "capture.summary_committed"]
+        applications = [t for t in types if str(t).startswith("application.")]
         check(f"E1.{name}.no_capture_no_step_no_application",
               not any(kind in ("capture_completed", "step_started", "recognition_started") for kind in fact_kinds)
-              and not any(str(t).startswith(("capture.", "application.")) for t in types),
-              json.dumps(sorted(set(types))))
+              and not captures and not applications,
+              json.dumps({"capture events": captures, "application events": applications,
+                          "all event types": sorted(set(types))}))
+    if os.environ.get("L2E_ONLY") == "E1":
+        say("RESULT", "failures", len(FAILURES), json.dumps(FAILURES))
+        return 1 if FAILURES else 0
 
     # 2. Admission refusals: no PackageAdmitted.
     for name, code, _detail in REFUSALS:
