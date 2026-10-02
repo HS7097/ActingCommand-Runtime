@@ -432,8 +432,9 @@ resolved here (see "Default ADB").
 ## Default ADB
 
 Workflow #337 ships the official Android platform-tools in the Tools artifact,
-installed as `<install root>\tools\platform-tools\`. An instance that leaves
-`adb_path` empty uses that adb when the daemon runs from an install root.
+installed as `<install root>\tools\platform-tools\`. An instance without
+`adb_path` (key omitted) uses that adb when the daemon runs from an install
+root; an empty or blank `adb_path` is still refused.
 
 The install root is judged once per assembly from the running executable
 alone: `R` is two levels above the canonical path of the `actingd` executable,
@@ -497,7 +498,7 @@ recorded. There is no fallback to the MuMu adb. `error.detail` names the adb,
 the instances that use it, every file that is not as pinned and the remedy:
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"adb_install_mismatch","stage":"assemble","detail":{"adb_path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","instances":["node.a"],"files":[{"path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","state":"sha256_mismatch","expected_sha256":"<64 hex>","actual_sha256":"<64 hex>"}],"remedy":"fix: run acsetup v0.10 or later on this install root again, which reinstalls tools\\platform-tools; or set the instance's adb_path to MuMu's own adb to use it as before (an explicit instance may also name any other adb)"}}}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"adb_install_mismatch","stage":"assemble","detail":{"adb_path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","instances":["node.a"],"files":[{"path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","state":"sha256_mismatch","expected_sha256":"<64 hex>","actual_sha256":"<64 hex>"}],"remedy":"fix: reinstall tools\\platform-tools under this install root (acsetup v0.10 or later for an acsetup install), or set the instance's adb_path to another adb (MuMu's own adb as before; an explicit instance may name any other adb)"}}}
 ```
 
 A missing file is `{"path":"...","state":"missing","error":"<OS error>"}`.

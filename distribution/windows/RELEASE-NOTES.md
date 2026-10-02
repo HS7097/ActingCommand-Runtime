@@ -35,12 +35,12 @@ shipped; Google's `NOTICE.txt` and `source.properties` stay unchanged beside the
 They are redistributed by the owner's decision under the Android SDK License and
 the open-source licenses in `NOTICE.txt`. Installed, they are in
 `<install root>\tools\platform-tools\`, and
-`<install root>\tools\platform-tools\adb.exe` is the adb that an instance with an
-empty `adb_path` uses.
+`<install root>\tools\platform-tools\adb.exe` is the adb that an instance without
+`adb_path` (key omitted) uses.
 
-The daemon recognises an install root from its own path (`runtime\` with
-`BUILD-MANIFEST.json`, as acsetup installs it, also in acsetup's upgrade
-staging). There an instance without `adb_path`, explicit or discovery-bound,
+The daemon recognises an install root from its own path: any directory named
+`runtime` that holds this artifact with its `BUILD-MANIFEST.json` makes its
+parent one (an acsetup install, acsetup's upgrade staging, or a hand layout). There an instance without `adb_path`, explicit or discovery-bound,
 uses that adb; startup and `check-config` compare the SHA-256 of `adb.exe`,
 `AdbWinApi.dll` and `AdbWinUsbApi.dll` with the build's pin before the ledger
 opens and refuse with `adb_install_missing` or `adb_install_mismatch`, with no

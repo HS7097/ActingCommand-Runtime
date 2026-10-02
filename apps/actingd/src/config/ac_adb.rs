@@ -28,9 +28,9 @@ const TOOL_SOURCES_PIN: &str =
 /// The pin path of the adb itself, relative to `<install root>\tools`; the pin must list it.
 const PINNED_ADB: &str = "platform-tools/adb.exe";
 /// What to do about a refused install adb; the end of every refusal.
-const REMEDY: &str = "fix: run acsetup v0.10 or later on this install root again, which \
-reinstalls tools\\platform-tools; or set the instance's adb_path to MuMu's own adb to use it \
-as before (an explicit instance may also name any other adb)";
+const REMEDY: &str = "fix: reinstall tools\\platform-tools under this install root (acsetup \
+v0.10 or later for an acsetup install), or set the instance's adb_path to another adb (MuMu's \
+own adb as before; an explicit instance may name any other adb)";
 
 /// The adb of the install root the daemon runs from; the file may be missing.
 #[derive(Clone)]

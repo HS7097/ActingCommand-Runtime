@@ -31,7 +31,11 @@ pwsh -NoProfile -File scripts/windows-tools/Get-ExactBuildArtifact.ps1 `
   -OutputPath D:\task\runtime-install\artifacts\runtime
 ```
 
-Replace the bracketed values before use. The task directory must already exist;
+Replace the bracketed values before use. With an output directory named
+`runtime` as in this example, its parent (`artifacts`) becomes an install root
+for this Runtime (see "Bundled adb"): instances without `adb_path` then use
+`artifacts\tools\platform-tools\adb.exe` (startup refuses while it is missing),
+so choose another name to keep the MuMu adb. The task directory must already exist;
 the output directory must be new and a strict child of it. The downloader selects
 the exact native Actions artifact, extracts it to staging and verifies it before
 making the output directory available. It checks the source repository, commit,
@@ -73,8 +77,8 @@ file's pinned size and SHA-256 (`scripts/windows-tools/windows-tool-sources.v1.j
 `adb.exe version` reports `Version 37.0.1-15733141`. Keep `NOTICE.txt` and
 `source.properties` with the binaries. Installed, the files are in
 `<install root>\tools\platform-tools\`, and
-`<install root>\tools\platform-tools\adb.exe` is the adb that an instance with an
-empty `adb_path` uses.
+`<install root>\tools\platform-tools\adb.exe` is the adb that an instance without
+`adb_path` (key omitted) uses.
 
 ## Prepare private configuration
 
@@ -155,11 +159,14 @@ startup does; see `contracts/actingd-check-config.md`.
 
 An install root is the layout acsetup installs: `<install root>\runtime\` holds
 this Runtime artifact with its `BUILD-MANIFEST.json`, and `<install root>\tools\`
-the Tools artifact. The daemon recognises it from its own executable path (two
-levels above `actingcommand-actingd.exe`, `runtime\BUILD-MANIFEST.json` must be a
-file); a directory extracted elsewhere is no install root. acsetup's upgrade
-staging directory has the same layout, so the check it runs with the staged
-Runtime uses the staged adb.
+the Tools artifact. The daemon recognises it from its own executable path alone
+(two levels above `actingcommand-actingd.exe`, `runtime\BUILD-MANIFEST.json` must
+be a file). So any directory named `runtime` that holds this Runtime artifact
+makes its parent an install root, whoever laid it out: an acsetup install,
+acsetup's upgrade staging directory (the check acsetup runs with the staged
+Runtime then uses the staged adb), or a hand layout such as `<dir>\runtime\` +
+`<dir>\tools\`. A hand layout that should keep using the MuMu adb must give the
+Runtime directory another name or declare `adb_path` on every instance.
 
 When the daemon runs from an install root, an instance without `adb_path`
 (explicit or discovery-bound) uses `<install root>\tools\platform-tools\adb.exe`.
@@ -171,16 +178,21 @@ unreadable file refuses with `adb_install_missing`, a different one with
 `error.detail`) names the file, the expected and the actual value. Nothing falls
 back to another adb. Two fixes:
 
-- run acsetup v0.10 or later on this install root again; it reinstalls
-  `tools\platform-tools`;
-- or set the instance's `adb_path` to MuMu's own adb to use it as before (an
-  explicit instance may name any other adb too).
+- reinstall `tools\platform-tools` (for an acsetup install, run acsetup v0.10 or
+  later on it again; for a hand layout, copy the Tools artifact's
+  `platform-tools` directory);
+- or set the instance's `adb_path` to another adb: MuMu's own adb to use it as
+  before (an explicit instance may name any other adb too).
 
-An explicit instance may name any adb; whatever is named is used as before,
-without a hash check. A discovery-bound instance may name only the discovered
-MuMu adb or the install root's adb; anything else fails startup with
+An explicit instance may name any other adb; that one is used as before, without
+a hash check. Naming the install root's adb is the same choice as omitting the
+key and is checked as above. A discovery-bound instance may name only the
+discovered MuMu adb or the install root's adb; anything else fails startup with
 `instance_discovery_conflict` (`adb_path_conflict`), whose message lists both
-accepted values. Outside an install root nothing changes: an explicit instance
+accepted values. An empty or blank `adb_path` is refused with
+`instance_config_invalid`, as before. Outside an install root (a development
+build, or a Runtime directory under another name than `runtime`) nothing
+changes: an explicit instance
 without `adb_path` is refused with `instance_config_invalid`, and a
 discovery-bound one uses the discovered MuMu adb. `check-config` reports the
 install root's adb as `adb_default`: `{"path": ..., "state": "ok" | "missing" |
@@ -258,10 +270,14 @@ with a downgrade) needs two configuration edits first, because v0.9.0 requires
 2. Remove an `adb_path` that names the install root's adb from discovery-bound
    instances.
 
-Forgetting either is not silent: v0.9.0's `check-config` and startup refuse with
-`instance_config_invalid` (stage `assemble`), or a discovery-bound instance fails
-startup with `instance_discovery_conflict`, and v0.9.0's acsetup stops before it
-changes anything. v0.9.0's acsetup also cannot move `ui\` entry by entry: if
+Forgetting either is not silent, but they surface at different points.
+Forgetting edit 1 makes v0.9.0's `check-config` refuse with
+`instance_config_invalid` (stage `assemble`), so v0.9.0's acsetup stops before it
+changes anything (and v0.9.0 startup refuses the same way). Forgetting edit 2 is
+not caught before the swap, because `check-config` does not run discovery: the
+rollback completes, and the v0.9.0 Runtime then fails at provider startup with
+`instance_discovery_conflict` (`adb_path_conflict`); remove that `adb_path` and
+start it again. v0.9.0's acsetup also cannot move `ui\` entry by entry: if
 `ui\` is the working directory of a running adb server at the moment of the
 rollback (an adb server started by a Runtime the console launched), it reports
 that the console must be closed first and restores everything, although the
