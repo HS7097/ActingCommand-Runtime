@@ -666,6 +666,7 @@ fn enabled_performance_monitor_collects_runtime_capture_pipeline_events() {
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
     let request = client.request(RuntimeOperation::ObserveReadonly {
         instance_alias: "node.alpha".to_owned(),
     });

@@ -59,7 +59,7 @@ the Runtime's normal chain; an offline query establishes no production run fact.
 ## Frozen V1 Documents
 
 - `tasks.schema.json`: task entrypoints, bounded triggers, feedback stop conditions, effects, failure policy, load profile, loop budget, and instance overrides.
-- `pools.schema.json`: scoped resource pools, regeneration projections, observations, bounded group delay, and an optional resource valuation ("Pool Valuation" below).
+- `pools.schema.json`: scoped resource pools, regeneration or nonregenerating projections, observations, bounded group delay, and an optional resource valuation ("Pool Valuation" below).
 - `activity.schema.json`: scoped activity windows, per-instance importance, bounded sessions, sampling policy, and goals.
 - `timeline.schema.json`: scoped reset, maintenance, activity, and deadline events.
 - `diagnostic.schema.json`: stable compiler diagnostic envelope.
@@ -68,6 +68,50 @@ the Runtime's normal chain; an offline query establishes no production run fact.
   own schema version and no `catalog` descriptor.
 
 All four catalog documents must carry the exact schema version `actingcommand.scheduling.v1` and an identical `catalog` descriptor. A mismatch rejects the whole catalog.
+
+## Pool Projection
+
+`projection` is required in V1 and V2 pools and accepts exactly one of these closed
+objects:
+
+- `{"amount": 1, "per_ms": 1000}`: both integers are positive. Each complete period
+  adds `amount`, up to `capacity`, using the existing regeneration and wake rules.
+- `{"kind": "none"}`: an available snapshot keeps its amount as time passes. It
+  produces no regeneration wake and contributes zero fullness urgency to tasks
+  consuming it. Deadline urgency and urgency from other regenerating pools remain.
+
+Missing or null projections, unknown kinds or fields, mixed shapes, and zero
+regeneration amounts or periods reject the catalog. Existing regenerating objects
+retain their serialization and catalog hash. A `none` declaration changes the hash
+and follows the ordinary version, approval and activation path.
+
+Capacity keeps its positive safe-integer bound. Zero is a known empty amount;
+missing observations remain Unknown. For inventory, a declared numeric ceiling
+does not assert an account's physical storage limit. Neither projection mode
+clamps an invalid observed amount into a valid balance.
+
+Projection and value source are independent. `static_snapshot` keeps the caller's
+fixed snapshot; it has no additional TTL or automatic update from resource readings.
+`ledger_fact` keeps the original scope/key, confidence, expiry, native-instance
+binding and input invalidation requirements. FactsChanged, expiry, timeline and
+task-state wakes remain; time passing never refreshes a fact. Package resource
+readings bound to the same key as a live pool retain their existing rejection
+(`contracts/resource-readings.md`).
+
+The pure forward projection advances a nonregenerating pool's simulated time
+without increasing its amount or accumulating regeneration waste. Declared task
+effects still affect the simulation, including insufficient-resource rejection,
+production clipping and waste at capacity, overflow and insufficient-evidence
+handling. It does not update real inventory or renew the observation's TTL.
+`consumes`, `produces`, valuation, eligibility and resource-target scoring keep
+their existing meanings; they do not reserve or settle real resource quantities.
+
+A Runtime without `none` rejects the new shape. Historical catalog generations
+are compiled when loaded, including for dispatch recovery, so switching the active
+configuration to an older catalog does not establish binary downgrade safety for
+a lineage containing `none`. Catalog rollback uses the existing approved-catalog
+route on a Runtime that understands its recorded generations. No fact or event
+wire field is added.
 
 ## Pool Valuation
 
