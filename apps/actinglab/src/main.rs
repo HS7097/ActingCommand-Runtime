@@ -278,6 +278,7 @@ fn execute_invocation(
 }
 
 fn execute(invocation: &Invocation) -> CliOutcome<Value> {
+    record_flag_gate(invocation)?;
     match invocation.command.as_slice() {
         [cmd] if cmd == "help" => Ok(help_data()),
         [cmd] if cmd == "version" => Ok(version_data()),
@@ -353,6 +354,70 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
             invocation.command.join(" ")
         ))),
     }
+}
+
+/// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
+/// only on `capture`, `observe --capture` and `do --capture`; `--tap-rect` exists only with
+/// it. FlagArgs accepts unknown flags, so without this gate they would be silently ignored.
+fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
+    let args = &invocation.args;
+    if !args.iter().any(|arg| arg == "--record") {
+        if args.iter().any(|arg| arg == "--tap-rect") {
+            return Err(CliError::usage(
+                "--tap-rect is accepted only with do --capture --record",
+            ));
+        }
+        return Ok(());
+    }
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "--record" && !pair[1].starts_with("--"))
+    {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "record_flag_takes_no_value",
+            "--record takes no value",
+            &[],
+        ));
+    }
+    if args.iter().any(|arg| arg == "--state-dir") {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "record_state_dir_unsupported",
+            "--record uses ACTINGLAB_SESSION_STATE_DIR or the default state root; \
+             --state-dir is not accepted with it",
+            &[],
+        ));
+    }
+    let flags = FlagArgs::parse(args)?;
+    let dry_run = invocation.global.dry_run || flags.bool("--dry-run");
+    let capture = !flags.bool("--diagnose") && flags.positionals.is_empty();
+    let supported = match invocation.command.as_slice() {
+        [cmd] if cmd == "capture" => capture,
+        [group, sub] if group == "session" && sub == "capture" => capture,
+        [cmd] if cmd == "observe" => flags.bool("--capture") && flags.optional("--scene").is_none(),
+        [cmd] if cmd == "do" => {
+            flags.bool("--capture")
+                && !dry_run
+                && flags.optional("--scene").is_none()
+                && flags.optional("--swipe").is_none()
+                && flags.positionals.is_empty()
+        }
+        _ => false,
+    };
+    if !supported {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "record_flag_unsupported",
+            format!(
+                "--record is accepted only on capture, observe --capture and do --capture with \
+                 a point or rectangle click; not on {}",
+                invocation.command_name
+            ),
+            &[],
+        ));
+    }
+    Ok(())
 }
 
 use cli_result::human_summary;

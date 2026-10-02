@@ -313,6 +313,35 @@ fn session_record_policy_payload(
             "record_policy_query": "session record-policy",
             "daemon_record_policy_query": "session request record-policy"
         },
+        "record_flag": {
+            "commands": ["capture --record", "observe --capture --record", "do --capture --record"],
+            "unflagged_commands_recorded": false,
+            "unsupported_with_flag": "record_flag_unsupported",
+            "flag_with_value": "record_flag_takes_no_value",
+            "state_dir": "env_or_default_only",
+            "state_dir_flag": "record_state_dir_unsupported",
+            "tap_rect_requires_record": true,
+            "instance_mismatch": "record_instance_mismatch",
+            "do_point": "rect_center unless --tap x,y inside the rectangle"
+        },
+        "lab_recording": {
+            "schema_version": "actingcommand.lab-recording.v1",
+            "path": "<state>/record-artifacts/<record_id>/lab/recording.json",
+            "mark_command": "record mark",
+            "mark_request_schema": "actingcommand.lab-record-mark.v1",
+            "families": ["template", "color", "color_digest", "ocr", "check"],
+            "self_test_statuses": ["passed", "failed", "not_evaluated"],
+            "ocr_self_test": "not_evaluated",
+            "step_operations": ["--drop-step", "--reopen-step", "--close-step", "--to-transition"],
+            "transitions": ["none", "page", "window"],
+            "recording_lock": {
+                "file": "<state>/record-<instance>.lock",
+                "busy": "record_busy",
+                "failure": "record_lock_failed",
+                "unlocked_actions": ["status", "candidates"]
+            },
+            "ledger_writes": false
+        },
         "live_validation": {
             "status": "deferred",
             "deferred_code": "requires-live-device",
