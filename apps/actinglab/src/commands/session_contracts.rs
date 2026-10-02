@@ -314,7 +314,8 @@ fn session_record_policy_payload(
             "daemon_record_policy_query": "session request record-policy"
         },
         "record_flag": {
-            "commands": ["capture --record", "observe --capture --record", "do --capture --record"],
+            "commands": ["capture --record", "observe --capture --record", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"],
+            "dry_run_refused": ["do --capture --record", "session app --record", "session instance app --record"],
             "unflagged_commands_recorded": false,
             "unsupported_with_flag": "record_flag_unsupported",
             "flag_with_value": "record_flag_takes_no_value",
@@ -322,7 +323,8 @@ fn session_record_policy_payload(
             "state_dir_flag": "record_state_dir_unsupported",
             "tap_rect_requires_record": true,
             "instance_mismatch": "record_instance_mismatch",
-            "do_point": "rect_center unless --tap x,y inside the rectangle"
+            "do_point": "rect_center unless --tap x,y inside the rectangle",
+            "application_may_have_run_codes": ["record_application_indeterminate", "record_append_failed_after_input"]
         },
         "lab_recording": {
             "schema_version": "actingcommand.lab-recording.v1",
@@ -334,6 +336,17 @@ fn session_record_policy_payload(
             "ocr_self_test": "not_evaluated",
             "step_operations": ["--drop-step", "--reopen-step", "--close-step", "--to-transition"],
             "transitions": ["none", "page", "window"],
+            "application_steps": {
+                "device_command": "session app <launch|restart|stop|force-stop> --record",
+                "mark_flag": "--application <launch|restart|stop|force-stop>",
+                "actions": ["launch", "restart", "stop"],
+                "force_stop_recorded_as": "stop",
+                "one_effect_per_step": true,
+                "entry_step": "first step only, no frame",
+                "frames_stored": false,
+                "recorded": "application_recorded",
+                "indeterminate": "record_application_indeterminate"
+            },
             "recording_lock": {
                 "file": "<state>/record-<instance>.lock",
                 "busy": "record_busy",

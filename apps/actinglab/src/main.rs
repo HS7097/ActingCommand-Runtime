@@ -120,8 +120,8 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 use session_management::{
-    monitor_policy_monitor_args, run_session_app, run_session_instance, run_session_monitor_policy,
-    run_session_status,
+    monitor_policy_monitor_args, run_session_app_or_recorded, run_session_instance,
+    run_session_monitor_policy, run_session_status,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -357,8 +357,10 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
 }
 
 /// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
-/// only on `capture`, `observe --capture` and `do --capture`; `--tap-rect` exists only with
-/// it. FlagArgs accepts unknown flags, so without this gate they would be silently ignored.
+/// only on `capture`, `observe --capture`, `do --capture` and (R24) `session app` /
+/// `session instance app` with one of its four actions; `do` and `session app` refuse it
+/// with `--dry-run`. `--tap-rect` exists only with it. FlagArgs accepts unknown flags, so
+/// without this gate they would be silently ignored.
 fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let args = &invocation.args;
     if !args.iter().any(|arg| arg == "--record") {
@@ -392,6 +394,12 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let flags = FlagArgs::parse(args)?;
     let dry_run = invocation.global.dry_run || flags.bool("--dry-run");
     let capture = !flags.bool("--diagnose") && flags.positionals.is_empty();
+    // `session app --record` sends the operation; there is no dry run of it.
+    let application = |positionals: &[String]| {
+        !dry_run
+            && matches!(positionals, [verb]
+                if matches!(verb.as_str(), "launch" | "restart" | "stop" | "force-stop"))
+    };
     let supported = match invocation.command.as_slice() {
         [cmd] if cmd == "capture" => capture,
         [group, sub] if group == "session" && sub == "capture" => capture,
@@ -403,6 +411,13 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
                 && flags.optional("--swipe").is_none()
                 && flags.positionals.is_empty()
         }
+        [group, sub] if group == "session" && sub == "app" => {
+            application(flags.positionals.as_slice())
+        }
+        [group, sub] if group == "session" && sub == "instance" => {
+            flags.positionals.first().is_some_and(|word| word == "app")
+                && application(&flags.positionals[1..])
+        }
         _ => false,
     };
     if !supported {
@@ -410,8 +425,10 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
             ErrorKind::UsageValidation,
             "record_flag_unsupported",
             format!(
-                "--record is accepted only on capture, observe --capture and do --capture with \
-                 a point or rectangle click; not on {}",
+                "--record is accepted only on capture, observe --capture, do --capture with a \
+                 point or rectangle click, and session app|session instance app \
+                 <launch|restart|stop|force-stop>, never with --dry-run on do or session app; \
+                 not on {}",
                 invocation.command_name
             ),
             &[],
@@ -468,7 +485,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "request-state" => runtime_session_adapter::retired_authority(sub, args),
         "monitor-policy" => run_session_monitor_policy(global, args),
         "instance" => run_session_instance(global, args),
-        "app" => run_session_app(global, args),
+        "app" => run_session_app_or_recorded(global, args),
         "capture" => run_capture(global, args),
         "stream" => runtime_stream_adapter::run_stream(global, args),
         "recover" => run_session_recover(global, args),

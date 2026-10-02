@@ -13,10 +13,10 @@ use crate::{
 use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
-    ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec, RecordRect,
-    RecordStartOptions, RecordingLock, StepAction, StepActionKind, TransitionSpec,
-    record_instance_check, record_mark, record_start, record_start_defaults, record_status,
-    record_stop_close, record_stop_precheck,
+    ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
+    MarkSpec, RecordRect, RecordStartOptions, RecordingLock, StepAction, StepActionKind,
+    TransitionSpec, record_instance_check, record_mark, record_start, record_start_defaults,
+    record_status, record_stop_close, record_stop_precheck,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -3365,6 +3365,7 @@ const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--reopen-step",
     "--close-step",
     "--to-transition",
+    "--application",
 ];
 
 /// `record mark`: flags or a `actingcommand.lab-record-mark.v1` request, applied by the Lab
@@ -3498,6 +3499,8 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         transition: None,
         replace_transition: record_flag_switch(flags, "--replace-transition")?,
         step_action: None,
+        application: record_flag_value(flags, "--application")?
+            .map(|action| ApplicationSpec { action }),
     };
     let timeout_ms = millis("--transition-timeout-ms")?;
     let min_ms = millis("--min-ms")?;

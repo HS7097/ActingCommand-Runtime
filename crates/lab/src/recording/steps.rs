@@ -12,10 +12,11 @@ use super::marks::{
     EvalFrame, MarkRejection, derive_check, evaluate_mark, prepare_mark, validate_mark_id,
 };
 use super::model::{
-    ClickExecution, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE, LAB_RECORDING_DEFAULT_MATCH_METRIC,
-    LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_SCHEMA, LabRecording, MarkFamily,
-    MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordedFrame, RecordedMark, RecordingDefaults,
-    RecordingStep, StepClick, StepTransition,
+    ApplicationAttempt, ClickExecution, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
+    LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD,
+    LAB_RECORDING_SCHEMA, LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect,
+    RecordedFrame, RecordedMark, RecordingDefaults, RecordingStep, StepApplication, StepClick,
+    StepTransition,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -360,10 +361,10 @@ fn click_missing(index: u32) -> LabError {
         blocked(
             "record_step_click_missing",
             format!(
-                "step {index} has marks but no click. If this frame shows a loading page or \
-                 another intermediate screen, use `record mark --to-transition {index}`; if \
-                 step {index} is the final step, check with `record stop --dry-run` first and \
-                 then run `record stop`"
+                "step {index} has marks but no click or application operation. If this frame \
+                 shows a loading page or another intermediate screen, use `record mark \
+                 --to-transition {index}`; if step {index} is the final step, check with \
+                 `record stop --dry-run` first and then run `record stop`"
             ),
         ),
         json!({"step": index}),
@@ -381,6 +382,9 @@ fn plan_arrival(recording: &LabRecording, mode: ArrivalMode) -> LabResult<Arriva
         return Ok(ArrivalPlan::Open { close: None });
     };
     let step = effective_step(recording, index)?;
+    if let Some(application) = &step.application {
+        return application_arrival(index, application, mode);
+    }
     match &step.click {
         None if !has_marks(step) => Ok(ArrivalPlan::Replace(index)),
         None => Err(click_missing(index)),
@@ -417,9 +421,82 @@ fn plan_arrival(recording: &LabRecording, mode: ArrivalMode) -> LabResult<Arriva
     }
 }
 
+/// A frame after the application operation of the open step: the rows of the click read
+/// as "effect" (R24 section 2.5). A declared operation, also one whose attempts have no
+/// completed receipt, refuses a device frame and is closed by an offline frame.
+fn application_arrival(
+    index: u32,
+    application: &StepApplication,
+    mode: ArrivalMode,
+) -> LabResult<ArrivalPlan> {
+    if application.executed.is_some() {
+        return Ok(ArrivalPlan::Open {
+            close: Some((index, "application")),
+        });
+    }
+    match mode {
+        ArrivalMode::Device => Err(with_details(
+            blocked(
+                "record_step_click_not_executed",
+                format!(
+                    "step {index} declares the application operation {} without a completed \
+                     receipt{}; run `session app {} --record` to execute it or close the step \
+                     with `record mark --close-step`",
+                    application.action,
+                    if application.attempts.is_empty() {
+                        ""
+                    } else {
+                        " (an earlier attempt may have run: check the instance first)"
+                    },
+                    application.cli_verb
+                ),
+            ),
+            json!({
+                "step": index,
+                "application": application.action,
+                "attempts": application.attempts.len()
+            }),
+        )),
+        ArrivalMode::Offline => Ok(ArrivalPlan::Open {
+            close: Some((index, "offline_frame")),
+        }),
+    }
+}
+
 /// Device preflight: refuses before anything is captured.
 pub(crate) fn check_device_arrival(recording: &LabRecording) -> LabResult<()> {
     plan_arrival(recording, ArrivalMode::Device).map(|_| ())
+}
+
+/// The serial number of the next step (serial numbers are never reused).
+fn next_step_index(recording: &LabRecording) -> LabResult<u32> {
+    recording
+        .steps
+        .iter()
+        .map(|step| step.index)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| invalid("validation_failed", "step index overflow"))
+}
+
+/// A new open step: a frame arrival, or the application entry step (no frame).
+fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
+    RecordingStep {
+        index,
+        page: None,
+        dropped: false,
+        converted_to_transition: false,
+        frames,
+        marks: Vec::new(),
+        reused: Vec::new(),
+        click: None,
+        click_guard: None,
+        application: None,
+        transition: None,
+        closed: false,
+        closed_by: None,
+    }
 }
 
 pub(crate) fn arrive(
@@ -451,29 +528,11 @@ pub(crate) fn arrive(
                 step.closed = true;
                 step.closed_by = Some(by.to_string());
             }
-            let index = session
+            let index = next_step_index(&session.recording)?;
+            session
                 .recording
                 .steps
-                .iter()
-                .map(|step| step.index)
-                .max()
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or_else(|| invalid("validation_failed", "step index overflow"))?;
-            session.recording.steps.push(RecordingStep {
-                index,
-                page: None,
-                dropped: false,
-                converted_to_transition: false,
-                frames: vec![entry.clone()],
-                marks: Vec::new(),
-                reused: Vec::new(),
-                click: None,
-                click_guard: None,
-                transition: None,
-                closed: false,
-                closed_by: None,
-            });
+                .push(new_step(index, vec![entry.clone()]));
             Ok(Arrival {
                 step: index,
                 opened: true,
@@ -920,6 +979,11 @@ pub(crate) fn apply_marks(
                     }
                 }
             }
+            None if request.application.is_some() => {
+                let (index, entry_opened) = application_mark_target(&mut session.recording)?;
+                opened = entry_opened;
+                index
+            }
             None => open_step(&session.recording).ok_or_else(|| {
                 blocked(
                     "record_step_frame_missing",
@@ -928,6 +992,41 @@ pub(crate) fn apply_marks(
             })?,
         },
     };
+    // The application entry step has no frame: only its effect can be declared on it.
+    if step_ref(&session.recording, target).is_some_and(|step| live_primary_sha(step).is_none()) {
+        let needs_frame = request.page.is_some()
+            || !request.samples.is_empty()
+            || !request.add.is_empty()
+            || !request.reuse.is_empty()
+            || !request.remove.is_empty()
+            || request.click.is_some()
+            || request.click_guard.is_some()
+            || request.retry.is_some()
+            || request.application.is_none();
+        if needs_frame {
+            return Err(with_details(
+                blocked(
+                    "record_step_frame_missing",
+                    format!(
+                        "step {target} is the application entry step and has no frame; pages, \
+                         marks, samples and clicks need a step with a frame"
+                    ),
+                ),
+                json!({"step": target}),
+            ));
+        }
+        apply_application(session, request, target, None)?;
+        return Ok(MarkApplied {
+            step: target,
+            opened,
+            closed_step,
+            frame: new_frame,
+            samples: Vec::new(),
+            added: Vec::new(),
+            reused: Vec::new(),
+            removed: Vec::new(),
+        });
+    }
     if let Some(page) = &request.page {
         step_mut(&mut session.recording, target)?.page = Some(page.clone());
     }
@@ -1025,8 +1124,12 @@ pub(crate) fn apply_marks(
     let mut live = live_existing;
     live.extend(samples.iter().cloned());
 
-    // click
-    apply_click(session, request, target, &batch)?;
+    // effect: a click or an application operation
+    if request.application.is_some() {
+        apply_application(session, request, target, Some(&batch))?;
+    } else {
+        apply_click(session, request, target, &batch)?;
+    }
 
     // self-test
     let total = batch.own.len() + batch.reused.len();
@@ -1144,7 +1247,25 @@ fn apply_click(
         validate_retry(retry)?;
     }
     let step = step_mut(&mut session.recording, target)?;
+    // One step has one effect: a click replaces a declared application operation only with
+    // --replace-click; retry and guard belong to a click.
+    if let Some(application) = &step.application {
+        if declared.is_none() {
+            if request.retry.is_some() || guard.is_some() {
+                return Err(application_with_click(Some(target)));
+            }
+        } else if application.executed.is_some() {
+            return Err(effect_executed(target, "application"));
+        } else if !request.replace_click {
+            return Err(effect_exists(
+                target,
+                "application",
+                "add --replace-click to replace the declared one",
+            ));
+        }
+    }
     if let Some((rect, source, from)) = declared {
+        step.application = None;
         let attempts = match &step.click {
             Some(existing) if existing.execution.is_some() => {
                 return Err(with_details(
@@ -1208,6 +1329,169 @@ fn apply_click(
     Ok(())
 }
 
+/// `launch`, `restart` and `stop` as given; `force-stop` is recorded as `stop` (R24 section
+/// 2.3.1).
+pub(crate) fn application_action(verb: &str) -> LabResult<&'static str> {
+    match verb {
+        "launch" => Ok("launch"),
+        "restart" => Ok("restart"),
+        "stop" | "force-stop" => Ok("stop"),
+        other => Err(with_details(
+            invalid(
+                "record_application_action_invalid",
+                format!(
+                    "the application operation must be launch, restart, stop or force-stop, got \
+                     '{other}'"
+                ),
+            ),
+            json!({"action": other}),
+        )),
+    }
+}
+
+pub(crate) fn application_with_click(step: Option<u32>) -> LabError {
+    with_details(
+        invalid(
+            "record_application_with_click",
+            "one step has one effect: --application cannot be combined with --click, \
+             --click-from, --click-guard or --click-retry, and an application step takes no \
+             click guard or retry",
+        ),
+        json!({"step": step}),
+    )
+}
+
+/// The step's effect, `click` or `application`, and whether it has an outcome on record.
+fn step_effect(step: &RecordingStep) -> Option<(&'static str, bool)> {
+    match (&step.click, &step.application) {
+        (Some(click), _) => Some(("click", click.execution.is_some())),
+        (None, Some(application)) => Some(("application", application.executed.is_some())),
+        (None, None) => None,
+    }
+}
+
+fn effect_name(effect: &str) -> &'static str {
+    if effect == "click" {
+        "a click"
+    } else {
+        "an application operation"
+    }
+}
+
+/// The step already has an effect (`click` or `application`); `hint` says what to do.
+fn effect_exists(index: u32, effect: &str, hint: &str) -> LabError {
+    with_details(
+        blocked(
+            "record_step_effect_exists",
+            format!(
+                "step {index} already has {}; one step has one effect; {hint}",
+                effect_name(effect)
+            ),
+        ),
+        json!({"step": index, "effect": effect}),
+    )
+}
+
+/// An effect with an outcome on record is not replaced before `--reopen-step`.
+fn effect_executed(index: u32, effect: &str) -> LabError {
+    with_details(
+        blocked(
+            "record_click_executed",
+            format!(
+                "step {index} already has {} with an outcome on record; run \
+                 `record mark --reopen-step {index}` first",
+                effect_name(effect)
+            ),
+        ),
+        json!({"step": index, "effect": effect}),
+    )
+}
+
+fn application_entry_invalid() -> LabError {
+    blocked(
+        "record_application_entry_invalid",
+        "an application entry step can only be step 1. After the effect of the previous step, \
+         capture the arrival screen with capture --record and mark it, then execute or declare \
+         the application operation on that step; offline, give the arrival screen with --frame",
+    )
+}
+
+fn application_marks_missing(index: u32) -> LabError {
+    with_details(
+        blocked(
+            "record_application_step_marks_missing",
+            format!(
+                "step {index} has a frame but no marks; mark the screen the application \
+                 operation starts from first"
+            ),
+        ),
+        json!({"step": index}),
+    )
+}
+
+/// `record mark --application` without `--step` and `--frame`: the open step, or a new
+/// application entry step while the recording has no effective step.
+fn application_mark_target(recording: &mut LabRecording) -> LabResult<(u32, bool)> {
+    if let Some(index) = open_step(recording) {
+        return Ok((index, false));
+    }
+    if !effective_indices(recording).is_empty() {
+        return Err(application_entry_invalid());
+    }
+    let index = next_step_index(recording)?;
+    recording.steps.push(new_step(index, Vec::new()));
+    Ok((index, true))
+}
+
+/// `record mark --application <action>`: the declared application operation becomes the
+/// step's effect. `batch` holds the step's marks after this command (none for the entry step).
+fn apply_application(
+    session: &mut Session,
+    request: &super::model::MarkRequest,
+    target: u32,
+    batch: Option<&MarkBatch>,
+) -> LabResult<()> {
+    let Some(spec) = &request.application else {
+        return Ok(());
+    };
+    let action = application_action(&spec.action)?;
+    let step = step_mut(&mut session.recording, target)?;
+    match step_effect(step) {
+        Some((effect, true)) => return Err(effect_executed(target, effect)),
+        Some((effect, false)) if !request.replace_click => {
+            return Err(effect_exists(
+                target,
+                effect,
+                "add --replace-click to replace the declared one",
+            ));
+        }
+        _ => {}
+    }
+    if let Some(batch) = batch
+        && !step.closed
+        && batch.own.is_empty()
+        && batch.reused.is_empty()
+    {
+        return Err(application_marks_missing(target));
+    }
+    let attempts = step
+        .application
+        .as_ref()
+        .map(|application| application.attempts.clone())
+        .unwrap_or_default();
+    step.click = None;
+    step.click_guard = None;
+    step.application = Some(StepApplication {
+        action: action.to_string(),
+        cli_verb: spec.action.clone(),
+        source: "declared".to_string(),
+        executed: None,
+        attempts,
+        needs_review: false,
+    });
+    Ok(())
+}
+
 /// `record mark --step k --transition none|page|window`.
 pub(crate) struct TransitionApplied {
     pub(crate) step: u32,
@@ -1228,13 +1512,13 @@ pub(crate) fn apply_transition(
         )
     })?;
     let step = effective_step(&session.recording, index)?;
-    if step.click.is_none() {
+    if step.click.is_none() && step.application.is_none() {
         return Err(with_details(
             blocked(
                 "record_transition_without_click",
                 format!(
-                    "step {index} has no click; a transition follows the click of an effective \
-                     step"
+                    "step {index} has no effect; a transition follows the effect (a click or an \
+                     application operation) of an effective step"
                 ),
             ),
             json!({"step": index}),
@@ -1435,6 +1719,17 @@ pub(crate) fn apply_step_action(
                 click.attempts.push(execution);
                 click.needs_review = false;
             }
+            if let Some(application) = step.application.as_mut()
+                && let Some(executed) = application.executed.take()
+            {
+                application.attempts.push(ApplicationAttempt {
+                    receipt_state: executed.receipt_state,
+                    runtime_code: None,
+                    request_id: Some(executed.request_id),
+                });
+                application.source = "declared".to_string();
+                application.needs_review = false;
+            }
             step.closed = false;
             step.closed_by = None;
             Ok(("step_reopened", index))
@@ -1449,7 +1744,7 @@ pub(crate) fn apply_step_action(
                 return Err(step_not_last(requested, Some(index)));
             }
             let step = step_mut(recording, index)?;
-            if step.click.is_none() {
+            if step.click.is_none() && step.application.is_none() {
                 return Err(click_missing(index));
             }
             step.closed = true;
@@ -1490,8 +1785,8 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
         return Err(to_transition_invalid(index, "no_previous_effective_step"));
     };
     let step = effective_step(recording, index)?;
-    if step.click.is_some() {
-        return Err(to_transition_invalid(index, "step_has_click"));
+    if step.click.is_some() || step.application.is_some() {
+        return Err(to_transition_invalid(index, "step_has_effect"));
     }
     if !has_marks(step) {
         return Err(to_transition_invalid(index, "step_has_no_marks"));
@@ -1505,8 +1800,8 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
         return Err(to_transition_invalid(index, "marks_reused_by_other_steps"));
     }
     let target = effective_step(recording, previous)?;
-    if target.click.is_none() {
-        return Err(to_transition_invalid(index, "previous_step_has_no_click"));
+    if target.click.is_none() && target.application.is_none() {
+        return Err(to_transition_invalid(index, "previous_step_has_no_effect"));
     }
     if target.transition.is_some() {
         return Err(to_transition_invalid(index, "previous_step_has_transition"));
@@ -1565,6 +1860,15 @@ pub(crate) fn plan_click(
         )
     })?;
     let step = effective_step(recording, index)?;
+    if step.application.is_some() {
+        return Err(effect_exists(
+            index,
+            "application",
+            "a click needs a step of its own: execute the operation with `session app <action> \
+             --record` or close the step with `record mark --close-step`, then capture the next \
+             screen",
+        ));
+    }
     if let Some(click) = &step.click
         && click.execution.is_some()
     {
@@ -1702,6 +2006,108 @@ pub(crate) fn commit_click(
         step.closed_by = Some("click".to_string());
     }
     Ok((click, performed))
+}
+
+/// `session app <verb> --record`: the step the application operation lands on (R24 section
+/// 2.5), decided before anything is sent. Every refusal here means nothing was sent.
+pub(crate) fn plan_application(
+    recording: &LabRecording,
+    request: &super::model::PlanApplicationRequest,
+) -> LabResult<super::model::ApplicationPlan> {
+    let action = application_action(&request.verb)?;
+    let hint = "one step has one effect: capture and mark the next screen with capture --record \
+                first, or replace a declared effect with `record mark --application <action> \
+                --replace-click`";
+    let plan = |step: u32, opens_entry_step: bool| super::model::ApplicationPlan {
+        record_id: recording.record_id.clone(),
+        step,
+        opens_entry_step,
+        action: action.to_string(),
+        cli_verb: request.verb.clone(),
+    };
+    let Some(index) = open_step(recording) else {
+        if !effective_indices(recording).is_empty() {
+            return Err(application_entry_invalid());
+        }
+        return Ok(plan(next_step_index(recording)?, true));
+    };
+    let step = effective_step(recording, index)?;
+    match (&step.click, &step.application) {
+        (Some(_), _) => Err(effect_exists(index, "click", hint)),
+        (None, Some(existing)) if existing.action != action || existing.executed.is_some() => {
+            Err(with_details(
+                effect_exists(index, "application", hint),
+                json!({
+                    "step": index,
+                    "effect": "application",
+                    "declared_action": existing.action,
+                    "requested_action": action
+                }),
+            ))
+        }
+        (None, Some(_)) => Ok(plan(index, false)),
+        (None, None) if !has_marks(step) => Err(application_marks_missing(index)),
+        (None, None) => Ok(plan(index, false)),
+    }
+}
+
+/// Records the Runtime result of a planned application operation. Performed: the completed
+/// receipt is the step's executed effect and closes it (`closed_by:"application"`).
+/// Indeterminate: the step declares the operation with one more attempt and stays open.
+/// Returns the step's application, whether it was opened and whether it was closed.
+pub(crate) fn commit_application(
+    recording: &mut LabRecording,
+    plan: &super::model::ApplicationPlan,
+    request: &super::model::CommitApplicationRequest,
+) -> LabResult<(StepApplication, bool, bool)> {
+    use super::model::CommitApplicationRequest;
+    let still_planned = recording.record_id == plan.record_id
+        && if plan.opens_entry_step {
+            effective_indices(recording).is_empty()
+                && next_step_index(recording).ok() == Some(plan.step)
+        } else {
+            open_step(recording) == Some(plan.step)
+        };
+    if !still_planned {
+        return Err(blocked(
+            "record_step_not_found",
+            format!(
+                "the planned step {} is no longer the step the application operation lands on \
+                 in recording {}",
+                plan.step, plan.record_id
+            ),
+        ));
+    }
+    if plan.opens_entry_step {
+        recording.steps.push(new_step(plan.step, Vec::new()));
+    }
+    let step = step_mut(recording, plan.step)?;
+    let application = step.application.get_or_insert_with(|| StepApplication {
+        action: plan.action.clone(),
+        cli_verb: plan.cli_verb.clone(),
+        source: "declared".to_string(),
+        executed: None,
+        attempts: Vec::new(),
+        needs_review: false,
+    });
+    let performed = match request {
+        CommitApplicationRequest::Performed(execution) => {
+            application.executed = Some(execution.clone());
+            application.source = "executed".to_string();
+            application.cli_verb = plan.cli_verb.clone();
+            true
+        }
+        CommitApplicationRequest::Indeterminate(attempt) => {
+            application.attempts.push(attempt.clone());
+            false
+        }
+    };
+    let application = application.clone();
+    if performed {
+        step.closed = true;
+        step.closed_by = Some("application".to_string());
+    }
+    Ok((application, plan.opens_entry_step, performed))
 }
 
 /// The JSON of a value for error details.

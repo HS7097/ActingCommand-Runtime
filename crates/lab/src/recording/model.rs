@@ -104,6 +104,9 @@ pub struct RecordingStep {
     pub reused: Vec<String>,
     pub click: Option<StepClick>,
     pub click_guard: Option<String>,
+    /// The application operation of the step (R24); a step has a click or this, not both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application: Option<StepApplication>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -114,6 +117,50 @@ impl RecordingStep {
     pub fn is_effective(&self) -> bool {
         !self.dropped && !self.converted_to_transition
     }
+
+    /// The application entry step: an application operation and no frame (`from:"any"`).
+    pub fn is_application_entry(&self) -> bool {
+        self.application.is_some() && self.frames.is_empty()
+    }
+}
+
+/// The application operation of a step (Workflow #336 R24): `launch`, `restart` or `stop` of
+/// the instance's assigned application, executed by `session app … --record` or declared by
+/// `record mark --application`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepApplication {
+    /// `launch`, `restart` or `stop` (`force-stop` is recorded as `stop`).
+    pub action: String,
+    /// The verb the command used (`force-stop` stays `force-stop` here).
+    pub cli_verb: String,
+    /// `executed` (a completed receipt is on record) or `declared`.
+    pub source: String,
+    pub executed: Option<ApplicationExecution>,
+    pub attempts: Vec<ApplicationAttempt>,
+    pub needs_review: bool,
+}
+
+/// The completed receipt of the application operation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationExecution {
+    pub request_id: String,
+    pub correlation_id: String,
+    pub action_id: String,
+    pub receipt_state: String,
+    pub application_event_ids: Vec<String>,
+}
+
+/// An application operation without a completed receipt (it may have run), or a completed
+/// one moved aside by `--reopen-step`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationAttempt {
+    /// The receipt state (`failed`, `completed`, …) or `none` without a receipt.
+    pub receipt_state: String,
+    pub runtime_code: Option<String>,
+    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -384,6 +431,7 @@ pub struct MarkRequest {
     pub click_guard: Option<String>,
     #[serde(default)]
     pub retry: Option<ClickRetry>,
+    /// Replaces the step's declared effect (a click or an application operation).
     #[serde(default)]
     pub replace_click: bool,
     #[serde(default)]
@@ -392,6 +440,16 @@ pub struct MarkRequest {
     pub replace_transition: bool,
     #[serde(default)]
     pub step_action: Option<StepAction>,
+    /// `{"action": "launch|restart|stop|force-stop"}`: the step's effect is that application
+    /// operation (R24).
+    #[serde(default)]
+    pub application: Option<ApplicationSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationSpec {
+    pub action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -541,7 +599,9 @@ pub struct LabRecordingStart {
 pub struct StepStateView {
     pub marks: usize,
     pub frames: usize,
-    pub click: String,
+    /// `none`, `click_declared`, `click_executed`, `click_indeterminate`,
+    /// `application_declared` or `application_executed`.
+    pub effect: String,
     pub transition: Option<String>,
     pub closed: bool,
 }
@@ -575,6 +635,7 @@ pub struct MarkOutcome {
     pub reused: Vec<RecordedMark>,
     pub removed: Vec<String>,
     pub click: Option<StepClick>,
+    pub application: Option<StepApplication>,
     pub transition: Option<TransitionView>,
     pub step_state: Option<StepStateView>,
     pub closed_step: Option<u32>,
@@ -618,6 +679,8 @@ pub struct ClickView {
 pub struct StepView {
     pub index: u32,
     pub artifact_step: Option<u32>,
+    /// `any` for the application entry step (no frame), `page` otherwise.
+    pub entry: String,
     pub page: Option<String>,
     pub dropped: bool,
     pub converted_to_transition: bool,
@@ -625,6 +688,7 @@ pub struct StepView {
     pub marks: Vec<MarkView>,
     pub reused: Vec<String>,
     pub click: Option<ClickView>,
+    pub application: Option<StepApplication>,
     pub transition: Option<TransitionView>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -715,4 +779,40 @@ pub struct CommitClickOutcome {
     pub step: u32,
     pub step_closed: bool,
     pub click: StepClick,
+}
+
+/// `session app <verb> --record`: the verb as given (`launch`, `restart`, `stop`,
+/// `force-stop`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanApplicationRequest {
+    pub verb: String,
+}
+
+/// The step an application operation lands on, planned before anything is sent.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ApplicationPlan {
+    pub record_id: String,
+    pub step: u32,
+    /// The operation opens the application entry step (the recording has no effective step).
+    pub opens_entry_step: bool,
+    pub action: String,
+    pub cli_verb: String,
+}
+
+/// The Runtime result of the planned application operation: a completed receipt, or none
+/// that proves it did not run (it may have run).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommitApplicationRequest {
+    Performed(ApplicationExecution),
+    Indeterminate(ApplicationAttempt),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CommitApplicationOutcome {
+    pub status: String,
+    pub record_id: String,
+    pub step: u32,
+    pub step_opened: bool,
+    pub step_closed: bool,
+    pub application: StepApplication,
 }

@@ -412,6 +412,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record promote", ["offline"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
+        command_cap("session app --record", ["device"], "available"),
+        command_cap("session instance app --record", ["device"], "available"),
         command_cap(
             "observe --capture --record",
             ["running_runtime", "device"],
@@ -599,7 +601,7 @@ pub(crate) fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture", "do --capture --record"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"]
             }
         },
         "safety": {

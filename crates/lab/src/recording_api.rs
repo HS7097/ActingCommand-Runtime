@@ -6,16 +6,18 @@
 
 use crate::recording::marks::match_metric;
 use crate::recording::model::{
-    AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView, CommitClickOutcome,
-    CommitClickRequest, FrameView, LAB_RECORD_MARK_SCHEMA, LabRecordingStart, LabStatus,
-    LabStatusView, MarkOutcome, MarkRequest, MarkStatusView, MarkView, PlanClickRequest,
+    ApplicationPlan, AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView,
+    CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome, CommitClickRequest,
+    FrameView, LAB_RECORD_MARK_SCHEMA, LabRecordingStart, LabStatus, LabStatusView, MarkOutcome,
+    MarkRequest, MarkStatusView, MarkView, PlanApplicationRequest, PlanClickRequest,
     RecordStartOptions, RecordedFrame, RecordingDefaults, RecordingStep, StepClick, StepStateView,
     StepTransition, StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::steps::{
-    ArrivalMode, FrameMeta, apply_marks, apply_step_action, apply_transition, arrive,
-    check_device_arrival, commit_click, default_recording_defaults, effective_indices,
-    new_recording, open_session, open_step, plan_click, save, to_json,
+    ArrivalMode, FrameMeta, application_action, application_with_click, apply_marks,
+    apply_step_action, apply_transition, arrive, check_device_arrival, commit_application,
+    commit_click, default_recording_defaults, effective_indices, new_recording, open_session,
+    open_step, plan_application, plan_click, save, to_json,
 };
 use crate::recording::store::{
     LabFile, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms, page_name_valid,
@@ -196,7 +198,8 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         || request.click.is_some()
         || request.click_guard.is_some()
         || request.retry.is_some()
-        || request.replace_click;
+        || request.replace_click
+        || request.application.is_some();
     if request.step_action.is_some() {
         if marks_or_click
             || request.transition.is_some()
@@ -205,8 +208,8 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         {
             return Err(invalid(
                 "validation_failed",
-                "step operations cannot be combined with marks, clicks, samples, frames, \
-                 pages or transitions",
+                "step operations cannot be combined with marks, clicks, application \
+                 operations, samples, frames, pages or transitions",
             ));
         }
         return Ok(());
@@ -216,10 +219,12 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             || request.click_guard.is_some()
             || request.retry.is_some()
             || request.replace_click
+            || request.application.is_some()
         {
             return Err(invalid(
                 "record_transition_has_click",
-                "a transition only recognizes; it cannot carry a click",
+                "a transition only recognizes; it cannot carry a click or an application \
+                 operation",
             ));
         }
         if request.frame.is_some()
@@ -247,6 +252,12 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
                 "validation_failed",
                 "--replace-transition does not apply to --transition none",
             ));
+        }
+    }
+    if let Some(application) = &request.application {
+        application_action(&application.action)?;
+        if request.click.is_some() || request.click_guard.is_some() || request.retry.is_some() {
+            return Err(application_with_click(request.step));
         }
     }
     Ok(())
@@ -277,6 +288,7 @@ pub fn record_mark(
         reused: Vec::new(),
         removed: Vec::new(),
         click: None,
+        application: None,
         transition: None,
         step_state: None,
         closed_step: None,
@@ -310,6 +322,7 @@ pub fn record_mark(
         .find(|item| item.index == step)
     {
         outcome.click = recorded.click.clone();
+        outcome.application = recorded.application.clone();
         outcome.transition = recorded.transition.as_ref().map(transition_view);
         outcome.step_state = Some(step_state(recorded));
     }
@@ -450,6 +463,102 @@ pub fn record_commit_click(
     Ok(outcome)
 }
 
+/// Before `session app <verb> --record` sends anything: the step the application operation
+/// lands on (Workflow #336 R24). Every refusal means nothing was sent.
+pub fn record_plan_application(
+    lock: &RecordingLock,
+    request: &PlanApplicationRequest,
+) -> LabResult<ApplicationPlan> {
+    let session = open_session(lock)?;
+    plan_application(&session.recording, request)
+}
+
+/// Records the Runtime result of a planned application operation. Performed closes the step
+/// (`application_recorded`); Indeterminate records one more attempt, keeps the step open and
+/// returns `record_application_indeterminate` (exit 4). A failure to record after the
+/// operation was sent is `record_append_failed_after_input`. Only these two errors mean the
+/// application operation may have run.
+pub fn record_commit_application(
+    lock: &RecordingLock,
+    plan: &ApplicationPlan,
+    request: &CommitApplicationRequest,
+) -> LabResult<CommitApplicationOutcome> {
+    let recorded = (|| -> LabResult<CommitApplicationOutcome> {
+        let mut session = open_session(lock)?;
+        let (application, opened, closed) =
+            commit_application(&mut session.recording, plan, request)?;
+        save(&mut session)?;
+        Ok(CommitApplicationOutcome {
+            status: if closed {
+                "application_recorded"
+            } else {
+                "application_indeterminate"
+            }
+            .to_string(),
+            record_id: session.recording.record_id.clone(),
+            step: plan.step,
+            step_opened: opened,
+            step_closed: closed,
+            application,
+        })
+    })();
+    let effect = match request {
+        CommitApplicationRequest::Performed(_) => "performed",
+        CommitApplicationRequest::Indeterminate(_) => "indeterminate",
+    };
+    let outcome =
+        recorded.map_err(|error| record_application_append_failed(plan, effect, error))?;
+    if let CommitApplicationRequest::Indeterminate(attempt) = request {
+        return Err(LabError::new(
+            LabErrorClass::DeviceInstance,
+            "record_application_indeterminate",
+            format!(
+                "the application operation {} of step {} has no completed receipt (receipt {}, \
+                 Runtime code {}); it may have run. The attempt is recorded and the step stays \
+                 open: check the instance, then run `session app {} --record` again (launch, \
+                 restart and stop can be repeated) or accept it with `record mark --close-step`",
+                plan.action,
+                plan.step,
+                attempt.receipt_state,
+                attempt.runtime_code.as_deref().unwrap_or("none"),
+                plan.cli_verb
+            ),
+            &["device"],
+        )
+        .with_details(json!({
+            "runtime_code": attempt.runtime_code,
+            "receipt_state": attempt.receipt_state,
+            "request_id": attempt.request_id,
+            "record": to_json(&outcome)
+        })));
+    }
+    Ok(outcome)
+}
+
+/// The application operation was sent (`effect`: `performed` or `indeterminate`) but could
+/// not be recorded: `record_append_failed_after_input` (exit 3) with the plan and the cause.
+pub fn record_application_append_failed(
+    plan: &ApplicationPlan,
+    effect: &str,
+    cause: LabError,
+) -> LabError {
+    let details = json!({
+        "code": cause.code,
+        "message": cause.message,
+        "details": cause.details
+    });
+    LabError::new(
+        LabErrorClass::SafetyBlocked,
+        "record_append_failed_after_input",
+        format!(
+            "the application operation was sent ({effect}) but recording it failed: {}: {}",
+            cause.code, cause.message
+        ),
+        &["session_record"],
+    )
+    .with_details(json!({"plan": to_json(plan), "effect": effect, "cause": details}))
+}
+
 fn frame_view(frame: &RecordedFrame) -> FrameView {
     FrameView {
         frame_id: frame.frame_id.clone(),
@@ -499,18 +608,23 @@ fn click_outcome(click: &StepClick) -> &'static str {
     }
 }
 
-fn click_state(step: &RecordingStep) -> String {
-    step.click
-        .as_ref()
-        .map_or("none", click_outcome)
-        .to_string()
+/// `none`, `click_<declared|executed|indeterminate>` or `application_<declared|executed>`.
+fn effect_state(step: &RecordingStep) -> String {
+    match (&step.click, &step.application) {
+        (Some(click), _) => format!("click_{}", click_outcome(click)),
+        (None, Some(application)) if application.executed.is_some() => {
+            "application_executed".to_string()
+        }
+        (None, Some(_)) => "application_declared".to_string(),
+        (None, None) => "none".to_string(),
+    }
 }
 
 fn step_state(step: &RecordingStep) -> StepStateView {
     StepStateView {
         marks: step.marks.len() + step.reused.len(),
         frames: step.frames.iter().filter(|frame| !frame.superseded).count(),
-        click: click_state(step),
+        effect: effect_state(step),
         transition: step
             .transition
             .as_ref()
@@ -527,6 +641,12 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
     StepView {
         index: step.index,
         artifact_step,
+        entry: if step.is_application_entry() {
+            "any"
+        } else {
+            "page"
+        }
+        .to_string(),
         page: step.page.clone(),
         dropped: step.dropped,
         converted_to_transition: step.converted_to_transition,
@@ -552,6 +672,7 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
             attempts: click.attempts.len(),
             needs_review: click.needs_review,
         }),
+        application: step.application.clone(),
         transition: step.transition.as_ref().map(transition_view),
         closed: step.closed,
         closed_by: step.closed_by.clone(),

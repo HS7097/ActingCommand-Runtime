@@ -1,16 +1,16 @@
 # Lab recording (`record start` / `mark` / `status` / `stop`, `--record`)
 
 A Lab recording turns a sequence of real screens into a linear-steps task package: each
-step is one screen with its recognition marks and at most one click rectangle, and the
-last step only recognizes. This document is the first half of the contract (Workflow
-#336): the recording state, the commands that build it, the five mark families with their
-mark-time self-test, steps and transitions, remediation, `--record` on the device commands
-and the recording lock. Package generation by `record stop` is described in the second
-half.
+step is one screen with its recognition marks and at most one effect, a click rectangle or
+an application operation (R24), and the last step only recognizes. This document is the
+first half of the contract (Workflow #336): the recording state, the commands that build
+it, the five mark families with their mark-time self-test, steps and transitions,
+remediation, application steps, `--record` on the device commands and the recording lock.
+Package generation by `record stop` is described in the second half.
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
-the Runtime ledger; the clicks themselves are executed by the Runtime and recorded there as
-any `do --capture` is.
+the Runtime ledger; the clicks and application operations themselves are executed by the
+Runtime and recorded there as any `do --capture` or `session app` is.
 
 ## Files
 
@@ -67,7 +67,8 @@ command deletes nothing and names the files it already wrote.
   (`observe --capture --record`, with the Runtime frame reference in `runtime_artifact`).
 - All frames of a recording have one size; it becomes the package coordinate space and
   resolution (`record_frame_size_mismatch`).
-- Fields added later use `serde(default, skip_serializing_if)`.
+- Fields added later use `serde(default, skip_serializing_if)`: `application` (see
+  "Application steps") is absent on steps without one.
 
 ## Commands
 
@@ -106,6 +107,8 @@ record mark [--step <n>] [--frame <png>] [--sample <png>]… [--page <name>]
             [--template <id>=x,y,w,h]… [--color <id>=x,y,w,h]… [--reuse <id>]…
             [--click x,y,w,h | --click-from <id>] [--click-guard <id>] [--click-retry <n>]
             [--replace-click] [--remove <id>]… [--dry-run] [--state-dir <dir>]
+record mark [--step <n>] [--frame <png>] [--template …]… [--color …]… [--reuse <id>]…
+            --application <launch|restart|stop|force-stop> [--replace-click]
 record mark --step <k> --transition none|page|window [--frame <png>] [--sample <png>]…
             [--template …]… [--color …]… [--reuse <id>]… [--transition-timeout-ms <ms>]
             [--min-ms <a> --max-ms <b>] [--replace-transition]
@@ -129,7 +132,7 @@ the color digest, OCR and check families:
         {"id":"check/ready","family":"check","all_of":["ui/start","state/start"]}],
  "reuse":[],"remove":[],
  "click":{"from":"ui/start"},"click_guard":null,"retry":null,"replace_click":false,
- "transition":null,"replace_transition":false,"step_action":null}
+ "transition":null,"replace_transition":false,"step_action":null,"application":null}
 ```
 
 A page transition after the click of step 3, a window transition, clearing it, and one step
@@ -186,8 +189,9 @@ Rules:
   interval_ms 1000}`; the request form takes any `interval_ms` in 1..5000.
 
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
-click, transition, step_state{marks, frames, click, transition, closed}, closed_step,
-dry_run}`.
+click, application, transition, step_state{marks, frames, effect, transition, closed},
+closed_step, dry_run}`. `step_state.effect` is `none`, `click_declared`, `click_executed`,
+`click_indeterminate`, `application_declared` or `application_executed`.
 
 ### record status
 
@@ -199,7 +203,9 @@ reason}`, or
  steps:[{index, artifact_step|null, page, dropped, converted_to_transition,
          frames[{frame_id, role, sha256, w, h, superseded}],
          marks[{id, family, self_test{status}, margin}], reused,
+         entry: "any" | "page",
          click{rect, source, executed, outcome, attempts, needs_review}|null,
+         application{action, cli_verb, source, executed, attempts[], needs_review}|null,
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
          closed, closed_by}],
  artifact|null, record_flag_state_dir, record_flag_reachable}
@@ -281,8 +287,9 @@ window.
 
 ### Transitions
 
-A transition belongs to an effective step k with a click (declared or executed) and
-describes the screens between that click and the next step
+A transition belongs to an effective step k with an effect, a click or an application
+operation (declared or executed), and describes the screens between that effect and the
+next step
 (`record_transition_without_click`, exit 3, otherwise; `--step k` is required).
 
 - `--transition none` clears it; its marks free their ids.
@@ -300,12 +307,14 @@ describes the screens between that click and the next step
 
 ## `--record` on device commands
 
-Only `capture`, `observe --capture` and `do --capture` with a point or rectangle click accept
-`--record`; every other command or combination is refused before it runs:
+Only `capture`, `observe --capture`, `do --capture` with a point or rectangle click and
+`session app` / `session instance app` with `launch`, `restart`, `stop` or `force-stop`
+(see "Application steps") accept `--record`; every other command or combination is refused
+before it runs:
 
 | code (exit 2) | when |
 |---|---|
-| `record_flag_unsupported` | offline commands, `capture diagnose`, element or swipe clicks, `do --dry-run`, `tap`/`swipe`/`long-tap` and every other command |
+| `record_flag_unsupported` | offline commands, `capture diagnose`, element or swipe clicks, `do --dry-run`, `session app --dry-run` (global or after the command), `session app` without one of its four actions, `tap`/`swipe`/`long-tap` and every other command |
 | `record_flag_takes_no_value` | `--record <value>` |
 | `record_state_dir_unsupported` | `--record` with `--state-dir`; `--record` uses `ACTINGLAB_SESSION_STATE_DIR` or the default state root |
 | `validation_failed` | `--tap-rect` without `--record` |
@@ -339,11 +348,121 @@ must be the same (`record_instance_mismatch`, exit 3); a missing or inactive ses
 - Pause the instance's scheduling for the recording (`actingctl pause --instance <alias>`,
   then `resume`): a scheduled task between two commands would act on another screen.
 
+## Application steps
+
+A step's effect may be an application operation instead of a click (R24): `launch`,
+`restart` or `stop` of the application assigned to the instance
+(`application-lifecycle.md`); the package never names the application. One step has one
+effect.
+
+```
+actinglab --json --instance <i> session app <launch|restart|stop|force-stop> --record
+actinglab --json --instance <i> session instance app <launch|restart|stop|force-stop> --record
+actinglab --json [--instance <i>] record mark [--step <k>] [--frame <png>] [marks…]
+          --application <launch|restart|stop|force-stop> [--replace-click]
+```
+
+`force-stop` is recorded as `stop`; the verb used stays in `cli_verb`. In the request form
+the field is `"application": null | {"action": "restart"}`.
+
+```json
+{"index":1,"page":null,"frames":[],"marks":[],"click":null,
+ "application":{"action":"restart","cli_verb":"restart","source":"executed",
+   "executed":{"request_id":"…","correlation_id":"…","action_id":"…","receipt_state":"completed",
+               "application_event_ids":["…","…"]},
+   "attempts":[],"needs_review":false},
+ "transition":null,"closed":true,"closed_by":"application"}
+```
+
+- `source` is `executed` (a completed receipt is on record) or `declared`. `attempts[]`
+  holds `{receipt_state, runtime_code, request_id}` of operations without a completed
+  receipt (`receipt_state` is the receipt state, or `none` when no receipt arrived) and of
+  executions moved aside by `--reopen-step`. `needs_review` stays false: an application
+  operation has no "performed with a failure" outcome.
+- The application entry step is a step with an application operation and no frame (not a
+  separate field; `record status` shows `entry:"any"`). It can only be the first effective
+  step; its package operation starts `from:"any"`. `coordinate_space` is set by the first
+  frame after it.
+- No frame is stored before or after the operation: `session app` returns none, the entry
+  step has no screen before it, the screen right after the operation is usually a launcher
+  or splash screen, and the arrival screen comes from the next `capture --record`.
+
+### Where the operation lands
+
+| recording | `session app … --record` (device) | `record mark --application` (offline, without `--step` and `--frame`) |
+|---|---|---|
+| no effective step | Performed: a new application entry step, executed and closed (`closed_by:"application"`). Indeterminate: a new entry step, declared with the attempt, open | a new entry step, declared, open |
+| the last effective step is closed and no arrival screen came yet | `record_application_entry_invalid` (3), nothing sent | same |
+| open step, a frame without marks | `record_application_step_marks_missing` (3), nothing sent | same |
+| open step, marks, no effect | Performed: the step's effect, executed, the step closed. Indeterminate: declared with the attempt, open | the step's effect, declared, open |
+| open step with a click | `record_step_effect_exists` (3), nothing sent | replaced with `--replace-click`, otherwise `record_step_effect_exists`; a click with an outcome is `record_click_executed` |
+| open step with a declared application operation (also one left by an indeterminate result) | the same action is sent: Performed records the execution and closes the step, Indeterminate adds an attempt. Another action: `record_step_effect_exists` (3), nothing sent | replaced with `--replace-click` (its attempts are kept), otherwise `record_step_effect_exists` |
+
+- With `--frame` (a new offline frame) or `--step k` the operation becomes the effect of
+  that step, from its page. An open step needs marks first
+  (`record_application_step_marks_missing`); a declared effect is replaced only with
+  `--replace-click`, which now means "replace the step's effect" (`record_step_effect_exists`);
+  an effect with an outcome on record is not replaced (`record_click_executed`).
+- `--application` with `--click`, `--click-from`, `--click-guard` or `--click-retry`, and a
+  click guard or retry on an application step, are `record_application_with_click` (2); an
+  action other than the four is `record_application_action_invalid` (2).
+- The entry step has no frame: `--page`, marks, samples and clicks aimed at it are
+  `record_step_frame_missing` (3).
+- The step rules above read "effect" where they say "click": a device frame on a step whose
+  declared application operation has no completed receipt is
+  `record_step_click_not_executed`, an offline frame closes such a step
+  (`closed_by:"offline_frame"`), `--close-step` accepts it, `--reopen-step` moves the
+  execution into `attempts[]`, and a transition (`--transition`, `--to-transition`) follows
+  an application step as it follows a click, for example a splash screen captured after a
+  restart. `do --capture --record` on a step with an application operation is
+  `record_step_effect_exists`.
+- Typical use (restart, then the title screen): pause the instance's scheduling;
+  `session app restart --record` (the entry step, serial 1); `capture --record` of the title
+  screen (serial 2) and `record mark` of its marks; `record stop --dry-run`, then
+  `record stop`. Record only screens that every cold start shows; what follows the title
+  screen belongs to a page-graph return-home package.
+
+### `session app … --record`
+
+- Accepted only with one of the four actions and never with `--dry-run`, global or after
+  the command (`record_flag_unsupported`, 2): `session app` does not read `--dry-run`, so the
+  recording path offers no dry run. The other gate rules apply (`record_flag_takes_no_value`,
+  `record_state_dir_unsupported`). Without `--record`, `session app` is unchanged.
+- The record instance and the command instance must agree (`record_instance_mismatch`). The
+  recording lock is taken before any Runtime request and held until the result is recorded;
+  a busy lock is `record_busy` and nothing is sent.
+- Order: the step is planned first (the refusals above send nothing); the request is the
+  `session app` request (`RuntimeClient::control_application`); then the Runtime result
+  decides:
+  - a completed receipt: recorded, the step closed; the output is the `session app` output
+    plus `record{status:"application_recorded", record_id, step, step_opened, step_closed,
+    application}`;
+  - a denied receipt (for example `fixture_execution_scope_forbidden` on a fixture instance,
+    or a busy lease): the operation did not run; nothing is recorded and the error is
+    returned as `session app` returns it;
+  - anything else (a failed receipt such as `application_backend_operation_failed`, or no
+    receipt at all): the operation may have run. The attempt is recorded on the planned
+    step, which stays open, and the command fails with `record_application_indeterminate`
+    (exit 4, `details{runtime_code, receipt_state, request_id, record, runtime_error}`).
+    Check the instance, then run the same command again (launch, restart and stop can be
+    repeated) or accept the step with `record mark --close-step`;
+  - recording fails after the operation was sent: `record_append_failed_after_input` (3)
+    with the plan, the effect and the cause.
+- **Error codes, not exit codes.** Only `record_application_indeterminate` and
+  `record_append_failed_after_input` mean the application operation may have run or did
+  run; every other error means it did not run and the recording is unchanged. Several of
+  these errors exit with 4 (also the Runtime refusals mapped to `device_error`): tell them
+  apart by the error code.
+- The v0.9.0 ActingLab ignores `--record` on `session app` and runs the operation without
+  recording it: do not use it during a recording. A build without application steps refuses
+  the flag with `record_flag_unsupported` before any request.
+
 ## Recording lock
 
 Every state-writing command (`record start`, `mark`, `stop` including `--dry-run`, the old
 `step`, `amend`, `build-task`, `promote`/`publish`, and `capture`/`observe`/`do --record`)
-takes `<state>/record-<instance>.lock` with an exclusive operating-system lock without
+takes `<state>/record-<instance>.lock` (`session app … --record` too, from before its
+Runtime request until the result is recorded) with an exclusive operating-system lock without
 waiting, holds it until its output is printed (`do --record` holds it across the device
 click) and writes the holder to `.lock.json`. `record status` and `record candidates` do
 not lock.
@@ -362,8 +481,8 @@ not lock.
 
 | exit | codes |
 |---|---|
-| 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy` |
-| 4 | `record_click_indeterminate`, `record_click_performed_with_failure` |
+| 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click` |
+| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists` |
+| 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator) |
