@@ -17,7 +17,23 @@ MuMu/Nemu, model, provider, or Runtime binaries.
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
   `actingledger.exe`,
   `actingcommand-vision-provider-check.exe`, `actingcommand-device-test.exe`, and
-  the existing PP-OCR cdylib staged as `ac_fastdeploy_ppocr.dll`.
+  the existing PP-OCR cdylib staged as `ac_fastdeploy_ppocr.dll`, plus the official
+  Android platform-tools 37.0.1 files under `platform-tools/`: `adb.exe`,
+  `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`.
+
+Before it compiles anything, the build fetches
+`https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip` (the only
+source: no other host, no cache, no fallback), requires HTTP 200 and the size and
+SHA-1 that Google publishes for it, then the pinned sha256, extracts only the five
+files above and checks each size and sha256, and requires `adb.exe version` to
+print `Version 37.0.1-15733141`; all values come from the `platform-tools-37.0.1`
+entry of `windows-tool-sources.v1.json`. Only network errors and non-200 responses
+are retried (three attempts on the same URL). The build fails with
+`platform_tools_source_unavailable` (no HTTP 200 response),
+`platform_tools_hash_mismatch` (size, SHA-1 or sha256 differs) or
+`platform_tools_content_invalid` (a file is missing, unsafe or differs, or the
+revision or adb version line is wrong). So a build fails whenever `dl.google.com`
+is unreachable.
 
 Each artifact contains a root `BUILD-MANIFEST.json`. The verifier independently
 resolves the commit tree and `Cargo.lock` bytes from GitHub, selects exactly one
@@ -30,7 +46,13 @@ manifests without this field still require exactly the two original executables.
 Explicit unknown, empty or non-string layouts fail; an incomplete distribution
 cannot fall back to the two-file layout. Both layouts retain the flat directory,
 exact case/path, complete declared/physical set, size/hash and source checks.
-Tools keep their separate fixed payload set and do not declare a Runtime layout.
+
+Tools manifests declare `tools_payload_layout: "platform-tools-v1"`, which requires
+exactly the ten Tools payloads listed above (manifest paths use `/`) and allows no
+directory other than `platform-tools`. Historical Tools manifests without this
+field still require exactly the five flat files. An explicit unknown, empty or
+non-string layout fails, a Runtime manifest may not declare a Tools layout, and a
+Tools manifest may not declare a Runtime layout.
 
 The three static Runtime files come from `distribution/windows` at the same build
 commit. See the [installation instructions](../../distribution/windows/INSTALL.md)
@@ -58,7 +80,9 @@ The materializer accepts only a strict child of the caller's existing `-TaskRoot
 on drive `D:`. Component selection is explicit:
 
 - `platform-tools-37.0.1` downloads the hash-bound official Google archive only
-  after `-AcceptAndroidSdkLicense`; it is not redistributed in build artifacts.
+  after `-AcceptAndroidSdkLicense`. The same entry pins the five files the
+  Tools artifact redistributes (`distributed_files`, by the owner's decision in
+  Workflow #337; see `license.redistribution_note`).
 - `ppocrv6-medium-source` downloads the pinned official Paddle inference sources.
   Source archives alone cannot satisfy the Runtime ONNX contract, so this selection
   is published only as `PendingVerification` and fails before ready use.

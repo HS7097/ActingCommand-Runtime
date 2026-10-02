@@ -14,7 +14,8 @@
       "license": {
         "id": "android-sdk-license",
         "url": "https://developer.android.com/studio/terms",
-        "redistribution": "not_authorized_by_this_manifest"
+        "redistribution": "redistributed_in_tools_artifact_by_owner_decision",
+        "redistribution_note": "The owner decided to redistribute the distributed_files below in the Runtime Tools artifact (Workflow #337, 2026-10-03). Android SDK License section 3.4 forbids copying or redistributing the SDK except where a third-party license requires otherwise; section 3.5 places components released under an open-source license only under that license. NOTICE.txt (it begins with the Apache License) and source.properties ship unchanged in the same platform-tools directory as the binaries. This records the owner's decision; it is not a legal opinion."
       },
       "archive": {
         "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip",
@@ -22,7 +23,7 @@
         "size": 8044989,
         "sha256": "45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99",
         "official_sha1": "e03e78b1d80b396f1c3358e31251cb31740e1110",
-        "hash_provenance": "sha256 independently computed from exact Google bytes; SHA-1 and size published in repository2-3.xml"
+        "hash_provenance": "size and SHA-1 as Google publishes them for platform-tools 37.0.1 (host-os windows) in repository2-1.xml, repository2-2.xml and repository2-3.xml under https://dl.google.com/android/repository/ (all three identical, read 2026-10-03); Google publishes no SHA-256, so sha256 is independently computed from the exact Google bytes"
       },
       "extract_relative_path": "platform-tools-37.0.1",
       "max_extract_bytes": 67108864,
@@ -32,7 +33,36 @@
         "platform-tools/AdbWinApi.dll",
         "platform-tools/AdbWinUsbApi.dll",
         "platform-tools/source.properties"
-      ]
+      ],
+      "distributed_files": [
+        {
+          "path": "platform-tools/adb.exe",
+          "size": 8273560,
+          "sha256": "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f"
+        },
+        {
+          "path": "platform-tools/AdbWinApi.dll",
+          "size": 108184,
+          "sha256": "c1d653030b4bde65d3e07e4d0b0979e17be56df1436cdd15528630f27808050d"
+        },
+        {
+          "path": "platform-tools/AdbWinUsbApi.dll",
+          "size": 73368,
+          "sha256": "0710e894d9b40f71a670c13c694079d564c92c1279da382cfe4850983aaebe1b"
+        },
+        {
+          "path": "platform-tools/NOTICE.txt",
+          "size": 1154131,
+          "sha256": "38ec8c6f5b7799c223ffeab1f9e81c2d5fc67b5e56d6424f649630ca1ee1a811"
+        },
+        {
+          "path": "platform-tools/source.properties",
+          "size": 38,
+          "sha256": "2dccd788c0234d8cf7f7457377e57f57527a86a629c6ed54feb8af0f549dac38"
+        }
+      ],
+      "distributed_adb_version": "37.0.1-15733141",
+      "distributed_provenance": "The Windows exact-SHA build fetches the archive above from its official URL only, checks size, Google's SHA-1 and the sha256, extracts exactly distributed_files, checks each size and sha256, and requires `adb.exe version` to print `Version 37.0.1-15733141` (the build number is not in the repository XML). Recorded once on 2026-10-03, not checked in CI: adb.exe, AdbWinApi.dll and AdbWinUsbApi.dll with these sha256 values carry valid Authenticode signatures by CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US, SERIALNUMBER=3582691 (EV fields), timestamped by DigiCert SHA256 RSA4096 Timestamp Responder 2025 1."
     },
     "onnxruntime-gpu-1.24.4": {
       "kind": "download_zip",

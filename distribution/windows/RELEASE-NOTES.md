@@ -17,9 +17,26 @@ and individually bound by size and SHA-256.
 
 The existing exact-artifact downloader understands this layout and the historical
 fixed two-executable Runtime layout whose manifest omits the field. It continues
-to reject incomplete or unexpected payloads. The separate Tools artifact retains
+to reject incomplete or unexpected payloads. The separate Tools artifact carries
 `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and its own manifest.
+`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and, under
+`platform-tools/`, the official Android platform-tools 37.0.1 files `adb.exe`,
+`AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. Its
+own manifest declares `tools_payload_layout: "platform-tools-v1"` and binds all
+ten files; the downloader still accepts the historical five-file Tools layout
+whose manifest omits the field and rejects any other layout.
+
+The build takes `platform-tools_r37.0.1-win.zip` only from Google's official
+`https://dl.google.com/android/repository/` URL and fails unless the archive has
+the size and SHA-1 that Google publishes, the pinned SHA-256, and each shipped
+file its pinned size and SHA-256, and unless `adb.exe version` reports
+`37.0.1-15733141`. Of the archive's binaries only `adb.exe` and its two DLLs are
+shipped; Google's `NOTICE.txt` and `source.properties` stay unchanged beside them.
+They are redistributed by the owner's decision under the Android SDK License and
+the open-source licenses in `NOTICE.txt`. Installed, they are in
+`<install root>\tools\platform-tools\`, and
+`<install root>\tools\platform-tools\adb.exe` is the adb that an instance with an
+empty `adb_path` uses.
 
 Configuration uses `actingcommand.actingd.config.v1` and the existing
 `actingcommand-actingd --config <path>` entry. The supplied template has empty

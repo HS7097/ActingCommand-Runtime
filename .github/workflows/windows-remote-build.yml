@@ -114,6 +114,151 @@ jobs:
           }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tree_sha=$treeSha"
 
+      - name: Fetch and verify Android platform-tools
+        id: platform_tools
+        shell: pwsh
+        run: |
+          # Workflow #337: the official Google archive at its versioned URL is the only source
+          # (no other host, no cache, no fallback). Size and Google's SHA-1, then the sha256
+          # pin, then every distributed file are checked against windows-tool-sources.v1.json.
+          # Only network errors and non-200 responses are retried; a mismatch never is.
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $pin = (Get-Content -LiteralPath 'scripts/windows-tools/windows-tool-sources.v1.json' -Raw |
+            ConvertFrom-Json -Depth 100).components.'platform-tools-37.0.1'
+          $url = [string]$pin.archive.url
+          $size = [long]$pin.archive.size
+          $officialSha1 = [string]$pin.archive.official_sha1
+          $pinnedSha256 = [string]$pin.archive.sha256
+          $files = @($pin.distributed_files)
+          if ($files.Count -eq 0) {
+            throw 'platform_tools_content_invalid: the pin lists no distributed_files'
+          }
+          if ($url -cnotmatch '\Ahttps://dl\.google\.com/android/repository/[A-Za-z0-9._-]+\.zip\z') {
+            throw "platform_tools_source_unavailable: the pinned URL is not an official https://dl.google.com archive: $url"
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'actingcommand-platform-tools'
+          $outDir = Join-Path $root 'verified'
+          New-Item -ItemType Directory -Path $root, $outDir | Out-Null
+
+          # 1. Download: same URL each time, 5 minutes per attempt, at most 3 attempts.
+          $handler = [Net.Http.HttpClientHandler]::new()
+          $handler.AllowAutoRedirect = $false
+          $client = [Net.Http.HttpClient]::new($handler)
+          $client.Timeout = [TimeSpan]::FromMinutes(5)
+          $bytes = $null
+          try {
+            for ($attempt = 1; $attempt -le 3 -and $null -eq $bytes; $attempt++) {
+              if ($attempt -gt 1) {
+                Start-Sleep -Seconds (10 * ($attempt - 1))
+              }
+              try {
+                $response = $client.GetAsync($url).GetAwaiter().GetResult()
+              } catch {
+                Write-Host "platform-tools attempt $attempt/3: GET $url failed: $($_.Exception.GetBaseException().Message)"
+                continue
+              }
+              try {
+                $status = [int]$response.StatusCode
+                $length = $response.Content.Headers.ContentLength
+                $lengthText = if ($null -eq $length) { 'absent' } else { "$length" }
+                Write-Host "platform-tools attempt $attempt/3: GET $url -> HTTP $status, Content-Length $lengthText"
+                if ($status -ne 200) {
+                  continue
+                }
+                if ($null -eq $length -or $length -ne $size) {
+                  throw "platform_tools_hash_mismatch: Content-Length expected $size (Google), actual $lengthText"
+                }
+                $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+              } finally {
+                $response.Dispose()
+              }
+            }
+          } finally {
+            $client.Dispose()
+            $handler.Dispose()
+          }
+          if ($null -eq $bytes) {
+            throw "platform_tools_source_unavailable: no HTTP 200 response from $url in 3 attempts"
+          }
+
+          # 2. Size and Google's SHA-1, then the sha256 pin.
+          if ($bytes.LongLength -ne $size) {
+            throw "platform_tools_hash_mismatch: received $($bytes.LongLength) bytes, expected $size (Google)"
+          }
+          $sha1 = [Convert]::ToHexString([Security.Cryptography.SHA1]::HashData($bytes)).ToLowerInvariant()
+          if ($sha1 -cne $officialSha1) {
+            throw "platform_tools_hash_mismatch: archive SHA-1 expected $officialSha1 (Google), actual $sha1"
+          }
+          $sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+          if ($sha256 -cne $pinnedSha256) {
+            throw "platform_tools_hash_mismatch: archive SHA-256 expected $pinnedSha256 (pin), actual $sha256"
+          }
+          Write-Host "platform-tools archive: $($bytes.LongLength) bytes, SHA-1 $sha1 (Google), SHA-256 $sha256 (pin)"
+          $archivePath = Join-Path $root ([IO.Path]::GetFileName([string]$pin.archive.relative_path))
+          [IO.File]::WriteAllBytes($archivePath, $bytes)
+
+          # 3. Extract only the pinned files: no unsafe or colliding paths, at most 16 MiB.
+          $wanted = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+          foreach ($file in $files) {
+            $wanted.Add([string]$file.path, $file)
+          }
+          $selected = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+          [long]$selectedBytes = 0
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
+          try {
+            foreach ($entry in $zip.Entries) {
+              $name = $entry.FullName
+              if ($name.Contains('\') -or $name.Contains(':') -or $name.StartsWith('/') -or
+                  @($name.Split('/')) -contains '..') {
+                throw "platform_tools_content_invalid: archive entry has an unsafe path: $name"
+              }
+              if (-not $wanted.ContainsKey($name)) {
+                continue
+              }
+              if ($name -cne [string]$wanted[$name].path -or $selected.ContainsKey($name)) {
+                throw "platform_tools_content_invalid: archive entry $name duplicates or case-collides with $($wanted[$name].path)"
+              }
+              $selected.Add($name, $entry)
+              $selectedBytes += $entry.Length
+            }
+            if ($selectedBytes -gt 16MB) {
+              throw "platform_tools_content_invalid: the selected entries declare $selectedBytes bytes, above 16 MiB"
+            }
+            foreach ($file in $files) {
+              $path = [string]$file.path
+              if (-not $selected.ContainsKey($path)) {
+                throw "platform_tools_content_invalid: the archive has no $path"
+              }
+              $destination = Join-Path $outDir $path
+              New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($selected[$path], $destination)
+              $actualSize = (Get-Item -LiteralPath $destination).Length
+              $actualSha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actualSize -ne [long]$file.size -or $actualSha256 -cne [string]$file.sha256) {
+                throw "platform_tools_content_invalid: $path expected $($file.size) bytes SHA-256 $($file.sha256), actual $actualSize bytes SHA-256 $actualSha256"
+              }
+              Write-Host "platform-tools file ${path}: $actualSize bytes, SHA-256 $actualSha256"
+            }
+          } finally {
+            $zip.Dispose()
+          }
+
+          # 4. The revision and the adb build ('adb version' starts no server).
+          $properties = [IO.File]::ReadAllText((Join-Path $outDir 'platform-tools/source.properties'))
+          if ($properties -cnotmatch "(?m)^Pkg\.Revision=$([regex]::Escape([string]$pin.version))\r?$") {
+            throw "platform_tools_content_invalid: source.properties has no Pkg.Revision=$($pin.version)"
+          }
+          $adbVersion = [string]$pin.distributed_adb_version
+          $versionText = (& (Join-Path $outDir 'platform-tools/adb.exe') version | Out-String)
+          $versionExit = $LASTEXITCODE
+          Write-Host "platform-tools adb.exe version (exit $versionExit):`n$($versionText.Trim())"
+          if ($versionExit -ne 0 -or $versionText -cnotmatch "(?m)^Version $([regex]::Escape($adbVersion))\r?$") {
+            throw "platform_tools_content_invalid: adb.exe version exited $versionExit without the line 'Version $adbVersion'"
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "platform_tools_dir=$outDir"
+
       - name: Configure stable MSVC Rust toolchain
         shell: pwsh
         run: |
@@ -365,6 +510,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           TREE_SHA: ${{ steps.checkout.outputs.tree_sha }}
+          PLATFORM_TOOLS_DIR: ${{ steps.platform_tools.outputs.platform_tools_dir }}
         run: |
           $ErrorActionPreference = 'Stop'
           $targetTriple = 'x86_64-pc-windows-msvc'
@@ -394,6 +540,15 @@ jobs:
             'actingcommand-device-test.exe',
             'ac_fastdeploy_ppocr.dll'
           )
+          # Workflow #337: the official platform-tools files the fetch step verified, under platform-tools/.
+          $platformToolsFiles = @(
+            (Get-Content -LiteralPath 'scripts/windows-tools/windows-tool-sources.v1.json' -Raw |
+              ConvertFrom-Json -Depth 100).components.'platform-tools-37.0.1'.distributed_files |
+              ForEach-Object { [string]$_.path }
+          )
+          if ($platformToolsFiles.Count -eq 0 -or -not $env:PLATFORM_TOOLS_DIR) {
+            throw 'the verified platform-tools files are missing'
+          }
 
           function Copy-BuildFiles {
             param(
@@ -415,7 +570,8 @@ jobs:
               [Parameter(Mandatory)] [string] $ArtifactName,
               [Parameter(Mandatory)] [string] $Directory,
               [Parameter(Mandatory)] [string[]] $Names,
-              [switch] $RuntimeDistribution
+              [switch] $RuntimeDistribution,
+              [switch] $PlatformToolsLayout
             )
             $files = foreach ($name in $Names) {
               $path = Join-Path $Directory $name
@@ -454,6 +610,9 @@ jobs:
             if ($RuntimeDistribution) {
               $manifest.runtime_payload_layout = 'distribution-v1'
             }
+            if ($PlatformToolsLayout) {
+              $manifest.tools_payload_layout = 'platform-tools-v1'
+            }
             $manifestPath = Join-Path $Directory 'BUILD-MANIFEST.json'
             $json = $manifest | ConvertTo-Json -Depth 6
             [IO.File]::WriteAllText(
@@ -485,6 +644,8 @@ jobs:
           Copy-Item -LiteralPath $providerSource -Destination (
             Join-Path $toolsDir 'ac_fastdeploy_ppocr.dll'
           )
+          New-Item -ItemType Directory -Path (Join-Path $toolsDir 'platform-tools') | Out-Null
+          Copy-BuildFiles -Names $platformToolsFiles -SourceDirectory $env:PLATFORM_TOOLS_DIR -Destination $toolsDir
           New-BuildManifest `
             -ArtifactName $runtimeArtifactName `
             -Directory $runtimeDir `
@@ -493,7 +654,8 @@ jobs:
           New-BuildManifest `
             -ArtifactName $toolsArtifactName `
             -Directory $toolsDir `
-            -Names $toolFiles
+            -Names ($toolFiles + $platformToolsFiles) `
+            -PlatformToolsLayout
 
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "runtime_artifact_name=$runtimeArtifactName"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "runtime_artifact_dir=$runtimeDir"
@@ -581,7 +743,7 @@ jobs:
             }
             $expected = @(@($manifest.files | ForEach-Object { [string]$_.path }) + 'BUILD-MANIFEST.json' | Sort-Object)
             $actual = @(Get-ChildItem -LiteralPath $check -Recurse -File -Force |
-              ForEach-Object { [IO.Path]::GetRelativePath($check, $_.FullName) } | Sort-Object)
+              ForEach-Object { [IO.Path]::GetRelativePath($check, $_.FullName).Replace('\', '/') } | Sort-Object)
             if (($expected -join '|') -cne ($actual -join '|')) {
               throw "release_zip_unverified: $($artifact.Name).zip holds [$($actual -join ', ')], expected [$($expected -join ', ')]"
             }

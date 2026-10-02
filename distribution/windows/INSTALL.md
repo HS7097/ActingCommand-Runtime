@@ -53,8 +53,28 @@ The artifact root contains exactly these six files:
 The manifest binds the five payload files individually. Historical Runtime
 artifacts without the layout field have the fixed two-executable payload plus
 their manifest. An explicit unknown, empty or non-string layout is rejected;
-`distribution-v1` always requires all five payloads. Tools use their separate
-artifact and fixed five-binary/DLL payload.
+`distribution-v1` always requires all five payloads.
+
+Tools use their separate artifact (`-ArtifactKind Tools`,
+`actingcommand-tools-<sha>`). Its manifest declares
+`tools_payload_layout: "platform-tools-v1"`: the root holds `actinglab.exe`,
+`actingledger.exe`, `actingcommand-vision-provider-check.exe`,
+`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and
+`BUILD-MANIFEST.json`, and the one subdirectory `platform-tools` holds the
+official Android platform-tools 37.0.1 files `adb.exe`, `AdbWinApi.dll`,
+`AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. The manifest binds all
+ten payload files (paths use `/`). Historical Tools artifacts without the layout
+field have only the five root files; any other layout is rejected.
+
+The build takes these platform-tools files only from Google's official archive
+`https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip`, after
+checking its size and the SHA-1 that Google publishes, a pinned SHA-256, and each
+file's pinned size and SHA-256 (`scripts/windows-tools/windows-tool-sources.v1.json`);
+`adb.exe version` reports `Version 37.0.1-15733141`. Keep `NOTICE.txt` and
+`source.properties` with the binaries. Installed, the files are in
+`<install root>\tools\platform-tools\`, and
+`<install root>\tools\platform-tools\adb.exe` is the adb that an instance with an
+empty `adb_path` uses.
 
 ## Prepare private configuration
 
