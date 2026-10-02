@@ -1772,8 +1772,9 @@ fn pressure_measurements(
 }
 
 fn pipeline_responsiveness_basis_points(signal: &PipelinePerformanceSignal) -> Option<u16> {
+    // Frame cadence includes declared waits and idle time; only measured execution spans
+    // contribute to responsiveness. A cadence-only signal therefore has no score.
     [
-        signal.frame_gap_ms.map(|value| latency_score(value, 1_000)),
         signal
             .capture_latency_ms
             .map(|value| latency_score(value, 500)),
@@ -2755,17 +2756,50 @@ mod tests {
 
     #[test]
     fn pipeline_probes_synthesize_responsiveness_without_faking_missing_samples() {
+        // First red: https://github.com/HS7097/ActingCommand-Workflow/issues/335#issuecomment-5960349709
         let mut empty = monitor(Vec::new());
         assert_eq!(
             empty.control_observation(1_000).expect("empty observation"),
             None
         );
+        let events = empty
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 1_000, 5_396)
+                    .expect("cadence-only signal"),
+            )
+            .expect("cadence sample");
+        assert!(matches!(
+            events.as_slice(),
+            [PerformanceSemanticEvent::StutterDetected(data)] if data.frame_gap_ms == 5_396
+        ));
+        assert_eq!(
+            empty
+                .control_observation(1_000)
+                .expect("unmeasured response"),
+            None
+        );
+
+        let mut host_only = monitor(vec![Ok(sample(1_000, 4_000))]);
+        host_only.tick(1_000).expect("host sample");
+        host_only
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 1_500, 5_396)
+                    .expect("cadence-only signal"),
+            )
+            .expect("cadence sample");
+        let host_observation = host_only
+            .control_observation(1_500)
+            .expect("host observation")
+            .expect("measured process pressure");
+        assert_eq!(host_observation.observed_at_unix_ms, 1_000);
+        assert_eq!(host_observation.host_responsiveness_basis_points, None);
+        assert_eq!(host_observation.third_party_pressure_basis_points, Some(0));
 
         let mut monitor = monitor(vec![Ok(sample(1_000, 4_000))]);
         monitor.tick(1_000).expect("host sample");
         monitor
             .record_pipeline_signal(
-                PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
+                PipelinePerformanceSignal::new("fixture-instance", 1_500, 5_396)
                     .expect("signal")
                     .with_capture_latency(1_000)
                     .expect("capture"),
@@ -2782,6 +2816,73 @@ mod tests {
             monitor
                 .control_observation(1_600)
                 .expect("consumed observation"),
+            None
+        );
+
+        monitor
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 1_700, 60_000)
+                    .expect("idle cadence")
+                    .with_capture_latency(54)
+                    .expect("capture")
+                    .with_recognition_latency(300)
+                    .expect("recognition")
+                    .with_action_effect_latency(200)
+                    .expect("action")
+                    .with_touch_response(10_000)
+                    .expect("touch")
+                    .with_capture_acquire(40_000)
+                    .expect("acquire"),
+            )
+            .expect("fast execution after idle");
+        let fast = monitor
+            .control_observation(1_700)
+            .expect("fast observation")
+            .expect("measured execution");
+        assert_eq!(fast.host_responsiveness_basis_points, Some(10_000));
+        assert_eq!(fast.third_party_pressure_basis_points, None);
+        assert_eq!(
+            monitor
+                .context("fixture-instance", 1_700)
+                .expect("context")
+                .max_frame_gap_ms,
+            Some(60_000)
+        );
+        monitor
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 1_800, 60_000)
+                    .expect("cadence-only signal"),
+            )
+            .expect("cadence sample");
+        assert_eq!(
+            monitor
+                .control_observation(1_800)
+                .expect("consumed execution"),
+            None
+        );
+        monitor
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::measured("fixture-instance", 2_000)
+                    .with_capture_latency(1_000)
+                    .expect("slow execution"),
+            )
+            .expect("unconsumed execution");
+        assert_eq!(
+            monitor
+                .control_observation(6_001)
+                .expect("expired execution"),
+            None
+        );
+        monitor
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 6_002, 5_396)
+                    .expect("fresh cadence-only signal"),
+            )
+            .expect("cadence sample");
+        assert_eq!(
+            monitor
+                .control_observation(6_002)
+                .expect("expired execution stays expired"),
             None
         );
     }
@@ -2807,7 +2908,9 @@ mod tests {
         monitor
             .record_pipeline_signal(
                 PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
-                    .expect("pipeline signal"),
+                    .expect("pipeline signal")
+                    .with_capture_latency(1_000)
+                    .expect("measured slow capture"),
             )
             .expect("pipeline sample");
 
@@ -2830,7 +2933,9 @@ mod tests {
         monitor
             .record_pipeline_signal(
                 PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
-                    .expect("pipeline sample"),
+                    .expect("pipeline sample")
+                    .with_capture_latency(1_000)
+                    .expect("measured slow capture"),
             )
             .expect("pipeline sample");
         assert_eq!(

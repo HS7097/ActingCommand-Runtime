@@ -11,6 +11,26 @@ releases one instance per transition. The levels in rank order are Normal,
 DispatchPaused, Throttled, YieldRequested, QosReduced, Suspended and
 ShutdownRequested.
 
+## Responsiveness input
+
+Host responsiveness measures execution spans: `capture_latency_ms` (500 ms
+target), `recognition_latency_ms` (1,000 ms), `action_effect_latency_ms`
+(1,500 ms), `touch_response_us` (100,000 us) and `capture_acquire_us`
+(250,000 us). Each measured span scores 10,000 at or below its target and
+`floor(target * 10,000 / actual)` above it; the monitor uses the lowest score
+from fresh signals within the latest 64 pipeline entries. Freshness remains twice the sample
+interval, and consumed or expired signals do not supply another observation.
+
+`frame_gap_ms` describes frame arrival cadence, including declared observation
+waits and time without work. It remains in stutter events, `max_frame_gap_ms`,
+the bounded context queue and related diagnostic event chains. It contributes
+no responsiveness score. A signal containing only a frame gap supplies no
+responsiveness measurement: the field remains `None`, and a control observation
+exists only when another fresh scoring signal or usable system-pressure sample
+exists. System pressure keeps its own source timestamp and coverage rules;
+unavailable process coverage remains unknown. The original sampler-failure,
+idle-recovery, controller and admission rules below continue to apply.
+
 ## Recovery without evidence
 
 Every performance tick reaches the controller. A tick without a fresh sample
