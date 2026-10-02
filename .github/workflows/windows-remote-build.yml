@@ -662,6 +662,179 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tools_artifact_name=$toolsArtifactName"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tools_artifact_dir=$toolsDir"
 
+      - name: "One-off (to be reverted): Workflow #337 R2 install-root adb checks"
+        shell: pwsh
+        env:
+          RUNTIME_ARTIFACT_DIR: ${{ steps.stage.outputs.runtime_artifact_dir }}
+          TOOLS_ARTIFACT_DIR: ${{ steps.stage.outputs.tools_artifact_dir }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $base = Join-Path $env:RUNNER_TEMP 'r2-one-off'
+          New-Item -ItemType Directory -Path $base | Out-Null
+          $exeName = 'actingcommand-actingd.exe'
+          $pin = (Get-Content -LiteralPath 'scripts/windows-tools/windows-tool-sources.v1.json' -Raw |
+            ConvertFrom-Json -Depth 100).components.'platform-tools-37.0.1'.distributed_files
+          $pinnedAdb = [string]($pin | Where-Object { $_.path -ceq 'platform-tools/adb.exe' }).sha256
+          Write-Host "r2 pinned platform-tools/adb.exe sha256 $pinnedAdb"
+
+          function Assert-That([bool] $Condition, [string] $Message) {
+            if (-not $Condition) { throw "r2_one_off_failed: $Message" }
+          }
+
+          # This head's actingd and BUILD-MANIFEST.json in runtime\, R1's verified platform-tools in tools\.
+          function New-Layout([string] $Root) {
+            $runtime = Join-Path $Root 'runtime'
+            $platformTools = Join-Path $Root 'tools\platform-tools'
+            New-Item -ItemType Directory -Path $runtime, $platformTools -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR $exeName) -Destination $runtime
+            Copy-Item -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR 'BUILD-MANIFEST.json') -Destination $runtime
+            Get-ChildItem -LiteralPath (Join-Path $env:TOOLS_ARTIFACT_DIR 'platform-tools') -File |
+              Copy-Item -Destination $platformTools
+            Write-Host "r2 layout $Root : $((Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object { $_.FullName.Substring($Root.Length + 1) }) -join ', ')"
+            return (Join-Path $runtime $exeName)
+          }
+
+          function New-InstanceId {
+            $bytes = [byte[]]::new(16)
+            [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+            return 'instance_' + [Convert]::ToHexString($bytes).ToLowerInvariant()
+          }
+
+          function Write-Config([string] $Name, [object[]] $Instances) {
+            $salt = [byte[]]::new(16)
+            [Security.Cryptography.RandomNumberGenerator]::Fill($salt)
+            $config = [ordered]@{
+              schema_version = 'actingcommand.actingd.config.v1'
+              state_root = (Join-Path $base "state-$Name")
+              bind_host = '127.0.0.1'
+              bind_port = 0
+              secret_fingerprint_salt = [Convert]::ToHexString($salt).ToLowerInvariant()
+              instances = @($Instances)
+            }
+            $path = Join-Path $base "$Name.config.json"
+            $json = $config | ConvertTo-Json -Depth 10
+            [IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))
+            Write-Host "r2 config $Name : $($config | ConvertTo-Json -Depth 10 -Compress)"
+            return $path
+          }
+
+          function Invoke-CheckConfig([string] $Label, [string] $Exe, [string] $Config) {
+            $errPath = Join-Path $base "$Label.stderr.txt"
+            $stdout = (& $Exe check-config --config $Config 2> $errPath | Out-String).Trim()
+            $exit = $LASTEXITCODE
+            $stderr = "$(Get-Content -LiteralPath $errPath -Raw -ErrorAction SilentlyContinue)".Trim()
+            Write-Host "r2 ($Label) $Exe check-config exit=$exit"
+            Write-Host "r2 ($Label) stdout: $stdout"
+            Write-Host "r2 ($Label) stderr: $stderr"
+            return [pscustomobject]@{ Exit = $exit; Report = ($stdout | ConvertFrom-Json -Depth 100); Stderr = $stderr }
+          }
+
+          function Copy-Instance($Instance, [hashtable] $Extra) {
+            $copy = [ordered]@{}
+            foreach ($key in $Instance.Keys) { $copy[$key] = $Instance[$key] }
+            foreach ($key in $Extra.Keys) { $copy[$key] = $Extra[$key] }
+            return $copy
+          }
+
+          $discovered = [ordered]@{
+            alias = 'r2.discovered'; instance_id = (New-InstanceId); application_id = 'neutral.application'
+            instance_index = 0; touch_backend = 'adb_shell_input'; capture_backend = 'adb'
+          }
+          $explicit = [ordered]@{
+            alias = 'r2.explicit'; instance_id = (New-InstanceId); application_id = 'neutral.application'
+            host = '127.0.0.1'; port = 16384; touch_backend = 'adb_shell_input'; capture_backend = 'adb'
+          }
+
+          foreach ($name in @('install', '.staging-1')) {
+            $root = Join-Path $base $name
+            $exe = New-Layout $root
+            $tag = $name.TrimStart('.')
+            $both = Write-Config "$tag-both" @($discovered, $explicit)
+            $zero = Write-Config "$tag-zero" @()
+            $adbPath = Join-Path $root 'tools\platform-tools\adb.exe'
+            $named = Write-Config "$tag-named" @((Copy-Instance $explicit @{ adb_path = $adbPath }))
+            $suffix = "$name\tools\platform-tools\adb.exe"
+
+            # (a) both instances without adb_path: ok, adb_default.state=ok under this layout.
+            $a = Invoke-CheckConfig "$tag a" $exe $both
+            Assert-That ($a.Exit -eq 0 -and $a.Report.status -ceq 'ok') "($tag a) check-config did not pass"
+            Assert-That ($a.Report.adb_default.state -ceq 'ok') "($tag a) adb_default.state is not ok"
+            Assert-That (([string]$a.Report.adb_default.path).EndsWith($suffix, [StringComparison]::OrdinalIgnoreCase)) "($tag a) adb_default.path is not under $name"
+            Write-Host "r2 ($tag a) PASS: exit 0, status ok, adb_default=$($a.Report.adb_default | ConvertTo-Json -Compress)"
+
+            # (b) one flipped byte in adb.exe: failed, adb_install_mismatch / assemble, detail and FATAL line.
+            $original = [IO.File]::ReadAllBytes($adbPath)
+            $flipped = [byte[]]$original.Clone()
+            $flipped[4096] = $flipped[4096] -bxor 0xFF
+            [IO.File]::WriteAllBytes($adbPath, $flipped)
+            $b = Invoke-CheckConfig "$tag b" $exe $both
+            Assert-That ($b.Exit -ne 0 -and $b.Report.status -ceq 'failed') "($tag b) check-config did not fail"
+            Assert-That ($b.Report.error.code -ceq 'adb_install_mismatch' -and $b.Report.error.stage -ceq 'assemble') "($tag b) code/stage $($b.Report.error.code)/$($b.Report.error.stage)"
+            $files = @($b.Report.error.detail.files)
+            Assert-That ($files.Count -eq 1 -and $files[0].state -ceq 'sha256_mismatch' -and ([string]$files[0].path).EndsWith($suffix, [StringComparison]::OrdinalIgnoreCase)) "($tag b) detail.files does not name adb.exe alone"
+            Assert-That ($files[0].expected_sha256 -ceq $pinnedAdb -and $files[0].actual_sha256 -cmatch '\A[0-9a-f]{64}\z' -and $files[0].actual_sha256 -cne $pinnedAdb) "($tag b) expected/actual values"
+            Assert-That ($b.Stderr -cmatch '\AFATAL actingd: adb_install_mismatch: ' -and $b.Stderr.Contains($pinnedAdb) -and $b.Stderr.Contains([string]$files[0].actual_sha256)) "($tag b) FATAL line"
+            Write-Host "r2 ($tag b) PASS: exit $($b.Exit), adb_install_mismatch / assemble, expected $pinnedAdb actual $($files[0].actual_sha256)"
+
+            # (e) actingd started on the (b) layout: FATAL, non-zero exit, no state root (no ledger).
+            $stateRoot = Join-Path $base "state-$tag-both"
+            $out = Join-Path $base "$tag-e.stdout.txt"
+            $err = Join-Path $base "$tag-e.stderr.txt"
+            $process = Start-Process -FilePath $exe -ArgumentList @('--config', "`"$both`"") -NoNewWindow -PassThru `
+              -RedirectStandardOutput $out -RedirectStandardError $err
+            $null = $process.Handle
+            if (-not $process.WaitForExit(60000)) {
+              Stop-Process -Id $process.Id -Force
+              throw "r2_one_off_failed: ($tag e) actingd did not exit within 60 s"
+            }
+            $eStdout = "$(Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue)".Trim()
+            $eStderr = "$(Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue)".Trim()
+            Write-Host "r2 ($tag e) actingd --config exit=$($process.ExitCode)"
+            Write-Host "r2 ($tag e) stdout: $eStdout"
+            Write-Host "r2 ($tag e) stderr: $eStderr"
+            Assert-That ($process.ExitCode -ne 0 -and $eStderr -cmatch '\AFATAL actingd: adb_install_mismatch: ') "($tag e) no FATAL adb_install_mismatch line"
+            Assert-That (-not (Test-Path -LiteralPath $stateRoot)) "($tag e) the state root $stateRoot was created"
+            Write-Host "r2 ($tag e) PASS: exit $($process.ExitCode), FATAL line, state root $stateRoot does not exist (no ledger)"
+            [IO.File]::WriteAllBytes($adbPath, $original)
+
+            # (c) platform-tools moved away: failed, adb_install_missing / assemble, all three files named.
+            Rename-Item -LiteralPath (Join-Path $root 'tools\platform-tools') -NewName 'platform-tools.moved'
+            $c = Invoke-CheckConfig "$tag c" $exe $both
+            Assert-That ($c.Exit -ne 0 -and $c.Report.status -ceq 'failed') "($tag c) check-config did not fail"
+            Assert-That ($c.Report.error.code -ceq 'adb_install_missing' -and $c.Report.error.stage -ceq 'assemble') "($tag c) code/stage $($c.Report.error.code)/$($c.Report.error.stage)"
+            $missing = @($c.Report.error.detail.files)
+            Assert-That ($missing.Count -eq 3 -and @($missing | Where-Object { $_.state -cne 'missing' }).Count -eq 0) "($tag c) detail.files are not three missing files"
+            Assert-That ($c.Stderr -cmatch '\AFATAL actingd: adb_install_missing: ') "($tag c) FATAL line"
+            Write-Host "r2 ($tag c) PASS: exit $($c.Exit), adb_install_missing / assemble, files: $(($missing | ForEach-Object { $_.path }) -join ', ')"
+
+            # (d) zero instances on the (c) layout: ok, adb_default.state=missing.
+            $d = Invoke-CheckConfig "$tag d" $exe $zero
+            Assert-That ($d.Exit -eq 0 -and $d.Report.status -ceq 'ok' -and $d.Report.adb_default.state -ceq 'missing') "($tag d) expected ok with adb_default.state=missing"
+            Write-Host "r2 ($tag d) PASS: exit 0, status ok, adb_default=$($d.Report.adb_default | ConvertTo-Json -Compress)"
+
+            # (g) the (c) layout, one explicit instance whose adb_path names the missing install adb.
+            $g = Invoke-CheckConfig "$tag g" $exe $named
+            Assert-That ($g.Exit -ne 0 -and $g.Report.error.code -ceq 'adb_install_missing' -and $g.Report.error.stage -ceq 'assemble') "($tag g) expected adb_install_missing / assemble"
+            Write-Host "r2 ($tag g) PASS: exit $($g.Exit), adb_install_missing / assemble for adb_path $adbPath"
+          }
+
+          # (f) no runtime\BUILD-MANIFEST.json two levels up (the manifest beside the exe, as in an extracted zip).
+          $plainBin = Join-Path $base 'plain\bin'
+          New-Item -ItemType Directory -Path $plainBin -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR $exeName) -Destination $plainBin
+          Copy-Item -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR 'BUILD-MANIFEST.json') -Destination $plainBin
+          $plainExe = Join-Path $plainBin $exeName
+          $f1 = Invoke-CheckConfig 'f1' $plainExe (Join-Path $base 'install-both.config.json')
+          Assert-That ($f1.Exit -ne 0 -and $f1.Report.error.code -ceq 'instance_config_invalid' -and $f1.Report.error.stage -ceq 'assemble') "(f1) expected instance_config_invalid / assemble"
+          Write-Host "r2 (f1) PASS: exit $($f1.Exit), instance_config_invalid / assemble outside an install root"
+          $discoveredOnly = Write-Config 'plain-discovered' @($discovered)
+          $f2 = Invoke-CheckConfig 'f2' $plainExe $discoveredOnly
+          Assert-That ($f2.Exit -eq 0 -and $f2.Report.status -ceq 'ok') "(f2) check-config did not pass"
+          Assert-That ($f2.Report.PSObject.Properties.Name -contains 'adb_default' -and $null -eq $f2.Report.adb_default) "(f2) adb_default is not null"
+          Write-Host "r2 (f2) PASS: exit 0, status ok, adb_default null outside an install root"
+          Write-Host 'r2 one-off: all checks passed'
+
       # Actions artifacts are acceptance builds only; a release run publishes the Release instead.
       - name: Upload Runtime artifact
         if: ${{ !inputs.release_tag }}
