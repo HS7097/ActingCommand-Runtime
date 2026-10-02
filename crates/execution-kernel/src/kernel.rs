@@ -481,6 +481,40 @@ impl ExecutionKernel {
         Ok(observation)
     }
 
+    /// Prepares only an already registered session. The Host holds its instance admission
+    /// guard across this ResourceClose phase and the following Business application step.
+    pub fn prepare_application_resources(
+        &self,
+        instance_id: InstanceId,
+        authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
+    ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+        let session = {
+            let state = self.lock_state()?;
+            if state.closed {
+                return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+            }
+            if state.closing.contains(&instance_id) {
+                return Err(ExecutionKernelError::fatal(
+                    "execution_session_close_in_progress",
+                ));
+            }
+            if let Some(Err(error)) = state.instance_closes.get(&instance_id)
+                && error.resource_quiescence()
+                    == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+            {
+                return Err(error.clone());
+            }
+            state.sessions.get(&instance_id).cloned()
+        };
+        match session {
+            Some(session) => session
+                .prepare_application_resources(authority, input_check)
+                .map_err(|error| error.with_instance_id(instance_id)),
+            None => Ok(ExecutionResourceCloseOutcome::confirmed(0)),
+        }
+    }
+
     pub fn control_application_retained_with_registration_guard<G>(
         &self,
         instance_alias: &str,

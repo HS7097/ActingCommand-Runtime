@@ -474,6 +474,8 @@ impl HostShared {
             .map_err(|_| RequestFailure::poison_without_terminal(critical_plan_error()))?;
         let endpoint = resolved.audit_endpoint.clone();
         let instance_alias = resolved.instance_alias.clone();
+        let preparation_links = links.clone();
+        let instance_guard = self.instance_guard(token.instance_id())?;
         let outcome_links = links.clone();
         let failure_links = links;
         let mut destructive_step = None;
@@ -482,6 +484,42 @@ impl HostShared {
             self.events.fingerprinter(),
             plan,
             || {
+                let admission = match lock(&instance_guard, "lock_application_preparation") {
+                    Ok(admission) => admission,
+                    Err(error) => {
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::poison(error),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
+                // ResourceClose is finished and its witness reclaimed before the separate
+                // Business admission. Keep capture admission locked across both phases.
+                match self.prepare_application_resources_result(
+                    token,
+                    connection_id,
+                    preparation_links,
+                    &admission,
+                ) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        let mut failure = ActionFailure::backend(RuntimeHostError::execution(
+                            "prepare_application_resources",
+                            &error,
+                        ));
+                        failure.destructive_started = false;
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::Indeterminate,
+                        };
+                    }
+                    Err(failure) => {
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::poison(*failure.error),
+                            effect: EffectDisposition::Indeterminate,
+                        };
+                    }
+                }
                 let destructive = lock(&self.scheduler, "begin_destructive_application").and_then(
                     |mut scheduler| {
                         scheduler

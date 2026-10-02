@@ -241,7 +241,11 @@ fn c1b9_d08_panic_owner() {
 
 #[test]
 fn c1b9_d09_close_terminal_cache() {
-    for fail_close in [false, true] {
+    // Also retain the same terminal close result when application preparation consumed
+    // the backends. First red: Workflow #314 issuecomment-5952556777.
+    for (fail_close, prepare_application) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let state = Arc::new(Mutex::new(FakeState {
             fail_close,
             ..FakeState::default()
@@ -252,11 +256,27 @@ fn c1b9_d09_close_terminal_cache() {
             .input("node.a", InputAction::Reset, step_witness())
             .expect("input");
         let session = kernel.session_for_test("node.a").expect("session");
+        let preparation = prepare_application.then(|| {
+            session.prepare_application_resources(
+                actingcommand_device::DeviceCloseAuthority::LocalOnly,
+                None,
+            )
+        });
         let first =
             session.close_with_authority(actingcommand_device::DeviceCloseAuthority::LocalOnly);
         let second =
             session.close_with_authority(actingcommand_device::DeviceCloseAuthority::LocalOnly);
         assert_eq!(first, second);
+        if let Some(Err(prepared)) = preparation.as_ref() {
+            assert_eq!(
+                first.as_ref().expect_err("cached preparation failure"),
+                prepared
+            );
+            assert_eq!(
+                prepared.resource_quiescence(),
+                Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+            );
+        }
         if let (Err(first), Err(second)) = (&first, &second) {
             assert!(Arc::ptr_eq(
                 &first.lifecycle_causes()[0].recorded_event,
@@ -624,6 +644,17 @@ fn application_lifecycle_is_serialized_by_the_daemon_session_and_invalidates_bac
         .expect("open input");
     kernel.capture("neutral.instance").expect("open capture");
 
+    let session = kernel
+        .session_for_test("neutral.instance")
+        .expect("original session");
+    kernel
+        .prepare_application_resources(
+            session.resolved().instance_id(),
+            actingcommand_device::DeviceCloseAuthority::LocalOnly,
+            None,
+        )
+        .expect("local fixture backends prepared by owner");
+
     kernel
         .control_application(
             "neutral.instance",
@@ -631,6 +662,13 @@ fn application_lifecycle_is_serialized_by_the_daemon_session_and_invalidates_bac
             step_witness(),
         )
         .expect("application restart");
+
+    assert!(Arc::ptr_eq(
+        &session,
+        &kernel
+            .session_for_test("neutral.instance")
+            .expect("same session")
+    ));
 
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.application_calls, 1);
@@ -827,6 +865,17 @@ fn application_failure_returns_original_error_then_later_input_uses_fresh_sessio
         .input("node.a", InputAction::Reset, step_witness())
         .expect("open input");
     kernel.capture("node.a").expect("open capture");
+
+    kernel
+        .prepare_application_resources(
+            kernel
+                .resolve("node.a")
+                .expect("resolved instance")
+                .instance_id(),
+            actingcommand_device::DeviceCloseAuthority::LocalOnly,
+            None,
+        )
+        .expect("local fixture backends prepared by owner");
 
     let error = kernel
         .control_application(
