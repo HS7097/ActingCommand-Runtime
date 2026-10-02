@@ -1140,8 +1140,19 @@ def fold(entries, is_capture, is_miss_end):
     return [item for _, unit in folded for item in unit]
 
 
+def sampled(entry):
+    """A rect click is tapped at a point sampled from the run's action seed, which differs per run:
+    the point is replaced by its rect membership (every pack clicks the rect x 8..12, y 8..12)."""
+    fact = entry["fact"]
+    action = fact.get("action")
+    if fact["kind"] == "effect_intent" and isinstance(action, dict) and action.get("kind") == "tap":
+        inside = 8 <= action.get("x", -1) <= 12 and 8 <= action.get("y", -1) <= 12
+        fact["action"] = {"kind": "tap", "point": "<sampled inside the click rect>" if inside else action}
+    return entry
+
+
 def fold_facts(facts):
-    entries = [normalize({"event_type": event_type, "fact": fact}) for _, event_type, fact, _ in facts]
+    entries = [sampled(normalize({"event_type": event_type, "fact": fact})) for _, event_type, fact, _ in facts]
     return fold(entries,
                 lambda entry: entry["fact"]["kind"] not in STRUCTURAL_KINDS,
                 lambda entry: (entry["fact"].get("matched_page") is None) if entry["fact"]["kind"] == "recognition_completed" else None)
@@ -1188,12 +1199,20 @@ def success(facts, executed_steps, final_page):
             and last.get("final_page") == final_page)
 
 
+FAILURE_CODE = re.compile(r"(contained_task_[a-z0-9_]+|resource_declaration_invalid|page_confirmation_failed"
+                          r"|application_effect_requires_assigned_application)")
+
+
+def failure_codes(text):
+    return sorted(set(FAILURE_CODE.findall(text)))
+
+
 def check_opt_run(label, facts, events, text):
     last = terminal(facts)
     starts, finishes = steps(facts, "step_started"), steps(facts, "step_finished")
     intents = len(kinds(facts, "effect_intent"))
     recognitions = [[fact.get("candidate_pages"), fact.get("matched_page")] for fact in kinds(facts, "recognition_completed")]
-    captures = len(kinds(facts, "capture_completed"))
+    captures = len(kinds(facts, "evidence_indexed"))
     say(label, "summary", json.dumps({"starts": starts, "finishes": finishes, "intents": intents, "captures": captures,
                                       "terminal": {k: last.get(k) for k in ("outcome", "final_page", "executed_steps", "failure_code")}}))
     no_outcome_failure = "contained_task_outcome_" not in text and "fixture capture exhausted" not in text
@@ -1252,7 +1271,7 @@ def check_opt_run(label, facts, events, text):
         if limits:
             check(f"{label}.ledger_limit_about_settle_plus_budget", any(isinstance(v, int) and 1500 <= v <= 1700 for v in limits),
                   json.dumps(limits))
-        check(f"{label}.frames_not_exhausted", captures < 22 and "fixture capture exhausted" not in text, f"captures {captures} of 22")
+        check(f"{label}.frames_not_exhausted", 0 < captures < 22 and "fixture capture exhausted" not in text, f"captures {captures} of 22")
         if label == "E8":
             check("E8.no_retry_wait", not retry_waits, json.dumps(retry_waits))
     elif label == "E7":
@@ -1301,7 +1320,8 @@ def run(work, new_runtime, new_tools, l2e_runtime, l2a_runtime, v091_runtime, v0
                       if str(event.get("event_type", "")).startswith("capture.") and event.get("event_type") != "capture.summary_committed"]
     check("E10.segment_ok.admitted_then_refused_before_any_capture",
           "package_admitted" in fact_kinds and terminal(facts).get("failure_code") == APPLICATION_REFUSAL
-          and "capture_completed" not in fact_kinds and not capture_events, json.dumps([fact_kinds, capture_events]))
+          and "evidence_indexed" not in fact_kinds and "recognition_started" not in fact_kinds and not capture_events,
+          json.dumps([fact_kinds, capture_events]))
 
     # E11: the L2a and L2e evidence packs on the L2e and product builds; the page-graph pack on
     # v0.9.1 and the product build. Semantic fact subsequences with misses folded.
@@ -1323,8 +1343,7 @@ def run(work, new_runtime, new_tools, l2e_runtime, l2a_runtime, v091_runtime, v0
         old_seq, new_seq = fold_facts(old_facts), fold_facts(new_facts)
         difference = next((i for i, (a, b) in enumerate(zip(old_seq, new_seq)) if a != b), None)
         # A package refused before admission writes no task fact: its failure codes are compared.
-        old_codes = sorted(set(re.findall(r'"(?:failure_code|code|host_code)":\s*"([a-z0-9_]+)"', old_text)))
-        new_codes = sorted(set(re.findall(r'"(?:failure_code|code|host_code)":\s*"([a-z0-9_]+)"', new_text)))
+        old_codes, new_codes = failure_codes(old_text), failure_codes(new_text)
         same = (len(old_seq) == len(new_seq) and difference is None
                 and (len(old_seq) > 0 or (old_codes == new_codes and len(old_codes) > 0)))
         say("E11", name, "folded facts", len(old_seq), len(new_seq), "first difference", difference,
@@ -1406,7 +1425,8 @@ def kernel(work, product_path, l2e_path):
           json.dumps(runs["E2-opt1"]["boundaries"]))
     for name in ("E1-opt1", "E4a-opt2", "E4b-opt2", "E9-opt1pp"):
         say(name, "progress (update_run_progress)", json.dumps(runs[name]["progress"]))
-    check("E4b.progress_is_dispatch_count", runs["E4b-opt2"]["progress"] == [1, 2, 3], json.dumps(runs["E4b-opt2"]["progress"]))
+    # The run start writes progress 0 (as on L2e); each dispatch then writes d + 1.
+    check("E4b.progress_is_dispatch_count", runs["E4b-opt2"]["progress"] == [0, 1, 2, 3], json.dumps(runs["E4b-opt2"]["progress"]))
     # E11: the L2a/L2e cases on both sources.
     for item in l2e:
         mine = by_name.get((item["kind"], item["name"]))
