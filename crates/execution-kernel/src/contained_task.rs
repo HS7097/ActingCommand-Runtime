@@ -2205,6 +2205,19 @@ impl PreparedContainedTask {
             },
         );
         runtime.observe_task_timing(observation_timing);
+        if self
+            .program
+            .operations
+            .iter()
+            .any(|operation| operation.application.is_some())
+            && self.control.execution_mode != "recognize_only"
+            && !runtime.supports_application_effect()
+        {
+            return Err(ContainedTaskError::new(
+                "application_effect_requires_assigned_application",
+            )
+            .into());
+        }
         if self.control.execution_mode == linear::LINEAR_STEPS {
             // Workflow #336: the admitted step plan, resolved again from the admitted program.
             let plan = self
@@ -2220,19 +2233,6 @@ impl PreparedContainedTask {
                     timing: observation_timing,
                 },
             );
-        }
-        if self
-            .program
-            .operations
-            .iter()
-            .any(|operation| operation.application.is_some())
-            && self.control.execution_mode != "recognize_only"
-            && !runtime.supports_application_effect()
-        {
-            return Err(ContainedTaskError::new(
-                "application_effect_requires_assigned_application",
-            )
-            .into());
         }
         let initial_application = self.program.operations.first().filter(|operation| {
             operation.from == "any"

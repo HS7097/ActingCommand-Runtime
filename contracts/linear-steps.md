@@ -3,9 +3,10 @@
 This document is the `linear_steps` execution mode of contained task packages
 ([Workflow #336](https://github.com/HS7097/ActingCommand-Workflow/issues/336), rulings R12 and
 R13). A linear task runs the one path it declares, step by step: each step first recognizes
-its own page, then clicks once, and the click leads to the next step. Packages that do not
-declare the mode keep their page-graph execution unchanged. No game-specific values are part
-of this contract.
+its own page, then clicks once, and the click leads to the next step. A step may instead
+launch, restart or stop the instance's assigned application (rulings R24 and R25, "Application
+steps" below). Packages that do not declare the mode keep their page-graph execution
+unchanged. No game-specific values are part of this contract.
 
 ## Declaration
 
@@ -47,10 +48,10 @@ one operation is at fault; an existing check keeps its existing code.
 | 1 to 1000 operations | `operation_count` |
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`, `resource_readings`; `stop_on_confirmation` is not `false` | the field name |
-| each operation's effect is `click`; no `application`, `select` or `on_error` | `operation_effect` |
+| each operation's effect is `click` or `application`; no `select` or `on_error` | `operation_effect` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
-| `entry_page` declared and equal to the first operation's `from` | `entry_page` |
+| `entry_page` declared and equal to the first operation's `from` (both `"any"` for an application entry) | `entry_page` |
 | each operation's destination equals the next operation's `from` | `chain` |
 | `target_page` names one page, equal to the last operation's destination | `target_page` |
 | a `page` transition names a page other than its operation's `from` and destination | `transition_page` |
@@ -59,11 +60,13 @@ one operation is at fault; an existing check keeps its existing code.
 | a `window` has `0 <= min_ms <= max_ms`, `1 <= max_ms <= 1800000`, and `min_ms` below the task timeout | `transition_window` |
 | a `scheduling_outcome`, when declared, has no designated operation | `designated_operation` |
 | every terminal page of that outcome is the target page | `terminal_page` |
+| the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
 
 Every operation still passes the existing operation checks (guard or trusted coordinate, click
 shape, retry fields, `post_delay_ms`); operation ids are unique (`contained_task_program_invalid`).
-Every page above is resolved to exactly one detector page id (`<game>/<page>`, with or without
-the game prefix in the declaration); a page that resolves to none or to several is the
+Every page above except an application entry's `any` is resolved to exactly one detector page
+id (`<game>/<page>`, with or without the game prefix in the declaration); a page that resolves
+to none or to several is the
 existing `contained_task_page_set_invalid`. All comparisons use the resolved ids. A
 `transition` on an operation of any other mode is `contained_task_operation_invalid`. The
 page-graph checks (scheduling outcome coverage, phases) are not run, and a linear task has no
@@ -85,7 +88,8 @@ interval and its remaining budget; the task deadline inside a wait is `contained
 
 **Steps.** The first step waits for its page for `step_timeout_ms` at the control capture
 interval; when it does not pass, the task fails with `contained_task_linear_entry_unmatched`.
-Then, for operation `k` (`step_index` `k`, counted from 0):
+An application entry waits for nothing ("Application steps" below). Then, for click operation
+`k` (`step_index` `k`, counted from 0):
 
 1. The run progress becomes `k + 1`, and `StepStarted` names the step's page.
 2. The guard is evaluated on the frame on which the step's page passed; a refusal is the
@@ -136,6 +140,80 @@ step's page.
 
 `executed_steps` counts dispatched operations: a retry adds none.
 
+## Application steps
+
+Workflow #336 R24 and R25. An operation's one effect may be the `application` effect of
+[Application lifecycle](application-lifecycle.md) instead of a click,
+`"application": {"action": "launch" | "restart" | "stop"}`, acting on the application the
+instance is assigned; the package never names an application. Only the first operation may
+start from any screen, the application entry:
+
+```json
+"entry_page": "any",
+"operations": [{"id": "step_01_app", "from": "any", "to": "home",
+  "application": {"action": "restart"},
+  "expect_after": {"page_id": "home", "timeout_ms": 90000}, "post_delay_ms": 1000}]
+```
+
+**Admission** (`contained_task_linear_invalid`, in addition to the rules above; the existing
+operation checks already refuse a `guard` or `unguarded_trusted_coordinate` on an application
+effect with `contained_task_operation_invalid`):
+
+| Rule | `reason` |
+|---|---|
+| an application operation declares none of `retryable`, `max_attempts`, `retry_interval_ms` | `application_retry` |
+| `from: "any"` appears only on the first operation | `any_from` |
+| a first operation `from: "any"` is an application operation | `any_requires_application` |
+| after a `stop`, the next operation, if any, is a `launch` or `restart` | `input_after_application_stop` |
+| after the last `launch` or `restart`, some step's page is the main interface: a page whose canonical anchor (the page id without its `<game>/` prefix) is `home`, the convention of the page-graph home entry | `application_without_home` |
+
+The application entry is not resolved to a detector page and is not compared with its
+destination; a `page` transition after it only has to differ from its destination. An
+application operation may declare a `transition`, checked as for a click. Writing
+`expect_after.timeout_ms` on an application operation is recommended: a cold start often
+outlasts the control `step_timeout_ms`, which is at most 60000.
+
+**Capability.** The existing check `application_effect_requires_assigned_application`
+(`invalid_request`, denied) runs after `RunStarted` and before any capture for linear packages
+exactly as for page-graph packages: an instance without an assigned application (a fixture
+instance) and the offline simulation refuse a package with an application operation before
+any frame.
+
+**Execution** of application operation `k`:
+
+1. The run progress becomes `k + 1`, and `StepStarted` names the step's page, or
+   `<unrecognized>` for the application entry (the literal the page-graph path writes for an
+   unrecognized initial frame).
+2. No guard, no effect intent, no foreground gate. After the task deadline check, the run's
+   application lifecycle path records `application.intent` and `application.completed` or
+   `application.failed`, then `EffectCompleted` follows.
+3. The post-input wait, the intermediate state and the next step's page follow as for a click.
+4. The next step's page passes: `StepFinished` names it, and that frame is the next step's
+   decision frame. Otherwise `StepFinished` names `<unrecognized>` and the task fails with
+   `contained_task_linear_application_unconfirmed`.
+
+The application entry captures and recognizes nothing before its effect: the ruling puts no
+recognition before it, a failing capture must not block a restart that may repair it, and the
+effect clears the committed input frames anyway. The run's first capture is the arrival wait
+after the effect. An application step is never retried and has no retry decision: the
+decision compares the gate with the step's own page, which an application entry does not
+have, and a failed cold start (a slow start, a forced update, a crash) is environmental; the
+next dispatch runs the package again as its own run. After a `stop` the assigned application
+is not in the foreground and the foreground gate refuses every pointer input, so only a
+`launch` or `restart` may follow it; the first click after an application step passes the
+foreground gate, which records `application.foreground`.
+
+**First frame after a restart.** When an application-entry package runs as the task of its
+own run (a startup package, a recovery ladder rung), the run's first capture follows the
+restart, so the host's first-capture rule (`application-lifecycle.md`, #316-P4) applies to
+that frame. A page-graph application package takes its initial frame before the restart, and
+the frame after it is not the first.
+
+**Severity.** An adb failure of the effect is `application_backend_operation_failed` on the
+host's `application.failed` chain. The device error is fatal, so the task's terminal severity
+is `fatal`, as for an adb failure of a click, and the scheduling policy settles a fatal
+terminal as severe: the task pauses at its first such failure.
+
 ## Failure codes
 
 | Situation | `failure_code` | Timing (existing values) |
@@ -143,6 +221,9 @@ step's page.
 | The first step's page does not pass within `step_timeout_ms` | `contained_task_linear_entry_unmatched` | `page_recognition` / `entry_recognition` |
 | The intermediate page is not seen within its timeout, with no attempt left | `contained_task_linear_intermediate_unobserved` | `postcondition` / `postcondition` |
 | The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, or the next step's page does not follow a seen intermediate page | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+| After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+| An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
+| The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused` | none |
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |
 | A recognition error | `contained_task_recognition_failed` | none |
@@ -163,8 +244,9 @@ linear run is read by older builds.
 | Admission | `PackageAdmitted` | the package reference |
 | Each capture | the capture records and their evidence | unchanged |
 | Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the one or two detector page ids awaited; `matched_page` the passing one, or none |
-| Step start | `StepStarted` | `step_index` `k`, the operation id, `from_page` the step's detector page id, no phase |
+| Step start | `StepStarted` | `step_index` `k`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
 | Input | `EffectIntent`, `EffectCompleted` | unchanged |
+| Application effect | `application.intent`, `application.completed` / `application.failed` (written by the host, with the task and run ids and their own action id), then `EffectCompleted`; no `EffectIntent` | unchanged |
 | Intermediate page | `RecognitionStarted`, `RecognitionCompleted` | the intermediate page as the only candidate; it is seen when it is the matched page |
 | Attempt end | `StepFinished` | the next step's page, the step's own page (a swallowed input) or `<unrecognized>` |
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait`, `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
@@ -176,7 +258,9 @@ its intermediate page and its destination distinct. Phase evidence is not used.
 
 The ledger cannot tell that a run was linear, which window it declared or that it declared an
 intermediate page: the package reference of `PackageAdmitted` names the content that carries
-them. Operation ids and page names are conventions, not types.
+them. Operation ids and page names are conventions, not types. No capture precedes an
+application entry, so its step has no pre-input frame evidence; the entry itself shows only as
+`from_page` `<unrecognized>` and in the package.
 
 ## Older builds
 
@@ -188,7 +272,9 @@ first refused by the resource declaration check (`resource_declaration_invalid`,
 ## Tools
 
 The offline simulation runs the same interpreter: its first decision of a linear package is
-the first operation's click, or a refusal. `package build --execution-mode linear_steps`,
+the first operation's click, or a refusal. A package with an application operation is always
+refused, `application_effect_requires_assigned_application` with no capture, provided the frame
+list is not empty (an empty list is `offline_fixture_missing` before the interpreter). `package build --execution-mode linear_steps`,
 `lab run` and the Lab capability listing accept the mode; a built package is admitted by the
 rules above. `lab run` passes `transition` through unread.
 
@@ -199,3 +285,8 @@ that does not start on the first step's page, including one already on the targe
 fails with `contained_task_linear_entry_unmatched`, so a path whose first page does not always
 appear is not suited to a fixed-interval schedule. An intermediate state that only sometimes
 appears is declared as a window, or not at all.
+
+An application step always runs: there is no conditional restart, and the package cannot name
+an application. Screens that appear only sometimes after a cold start (a daily sign-in, a
+notice, an update prompt) cannot be branched over; a run that meets one fails before the main
+interface, and a page-graph package is the way to return to the main interface across them.
