@@ -416,11 +416,18 @@ the field is `"application": null | {"action": "restart"}`.
   an application step as it follows a click, for example a splash screen captured after a
   restart. `do --capture --record` on a step with an application operation is
   `record_step_effect_exists`.
-- Typical use (restart, then the title screen): pause the instance's scheduling;
+- Typical use (restart, then the main interface): pause the instance's scheduling;
   `session app restart --record` (the entry step, serial 1); `capture --record` of the title
-  screen (serial 2) and `record mark` of its marks; `record stop --dry-run`, then
-  `record stop`. Record only screens that every cold start shows; what follows the title
-  screen belongs to a page-graph return-home package.
+  screen (serial 2), `record mark` of its marks and `do --capture --record` of its click;
+  `capture --record` of the main interface (serial 3) and `record mark --page home` of its
+  marks; `record stop --dry-run`, then `record stop`. The recorded package is
+  `any → restart → title → home`.
+- R25: a package with a `launch` or `restart` step must reach the main interface later, a
+  step marked `--page home` (its page id is `step_<nn>_home`, which counts as the main
+  interface). `record stop` (package generation, second half of this contract) refuses a
+  recording without it; `record mark` and `session app --record` do not check it. Screens a
+  cold start shows only sometimes (a daily notice, an update prompt) cannot branch in a
+  linear-steps package; a failure there, before the main interface, is only run again.
 
 ### `session app … --record`
 
