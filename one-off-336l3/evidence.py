@@ -554,8 +554,14 @@ def run(work, new_runtime, new_tools, old_tools, holder_exe, base_sha, product_s
     new_lab = os.path.join(new_tools, "actinglab.exe")
     old_lab = os.path.join(old_tools, "actinglab.exe")
     config_path = os.path.join(work, "lab-config.json")
+    # actinglab capture resolves an ADB path for its device configuration before it asks the
+    # Runtime for the frame; the fixture instance never runs it, so a placeholder file is enough.
+    placeholder_adb = os.path.join(work, "placeholder-adb", "adb.exe")
+    os.makedirs(os.path.dirname(placeholder_adb), exist_ok=True)
+    open(placeholder_adb, "wb").close()
     with open(config_path, "w", encoding="utf-8") as handle:
-        json.dump({"instances": {"emu-a": {"game": "fixture-game-a", "server": "fixture-server-a"}}}, handle)
+        json.dump({"instances": {"emu-a": {"game": "fixture-game-a", "server": "fixture-server-a"},
+                                 FIXTURE_ALIAS: {"adb_path": placeholder_adb}}}, handle)
     config_env = {"ACTINGLAB_CONFIG_PATH": config_path}
     ENV.update(config_env)
     ENV["ACTINGLAB_SESSION_STATE_DIR"] = os.path.join(work, "default-session")
