@@ -51,6 +51,9 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Resolve exact source SHA
         id: source
@@ -113,6 +116,28 @@ jobs:
             throw "resolved tree is not a complete lowercase SHA: $treeSha"
           }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tree_sha=$treeSha"
+
+      - name: One-off exact-artifact downloads (to be reverted)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $taskRoot = Join-Path $env:RUNNER_TEMP 'one-off-exact-artifacts'
+          New-Item -ItemType Directory -Path $taskRoot | Out-Null
+          foreach ($case in @(
+              @{ Label = 'new-tools'; Sha = '61ee6ba7b1e8673f55c38ac79879f48300f56ab2'; Run = 37043501900 },
+              @{ Label = 'old-tools'; Sha = 'd20fb28c2cf66da5f882d11abed2c8a60d44caa7'; Run = 37011513084 }
+          )) {
+            $output = Join-Path $taskRoot $case.Label
+            $json = & ./scripts/windows-tools/Get-ExactBuildArtifact.ps1 -Repository $env:GITHUB_REPOSITORY `
+              -SourceSha $case.Sha -ArtifactKind Tools -RunId $case.Run -TaskRoot $taskRoot -OutputPath $output
+            Write-Host "Get-ExactBuildArtifact $($case.Label) $($case.Sha) run $($case.Run):`n$($json | Out-String)"
+            Get-ChildItem -LiteralPath $output -Recurse -File | Sort-Object FullName | ForEach-Object {
+              Write-Host "  file $([IO.Path]::GetRelativePath($output, $_.FullName).Replace('\', '/')) $($_.Length) bytes"
+            }
+            Write-Host "BUILD-MANIFEST.json of $($case.Label):`n$(Get-Content -LiteralPath (Join-Path $output 'BUILD-MANIFEST.json') -Raw)"
+          }
 
       - name: Fetch and verify Android platform-tools
         id: platform_tools
@@ -682,14 +707,14 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
       - name: Publish the release
-        if: ${{ inputs.release_tag }}
+        if: ${{ github.event_name == 'pull_request' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          PREVIOUS_TAG: ${{ inputs.previous_tag }}
-          PRERELEASE: ${{ inputs.prerelease }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_TAG: v0.10.0-rc.0
+          PREVIOUS_TAG: v0.9.0
+          PRERELEASE: 'true'
+          DRY_RUN: 'true'
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           TREE_SHA: ${{ steps.checkout.outputs.tree_sha }}
           H3_BASELINE_TAG: ${{ steps.h3.outputs.baseline_tag }}
