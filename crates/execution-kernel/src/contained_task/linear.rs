@@ -654,11 +654,11 @@ fn optional_runs(steps: &mut [LinearStep]) -> Result<Vec<OptionalRun>, (&'static
                 return Err(("optional_candidates", start - 1));
             }
             // An intermediate page differs from every page its operation's input may reach.
-            for operation in start - 1..index {
-                if let Some(LinearTransition::Page { page, .. }) = &steps[operation].transition
+            for (offset, step) in steps[start - 1..index].iter().enumerate() {
+                if let Some(LinearTransition::Page { page, .. }) = &step.transition
                     && reachable.contains(page.as_str())
                 {
-                    return Err(("transition_page", operation));
+                    return Err(("transition_page", start - 1 + offset));
                 }
             }
         }
