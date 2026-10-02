@@ -1,0 +1,184 @@
+name: one-off 336 L2e (to be reverted)
+
+# Fix round (ruling 5961093808): the R25 main interface predicate. Runs the static checks, the
+# kernel harness and the fixture runs of the R25 packs only; runs 37051093030 and 37053998804
+# hold the rest of the L2e evidence.
+
+# One-off evidence for Workflow #336 L2e (R24 amendment items 1-8 and the R25 admission refusal).
+# The new binaries are the Windows exact-SHA build artifacts of the product commit, the L2a ones
+# those of the L2a tip it is stacked on, and the old ones the Runtime v0.9.0 release assets
+# (885947c9). The packages are small hand-written 64x36 fixture packages run on the fixture
+# backend. Reverted right after its run; the PR's final diff contains neither this file nor
+# one-off-336l2e/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  l2e:
+    name: L2e application steps evidence
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      PRODUCT_SHA: 2ef75a998c9c0d7b362b40d12f5ec519332e3a76
+      PREVIOUS_SHA: 6afbe8e3cf9383308b8396597bd09cb89490ce24
+      L2A_SHA: 979593096de26073ca0163a50911636648b7b29a
+      OLD_SHA: 885947c90dd6561d6e5c9b7bae3fe736ec36f7c8
+      GH_TOKEN: ${{ github.token }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git -C head rev-parse HEAD).Trim()
+          Write-Host "L2E|SCOPE|head $head product $env:PRODUCT_SHA l2a $env:L2A_SHA old $env:OLD_SHA"
+          $diff = @(& git -C head diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-336l2e' ':(exclude).github/workflows/oneoff-336l2e.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+          & git -C head merge-base --is-ancestor $env:L2A_SHA $env:PRODUCT_SHA
+          if ($LASTEXITCODE -ne 0) { throw "the L2a tip $env:L2A_SHA is not an ancestor of $env:PRODUCT_SHA" }
+          & git -C head diff --stat $env:L2A_SHA $env:PRODUCT_SHA | ForEach-Object { Write-Host "L2E|SCOPE|product $_" }
+      - name: Inputs (v0.9.0 release, L2a and product exact-SHA artifacts)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Get-Sha([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+          function Get-Release([string] $Repository, [string] $Tag, [string[]] $Names, [string] $Dir) {
+            New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+            foreach ($name in @($Names) + 'SHA256SUMS') {
+              Invoke-WebRequest -Uri "https://github.com/$Repository/releases/download/$Tag/$name" -OutFile (Join-Path $Dir $name)
+            }
+            $sums = Get-Content -LiteralPath (Join-Path $Dir 'SHA256SUMS')
+            foreach ($name in $Names) {
+              $line = @($sums | Where-Object { $_ -match "^([0-9a-f]{64})\s+\*?$([regex]::Escape($name))$" })
+              $actual = Get-Sha (Join-Path $Dir $name)
+              if ($line.Count -ne 1 -or -not $line[0].StartsWith($actual)) { throw "$Repository $Tag $name does not match SHA256SUMS" }
+              Write-Host "L2E|INPUT|$Repository $Tag $name sha256 $actual matches SHA256SUMS"
+            }
+          }
+          function Test-Manifest([string] $Dir, [string] $Commit) {
+            $manifest = Get-Content -Raw -LiteralPath (Join-Path $Dir 'BUILD-MANIFEST.json') | ConvertFrom-Json
+            if ($manifest.commit_sha -ne $Commit) { throw "$Dir BUILD-MANIFEST commit $($manifest.commit_sha) is not $Commit" }
+            foreach ($file in $manifest.files) {
+              if ((Get-Sha (Join-Path $Dir $file.path)) -ne $file.sha256) { throw "$Dir $($file.path) does not match BUILD-MANIFEST.json" }
+            }
+            Write-Host "L2E|INPUT|$Dir $($manifest.source_artifact_name) commit $($manifest.commit_sha) run $($manifest.workflow_run_id) files $(@($manifest.files).Count) verified"
+          }
+          function Get-Build([string] $Sha, [string] $Dir, [string[]] $Kinds) {
+            $runId = (& gh run list -R $env:GITHUB_REPOSITORY --workflow windows-remote-build.yml --commit $Sha --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+            if ($LASTEXITCODE -ne 0 -or -not $runId) { throw "no successful exact-SHA build run for $Sha" }
+            Write-Host "L2E|INPUT|exact-SHA build run $runId for $Sha"
+            foreach ($kind in $Kinds) {
+              & gh run download $runId -R $env:GITHUB_REPOSITORY -n "actingcommand-$kind-$Sha" -D (Join-Path $Dir $kind)
+              if ($LASTEXITCODE -ne 0) { throw "$kind artifact download for $Sha failed with exit code $LASTEXITCODE" }
+              Test-Manifest (Join-Path $Dir $kind) $Sha
+            }
+          }
+          $root = $env:RUNNER_TEMP
+          Get-Release 'HS7097/ActingCommand-Runtime' 'v0.9.0' @("actingcommand-runtime-$env:OLD_SHA.zip", "actingcommand-tools-$env:OLD_SHA.zip") (Join-Path $root 'old-release')
+          Expand-Archive -LiteralPath (Join-Path $root "old-release/actingcommand-runtime-$env:OLD_SHA.zip") -DestinationPath (Join-Path $root 'old/runtime')
+          Expand-Archive -LiteralPath (Join-Path $root "old-release/actingcommand-tools-$env:OLD_SHA.zip") -DestinationPath (Join-Path $root 'old/tools')
+          Test-Manifest (Join-Path $root 'old/runtime') $env:OLD_SHA
+          Test-Manifest (Join-Path $root 'old/tools') $env:OLD_SHA
+          Get-Build $env:L2A_SHA (Join-Path $root 'l2a') @('runtime')
+          Get-Build $env:PRODUCT_SHA (Join-Path $root 'new') @('runtime', 'tools')
+          & python -m pip install --quiet --disable-pip-version-check pillow
+          if ($LASTEXITCODE -ne 0) { throw "pip install pillow failed with exit code $LASTEXITCODE" }
+      - name: Static diffs (items 6 and 7)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          & python head/one-off-336l2e/evidence.py static head $env:L2A_SHA $env:PRODUCT_SHA
+          if ($LASTEXITCODE -ne 0) { throw "static failed with exit code $LASTEXITCODE" }
+          & python head/one-off-336l2e/evidence.py static-fix head $env:PREVIOUS_SHA $env:PRODUCT_SHA
+          if ($LASTEXITCODE -ne 0) { throw "static-fix failed with exit code $LASTEXITCODE" }
+      - name: Prepare packages and frames
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          & python head/one-off-336l2e/evidence.py prepare (Join-Path $env:RUNNER_TEMP 'work')
+          if ($LASTEXITCODE -ne 0) { throw "prepare failed with exit code $LASTEXITCODE" }
+      - name: Fixture runs and ledgers (fix round R25 packs)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          L2E_ONLY: FIX
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $root = $env:RUNNER_TEMP
+          & python head/one-off-336l2e/evidence.py run (Join-Path $root 'work') (Join-Path $root 'new/runtime') (Join-Path $root 'new/tools') (Join-Path $root 'l2a/runtime') (Join-Path $root 'old/runtime') (Join-Path $root 'old/tools') (Resolve-Path head/contracts/scheduling/examples/catalog-a).Path
+          if ($LASTEXITCODE -ne 0) { throw "evidence run failed with exit code $LASTEXITCODE" }
+      - name: Kernel admission codes, offline decisions and in-process runs (product, items 2, 3, 7)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          New-Item -ItemType Directory -Force -Path 'head/crates/execution-kernel/examples' | Out-Null
+          Copy-Item -LiteralPath 'head/one-off-336l2e/kernel_l2e.rs' -Destination 'head/crates/execution-kernel/examples/oneoff_336l2e.rs'
+          Push-Location head
+          & cargo run --locked -p actingcommand-execution-kernel --example oneoff_336l2e -- (Join-Path $env:RUNNER_TEMP 'work/cases.json')
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "kernel harness failed with exit code $code" }
+      - name: Kernel admission codes on the L2a source (item 4 details)
+        if: ${{ false }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $source = Join-Path $env:RUNNER_TEMP 'l2a-source'
+          & git -C head worktree add --detach $source $env:L2A_SHA
+          if ($LASTEXITCODE -ne 0) { throw "worktree add failed with exit code $LASTEXITCODE" }
+          Write-Host "L2E|L2A|source $((& git -C $source rev-parse HEAD).Trim())"
+          New-Item -ItemType Directory -Force -Path (Join-Path $source 'crates/execution-kernel/examples') | Out-Null
+          Copy-Item -LiteralPath 'head/one-off-336l2e/kernel_l2e.rs' -Destination (Join-Path $source 'crates/execution-kernel/examples/oneoff_336l2e.rs')
+          $env:CARGO_TARGET_DIR = (Join-Path (Resolve-Path head).Path 'target')
+          Push-Location $source
+          & cargo run --locked -p actingcommand-execution-kernel --example oneoff_336l2e -- (Join-Path $env:RUNNER_TEMP 'work/cases-l2a.json')
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "L2a kernel harness failed with exit code $code" }
+      - name: Fake physical provider (item 8, optional)
+        if: ${{ false }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Copy-Item -LiteralPath 'head/one-off-336l2e/host_l2e.rs' -Destination 'head/crates/runtime-host/src/tests/oneoff_336l2e.rs'
+          Add-Content -LiteralPath 'head/crates/runtime-host/src/tests.rs' -Value "`nmod oneoff_336l2e;"
+          Push-Location head
+          & cargo test --locked -p actingcommand-runtime-host --lib oneoff_336l2e -- --nocapture --test-threads=1
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "fake physical provider run failed with exit code $code" }
