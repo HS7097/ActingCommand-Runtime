@@ -132,6 +132,31 @@ the color digest, OCR and check families:
  "transition":null,"replace_transition":false,"step_action":null}
 ```
 
+A page transition after the click of step 3, a window transition, clearing it, and one step
+operation:
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "transition":{"kind":"page","frame":"D:\\frames\\loading.png","samples":[],
+   "add":[{"id":"load/bar","family":"color","region":{"x":600,"y":358,"width":8,"height":4}}],
+   "reuse":[],"timeout_ms":null},
+ "replace_transition":false}
+```
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "transition":{"kind":"window","min_ms":1000,"max_ms":3000}}
+```
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,"transition":{"kind":"none"}}
+```
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step_action":{"kind":"drop_step","step":4}}
+```
+
+The other step operations are `{"kind":"reopen_step","step":n}`, `{"kind":"close_step"}` and
+`{"kind":"to_transition","step":n}`. Unknown fields are refused at every level of the request
+(`validation_failed`, exit 2).
+
 Rules:
 
 - `--request` cannot be combined with the shortcut flags; single-valued flags given twice,
@@ -174,11 +199,15 @@ reason}`, or
  steps:[{index, artifact_step|null, page, dropped, converted_to_transition,
          frames[{frame_id, role, sha256, w, h, superseded}],
          marks[{id, family, self_test{status}, margin}], reused,
-         click{rect, source, executed, attempts, needs_review}|null,
+         click{rect, source, executed, outcome, attempts, needs_review}|null,
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
          closed, closed_by}],
  artifact|null, record_flag_state_dir, record_flag_reachable}
 ```
+
+`click.outcome` is `declared` (no outcome yet), `executed` (Performed) or `indeterminate`
+(the outcome of the last `do --capture --record` is unknown); `attempts` counts the earlier
+outcomes moved aside by `--reopen-step`.
 
 ### record stop
 
@@ -217,6 +246,11 @@ A frame arrives either from a `--record` command (device frame) or from `record 
 | open, no marks and no click | the frame replaces it; the old frames are marked `superseded` | same |
 | open, marks but no click | `record_step_click_missing` (3): a loading or other intermediate screen becomes a transition with `record mark --to-transition n`; a final step is checked with `record stop --dry-run` and then stopped | same |
 | open, a declared click that was not executed | `record_step_click_not_executed` (3) | the step is closed (`closed_by:"offline_frame"`) and a new one opened |
+| open, a click with an indeterminate outcome | `record_step_click_not_executed` (3): check the screen, then `--reopen-step k` to execute it again or `--close-step` to accept it | same |
+
+An offline frame byte-identical (same sha256) to the open step's live primary frame is not an
+arrival: `record mark --frame` without `--step` then targets that open step exactly as
+`--step n` would, and no frame is added (`step_opened:false`, `closed_step:null`).
 
 - The open step is the last effective step while it is not closed.
 - `record mark --step k` adds marks or samples to any effective step, closed or not; a
@@ -253,7 +287,9 @@ describes the screens between that click and the next step
 
 - `--transition none` clears it; its marks free their ids.
 - `--transition page`: the frame, samples and marks of the same command belong to the
-  transition. The first declaration needs `--frame` and at least one mark. Its marks follow
+  transition. Every page declaration, a replacement included, needs `--frame` and at least
+  one mark; a transition is changed by declaring it again whole with
+  `--replace-transition`, never piecemeal. Its marks follow
   the step rules and share the id space, but they are not marks of any step: they cannot
   be a click source or guard. A click in the same command is `record_transition_has_click`
   (exit 2). `--transition-timeout-ms` is 1..1800000.

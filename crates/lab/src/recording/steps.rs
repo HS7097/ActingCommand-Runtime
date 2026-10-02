@@ -37,6 +37,9 @@ pub(crate) struct Session {
     pub(crate) created: bool,
     pub(crate) pending: Vec<(PathBuf, Vec<u8>, String)>,
     pub(crate) cache: BTreeMap<String, LoadedFrame>,
+    /// The number of the next frame id (`f0001`, …): every frame admitted in this command
+    /// takes and advances it, so frames admitted together never share an id.
+    pub(crate) next_frame: u32,
 }
 
 pub(crate) fn default_recording_defaults() -> RecordingDefaults {
@@ -142,6 +145,7 @@ pub(crate) fn open_session(lock: &RecordingLock) -> LabResult<Session> {
     }
     Ok(Session {
         lab_dir: lab_dir(&state_dir, &old.record_id),
+        next_frame: highest_frame_number(&recording).saturating_add(1),
         state_dir,
         recording,
         created,
@@ -234,7 +238,8 @@ fn effective_step(recording: &LabRecording, index: u32) -> LabResult<&RecordingS
         .ok_or_else(|| step_not_found(index))
 }
 
-fn next_frame_id(recording: &LabRecording) -> String {
+/// The highest `fNNNN` frame number on record, steps and transitions included.
+fn highest_frame_number(recording: &LabRecording) -> u32 {
     let mut highest = 0_u32;
     for step in &recording.steps {
         let transition_frames = match &step.transition {
@@ -251,7 +256,7 @@ fn next_frame_id(recording: &LabRecording) -> String {
             }
         }
     }
-    format!("f{:04}", highest.saturating_add(1))
+    highest
 }
 
 /// Provenance of a frame from a `--record` command.
@@ -286,8 +291,13 @@ fn admit_frame(
         session.recording.coordinate_space = Some(loaded.size());
     }
     let path = frame_store_path(&session.lab_dir, &loaded.sha256);
+    let frame_id = format!("f{:04}", session.next_frame);
+    session.next_frame = session
+        .next_frame
+        .checked_add(1)
+        .ok_or_else(|| invalid("validation_failed", "frame id overflow"))?;
     let entry = RecordedFrame {
-        frame_id: next_frame_id(&session.recording),
+        frame_id,
         role: role.to_string(),
         path: path.display().to_string(),
         sha256: loaded.sha256.clone(),
@@ -332,6 +342,15 @@ pub(crate) struct Arrival {
     pub(crate) frame: RecordedFrame,
 }
 
+/// The sha256 of the step's live (not superseded) primary frame.
+fn live_primary_sha(step: &RecordingStep) -> Option<String> {
+    step.frames
+        .iter()
+        .rev()
+        .find(|frame| frame.role == "primary" && !frame.superseded)
+        .map(|frame| frame.sha256.clone())
+}
+
 fn has_marks(step: &RecordingStep) -> bool {
     !step.marks.is_empty() || !step.reused.is_empty()
 }
@@ -368,6 +387,17 @@ fn plan_arrival(recording: &LabRecording, mode: ArrivalMode) -> LabResult<Arriva
         Some(click) if click.executed() => Ok(ArrivalPlan::Open {
             close: Some((index, "click")),
         }),
+        Some(click) if click.execution.is_some() => Err(with_details(
+            blocked(
+                "record_step_click_not_executed",
+                format!(
+                    "the click of step {index} has an indeterminate outcome; check the screen, \
+                     then run `record mark --reopen-step {index}` to execute it again or \
+                     `record mark --close-step` to accept it"
+                ),
+            ),
+            json!({"step": index, "outcome": "indeterminate"}),
+        )),
         Some(_) => match mode {
             ArrivalMode::Device => Err(with_details(
                 blocked(
@@ -857,13 +887,7 @@ pub(crate) fn apply_marks(
             let step = effective_step(&session.recording, index)?;
             if let Some(path) = &request.frame {
                 let loaded = read_frame_file(path)?;
-                let primary = step
-                    .frames
-                    .iter()
-                    .rev()
-                    .find(|frame| frame.role == "primary" && !frame.superseded)
-                    .map(|frame| frame.sha256.clone());
-                if primary.as_deref() != Some(loaded.sha256.as_str()) {
+                if live_primary_sha(step).as_deref() != Some(loaded.sha256.as_str()) {
                     return Err(with_details(
                         blocked(
                             "record_step_frame_conflict",
@@ -878,11 +902,23 @@ pub(crate) fn apply_marks(
         None => match &request.frame {
             Some(path) => {
                 let loaded = read_frame_file(path)?;
-                let arrival = arrive(session, loaded, ArrivalMode::Offline, &local, path)?;
-                opened = arrival.opened;
-                closed_step = arrival.closed_step;
-                new_frame = Some(arrival.frame);
-                arrival.step
+                // A frame byte-identical to the open step's live primary frame is not an
+                // arrival: the command targets that open step, as `--step n` would.
+                let open = open_step(&session.recording);
+                let same_as_open = open
+                    .and_then(|index| step_ref(&session.recording, index))
+                    .and_then(live_primary_sha)
+                    .is_some_and(|sha256| sha256 == loaded.sha256);
+                match open.filter(|_| same_as_open) {
+                    Some(index) => index,
+                    None => {
+                        let arrival = arrive(session, loaded, ArrivalMode::Offline, &local, path)?;
+                        opened = arrival.opened;
+                        closed_step = arrival.closed_step;
+                        new_frame = Some(arrival.frame);
+                        arrival.step
+                    }
+                }
             }
             None => open_step(&session.recording).ok_or_else(|| {
                 blocked(
@@ -938,18 +974,12 @@ pub(crate) fn apply_marks(
 
     // add, reuse
     let step = effective_step(&session.recording, target)?;
-    let primary_sha = step
-        .frames
-        .iter()
-        .rev()
-        .find(|frame| frame.role == "primary" && !frame.superseded)
-        .map(|frame| frame.sha256.clone())
-        .ok_or_else(|| {
-            blocked(
-                "record_step_frame_missing",
-                format!("step {target} has no primary frame"),
-            )
-        })?;
+    let primary_sha = live_primary_sha(step).ok_or_else(|| {
+        blocked(
+            "record_step_frame_missing",
+            format!("step {target} has no primary frame"),
+        )
+    })?;
     let mut batch = MarkBatch {
         own: step
             .marks
@@ -1121,8 +1151,8 @@ fn apply_click(
                     blocked(
                         "record_click_executed",
                         format!(
-                            "step {target} already has an executed click; run \
-                             `record mark --reopen-step {target}` first"
+                            "step {target} already has a click with an outcome on record; \
+                             run `record mark --reopen-step {target}` first"
                         ),
                     ),
                     json!({"step": target}),

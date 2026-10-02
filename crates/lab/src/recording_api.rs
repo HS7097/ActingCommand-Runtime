@@ -9,7 +9,7 @@ use crate::recording::model::{
     AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView, CommitClickOutcome,
     CommitClickRequest, FrameView, LAB_RECORD_MARK_SCHEMA, LabRecordingStart, LabStatus,
     LabStatusView, MarkOutcome, MarkRequest, MarkStatusView, MarkView, PlanClickRequest,
-    RecordStartOptions, RecordedFrame, RecordingDefaults, RecordingStep, StepStateView,
+    RecordStartOptions, RecordedFrame, RecordingDefaults, RecordingStep, StepClick, StepStateView,
     StepTransition, StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::steps::{
@@ -490,16 +490,20 @@ fn transition_view(transition: &StepTransition) -> TransitionView {
     }
 }
 
-fn click_state(step: &RecordingStep) -> String {
-    match &step.click {
-        None => "none",
-        Some(click) => match &click.execution {
-            None => "declared",
-            Some(execution) if execution.effect == "performed" => "executed",
-            Some(_) => "indeterminate",
-        },
+/// `declared` (no outcome yet), `executed` (Performed) or `indeterminate`.
+fn click_outcome(click: &StepClick) -> &'static str {
+    match &click.execution {
+        None => "declared",
+        Some(execution) if execution.effect == "performed" => "executed",
+        Some(_) => "indeterminate",
     }
-    .to_string()
+}
+
+fn click_state(step: &RecordingStep) -> String {
+    step.click
+        .as_ref()
+        .map_or("none", click_outcome)
+        .to_string()
 }
 
 fn step_state(step: &RecordingStep) -> StepStateView {
@@ -544,6 +548,7 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
             rect: click.rect,
             source: click.source.clone(),
             executed: click.executed(),
+            outcome: click_outcome(click).to_string(),
             attempts: click.attempts.len(),
             needs_review: click.needs_review,
         }),

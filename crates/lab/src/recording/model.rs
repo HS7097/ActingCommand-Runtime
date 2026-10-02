@@ -478,7 +478,7 @@ pub struct ClickSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TransitionSpec {
     #[serde(rename = "none")]
     Clear,
@@ -609,6 +609,7 @@ pub struct ClickView {
     pub rect: RecordRect,
     pub source: String,
     pub executed: bool,
+    pub outcome: String,
     pub attempts: usize,
     pub needs_review: bool,
 }
