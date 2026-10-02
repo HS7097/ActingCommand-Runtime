@@ -3474,7 +3474,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         .map(|value| parse_record_mark_rect(&value, "--click"))
         .transpose()?;
     let click_from = record_flag_value(flags, "--click-from")?;
-    let click = (click_rect.is_some() || click_from.is_some()).then(|| ClickSpec {
+    let click = (click_rect.is_some() || click_from.is_some()).then_some(ClickSpec {
         region: click_rect,
         from: click_from,
     });
@@ -3592,10 +3592,10 @@ pub(crate) fn parse_record_mark_rect(value: &str, label: &str) -> CliOutcome<Rec
             .map_err(|error| CliError::usage(format!("{label} {name} '{text}': {error}")))
     };
     Ok(RecordRect {
-        x: field(*x, "x")?,
-        y: field(*y, "y")?,
-        width: field(*width, "width")?,
-        height: field(*height, "height")?,
+        x: field(x, "x")?,
+        y: field(y, "y")?,
+        width: field(width, "width")?,
+        height: field(height, "height")?,
     })
 }
 

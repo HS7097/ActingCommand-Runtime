@@ -247,8 +247,8 @@ fn begin_record_click(
                     .map_err(|_| CliError::usage("Lab coordinates must be i32 integers"))
             };
             Some(RecordPoint {
-                x: coordinate(*x)?,
-                y: coordinate(*y)?,
+                x: coordinate(x)?,
+                y: coordinate(y)?,
             })
         }
         _ => return Err(CliError::usage("--tap may be given once")),
