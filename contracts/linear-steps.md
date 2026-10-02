@@ -165,7 +165,13 @@ effect with `contained_task_operation_invalid`):
 | `from: "any"` appears only on the first operation | `any_from` |
 | a first operation `from: "any"` is an application operation | `any_requires_application` |
 | after a `stop`, the next operation, if any, is a `launch` or `restart` | `input_after_application_stop` |
-| after the last `launch` or `restart`, some step's page is the main interface: a page whose canonical anchor (the page id without its `<game>/` prefix) is `home`, the convention of the page-graph home entry | `application_without_home` |
+| after the last `launch` or `restart`, some step's page is the main interface (below) | `application_without_home` |
+
+**Main interface.** A page of a linear package is the main interface when its canonical anchor
+(the page id without its `<game>/` prefix) is `home`, or is `step_<digits>_home` exactly (for
+example `step_03_home`, the page Lab records for `--page home`; `step_03_homepage` is not one).
+Only `linear_steps` packages use this predicate (Workflow #336 R25, ruling 5961093808); the
+page-graph home entry, the scheduler and the other home checks keep the literal `home`.
 
 The application entry is not resolved to a detector page and is not compared with its
 destination; a `page` transition after it only has to differ from its destination. An
@@ -185,8 +191,9 @@ any frame.
    `<unrecognized>` for the application entry (the literal the page-graph path writes for an
    unrecognized initial frame).
 2. No guard, no effect intent, no foreground gate. After the task deadline check, the run's
-   application lifecycle path records `application.intent` and `application.completed` or
-   `application.failed`, then `EffectCompleted` follows.
+   application lifecycle path records `application.intent`, then `application.completed`,
+   followed by `EffectCompleted`. An `application.failed` ends the step and the task, with no
+   `EffectCompleted`.
 3. The post-input wait, the intermediate state and the next step's page follow as for a click.
 4. The next step's page passes: `StepFinished` names it, and that frame is the next step's
    decision frame. Otherwise `StepFinished` names `<unrecognized>` and the task fails with
@@ -246,7 +253,7 @@ linear run is read by older builds.
 | Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the one or two detector page ids awaited; `matched_page` the passing one, or none |
 | Step start | `StepStarted` | `step_index` `k`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
 | Input | `EffectIntent`, `EffectCompleted` | unchanged |
-| Application effect | `application.intent`, `application.completed` / `application.failed` (written by the host, with the task and run ids and their own action id), then `EffectCompleted`; no `EffectIntent` | unchanged |
+| Application effect | `application.intent`, then `application.completed` followed by `EffectCompleted`, or `application.failed`, which ends the step and the task with no `EffectCompleted` (the `application.*` records are written by the host, with the task and run ids and their own action id); no `EffectIntent` | unchanged |
 | Intermediate page | `RecognitionStarted`, `RecognitionCompleted` | the intermediate page as the only candidate; it is seen when it is the matched page |
 | Attempt end | `StepFinished` | the next step's page, the step's own page (a swallowed input) or `<unrecognized>` |
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait`, `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |

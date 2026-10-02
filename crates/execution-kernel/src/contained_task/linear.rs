@@ -259,6 +259,19 @@ fn application_unconfirmed(
     .with_timing(postcondition_timing(miss.elapsed, miss.limit))
 }
 
+/// Workflow #336 R25 (ruling 5961093808): whether `page` is the main interface of a linear
+/// package. Its canonical anchor is `home`, or `step_<digits>_home`, the page Lab records for
+/// `--page home`. Only linear packages use this predicate; the page-graph home entry stays the
+/// literal `home`.
+pub(crate) fn linear_main_interface(game: &str, page: &str) -> bool {
+    let anchor = crate::canonical_page_anchor(game, page);
+    anchor == "home"
+        || anchor
+            .strip_prefix("step_")
+            .and_then(|rest| rest.strip_suffix("_home"))
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
 impl TaskProgram {
     /// Admission of a `linear_steps` task (§5.2): its operations form one chain from the entry
     /// page to the target page, and every page it names resolves to one detector page.
@@ -440,9 +453,8 @@ impl TaskProgram {
         if steps[last].to != target {
             return Err(invalid("target_page", Some(&self.operations[last])));
         }
-        // Workflow #336 R25: a launch or restart is complete only on the main interface, the
-        // page whose canonical anchor is `home` (the kernel's home-entry convention); one such
-        // page must follow the last of them.
+        // Workflow #336 R25: a launch or restart is complete only on the main interface
+        // (`linear_main_interface`); one such page must follow the last of them.
         if let Some(start) = steps.iter().rposition(|step| {
             matches!(
                 step.effect,
@@ -452,7 +464,7 @@ impl TaskProgram {
             )
         }) && !steps[start..]
             .iter()
-            .any(|step| crate::canonical_page_anchor(&control.game, &step.to) == "home")
+            .any(|step| linear_main_interface(&control.game, &step.to))
         {
             return Err(invalid(
                 "application_without_home",
