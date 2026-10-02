@@ -4,7 +4,7 @@ This repository does not commit DroidCast_raw APK files or MuMu/Nemu IPC DLL fil
 
 The Rust capture backend can use optional local tools named by environment variables:
 
-- `ACTINGCOMMAND_ADB_PATH`: local path to the adb executable that matches the running emulator.
+- `ACTINGCOMMAND_ADB_PATH`: local path to an adb executable, read by `actinglab` and `device-test` only (`actingd` has no reader for it, see "ADB version boundary").
 - `ACTINGCOMMAND_DROIDCAST_RAW_APK`: local path to a reviewed DroidCast_raw APK.
 - `ACTINGCOMMAND_NEMU_FOLDER`: local MuMu Player folder.
 - `ACTINGCOMMAND_NEMU_IPC_DLL`: local path to `external_renderer_ipc.dll`.
@@ -17,20 +17,18 @@ These files are host-local runtime tools. Keep their license review, source loca
 
 ## ADB version boundary
 
-Do not commit `adb.exe` to this repository.
+Do not commit `adb.exe` to this repository. The Windows exact-SHA build fetches the official Android SDK Platform-Tools 37.0.1 archive from Google at build time, verifies it against `scripts/windows-tools/windows-tool-sources.v1.json` and ships `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties` in the Tools release artifact only (see the root `NOTICE.md`). acsetup installs them under `<install root>\tools\platform-tools\`; that `adb.exe version` reports `1.0.41` and `Version 37.0.1-15733141`.
 
-When controlling MuMu Player instances, ActingCommand must use the adb executable that matches the MuMu adb server. On the current Windows test host, the reviewed matching executable is:
+Which adb `actingd` uses (Workflow #337; `contracts/actingd-check-config.md`, "Default ADB"):
 
-```text
-D:\BST\MuMuPlayer\nx_main\adb.exe
-```
+- An install root is recognised from `actingd`'s own path: two levels above the executable, `runtime\BUILD-MANIFEST.json` must be a file (the layout acsetup installs, and its upgrade staging directory).
+- From an install root, an instance whose `adb_path` is empty, discovery-bound (`instance_index` / `instance_name`) or explicit (`serial`, or `host` and `port`), uses `<install root>\tools\platform-tools\adb.exe`. Before the ledger opens, `actingd` compares the SHA-256 of `adb.exe`, `AdbWinApi.dll` and `AdbWinUsbApi.dll` with the pin and refuses to start with `adb_install_missing` or `adb_install_mismatch`; it never falls back to another adb.
+- A non-empty `adb_path` on a discovery-bound instance is accepted only when it is canonically the discovered MuMu adb, or, from an install root, when it names the install root's adb (an absolute path; canonicalized, or when the file is missing its nearest existing ancestor canonicalized and the rest joined back; compared ignoring case). The latter is checked as above. Any other value fails startup with `instance_discovery_conflict` / `adb_path_conflict`, whose message lists the accepted values.
+- A non-empty `adb_path` on an explicit instance is used as written and is not hashed, unless it names the install root's adb.
+- Outside an install root (a development build, a hand-extracted Runtime directory), an explicit instance still requires `adb_path` (`instance_config_invalid`), and a discovery-bound instance without it uses the discovered MuMu adb.
 
-That MuMu adb is currently `1.0.41 / 36.0.0`. Mixing it with other installed adb builds, such as Android SDK/platform-tools or Python virtualenv copies, can kill and restart the MuMu adb server because the adb server version differs. That version fight can disconnect emulator devices and cause `adb exec-out screencap -p` calls to hang until the Runtime timeout fires.
+All adb clients on a host share one adb server on port 5037. A client whose adb server protocol version differs from the running server's kills and restarts that server; tools with different adb builds can then keep restarting each other, which disconnects emulator devices and can make `adb exec-out screencap -p` hang until the Runtime timeout fires. By the adb source only the protocol version (the third field of the first `adb version` line, `41` for 37.0.1) decides; mixing builds has not been measured, so every adb that shares port 5037 stays on 37.0.1 (ruling of 2026-09-30). `actingd` does not check the version of a configured adb: a non-empty `adb_path` must point at a 37.0.1 adb, such as the install root's adb, a MuMu adb whose files were replaced by the same 37.0.1 files, or a separate byte-identical copy. Other tools that share port 5037 should use their own 37.0.1 copy, not the install root's adb, because an upgrade moves `tools\` aside.
 
-Preferred configuration order:
+`actinglab` and `device-test` resolve their own adb, in this order: `ACTINGCOMMAND_ADB_PATH`, the configured `adb_path` (`actinglab config set adb_path <path>`), `ACTINGCOMMAND_NEMU_FOLDER`, MuMu discovery, then `adb` on `PATH` with a warning. `actinglab`'s device commands run in the Runtime; its `adb_source` label does not show which adb the Runtime uses.
 
-1. Set `ACTINGCOMMAND_ADB_PATH` to the matching MuMu adb path when the host has multiple adb versions (read by `actinglab` / `device-test`; `actingd` takes `adb_path` from its instance configuration or discovery).
-2. Or set `ACTINGCOMMAND_NEMU_FOLDER` to the MuMu folder so Runtime discovery can find `nx_main\adb.exe` (`actingd`: only under `allow_env_overrides`).
-3. Or configure `actinglab config set adb_path <matching-adb-path>` as a host-local option.
-
-ActingCommand intentionally does not fall back to a bare `adb` on `PATH` for Runtime device operations.
+`actingd` never falls back to a bare `adb` on `PATH`; it runs one only when an explicit instance names it as `adb_path`.
