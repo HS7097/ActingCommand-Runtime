@@ -160,7 +160,8 @@ impl PackageRef {
         }
     }
 
-    /// The locator names a directory read by containment rather than a ZIP file.
+    /// The locator is handed to containment, which reads it by path (a directory or a content
+    /// container file, Workflow #336), rather than read here as a ZIP file.
     pub fn is_directory_source(&self) -> bool {
         matches!(self, Self::GitSourceTree(_) | Self::ContentDirectory(_))
     }
@@ -259,6 +260,18 @@ pub fn digest_named(path: &std::path::Path) -> Option<&str> {
     path.file_name()?
         .to_str()
         .filter(|name| name.len() == 64 && lower_hex(name))
+}
+
+/// Workflow #336: the final path segment without its content container extension (`.zip` or
+/// `.json`, ASCII case-insensitive) when what remains has the digest form.
+pub fn digest_named_stem(path: &std::path::Path) -> Option<&str> {
+    let (stem, extension) = path.file_name()?.to_str()?.rsplit_once('.')?;
+    (["zip", "json"]
+        .iter()
+        .any(|container| extension.eq_ignore_ascii_case(container))
+        && stem.len() == 64
+        && lower_hex(stem))
+    .then_some(stem)
 }
 
 /// The single `content-directory.v1` digest: SHA-256 over the domain line followed by one

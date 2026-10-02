@@ -28,8 +28,15 @@ Policy sections are assembled as at startup: catalog documents are read and
 resource packages are stat'ed or canonicalized from disk. Relative directory
 package paths (`GitSourceTree` or `ContentDirectory`) resolve against the process
 working directory, exactly as startup does, so run the check from the directory the
-daemon will be started in. An empty `instances` array passes, as at startup, and describes a
-control-plane-only daemon.
+daemon will be started in. A procedure binding's `scheduled_execution.package_path` must
+name a regular file for a ZIP digest, a directory for a Git source-tree reference, and a
+directory or a content container file (`.zip` or `.json`, ASCII case-insensitive; see
+"Containers" in `contracts/package-reference.md`, Workflow #336) for a content-directory
+reference. A content-directory binding to any other file fails
+`procedure_package_container_unsupported`; a path that is not of its reference's kind fails
+`procedure_package_not_regular`, as before. Procedure packages are not read here: their
+content is admitted when the task runs. An empty `instances` array passes, as at startup,
+and describes a control-plane-only daemon.
 
 ## Result
 
@@ -208,7 +215,8 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `duplicate_instance_id`, `stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
 `device_path_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
-`scheduled_execution_instance_unknown`, `governance_capability_retired`,
+`scheduled_execution_instance_unknown`, `procedure_package_not_regular`,
+`procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
 `config_manifest_incomplete`),
 `validate` (`invalid_runtime_host_config`,

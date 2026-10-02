@@ -1045,12 +1045,31 @@ fn contained_task_request(
             .join(path),
     };
     let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
-    if match package_digest {
-        actingcommand_contract::PackageRef::LegacyZipSha256(_) => !metadata.is_file(),
-        actingcommand_contract::PackageRef::GitSourceTree(_)
-        | actingcommand_contract::PackageRef::ContentDirectory(_) => !metadata.is_dir(),
-    } {
-        return Err("procedure_package_not_regular");
+    // Workflow #336: a content-directory package is a directory or a content container file
+    // (`.zip` or `.json`, ASCII case-insensitive); containment reads and checks either.
+    let container = || {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("zip") || extension.eq_ignore_ascii_case("json")
+            })
+    };
+    let refusal = match package_digest {
+        actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
+            (!metadata.is_file()).then_some("procedure_package_not_regular")
+        }
+        actingcommand_contract::PackageRef::GitSourceTree(_) => {
+            (!metadata.is_dir()).then_some("procedure_package_not_regular")
+        }
+        actingcommand_contract::PackageRef::ContentDirectory(_) if metadata.is_file() => {
+            (!container()).then_some("procedure_package_container_unsupported")
+        }
+        actingcommand_contract::PackageRef::ContentDirectory(_) => {
+            (!metadata.is_dir()).then_some("procedure_package_not_regular")
+        }
+    };
+    if let Some(code) = refusal {
+        return Err(code);
     }
     package_digest
         .validate()

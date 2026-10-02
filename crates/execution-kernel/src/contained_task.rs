@@ -1815,6 +1815,27 @@ impl PreparedContainedTask {
         Self::from_bundle(bundle)
     }
 
+    /// Workflow #336: `load_path` for a content table already in memory, admitted against the
+    /// content-directory reference `expected`.
+    pub fn load_content_entries(
+        instance_label: &str,
+        entries: std::collections::BTreeMap<String, Vec<u8>>,
+        expected: &actingcommand_contract::ContentDirectory,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_content_entries(
+            instance_label,
+            entries,
+            expected,
+            false,
+            vision_provider,
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
+        Self::from_bundle(bundle)
+    }
+
     pub fn load(
         instance_label: &str,
         zip_bytes: &[u8],

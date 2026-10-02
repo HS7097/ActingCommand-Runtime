@@ -24,9 +24,12 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 use zip::ZipArchive;
 
+mod container;
 mod content_dir;
 pub mod source;
 mod source_pack;
+
+pub use container::{CONTENT_JSON_V1, ContentContainer, expand_content_container};
 
 pub type ContainmentResult<T> = Result<T, ContainmentError>;
 
@@ -169,8 +172,9 @@ impl Default for ContainmentLimits {
     }
 }
 
-/// A local directory as content-directory admission reads it: its `content-directory.v1`
-/// reference and the bytes of every regular file, keyed by `/`-separated relative path.
+/// A local locator as content-directory admission reads it (a directory, or a content
+/// container file expanded in memory): its `content-directory.v1` reference and the bytes of
+/// every file, keyed by `/`-separated relative path.
 #[derive(Debug)]
 pub struct ContentDirectorySnapshot {
     pub reference: actingcommand_contract::ContentDirectory,
@@ -239,6 +243,26 @@ impl Containment {
     ) -> ContainmentResult<ContentDirectorySnapshot> {
         let (entries, reference) = content_dir::measure(locator, self.limits, deadline)?;
         Ok(ContentDirectorySnapshot { reference, entries })
+    }
+
+    /// Workflow #336: admits a content table already in memory (for example a content
+    /// container just encoded and not yet written) as `load_path` admits a content-directory
+    /// locator once it is read: the shared entry rules, the digest comparison with `expected`,
+    /// then the same assembly.
+    pub fn load_content_entries(
+        &mut self,
+        instance: &InstanceId,
+        entries: BTreeMap<String, Vec<u8>>,
+        expected: &actingcommand_contract::ContentDirectory,
+        observation: bool,
+        deadline: std::time::Instant,
+    ) -> ContainmentResult<&LoadedBundle> {
+        expected
+            .validate()
+            .map_err(|_| source_error("package_reference_invalid"))?;
+        let entries = content_dir::admit_entries(entries, self.limits, deadline)?;
+        let verified = content_dir::verify(&entries, expected)?;
+        self.admit_source(instance, entries, verified, observation, deadline)
     }
 
     /// Assembles one verified in-memory source snapshot and issues its capability; the
