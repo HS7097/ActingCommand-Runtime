@@ -5,7 +5,9 @@ This document is the `linear_steps` execution mode of contained task packages
 R13). A linear task runs the one path it declares, step by step: each step first recognizes
 its own page, then clicks once, and the click leads to the next step. A step may instead
 launch, restart or stop the instance's assigned application (rulings R24 and R25, "Application
-steps" below). Packages that do not declare the mode keep their page-graph execution
+steps" below). A step whose page does not always appear may be declared optional and is then
+skipped when its page does not appear ([Workflow #339](https://github.com/HS7097/ActingCommand-Workflow/issues/339),
+"Optional steps" below). Packages that do not declare the mode keep their page-graph execution
 unchanged. No game-specific values are part of this contract.
 
 ## Declaration
@@ -16,12 +18,13 @@ The mode is declared only in `control.json`:
 {"schema_version": "Lab-1y.control.v2", "execution_mode": "linear_steps", "max_steps": 2, "...": "..."}
 ```
 
-`task.json` has no mode field. Each operation may carry one new field, `transition`, which is
-admitted only under `linear_steps`:
+`task.json` has no mode field. Each operation may carry two new fields, `transition` and
+`optional`, which are admitted only under `linear_steps`:
 
 ```json
 "transition": {"kind": "page", "page_id": "transition_01", "timeout_ms": 8000, "interval_ms": 50}
 "transition": {"kind": "window", "min_ms": 1000, "max_ms": 3000}
+"optional": {"settle_ms": 2000}
 ```
 
 Omitting `transition` (or writing `null`) declares no intermediate state. The resource
@@ -29,6 +32,13 @@ declaration check admits the field's shape (`kind` is `page` or `window`; `page_
 `timeout_ms`, `interval_ms`, `min_ms` and `max_ms` unsigned integers; no other field) and
 reports a wrong shape with the existing reasons `UnknownField`, `MissingField`,
 `InvalidType` and `InvalidValue`. The values are checked at Runtime admission (below).
+
+Omitting `optional` (or writing `null`) declares a required step. `optional` is an object
+with exactly one field, `settle_ms`, a required unsigned integer; `"optional": true` is not
+admitted, so that the settle is always chosen. The resource declaration check reports a value
+that is not an object or a `settle_ms` that is not an unsigned integer as `InvalidType`, a
+missing `settle_ms` as `MissingField` and any other field as `UnknownField`. This operation
+field is unrelated to the `optional` targets of a page rule (`page_rules.<page>.optional`).
 
 The source parser takes a `page` transition's `page_id` into the task's page set, like an
 operation's destination: the page is built from its `page_rules` entry, kept by a selected
@@ -61,6 +71,7 @@ one operation is at fault; an existing check keeps its existing code.
 | a `scheduling_outcome`, when declared, has no designated operation | `designated_operation` |
 | every terminal page of that outcome is the target page | `terminal_page` |
 | the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
+| the optional-step rules of "Optional steps" below | `optional_first_step`, `optional_application`, `optional_restart_segment_end`, `optional_settle`, `optional_candidates`, `transition_page` |
 
 Every operation still passes the existing operation checks (guard or trusted coordinate, click
 shape, retry fields, `post_delay_ms`); operation ids are unique (`contained_task_program_invalid`).
@@ -68,7 +79,8 @@ Every page above except an application entry's `any` is resolved to exactly one 
 id (`<game>/<page>`, with or without the game prefix in the declaration); a page that resolves
 to none or to several is the
 existing `contained_task_page_set_invalid`. All comparisons use the resolved ids. A
-`transition` on an operation of any other mode is `contained_task_operation_invalid`. The
+`transition` on an operation of any other mode is `contained_task_operation_invalid`, and so
+is an `optional` (detail `operation=<id> optional requires linear_steps`). The
 page-graph checks (scheduling outcome coverage, phases) are not run, and a linear task has no
 required home entry page, so the host runs no entry preflight for it.
 
@@ -88,20 +100,26 @@ interval and its remaining budget; the task deadline inside a wait is `contained
 
 **Steps.** The first step waits for its page for `step_timeout_ms` at the control capture
 interval; when it does not pass, the task fails with `contained_task_linear_entry_unmatched`.
-An application entry waits for nothing ("Application steps" below). Then, for click operation
-`k` (`step_index` `k`, counted from 0):
+An application entry waits for nothing ("Application steps" below). Then, for each click
+operation dispatched, with `step_index` `d` the number of operations dispatched before it
+(counted from 0, as the page-graph path counts its steps):
 
-1. The run progress becomes `k + 1`, and `StepStarted` names the step's page.
+1. The run progress becomes `d + 1`, and `StepStarted` names the operation and the step's page.
 2. The guard is evaluated on the frame on which the step's page passed; a refusal is the
    existing `contained_task_guard_refused`, with no input and no retry.
 3. The effect intent, the input bound to that frame's input context and the effect completion
    follow, in the order of the page-graph path.
 4. The post-input wait is `post_delay_ms`, or the window's `min_ms` when larger.
 5. The intermediate state, then the next step's page, are awaited (below).
-6. `StepFinished` names the next step's page, and that frame is the next step's decision frame.
+6. `StepFinished` names the page that passed (the next step's page, or a page of a run of
+   optional steps), and that frame is the next dispatched operation's decision frame.
 
-After the last operation, the run finishes with the target page and `executed_steps` equal to
-the operation count.
+When no operation follows, the run finishes with the target page and `executed_steps` equal
+to the number of operations dispatched. A package without optional steps dispatches every
+operation in order, so its `step_index` is the operation index and its `executed_steps` the
+operation count. The next operation is always the one the passing page selects (below), never
+the result of a comparison with the target page: a path that passes the target page before its
+end runs on to its last operation.
 
 ## Intermediate states
 
@@ -122,16 +140,18 @@ The arrival budget `T` of an operation is its `expect_after.timeout_ms`, or the 
 
 A retry exists only for a swallowed input; the existing `retryable`, `max_attempts` and
 `retry_interval_ms` declare it, and an operation without them is not retried. The gate of an
-operation is the first page awaited after its input: its intermediate page, or the next
-step's page.
+operation is the first page or pages awaited after its input: its intermediate page, or the
+next step's page (every candidate of "Optional steps" below).
 
 - Once an attempt has seen its intermediate page, a next step's page that does not follow
   fails the task (`page_confirmation_failed`, `intermediate_seen=true`), with no retry
-  decision and no further input.
+  decision and no further input. Likewise once an attempt has seen the skip target of a run of
+  optional steps (`skip_target_seen=true`, below): the input took effect.
 - Any other failed attempt with attempts left waits `retry_interval_ms` and then waits for
   `step_timeout_ms` for either the gate or the step's own page, the gate first:
   - the gate passes: the input took effect late; the attempt continues without another input
-    (an intermediate gate then counts as seen);
+    (an intermediate gate then counts as seen; a skip target with a settle is watched from
+    that frame on, as below, for its settle plus the arrival budget);
   - the step's own page passes: the input was swallowed; `StepFinished` names the step's page
     and the next attempt starts on that frame with another `StepStarted` of the same
     `step_index`;
@@ -139,6 +159,71 @@ step's page.
 - With no attempt left, `StepFinished` names `<unrecognized>` and the task fails.
 
 `executed_steps` counts dispatched operations: a retry adds none.
+
+## Optional steps
+
+Workflow #339. An operation declaring `optional` may find its page absent: the whole operation,
+its recognition, its click and its intermediate state, is then skipped and writes nothing.
+
+**Runs.** A run is a maximal sequence of consecutive optional operations `O_a .. O_b`; their
+pages (the `from` of each) are the optional pages `o_a .. o_b`. The operation before a run is
+required. The skip target `N` of the run is the destination of `O_b`: the page of the
+required operation after the run, or the target page. The recorded path is still one chain;
+optional only changes how an arrival is read.
+
+**Candidates.** The pages an input may reach are its candidates, evaluated in this order:
+
+- after the operation before a run: `o_a .. o_b` in path order, then `N`;
+- after an optional operation `O_i` of the run: the optional pages of the run not yet run,
+  other than `o_i`, in path order, then `N`;
+- after any other operation: the next step's page, as before.
+
+On a frame where several candidates pass, the first one wins, so an optional page wins over
+`N` (a dimmed popup over the next page). The page that passes selects the next operation: an
+optional page runs its operation next; `N` skips the rest of the run and continues after it,
+or finishes the run when the run ends the path. Within a run the order is free and every
+optional operation runs at most once per run; a page outside the candidates is never
+recognized, and nothing before the run is awaited again.
+
+**Settle.** The settle `S` of candidates is the largest `settle_ms` of their optional pages
+(0 when they have none). An optional page that passes is reached at once. `N` is reached only
+on a frame whose capture started at least `S` after the capture on which `N` first passed, so
+that an optional page appearing within `S` of `N` is still run; frames on which no candidate
+passes are ignored. The wait gives up after the arrival budget `T` (as in "Intermediate
+states"), or, once `N` was seen, `S + T` after the capture on which `N` first passed. The
+settle only shortens the sleeps while it lasts; after it, captures keep the interval and never
+run back to back. With one candidate, the wait is the wait above, unchanged.
+
+**Guard and retries.** An optional operation's guard is evaluated on the frame on which its
+page passed; the operation after `N` is guarded on the frame that ended the settle. An optional
+operation may declare an intermediate state and a retry, with the rules above; a close-popup
+step is best declared with `max_attempts` 2: when its click is swallowed, `N` does not pass,
+the attempt fails and the retry decision finds the popup's page again. The retry decision
+awaits every candidate, then the operation's own page (with an intermediate page: that page,
+then the own page). An attempt that saw `N` and then neither `N` nor an optional page within
+`S + T` fails with no retry decision.
+
+**Admission** (`contained_task_linear_invalid`, `operation=<id>`):
+
+| Rule | `reason` |
+|---|---|
+| the first operation is not optional (the entry gate checks only the first step's page; a step 2 may be optional, also after an application entry) | `optional_first_step` |
+| an application operation is not optional (it would be a conditional restart) | `optional_application` |
+| after the last `launch` or `restart`, the first page that is the main interface ("Application steps") is not the page of an optional operation | `optional_restart_segment_end` |
+| `settle_ms` is in `0..=60000` | `optional_settle` |
+| for each run, the optional pages, `N` and the page of the operation before the run (none for an application entry) are distinct, so that no candidate or retry-decision list repeats a page | `optional_candidates` |
+| a `page` transition of the operation before a run or of a run member is none of the run's optional pages and `N` | `transition_page` |
+
+The last operation may be optional. `N` is reached on every path, so the static rule after a
+launch or restart still guarantees the main interface. Each wait evaluates every candidate on
+every frame: the cost of a frame grows with the length of a run, which has no limit of its own
+beyond 1000 operations and the 1024 candidate pages of a recognition.
+
+**The skip target must be popup-sensitive.** `N` must not pass on a frame of an optional page:
+a hand-written package gives `N`'s page rule a target that fails under the popup (for example
+a color in an area the popup dims or covers) or declares the popup as a `forbidden` target of
+`N`. Otherwise, when a close click is swallowed, an unrecorded popup appears or a popup is late
+beyond its settle, `N` passes under the popup and the run goes on as if no popup had appeared.
 
 ## Application steps
 
@@ -185,19 +270,20 @@ exactly as for page-graph packages: an instance without an assigned application 
 instance) and the offline simulation refuse a package with an application operation before
 any frame.
 
-**Execution** of application operation `k`:
+**Execution** of an application operation dispatched as `step_index` `d`:
 
-1. The run progress becomes `k + 1`, and `StepStarted` names the step's page, or
+1. The run progress becomes `d + 1`, and `StepStarted` names the step's page, or
    `<unrecognized>` for the application entry (the literal the page-graph path writes for an
    unrecognized initial frame).
 2. No guard, no effect intent, no foreground gate. After the task deadline check, the run's
    application lifecycle path records `application.intent`, then `application.completed`,
    followed by `EffectCompleted`. An `application.failed` ends the step and the task, with no
    `EffectCompleted`.
-3. The post-input wait, the intermediate state and the next step's page follow as for a click.
-4. The next step's page passes: `StepFinished` names it, and that frame is the next step's
-   decision frame. Otherwise `StepFinished` names `<unrecognized>` and the task fails with
-   `contained_task_linear_application_unconfirmed`.
+3. The post-input wait, the intermediate state and the next step's page (or the candidates of
+   a run of optional steps after it) follow as for a click.
+4. A candidate passes: `StepFinished` names it, and that frame is the next dispatched
+   operation's decision frame. Otherwise `StepFinished` names `<unrecognized>` and the task
+   fails with `contained_task_linear_application_unconfirmed`.
 
 The application entry captures and recognizes nothing before its effect: the ruling puts no
 recognition before it, a failing capture must not block a restart that may repair it, and the
@@ -227,8 +313,19 @@ terminal as severe: the task pauses at its first such failure.
 |---|---|---|
 | The first step's page does not pass within `step_timeout_ms` | `contained_task_linear_entry_unmatched` | `page_recognition` / `entry_recognition` |
 | The intermediate page is not seen within its timeout, with no attempt left | `contained_task_linear_intermediate_unobserved` | `postcondition` / `postcondition` |
-| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, or the next step's page does not follow a seen intermediate page | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+
+When the operation awaited more than one candidate (a run of optional steps), the detail of
+these two codes ends with ` awaited=<the candidates' detector page ids, comma-separated>`,
+followed by ` skip_target_seen=true` when the skip target had passed; with one candidate the
+detail is unchanged. Neither key is part of a detail whitelist. An optional step adds no
+runtime failure code; its admission refusals are new `reason` values of
+`contained_task_linear_invalid`. A known limit: one cause can fail at the operation before a
+run on a day without a popup and at the optional step just run on a day with one, so the last
+`StepStarted` operation and the detail's `operation=` differ between such runs, and a rule that
+keys repeated failures by operation counts them apart; this favours rerunning and hides no
+failure.
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused` | none |
@@ -250,22 +347,24 @@ linear run is read by older builds.
 |---|---|---|
 | Admission | `PackageAdmitted` | the package reference |
 | Each capture | the capture records and their evidence | unchanged |
-| Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the one or two detector page ids awaited; `matched_page` the passing one, or none |
-| Step start | `StepStarted` | `step_index` `k`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
+| Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the detector page ids awaited: one or two, or the candidates of a run of optional steps (its optional pages in path order, the skip target last), with the retry decision's own page after them; `matched_page` the passing one, or none (the targets of a frame without a passing page are those of the first candidate, as before) |
+| Step start | `StepStarted` | `step_index` the dispatch index `d`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
+| Skipped optional step | none | a skip shows as the preceding `StepFinished` naming the skip target instead of its declared destination, and as no `StepStarted` of that operation in the run |
 | Input | `EffectIntent`, `EffectCompleted` | unchanged |
 | Application effect | `application.intent`, then `application.completed` followed by `EffectCompleted`, or `application.failed`, which ends the step and the task with no `EffectCompleted` (the `application.*` records are written by the host, with the task and run ids and their own action id); no `EffectIntent` | unchanged |
 | Intermediate page | `RecognitionStarted`, `RecognitionCompleted` | the intermediate page as the only candidate; it is seen when it is the matched page |
-| Attempt end | `StepFinished` | the next step's page, the step's own page (a swallowed input) or `<unrecognized>` |
-| Waits | the task timing boundaries `PostInputWait`, `PostconditionWait`, `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
-| End | `Finalizing`, `TerminalCommitted` | the final page is the target page; `executed_steps` the operation count on success, the dispatched operations on failure |
-| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the last operation | unchanged |
+| Attempt end | `StepFinished` | the page that passed (the next step's page, or a candidate of a run of optional steps), the step's own page (a swallowed input) or `<unrecognized>` |
+| Waits | the task timing boundaries `PostInputWait`, `PostconditionWait` (also the sleeps of a settle), `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
+| End | `Finalizing`, `TerminalCommitted` | the final page is the target page; `executed_steps` the operations dispatched, on success and on failure (the operation count when the package has no optional step) |
+| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the last dispatched operation, which names the target page | unchanged |
 
 Candidate pages are never duplicated, since the admission rules keep an operation's own page,
-its intermediate page and its destination distinct. Phase evidence is not used.
+its intermediate page, its destination and the candidates of a run distinct. Phase evidence is
+not used.
 
-The ledger cannot tell that a run was linear, which window it declared or that it declared an
-intermediate page: the package reference of `PackageAdmitted` names the content that carries
-them. Operation ids and page names are conventions, not types. No capture precedes an
+The ledger cannot tell that a run was linear, which window it declared, that it declared an
+intermediate page or which steps are optional: the package reference of `PackageAdmitted`
+names the content that carries them. Operation ids and page names are conventions, not types. No capture precedes an
 application entry, so its step has no pre-input frame evidence; the entry itself shows only as
 `from_page` `<unrecognized>` and in the package.
 
@@ -274,26 +373,47 @@ application entry, so its step has no pre-input frame evidence; the entry itself
 A build without this mode refuses a linear package before `PackageAdmitted`: the control's
 `execution_mode` is `contained_task_control_invalid`, and an operation's `transition` is
 first refused by the resource declaration check (`resource_declaration_invalid`, reason
-`UnknownField`).
+`UnknownField`). A build with this mode but without optional steps (v0.9.0, v0.9.1 and the
+earlier `linear_steps` builds) refuses an operation's `optional` the same way, before
+`PackageAdmitted`: `resource_declaration_invalid`, `UnknownField` at
+`/operations/<k>/optional`; so does its `package build`.
 
 ## Tools
 
 The offline simulation runs the same interpreter: its first decision of a linear package is
-the first operation's click, or a refusal. A package with an application operation is always
+the first operation's click, or a refusal; the first operation is never optional. A package
+with an application operation is always
 refused, `application_effect_requires_assigned_application` with no capture, provided the frame
 list is not empty (an empty list is `offline_fixture_missing` before the interpreter). `package build --execution-mode linear_steps`,
 `lab run` and the Lab capability listing accept the mode; a built package is admitted by the
-rules above. `lab run` passes `transition` through unread.
+rules above. `lab run` passes `transition` and `optional` through unread.
 
 ## What a linear task cannot express
 
-Branches, occasional popups and loops of variable length: only the declared path runs. A run
-that does not start on the first step's page, including one already on the target page,
-fails with `contained_task_linear_entry_unmatched`, so a path whose first page does not always
-appear is not suited to a fixed-interval schedule. An intermediate state that only sometimes
-appears is declared as a window, or not at all.
+Branches and loops of variable length: only the declared path runs, and a run of optional
+steps only skips steps of it. A run that does not start on the first step's page, including
+one already on the target page, fails with `contained_task_linear_entry_unmatched`, so a path
+whose first page does not always appear is not suited to a fixed-interval schedule; the first
+step cannot be optional. An intermediate state that only sometimes appears is declared as a
+window, or not at all.
+
+Popups that appear only sometimes after a step's click (a daily sign-in, a notice, an update
+prompt after a cold start, a reward card) are declared as optional steps, in a free order and
+each at most once per run; a popup that may appear several times is recorded as several
+optional steps. They cannot cover:
+
+- a popup that appears later than its settle after the next page, more often than it was
+  recorded, or that was never recorded: the next step judges or clicks on it, and, with a
+  popup-sensitive skip target, the run fails loudly;
+- a popup already on the screen before the preceding step's click: it is cleared by a
+  prerequisite package, or the path starts earlier;
+- a detour that confirms and returns to the same page (`A -> start -> [prompt?] -> confirm ->
+  A' -> start -> B`): on a day without the prompt, `A'` passes on the remaining frame of `A`,
+  the screen has moved on after the settle and the run fails; such a path is a page-graph
+  package or two packages.
 
 An application step always runs: there is no conditional restart, and the package cannot name
-an application. Screens that appear only sometimes after a cold start (a daily sign-in, a
-notice, an update prompt) cannot be branched over; a run that meets one fails before the main
-interface, and a page-graph package is the way to return to the main interface across them.
+an application. A restart package records up to the main interface,
+`any -> restart -> title -> [sign-in?] [notice?] -> home`, its optional steps covering the
+screens a cold start shows only sometimes; the main interface itself is a required step. A
+failure inside such a restart segment is still not counted (R25).
