@@ -730,7 +730,8 @@ VOLATILE = re.compile(r"(^|_)(id|ids|at|ms|us|sequence|timestamp|time|elapsed|mo
 def normalize(value):
     if isinstance(value, dict):
         return {key: ("<volatile>" if ((VOLATILE.search(key) and key != "target_id")
-                                       or key in ("links", "task_timing", "sampling")) else normalize(item))
+                                       or key in ("links", "task_timing", "sampling"))
+                      else sampled_action(item) if key == "action" else normalize(item))
                 for key, item in sorted(value.items())}
     if isinstance(value, list):
         return [normalize(item) for item in value]
@@ -738,6 +739,33 @@ def normalize(value):
         value = re.sub(r"(?<![0-9a-z_])[a-z]+_[0-9a-f]{32}(?![0-9a-z_])", "<identifier>", value)
         return re.sub(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", "<sha256>", value)
     return value
+
+
+def sampled_action(value):
+    """An input action's position is sampled from the click rectangle with a run-seeded
+    generator; its kind stays."""
+    if isinstance(value, dict):
+        return {key: ("<sampled>" if key in ("x", "y", "x1", "y1", "x2", "y2") else normalize(item))
+                for key, item in sorted(value.items())}
+    return normalize(value)
+
+
+def collapse(sequence):
+    """Removes immediately repeated blocks (a wait loop's iterations), so that runs whose loops
+    took a different number of iterations compare by their distinct steps."""
+    sequence = list(sequence)
+    changed = True
+    while changed:
+        changed = False
+        for size in range(1, 41):
+            index = 0
+            while index + 2 * size <= len(sequence):
+                if sequence[index:index + size] == sequence[index + size:index + 2 * size]:
+                    del sequence[index + size:index + 2 * size]
+                    changed = True
+                else:
+                    index += 1
+    return sequence
 
 
 def expect_rows(label, facts, expected):
@@ -763,6 +791,35 @@ def run(work, new_runtime, new_tools, base_runtime, old_runtime, old_tools, cata
         if keep:
             produced.append((label, root))
         return facts, root, events, types, text, config
+
+    # 7. The existing page-graph home entry: the same normalized facts on v0.9.0, the L2e base and this build.
+    def item_7():
+        for scenario, frames in (("from X", ["x"]), ("from HOME", ["home", "home", "a2", "a2"])):
+            sequences = {}
+            for build, runtime_dir in (("885947c9", old_runtime), ("fe358b6b", base_runtime), ("product", new_runtime)):
+                label = f"E7 {build} page-graph home entry {scenario}"
+                facts, *_ = case(label, "pg_home", frames, None, runtime=runtime_dir, keep=build == "product")
+                sequences[build] = [normalize({"event_type": event_type, "fact": fact}) for _, event_type, fact in facts]
+            for left, right in (("885947c9", "fe358b6b"), ("885947c9", "product"), ("fe358b6b", "product")):
+                old, new = sequences[left], sequences[right]
+                difference = next((index for index, (a, b) in enumerate(zip(old, new)) if a != b), None)
+                say("E7", scenario, left, len(old), right, len(new), "first difference", difference)
+                if difference is not None:
+                    say("E7", scenario, left, "at difference", short(json.dumps(old[difference]), 2500))
+                    say("E7", scenario, right, "at difference", short(json.dumps(new[difference]), 2500))
+                check(f"E7.identical.{scenario.replace(' ', '_')}.{left}_vs_{right}",
+                      len(old) == len(new) and difference is None and len(old) > 0, f"{len(old)} vs {len(new)}")
+            for index, entry in enumerate(sequences["product"]):
+                say("E7", scenario, "normalized fact", index, short(json.dumps(entry), 600))
+            last = sequences["product"][-1]["fact"] if sequences["product"] else {}
+            wanted = ("success", None) if scenario == "from HOME" else ("failure", "contained_task_home_recovery_binding_missing")
+            check(f"E7.product.{scenario.replace(' ', '_')}.terminal", (last.get("outcome"), last.get("failure_code")) == wanted,
+                  json.dumps([last.get("outcome"), last.get("failure_code")]))
+
+    if os.environ.get("L2B_ONLY") == "E7":
+        item_7()
+        say("RESULT", "failures", len(FAILURES), json.dumps(FAILURES))
+        return 1 if FAILURES else 0
 
     # 1. Already on the first step: no prerequisite package runs.
     facts, *_ = case("E1 A from HOME", "a", ["home", "home", "a2"], h_map)
@@ -901,23 +958,7 @@ def run(work, new_runtime, new_tools, base_runtime, old_runtime, old_tools, cata
         ["entry_target_disposition", "fail_closed", APPLICATION_REFUSAL],
         ["terminal_committed", "failure", 0, APPLICATION_REFUSAL]])
 
-    # 7. The existing page-graph home entry: the same normalized facts on v0.9.0, the L2e base and this build.
-    for scenario, frames in (("from X", ["x"]), ("from HOME", ["home", "home", "a2", "a2"])):
-        sequences = {}
-        for build, runtime_dir in (("885947c9", old_runtime), ("fe358b6b", base_runtime), ("product", new_runtime)):
-            label = f"E7 {build} page-graph home entry {scenario}"
-            facts, *_ = case(label, "pg_home", frames, None, runtime=runtime_dir, keep=build == "product")
-            sequences[build] = [normalize({"event_type": event_type, "fact": fact}) for _, event_type, fact in facts]
-        for build in ("fe358b6b", "product"):
-            same = sequences["885947c9"] == sequences[build] and len(sequences[build]) > 0
-            say("E7", scenario, "885947c9", len(sequences["885947c9"]), build, len(sequences[build]))
-            check(f"E7.identical.{scenario.replace(' ', '_')}.885947c9_vs_{build}", same, "")
-        for index, entry in enumerate(sequences["product"]):
-            say("E7", scenario, "normalized fact", index, short(json.dumps(entry), 600))
-        last = sequences["product"][-1]["fact"] if sequences["product"] else {}
-        wanted = ("success", None) if scenario == "from HOME" else ("failure", "contained_task_home_recovery_binding_missing")
-        check(f"E7.product.{scenario.replace(' ', '_')}.terminal", (last.get("outcome"), last.get("failure_code")) == wanted,
-              json.dumps([last.get("outcome"), last.get("failure_code")]))
+    item_7()
 
     # 11. Older builds refuse the declaration before PackageAdmitted, and the configuration field.
     for build, runtime_dir in (("885947c9", old_runtime), ("fe358b6b", base_runtime)):
@@ -990,9 +1031,9 @@ def same(product_log, base_log):
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 line = line.strip()
-                if not line.startswith("SAME|"):
+                if "SAME|" not in line:
                     continue
-                _, scenario, kind, payload = line.split("|", 3)
+                _, scenario, kind, payload = line[line.index("SAME|"):].split("|", 3)
                 if kind == "event":
                     scenarios.setdefault(scenario, []).append(normalize(json.loads(payload)))
                 elif kind == "receipt":
@@ -1004,6 +1045,8 @@ def same(product_log, base_log):
     check("SAME.scenarios", sorted(product) == sorted(base) and len(product) >= 8, "")
     for scenario in sorted(set(product) | set(base)):
         old, new = base.get(scenario, []), product.get(scenario, [])
+        say("SAME", scenario, "events before collapsing repeated wait iterations", "8e0ac191", len(old), "product", len(new))
+        old, new = collapse(old), collapse(new)
         difference = next((index for index, (a, b) in enumerate(zip(old, new)) if a != b), None)
         say("SAME", scenario, "8e0ac191", len(old), "product", len(new), "first difference", difference)
         if difference is not None:

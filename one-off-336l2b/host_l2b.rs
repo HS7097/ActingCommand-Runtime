@@ -150,8 +150,9 @@ fn oneoff_events(
         },
     );
     for event in &events {
+        // Shortened: a long line ends the job log's capture of the step output.
         let semantic = projected_task_semantic_fact(event)
-            .map(|fact| format!("{fact:?}"))
+            .map(|fact| format!("{fact:?}").chars().take(400).collect::<String>())
             .unwrap_or_default();
         println!(
             "HOST|{label}|event|{}|{:?}|{}",

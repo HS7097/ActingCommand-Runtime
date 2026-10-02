@@ -1,5 +1,9 @@
 name: one-off 336 L2b (to be reverted)
 
+# Rerun (run 37076410554 holds items 1-6 and 8-11): item 7 with the sampled tap position
+# normalized, the in-process runs with shortened lines, the 8e0ac191 comparison with wait loops
+# collapsed.
+
 # One-off evidence for Workflow #336 L2b (R14/R15 amendment 5954419623 "L2b" items 1-11 and the
 # R24 amendment 5958084341 "L2b" items 1-2). The new binaries are the Windows exact-SHA build
 # artifacts of the product commit, the base ones those of the L2e tip it is stacked on (fe358b6b),
@@ -141,9 +145,14 @@ jobs:
           Copy-Item -LiteralPath 'head/one-off-336l2b/host_same.rs' -Destination 'head/crates/runtime-host/src/tests/oneoff_336l2b_same.rs'
           Add-Content -LiteralPath 'head/crates/runtime-host/src/tests.rs' -Value "`nmod oneoff_336l2b;`nmod oneoff_336l2b_same;"
           Push-Location head
-          & cargo test --locked -p actingcommand-runtime-host --lib oneoff_336l2b -- --nocapture --test-threads=1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'host-product.log')
+          & cargo test --locked -p actingcommand-runtime-host --lib oneoff_336l2b -- --nocapture --test-threads=1 > (Join-Path $env:RUNNER_TEMP 'host-product.log')
           $code = $LASTEXITCODE
           Pop-Location
+          Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'host-product.log') | ForEach-Object {
+            $line = $_
+            if ($line.Length -gt 1500) { $line = $line.Substring(0, 1500) + '...' }
+            if ($line -match 'HOST\|' -or $line -match '^test |test result|panicked') { Write-Host $line }
+          }
           if ($code -ne 0) { throw "product in-process runs failed with exit code $code" }
       - name: The existing home entry on 8e0ac191
         if: ${{ !cancelled() }}
@@ -162,8 +171,9 @@ jobs:
           Add-Content -LiteralPath (Join-Path $source 'crates/runtime-host/src/tests.rs') -Value "`nmod oneoff_336l2b_same;"
           $env:CARGO_TARGET_DIR = (Join-Path (Resolve-Path head).Path 'target')
           Push-Location $source
-          & cargo test --locked -p actingcommand-runtime-host --lib oneoff_336l2b_same -- --nocapture --test-threads=1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'host-main.log')
+          & cargo test --locked -p actingcommand-runtime-host --lib oneoff_336l2b_same -- --nocapture --test-threads=1 > (Join-Path $env:RUNNER_TEMP 'host-main.log')
           $code = $LASTEXITCODE
+          Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'host-main.log') | Where-Object { $_ -match '^test |test result|panicked|\|counts\|' } | ForEach-Object { Write-Host $_.Substring(0, [Math]::Min($_.Length, 600)) }
           Pop-Location
           if ($code -ne 0) { throw "8e0ac191 in-process runs failed with exit code $code" }
           & python head/one-off-336l2b/evidence.py same (Join-Path $env:RUNNER_TEMP 'host-product.log') (Join-Path $env:RUNNER_TEMP 'host-main.log')
@@ -174,6 +184,7 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
+          L2B_ONLY: E7
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
