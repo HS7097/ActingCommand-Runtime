@@ -16,7 +16,7 @@ use crate::{
     MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
     MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
     MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_UTC_OFFSET_MINUTES, MetricRef,
-    ObservationRef, PoolSpec, PoolValuation, PredicateSpec, ResourceEffectSpec,
+    ObservationRef, PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ResourceEffectSpec,
     SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
     TimelineDocument,
 };
@@ -1152,7 +1152,13 @@ fn validate_pools(
             descriptor,
             diagnostics,
         );
-        if pool.capacity == 0 || pool.projection.amount == 0 || pool.projection.per_ms == 0 {
+        if pool.capacity == 0
+            || matches!(
+                &pool.projection,
+                PoolProjection::Regenerating(projection)
+                    if projection.amount == 0 || projection.per_ms == 0
+            )
+        {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 path.clone(),

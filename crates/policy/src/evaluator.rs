@@ -17,8 +17,8 @@ use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicySt
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
     FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ManualOffset,
-    ObservationRef, PoolSpec, PredicateSpec, PrioritySelection, ResourceEffectSpec, ScopeSelector,
-    TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
+    ObservationRef, PoolProjection, PoolSpec, PredicateSpec, PrioritySelection, ResourceEffectSpec,
+    ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -2775,6 +2775,9 @@ fn resource_urgency_milli(
     values: &BTreeMap<&str, &PoolValueSnapshot>,
 ) -> Option<u16> {
     let spec = specs.get(effect.pool_id.as_str())?;
+    if matches!(spec.projection, PoolProjection::NonRegenerating { .. }) {
+        return Some(0);
+    }
     let value = values.get(effect.pool_id.as_str())?;
     let ratio = value.value.min(spec.capacity).saturating_mul(1_000) / spec.capacity;
     u16::try_from(ratio).ok()
@@ -3366,9 +3369,12 @@ fn project_pool_value(
             spec.id, snapshot.value, spec.capacity
         )));
     }
+    let PoolProjection::Regenerating(projection) = &spec.projection else {
+        return Ok(snapshot.value);
+    };
     let elapsed = now.saturating_sub(snapshot.observed_at_unix_ms);
-    let periods = elapsed / spec.projection.per_ms;
-    let regenerated = periods.checked_mul(spec.projection.amount).ok_or_else(|| {
+    let periods = elapsed / projection.per_ms;
+    let regenerated = periods.checked_mul(projection.amount).ok_or_else(|| {
         PolicyEvaluationError::overflow(format!(
             "pool '{}' projection multiplication overflowed",
             spec.id
@@ -3385,12 +3391,15 @@ fn next_pool_projection_change(
     snapshot: &PoolValueSnapshot,
     now: u64,
 ) -> PolicyEvaluationResult<Option<u64>> {
-    if spec.projection.amount == 0 || project_pool_value(spec, snapshot, now)? >= spec.capacity {
+    let PoolProjection::Regenerating(projection) = &spec.projection else {
+        return Ok(None);
+    };
+    if projection.amount == 0 || project_pool_value(spec, snapshot, now)? >= spec.capacity {
         return Ok(None);
     }
     let elapsed = now.saturating_sub(snapshot.observed_at_unix_ms);
     let next_period = elapsed
-        .checked_div(spec.projection.per_ms)
+        .checked_div(projection.per_ms)
         .and_then(|period| period.checked_add(1))
         .ok_or_else(|| {
             PolicyEvaluationError::overflow(format!(
@@ -3398,14 +3407,12 @@ fn next_pool_projection_change(
                 spec.id
             ))
         })?;
-    let offset = next_period
-        .checked_mul(spec.projection.per_ms)
-        .ok_or_else(|| {
-            PolicyEvaluationError::overflow(format!(
-                "pool '{}' next projection offset overflowed",
-                spec.id
-            ))
-        })?;
+    let offset = next_period.checked_mul(projection.per_ms).ok_or_else(|| {
+        PolicyEvaluationError::overflow(format!(
+            "pool '{}' next projection offset overflowed",
+            spec.id
+        ))
+    })?;
     snapshot
         .observed_at_unix_ms
         .checked_add(offset)
@@ -5946,6 +5953,30 @@ mod tests {
                 .urgency_milli
                 > 0
         );
+
+        let mut docs = example_documents();
+        docs.0 = serde_json::to_value(&catalog.catalog().tasks).unwrap();
+        docs.1["pools"][0]["projection"] = serde_json::json!({"kind":"none"});
+        for (deadline, expected_urgency) in [(NOW + 10 * 86_400_000, 0), (NOW, 1000)] {
+            docs.2["profiles"][0]["goals"][0]["deadline_unix_ms"] = serde_json::json!(deadline);
+            let catalog = compile_documents(docs.clone());
+            let result = evaluate(
+                &catalog,
+                &base_facts(),
+                &resources,
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+                5,
+            )
+            .unwrap();
+            assert_eq!(result.decisions[0].eligibility, EligibilityState::True);
+            assert_eq!(
+                result.decisions[0].rank.as_ref().unwrap().urgency_milli,
+                expected_urgency
+            );
+        }
     }
 
     #[test]
@@ -5975,6 +6006,38 @@ mod tests {
         assert_eq!(result.decisions[0].eligibility, EligibilityState::False);
         assert_eq!(result.next_wake_unix_ms, Some(NOW + 360_000));
 
+        let mut fixed_docs = example_documents();
+        fixed_docs.0 = serde_json::to_value(&catalog.catalog().tasks).unwrap();
+        fixed_docs.1["pools"][0]["projection"] = serde_json::json!({"kind":"none"});
+        let fixed = compile_documents(fixed_docs);
+        for now in [NOW, NOW + 360_000] {
+            let result = evaluate(
+                &fixed,
+                &base_facts(),
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: now,
+                    monotonic_ms: now,
+                },
+                12,
+            )
+            .unwrap();
+            assert_eq!(result.decisions[0].eligibility, EligibilityState::False);
+            // The catalog's daily reset still wakes the evaluator at 04:00.
+            assert_eq!(result.next_wake_unix_ms, Some(240 * 60_000));
+        }
+        let spec = &fixed.catalog().pools.pools[0];
+        let mut snapshot = base_resources().pools.remove(0);
+        for value in [0, 10, spec.capacity] {
+            snapshot.value = value;
+            assert_eq!(
+                project_pool_value(spec, &snapshot, NOW + 86_400_000).unwrap(),
+                value
+            );
+        }
+        snapshot.value = spec.capacity + 1;
+        assert!(project_pool_value(spec, &snapshot, NOW).is_err());
+
         // LIVE-FACT-POOL-v1: one scoped observation supplies predicate and pool freshness.
         let mut docs = example_documents();
         docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"all","predicates":[
@@ -5988,85 +6051,91 @@ mod tests {
             serde_json::json!({"kind":"ledger_fact","minimum_confidence_milli":900});
         let scope: ScopeSelector =
             serde_json::from_value(docs.1["pools"][0]["scope"].clone()).unwrap();
-        let catalog = compile_documents(docs);
-        let mut facts = base_facts();
-        facts.facts.push(ObservedFact {
-            scope,
-            fact_key: "resource.current".into(),
-            value: FactValue::Integer(11),
-            observed_at_unix_ms: NOW,
-            expires_at_unix_ms: Some(NOW + 100),
-            confidence_milli: 900,
-        });
-        let mut inputs = base_resources();
-        inputs.pools.clear();
-        let resources = project_fact_pools(&catalog, &facts, &inputs);
-        assert_eq!(
-            (
-                resources.pools[0].value,
-                resources.pools[0].observed_at_unix_ms
-            ),
-            (11, NOW)
-        );
-        for (now, eligible) in [
-            (NOW, true),
-            (NOW + 100, true),
-            (NOW + 101, false),
-            (NOW + 360_000, false),
+        for projection in [
+            docs.1["pools"][0]["projection"].clone(),
+            serde_json::json!({"kind":"none"}),
         ] {
-            let result = evaluate(
-                &catalog,
-                &facts,
-                &resources,
-                EvaluationTime {
-                    unix_ms: now,
-                    monotonic_ms: now,
-                },
-                12,
-            )
-            .unwrap();
-            assert_eq!(!result.dispatch_intents.is_empty(), eligible);
-            if eligible {
-                assert_eq!(
-                    result.dispatch_intents[0]
-                        .prerequisites
-                        .facts_fresh_until_unix_ms,
-                    Some(NOW + 100)
+            docs.1["pools"][0]["projection"] = projection;
+            let catalog = compile_documents(docs.clone());
+            let mut facts = base_facts();
+            facts.facts.push(ObservedFact {
+                scope: scope.clone(),
+                fact_key: "resource.current".into(),
+                value: FactValue::Integer(11),
+                observed_at_unix_ms: NOW,
+                expires_at_unix_ms: Some(NOW + 100),
+                confidence_milli: 900,
+            });
+            let mut inputs = base_resources();
+            inputs.pools.clear();
+            let resources = project_fact_pools(&catalog, &facts, &inputs);
+            assert_eq!(
+                (
+                    resources.pools[0].value,
+                    resources.pools[0].observed_at_unix_ms
+                ),
+                (11, NOW)
+            );
+            for (now, eligible) in [
+                (NOW, true),
+                (NOW + 100, true),
+                (NOW + 101, false),
+                (NOW + 360_000, false),
+            ] {
+                let result = evaluate(
+                    &catalog,
+                    &facts,
+                    &resources,
+                    EvaluationTime {
+                        unix_ms: now,
+                        monotonic_ms: now,
+                    },
+                    12,
+                )
+                .unwrap();
+                assert_eq!(!result.dispatch_intents.is_empty(), eligible);
+                if eligible {
+                    assert_eq!(
+                        result.dispatch_intents[0]
+                            .prerequisites
+                            .facts_fresh_until_unix_ms,
+                        Some(NOW + 100)
+                    );
+                }
+            }
+            for (value, confidence) in [
+                (FactValue::Integer(11), 899),
+                (FactValue::Boolean(true), 900),
+                (FactValue::Integer(-1), 900),
+                (FactValue::Integer(i64::MAX), 900),
+            ] {
+                let record = facts.facts.last_mut().unwrap();
+                record.value = value;
+                record.confidence_milli = confidence;
+                assert!(
+                    project_fact_pools(&catalog, &facts, &inputs)
+                        .pools
+                        .is_empty()
                 );
             }
-        }
-        for (value, confidence) in [
-            (FactValue::Integer(11), 899),
-            (FactValue::Boolean(true), 900),
-            (FactValue::Integer(-1), 900),
-            (FactValue::Integer(i64::MAX), 900),
-        ] {
             let record = facts.facts.last_mut().unwrap();
-            record.value = value;
-            record.confidence_milli = confidence;
+            record.value = FactValue::Integer(11);
+            record.confidence_milli = 900;
+            record.scope = ScopeSelector::Instance {
+                instance_id: "other-instance".into(),
+            };
+            assert!(
+                project_fact_pools(&catalog, &facts, &inputs)
+                    .pools
+                    .is_empty()
+            );
+            facts.facts.pop();
             assert!(
                 project_fact_pools(&catalog, &facts, &inputs)
                     .pools
                     .is_empty()
             );
         }
-        let record = facts.facts.last_mut().unwrap();
-        record.value = FactValue::Integer(11);
-        record.confidence_milli = 900;
-        record.scope = ScopeSelector::Instance {
-            instance_id: "other-instance".into(),
-        };
-        assert!(
-            project_fact_pools(&catalog, &facts, &inputs)
-                .pools
-                .is_empty()
-        );
-        facts.facts.pop();
-        assert!(
-            project_fact_pools(&catalog, &facts, &inputs)
-                .pools
-                .is_empty()
-        );
     }
 
     #[test]
