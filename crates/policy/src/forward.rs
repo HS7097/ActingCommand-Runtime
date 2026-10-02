@@ -4,8 +4,8 @@
 
 use crate::{
     CompiledCatalog, DetectionSuggestion, EffectDirection, EvaluationFacts, EvaluationResources,
-    EvaluationTime, HostResourceSnapshot, ObservationSource, PolicyEvaluationError, PoolSpec,
-    PoolValueSnapshot, ScopeSelector, TaskRuntimeSnapshot, TaskTerminalState, evaluate,
+    EvaluationTime, HostResourceSnapshot, ObservationSource, PolicyEvaluationError, PoolProjection,
+    PoolSpec, PoolValueSnapshot, ScopeSelector, TaskRuntimeSnapshot, TaskTerminalState, evaluate,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -411,14 +411,18 @@ fn advance_pools(
         if to_unix_ms < pool.snapshot.observed_at_unix_ms {
             return Err(ForwardError::invalid("projected pool time moved backwards"));
         }
+        let PoolProjection::Regenerating(projection) = &pool.spec.projection else {
+            pool.snapshot.observed_at_unix_ms = to_unix_ms;
+            continue;
+        };
         let elapsed = to_unix_ms - pool.snapshot.observed_at_unix_ms;
         let total_elapsed = elapsed
             .checked_add(pool.remainder_ms)
             .ok_or_else(|| ForwardError::overflow("pool elapsed time overflowed"))?;
-        let periods = total_elapsed / pool.spec.projection.per_ms;
-        pool.remainder_ms = total_elapsed % pool.spec.projection.per_ms;
+        let periods = total_elapsed / projection.per_ms;
+        pool.remainder_ms = total_elapsed % projection.per_ms;
         let regenerated = periods
-            .checked_mul(pool.spec.projection.amount)
+            .checked_mul(projection.amount)
             .ok_or_else(|| ForwardError::overflow("pool regeneration overflowed"))?;
         let raw = pool
             .snapshot
@@ -1134,6 +1138,85 @@ mod tests {
         assert!(!first.steps.is_empty());
         assert!(first.cumulative_waste > 0);
         assert_eq!(first.catalog_hash, catalog.catalog_hash());
+
+        let mut pools_document = serde_json::to_value(&catalog.catalog().pools).unwrap();
+        pools_document["pools"][0]["projection"] = serde_json::json!({"kind":"none"});
+        let sources = CatalogSources {
+            tasks: CatalogDocumentSource::new(
+                "memory://neutral/tasks.json",
+                serde_json::to_vec(&catalog.catalog().tasks).unwrap(),
+            ),
+            pools: CatalogDocumentSource::new(
+                "memory://neutral/pools.json",
+                serde_json::to_vec(&pools_document).unwrap(),
+            ),
+            activity: CatalogDocumentSource::new(
+                "memory://neutral/activity.json",
+                serde_json::to_vec(&catalog.catalog().activity).unwrap(),
+            ),
+            timeline: CatalogDocumentSource::new(
+                "memory://neutral/timeline.json",
+                serde_json::to_vec(&catalog.catalog().timeline).unwrap(),
+            ),
+            selection: None,
+        };
+        let fixed = compile_catalog(&sources).unwrap();
+        let original_resources = resources(119);
+        let mut pools = initialize_pools(&fixed, &original_resources, NOW + 86_400_000).unwrap();
+        advance_pools(&mut pools, NOW + 2 * 86_400_000, true).unwrap();
+        assert_eq!(pools["fixture-pool-a"].snapshot.value, 119);
+        assert_eq!(
+            pools["fixture-pool-a"].snapshot.observed_at_unix_ms,
+            NOW + 2 * 86_400_000
+        );
+        assert_eq!(total_waste(&pools).unwrap(), 0);
+        let evaluation = evaluate(
+            &fixed,
+            &facts(true),
+            &original_resources,
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
+            11,
+        )
+        .unwrap();
+        assert_eq!(evaluation.dispatch_intents.len(), 1);
+        apply_declared_effects(&fixed, &evaluation.dispatch_intents, &mut pools).unwrap();
+        assert_eq!(pools["fixture-pool-a"].snapshot.value, 120);
+        assert_eq!(total_waste(&pools).unwrap(), 0);
+        apply_declared_effects(&fixed, &evaluation.dispatch_intents, &mut pools).unwrap();
+        assert_eq!(pools["fixture-pool-a"].snapshot.value, 120);
+        assert_eq!(total_waste(&pools).unwrap(), 1);
+        assert_eq!(original_resources, resources(119));
+
+        let mut uncertain_sources = sources.clone();
+        let mut tasks_document = serde_json::to_value(&fixed.catalog().tasks).unwrap();
+        tasks_document["tasks"][0]["produces"][0]["confidence_milli"] = serde_json::json!(999);
+        uncertain_sources.tasks.bytes = serde_json::to_vec(&tasks_document).unwrap();
+        let uncertain = project_forward(
+            &compile_catalog(&uncertain_sources).unwrap(),
+            &facts(true),
+            &original_resources,
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
+            11,
+            config,
+        )
+        .unwrap();
+        assert_eq!(
+            uncertain.completeness,
+            ForwardProjectionCompleteness::EvidenceInsufficient
+        );
+        assert!(uncertain.steps.is_empty());
+        assert!(
+            uncertain
+                .evidence_gaps
+                .iter()
+                .any(|gap| gap.code == "effect_evidence_insufficient")
+        );
     }
 
     #[test]

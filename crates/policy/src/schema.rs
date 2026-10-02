@@ -499,7 +499,7 @@ pub struct PoolSpec {
     pub id: String,
     pub scope: ScopeSelector,
     pub capacity: u64,
-    pub projection: RegenProjection,
+    pub projection: PoolProjection,
     pub observation: ObservationRef,
     #[serde(default, skip_serializing_if = "PoolValueSource::is_static")]
     pub value_source: PoolValueSource,
@@ -555,6 +555,19 @@ impl PoolValueSource {
     pub fn is_static(&self) -> bool {
         matches!(self, Self::StaticSnapshot)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum PoolProjection {
+    Regenerating(RegenProjection),
+    NonRegenerating { kind: NonRegeneratingProjectionKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NonRegeneratingProjectionKind {
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -995,11 +1008,20 @@ mod tests {
                 MAX_BUDGET_COUNT,
                 "{set}"
             );
+            let projections = pools["$defs"]["pool"]["properties"]["projection"]["oneOf"]
+                .as_array()
+                .expect("pool projection variants");
+            assert_eq!(projections.len(), 2, "{set}");
+            for field in ["amount", "per_ms"] {
+                assert_eq!(projections[0]["properties"][field]["minimum"], 1, "{set}");
+            }
             assert_eq!(
-                pools["$defs"]["pool"]["properties"]["projection"]["properties"]["amount"]["minimum"],
-                1,
+                projections[1]["properties"]["kind"]["const"], "none",
                 "{set}"
             );
+            for projection in projections {
+                assert_eq!(projection["additionalProperties"], false, "{set}");
+            }
             let fact = common["$defs"]["predicate"]["oneOf"]
                 .as_array()
                 .expect("predicate variants")
