@@ -581,8 +581,30 @@ def build(work, new_tools):
     if "prefixed" in state:
         admission.append({"name": "prefixed-to-legacy-zip", "locator": state["prefixed"]["path"], "reference": state["prefixed"]["sha256"],
                           "expect": "ok", "expect_detail": "mode=linear_steps", "first_frame": frames["a"], "expect_decision": "step_01_click"})
+    # In-process runs of the admitted packages on saved frames: the kernel's own failure details,
+    # which the ledger keeps only as the failure code.
+    runs = [
+        {"name": "dir-none-success", "locator": packs["three"]["paths"]["dir"], "reference": reference(packs["three"]["digest"]),
+         "frames": [frames[name] for name in ["a", "b", "c"]], "expect": "success",
+         "expect_detail": 'final_page=Some("fixture-game-a/step_03_c") executed_steps=2', "expect_inputs": 2},
+        {"name": "entry-unmatched", "locator": packs["three"]["paths"]["dir"], "reference": reference(packs["three"]["digest"]),
+         "frames": [frames["x"]] * 12, "expect": "contained_task_linear_entry_unmatched",
+         "expect_detail": "page=fixture-game-a/step_01_a", "expect_inputs": 0},
+        {"name": "intermediate-unobserved", "locator": packs["page"]["paths"]["zip"], "reference": reference(packs["page"]["digest"]),
+         "frames": [frames["a_mark"]] + [frames["b"]] * 10, "expect": "contained_task_linear_intermediate_unobserved",
+         "expect_detail": "intermediate_page=fixture-game-a/transition_01", "expect_inputs": 1},
+        {"name": "stuck-loading-with-retry", "locator": packs["retry_page"]["paths"]["dir"], "reference": reference(packs["retry_page"]["digest"]),
+         "frames": [frames["a"]] + [frames["load"]] * 8, "expect": "page_confirmation_failed",
+         "expect_detail": "transition=page intermediate_seen=true", "expect_inputs": 1},
+        {"name": "window-next-page-never", "locator": packs["window"]["paths"]["json"], "reference": reference(packs["window"]["digest"]),
+         "frames": [frames["a"]] * 24, "expect": "page_confirmation_failed",
+         "expect_detail": "transition=window min_ms=1000 max_ms=3000", "expect_inputs": 1},
+        {"name": "swallowed-click-retried", "locator": packs["retry"]["paths"]["dir"], "reference": reference(packs["retry"]["digest"]),
+         "frames": [frames["a"]] * 6 + [frames["b"]] * 4, "expect": "success",
+         "expect_detail": "executed_steps=1", "expect_inputs": 2},
+    ]
     with open(os.path.join(work, "cases.json"), "w", encoding="utf-8") as handle:
-        json.dump({"admission": admission}, handle, indent=2)
+        json.dump({"admission": admission, "runs": runs}, handle, indent=2)
     save_state(work, state)
     say("RESULT", "build failures", len(FAILURES), json.dumps(FAILURES))
     return 1 if FAILURES else 0
@@ -854,7 +876,7 @@ VOLATILE = re.compile(r"(^|_)(id|ids|at|ms|us|sequence|timestamp|time|elapsed|mo
 
 def normalize(value):
     if isinstance(value, dict):
-        return {key: ("<volatile>" if (VOLATILE.search(key) or key in ("links", "task_timing", "sampling")) else normalize(item))
+        return {key: ("<volatile>" if ((VOLATILE.search(key) and key != "target_id") or key in ("links", "task_timing", "sampling")) else normalize(item))
                 for key, item in sorted(value.items())}
     if isinstance(value, list):
         return [normalize(item) for item in value]
