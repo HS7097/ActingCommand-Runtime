@@ -11,6 +11,11 @@ pub(super) enum LeaseDeviceEnd {
     Expiry,
 }
 
+enum ResourceCloseTarget {
+    Session,
+    ApplicationBackends,
+}
+
 impl HostShared {
     /// Workflow #191 H: the device session belongs to the instance, not to the lease. The caller
     /// holds the instance admission guard. A kept session forgets its input frames, so the next
@@ -247,6 +252,33 @@ impl HostShared {
         connection_id: ConnectionId,
         links: EventLinksDraft,
     ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
+        self.retire_instance_resources(token, connection_id, links, ResourceCloseTarget::Session)
+    }
+
+    /// The caller keeps admission through the following Business step so capture cannot
+    /// reopen an independent backend between its fenced close and the application action.
+    pub(super) fn prepare_application_resources_result(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        links: EventLinksDraft,
+        _admission: &MutexGuard<'_, ()>,
+    ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
+        self.retire_instance_resources(
+            token,
+            connection_id,
+            links,
+            ResourceCloseTarget::ApplicationBackends,
+        )
+    }
+
+    fn retire_instance_resources(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        links: EventLinksDraft,
+        target: ResourceCloseTarget,
+    ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
         if let Some(error) = self
             .execution
             .unconfirmed_instance_close_error(token.instance_id())
@@ -283,12 +315,21 @@ impl HostShared {
                 })?,
         );
 
-        match self.execution.close_instance_with_input_check(
-            token.instance_id(),
-            DeviceCloseAuthority::FencedDeviceWrite(Arc::clone(&witness)),
-            self.nemu_close_check(token, Arc::clone(&witness), connection_id)
-                .map_err(RequestFailure::poison_without_terminal)?,
-        ) {
+        let authority = DeviceCloseAuthority::FencedDeviceWrite(Arc::clone(&witness));
+        let input_check = self
+            .nemu_close_check(token, Arc::clone(&witness), connection_id)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let closed = match target {
+            ResourceCloseTarget::Session => self.execution.close_instance_with_input_check(
+                token.instance_id(),
+                authority,
+                input_check,
+            ),
+            ResourceCloseTarget::ApplicationBackends => self
+                .execution
+                .prepare_application_resources(token.instance_id(), authority, input_check),
+        };
+        match closed {
             Ok(outcome) => {
                 self.append_stdio_close_observations(
                     outcome.vendor_stdio(),
