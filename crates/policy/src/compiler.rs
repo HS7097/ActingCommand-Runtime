@@ -942,6 +942,56 @@ mod tests {
         });
         assert!(compile_catalog(&projection_zero).is_err());
 
+        let nonregenerating = mutate_pools(|pools| {
+            pools["pools"][0]["projection"] = serde_json::json!({"kind":"none"});
+        });
+        let compiled = compile_catalog(&nonregenerating).expect("nonregenerating pool");
+        assert_eq!(
+            serde_json::to_value(&compiled.catalog().pools.pools[0].projection).unwrap(),
+            serde_json::json!({"kind":"none"})
+        );
+        assert_ne!(
+            compiled.catalog_hash(),
+            compile_catalog(&example_sources()).unwrap().catalog_hash()
+        );
+        for projection in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"kind":"unknown"}),
+            serde_json::json!({"kind":"none","amount":1}),
+            serde_json::json!({"kind":"none","per_ms":1}),
+            serde_json::json!({"kind":"none","unexpected":true}),
+            serde_json::json!({"kind":"none","amount":1,"per_ms":1}),
+            serde_json::json!({"amount":1,"per_ms":0}),
+            serde_json::json!({"amount":1}),
+            serde_json::json!({"per_ms":1}),
+            serde_json::json!({"amount":1,"per_ms":1,"unexpected":true}),
+        ] {
+            assert!(
+                compile_catalog(&mutate_pools(|pools| {
+                    pools["pools"][0]["projection"] = projection.clone();
+                }))
+                .is_err(),
+                "invalid projection {projection}"
+            );
+        }
+        assert!(
+            compile_catalog(&mutate_pools(|pools| {
+                pools["pools"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("projection");
+            }))
+            .is_err()
+        );
+        assert!(
+            compile_catalog(&mutate_pools(|pools| {
+                pools["pools"][0]["projection"] = serde_json::json!({"kind":"none"});
+                pools["pools"][0]["capacity"] = serde_json::json!(0);
+            }))
+            .is_err()
+        );
+
         for value in [1_u32, crate::MAX_BUDGET_COUNT] {
             let tasks = mutate_tasks(|tasks| {
                 tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(value);
