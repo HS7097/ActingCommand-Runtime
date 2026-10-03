@@ -1,0 +1,98 @@
+name: one-off 339 L3c plan-time refusal (to be reverted)
+
+# One-off evidence for Workflow #339 L3c, coordinator decision on the plan-time gap:
+# session app --record refuses to land on an optional step before any Runtime request. The
+# binaries are the Windows exact-SHA build artifacts of the product commit; the Runtime is a
+# fixture actingd. Reverted right after its run; the PR's final diff contains neither this
+# file nor one-off-339l3c/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  l3c-plan:
+    name: L3c plan-time optional refusal evidence
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PRODUCT_SHA: bcac54fbc8a77c71e048ea8fe303b09810ea2df1
+      L3B_SHA: 7a45d62519be33c253bb056fbfca2dab1273384d
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git -C head rev-parse HEAD).Trim()
+          Write-Host "L3CP|SCOPE|head $head product $env:PRODUCT_SHA"
+          $diff = @(& git -C head diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-339l3c' ':(exclude).github/workflows/oneoff-339l3c-plan.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+          & git -C head merge-base --is-ancestor $env:L3B_SHA $env:PRODUCT_SHA
+          if ($LASTEXITCODE -ne 0) { throw "product $env:PRODUCT_SHA does not contain the L3b tip $env:L3B_SHA" }
+      - name: Inputs (umbrella standard package, product exact-SHA artifacts)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Get-Sha([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+          function Test-Manifest([string] $Dir, [string] $Commit) {
+            $manifest = Get-Content -Raw -LiteralPath (Join-Path $Dir 'BUILD-MANIFEST.json') | ConvertFrom-Json
+            if ($manifest.commit_sha -ne $Commit) { throw "$Dir BUILD-MANIFEST commit $($manifest.commit_sha) is not $Commit" }
+            foreach ($file in $manifest.files) {
+              if ((Get-Sha (Join-Path $Dir $file.path)) -ne $file.sha256) { throw "$Dir $($file.path) does not match BUILD-MANIFEST.json" }
+            }
+            Write-Host "L3CP|INPUT|$Dir $($manifest.source_artifact_name) commit $($manifest.commit_sha) run $($manifest.workflow_run_id) files $(@($manifest.files).Count) verified"
+          }
+          $root = $env:RUNNER_TEMP
+          $dir = Join-Path $root 'umbrella'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $name = 'bluearchive-resources-193cfdd.zip'
+          foreach ($file in @($name, 'SHA256SUMS')) {
+            Invoke-WebRequest -Uri "https://github.com/HS7097/ActingCommand/releases/download/v0.9.0/$file" -OutFile (Join-Path $dir $file)
+          }
+          $actual = Get-Sha (Join-Path $dir $name)
+          $line = @(Get-Content -LiteralPath (Join-Path $dir 'SHA256SUMS') | Where-Object { $_ -match "^([0-9a-f]{64})\s+\*?$([regex]::Escape($name))$" })
+          if ($line.Count -ne 1 -or -not $line[0].StartsWith($actual)) { throw "$name does not match SHA256SUMS" }
+          Write-Host "L3CP|INPUT|HS7097/ActingCommand v0.9.0 $name sha256 $actual matches SHA256SUMS"
+          $runId = (& gh run list -R $env:GITHUB_REPOSITORY --workflow windows-remote-build.yml --commit $env:PRODUCT_SHA --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if ($LASTEXITCODE -ne 0 -or -not $runId) { throw "no successful exact-SHA build run for $env:PRODUCT_SHA" }
+          Write-Host "L3CP|INPUT|exact-SHA build run $runId for $env:PRODUCT_SHA"
+          foreach ($kind in @('runtime', 'tools')) {
+            & gh run download $runId -R $env:GITHUB_REPOSITORY -n "actingcommand-$kind-$env:PRODUCT_SHA" -D (Join-Path $root "new/$kind")
+            if ($LASTEXITCODE -ne 0) { throw "$kind artifact download failed with exit code $LASTEXITCODE" }
+            Test-Manifest (Join-Path $root "new/$kind") $env:PRODUCT_SHA
+          }
+          & python -m pip install --quiet --disable-pip-version-check pillow
+          if ($LASTEXITCODE -ne 0) { throw "pip install pillow failed with exit code $LASTEXITCODE" }
+      - name: Prepare synthetic frames
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          & python head/one-off-339l3c/plan_evidence.py prepare (Join-Path $env:RUNNER_TEMP 'work') (Join-Path $env:RUNNER_TEMP 'umbrella/bluearchive-resources-193cfdd.zip')
+          if ($LASTEXITCODE -ne 0) { throw "prepare failed with exit code $LASTEXITCODE" }
+      - name: Evidence (plan-time refusal on the fixture actingd)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $root = $env:RUNNER_TEMP
+          & python head/one-off-339l3c/plan_evidence.py run (Join-Path $root 'work') (Join-Path $root 'new/runtime') (Join-Path $root 'new/tools') (Resolve-Path head).Path $env:PRODUCT_SHA
+          if ($LASTEXITCODE -ne 0) { throw "evidence run failed with exit code $LASTEXITCODE" }
