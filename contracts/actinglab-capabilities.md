@@ -8,8 +8,10 @@ fetch backend assets. The Lab recording entries (`record mark`, `capture --recor
 `session app --record` and `session instance app --record`, Workflow #336) are
 declared like any other command; their behaviour is `lab-recording.md`.
 
-Each command has `status`, `available`, `reason_code`, `needs` and
-`availability_scope: offline_declaration`. `available` is true only for the
+Each command has `status`, `available`, `reason_code`, `needs`,
+`availability_scope: offline_declaration` and `dry_run_mode`, with
+`dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires
+(`actinglab-dry-run.md`). `available` is true only for the
 `available` status. Status values are:
 
 - `available`: an implemented offline handler has a normal path with its caller

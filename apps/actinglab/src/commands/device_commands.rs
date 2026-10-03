@@ -25,6 +25,12 @@ pub(crate) fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOut
             "touch-probe backend selection is owned by actingd; remove --touch-backend",
         ));
     }
+    crate::dry_run_gate::refuse(
+        global,
+        "touch-probe",
+        Some("session status --diagnostics"),
+        Value::Null,
+    )?;
     let config = read_user_config()?;
     let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, &config)?;
     backend
@@ -54,6 +60,12 @@ pub(crate) fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome
     {
         return run_capture_diagnose(global, &flags);
     }
+    crate::dry_run_gate::refuse(
+        global,
+        "capture --out",
+        Some("capture diagnose"),
+        Value::Null,
+    )?;
     reject_legacy_session_routing(&flags)?;
     let record = flags.bool("--record");
     let out = if record {
@@ -590,6 +602,13 @@ pub(crate) fn run_direct_touch(
         ))
     })()
     .map_err(input_not_submitted)?;
+    if global.dry_run {
+        let instance = resolve_instance_id(global, &config).map_err(input_not_submitted)?;
+        return Ok(crate::dry_run_gate::input_preview(
+            &instance,
+            command.to_json(),
+        ));
+    }
     send_direct_touch_command(
         global,
         &config,
@@ -636,15 +655,23 @@ pub(crate) fn run_direct_input(
     command: &str,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let (command, mut backend, instance_alias) = (|| -> CliOutcome<_> {
+    let (command, config) = (|| -> CliOutcome<_> {
         let flags = FlagArgs::parse(args)?;
         reject_legacy_session_routing(&flags)?;
         let command = DirectInputCommand::parse(command, &flags)?;
         let config = read_user_config()?;
-        let (backend, instance_alias) = open_cli_runtime_input_proxy(global, &config)?;
-        Ok((command, backend, instance_alias))
+        Ok((command, config))
     })()
     .map_err(input_not_submitted)?;
+    if global.dry_run {
+        let instance = resolve_instance_id(global, &config).map_err(input_not_submitted)?;
+        return Ok(crate::dry_run_gate::input_preview(
+            &instance,
+            command.to_json(),
+        ));
+    }
+    let (mut backend, instance_alias) =
+        open_cli_runtime_input_proxy(global, &config).map_err(input_not_submitted)?;
     let operation = command.run(&mut backend);
     let close = backend.close();
     let input_outcome = finish_direct_input(operation, close)?;

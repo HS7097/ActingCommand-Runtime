@@ -45,7 +45,15 @@ pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         )?;
         let response = lab.detect_env(request)?;
         record_detect_drive(&mut ledger, &response)?;
-        serialize_response(response)
+        let validated = response.status == "validated";
+        let mut payload = serialize_response(response)?;
+        if validated {
+            payload["persisted"] = json!(false);
+            payload["next"] = json!(
+                "re-run without --dry-run to store; env resolve and {env:…} read only stored results"
+            );
+        }
+        Ok(payload)
     })();
     finish_semantic_result_with_ledger(global, ledger, result)
 }
@@ -346,8 +354,13 @@ fn record_detect_drive(
         CliError::device("detected env response is missing its typed detection result")
     })?;
     let detections = result.detected_facts();
+    let stage = if response.status == "validated" {
+        "env_detection_validated"
+    } else {
+        "env_detected"
+    };
     ledger.record_drive(json!({
-        "stage": "env_detected",
+        "stage": stage,
         "detector_id": response.detector_id,
         "detector_version": response.detector_version,
         "instance_id": response.instance_id,

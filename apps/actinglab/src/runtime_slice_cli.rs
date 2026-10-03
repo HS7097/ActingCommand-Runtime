@@ -20,6 +20,14 @@ pub(super) fn run(subcommand: &str, global: &GlobalOptions, args: &[String]) -> 
         .or_else(|| global.instance.clone())
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CliError::usage("missing --instance <value>"))?;
+    if subcommand == "reset" {
+        crate::dry_run_gate::refuse(
+            global,
+            "runtime reset",
+            None,
+            serde_json::json!({"instance": instance}),
+        )?;
+    }
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         state_root,
         EventActor::Lab,

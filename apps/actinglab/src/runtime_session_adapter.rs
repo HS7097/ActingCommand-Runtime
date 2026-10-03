@@ -28,6 +28,14 @@ pub(super) fn run_monitor_policy(global: &GlobalOptions, args: &[String]) -> Cli
     let flags = FlagArgs::parse(&args[1..])?;
     let _ = global;
     reject_legacy_flags(&flags)?;
+    if action == "set" || action == "clear" {
+        crate::dry_run_gate::refuse(
+            global,
+            &format!("session monitor-policy {action}"),
+            Some("session monitor-policy status"),
+            json!({"action": action}),
+        )?;
+    }
     let state_root = runtime_state_root()?;
     let requested = flags
         .optional("--instance")

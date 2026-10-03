@@ -78,6 +78,9 @@ struct Lab2CommandContract {
 
 pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.optional_path("--with-frame").is_some() {
+        crate::dry_run_gate::refuse(global, "observe --with-frame", Some("observe"), Value::Null)?;
+    }
     if flags.bool("--capture") {
         return run_runtime_observe(global, &flags);
     }

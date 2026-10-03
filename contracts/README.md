@@ -27,6 +27,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `selection-graph.md` — the #308 selection graph; section Checks: named composite checks (recognition pack `0.7` `composite` targets), their evaluation and where they may be used; section Candidate layouts: recognition pack `0.7` `candidate_layouts`, their rules and feature values; section Records: the `task.selection_evaluated` ledger record and its evaluator mirror.
 - `resource-targets.md` — the instance resource target policy: the frozen v1 and the valuation-aware v2 documents, their rejection reasons, the `ApplyResourceTargets` entry and receipts, and their storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation", with "Resource weights (v2)").
 - `server-keys.md` — persisted server variant key policy.
+- `actinglab-dry-run.md` — the global actinglab `--dry-run`: each command's declared mode (preview, refused, no_effect, mixed), the `dry_run_unsupported` refusal, the preview shapes and the registered bootstrap and transient writes.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
 - `actingd-unlock-owner.md` — offline `actingd unlock-owner`: the operator's confirmation appended as the retained owner epoch's close evidence, the `owner.unlock` fact and its result schema.

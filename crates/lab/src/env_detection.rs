@@ -168,6 +168,25 @@ impl<P: LabPorts> Lab<P> {
         let now_ms = self.ports().clock().now_unix_ms()?;
         let resource_hash = detector_resource_hash(detector, &context.resource_root)?;
         let result = evaluate_detector(detector, &context, &scene, &resource_hash, now_ms)?;
+        // Workflow #341: a dry run validates the detection and stores nothing.
+        if request.dry_run {
+            return Ok(crate::EnvDetectResponse {
+                schema_version: "env-detect-command.v1".to_string(),
+                status: "validated".to_string(),
+                dry_run: Some(true),
+                task: detector.id.clone(),
+                detector_id: detector.id.clone(),
+                detector_version: detector.version().to_string(),
+                instance_id: context.instance_id,
+                game_id: context.game_id,
+                server_id: context.server_id,
+                resource_root: context.resource_root.display().to_string(),
+                result_path: None,
+                steps_executed: false,
+                steps: step_run.steps,
+                result: Some(result),
+            });
+        }
         let result_path = env_result_path(&context.env_dir, &context.instance_id);
         write_env_result(&result_path, &result)?;
         Ok(crate::EnvDetectResponse {

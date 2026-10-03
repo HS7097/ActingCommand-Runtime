@@ -166,6 +166,7 @@ mod contained_resources;
 mod scheduling_cli;
 #[rustfmt::skip] mod device_runtime_config;
 mod drive_cli;
+mod dry_run_gate;
 mod env_detection;
 mod flag_args;
 mod flag_values;
@@ -317,7 +318,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         }
         [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
-        [group, sub] if group == "config" => run_config(sub, &invocation.args),
+        [group, sub] if group == "config" => run_config(sub, &invocation.global, &invocation.args),
         [group, sub] if group == "env" => {
             env_detection::run_env(sub, &invocation.global, &invocation.args)
         }

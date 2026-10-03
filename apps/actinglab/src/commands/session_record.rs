@@ -316,6 +316,22 @@ struct SessionRecordBuildAsset {
 }
 
 pub(crate) fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    if let Some(action) = args
+        .first()
+        .filter(|action| crate::dry_run_gate::RECORD_REFUSED_ACTIONS.contains(&action.as_str()))
+    {
+        let alternative = if action == "start" || action == "stop" {
+            "record status"
+        } else {
+            "record candidates"
+        };
+        crate::dry_run_gate::refuse(
+            global,
+            &format!("record {action}"),
+            Some(alternative),
+            json!({"action": action}),
+        )?;
+    }
     run_session_record_inner(global, args, None)
 }
 
