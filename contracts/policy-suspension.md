@@ -23,6 +23,12 @@ failure is paused by `retry_limit` with `action` `pause` instead (Warning severi
 applied automatically: `on_failure` is part of the approved catalog, and a change of it is a
 catalog change to be approved again.
 
+`record stop` of a Lab recording prints `catalog_on_failure_example` with `retry_backoff_ms`
+60000 and, in `binding_requires`, a rerun "at the next trigger" (`lab-recording.md`,
+"Output"). Both predate R22: the rerun comes at the first evaluation after the backoff
+("Immediate rerun" below), so the printed value delays it by one minute; the value above
+reruns at once.
+
 ## Immediate rerun (R22)
 
 A pair (catalog task, instance) whose latest failure carries a failure identity and is

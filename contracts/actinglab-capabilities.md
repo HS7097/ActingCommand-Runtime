@@ -3,7 +3,10 @@
 `capabilities`, help and `list commands` use the existing command inventory.
 Lab2 verb/schema summaries consume the same command declarations. These queries
 do not connect to Runtime, start a provider, inspect a device, load a model or
-fetch backend assets.
+fetch backend assets. The Lab recording entries (`record mark`, `capture --record`,
+`session capture --record`, `observe --capture --record`, `do --capture --record`,
+`session app --record` and `session instance app --record`, Workflow #336) are
+declared like any other command; their behaviour is `lab-recording.md`.
 
 Each command has `status`, `available`, `reason_code`, `needs` and
 `availability_scope: offline_declaration`. `available` is true only for the

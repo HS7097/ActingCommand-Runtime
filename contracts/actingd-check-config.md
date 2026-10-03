@@ -302,7 +302,9 @@ run admits each package against its reference when it resolves its chain. The
 map needs no `policy` section, so a manual `task-run` uses it too; it is not a
 configuration fact (neither the `config_manifest` nor the `config.*` runtime
 facts name it) and it is read once at startup, so a change needs a restart. A
-build that predates the field refuses it with `config_decode_failed`.
+build that predates the field refuses it with `config_decode_failed`. A Lab
+recording's `record stop` prints the entry of the package it wrote as
+`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output").
 
 Workflow #336 L2c adds the optional top-level `return_home_packages`, per game
 and server the return-home package a `linear_steps` package without a declared
@@ -324,6 +326,16 @@ tasks (`return_home_packages_size_invalid`). All of them fail at stage
 and resolution when it resolves its chain). Like `prerequisite_packages`, it is
 not a configuration fact, it is read once at startup and a build that predates
 the field refuses it with `config_decode_failed`.
+
+A scheduled task paused by a failure is lifted once the daemon has restarted
+with a configuration in which its procedure binding's `package_digest` changed
+or, for a `linear_steps` task, a `prerequisite_packages` entry its paused run
+went through maps another digest, or its game and server's
+`return_home_packages` entry names another package or that package maps another
+digest. `actingd suspended --config <path>` loads and assembles the
+configuration exactly as this command does and lists the paused, lifted and
+repeating tasks (`contracts/policy-suspension.md`, "Lifting (R19)" and
+"`actingd suspended`").
 
 ## Performance and device paths
 

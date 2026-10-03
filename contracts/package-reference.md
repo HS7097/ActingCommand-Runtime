@@ -98,7 +98,9 @@ cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n
 Workflow #336: the same content can be held by three containers. All three use the one
 content-directory reference above and the one digest; the container is chosen by the
 locator alone (a directory, or a regular file by its extension, ASCII case-insensitive) and
-is recorded nowhere: references, requests and ledger records are unchanged.
+is recorded nowhere: references, requests and ledger records are unchanged. A Lab recording's
+`record stop` writes its package as `<D>.zip` or `<D>.json` in these containers
+(`lab-recording.md`, "Container and digest").
 
 | Container | Locator | Table entries |
 |---|---|---|

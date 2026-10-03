@@ -35,6 +35,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `scheduling-pause.md` — operator scheduling pause / resume: origin gate, the dispatch gate and its `Deferred` presentation, the instance drain with `contained_task_paused`, status fields, no persistence or expiry, and `actingctl pause` / `resume`.
 - `linear-steps.md` — the `linear_steps` execution mode: its control declaration and the operation `transition` and `optional` fields, admission rules, step-by-step execution with intermediate states, optional steps with their settle and retries for a swallowed input, failure codes and the mapping onto existing ledger records.
 - `policy-suspension.md` — the failure identity a scheduled `linear_steps` task's settlement records as its `error_code`, which failures accumulate toward a pause, the immediate rerun, lifting a pause by a package update, and the read-only `actingd suspended` report.
+- `lab-recording.md` — the Lab recording (`actinglab record start` / `mark` / `status` / `stop` and `--record` on the device commands): marks and their self-test, steps, intermediate states, application and optional steps, the recording lock, and the `linear_steps` package `record stop` generates, checks and writes as a content container (`package-reference.md`, "Containers") with its binding snippets.
 - `application-lifecycle.md` — the `application` effect of task packages (launch / restart / stop of the instance's assigned application), the foreground gate before every pointer input with the `application.foreground` program fact, and the startup package the host schedules after emulator `start` / `restart`.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
 
@@ -221,6 +222,9 @@ intermediate page or a time window), and an operation after the first may be
 a settle that watches the next page for a late one. The run writes only existing
 ledger records; builds without the mode refuse such packages before
 `PackageAdmitted`, and builds without optional steps refuse an `optional` field.
+A Lab recording generates such packages ([Lab recording](lab-recording.md)); a
+scheduled linear task's failure is rerun at once, the same problem again pauses it,
+and a package update lifts the pause ([Policy suspension](policy-suspension.md)).
 
 The Rust mainline contract crate lives in:
 

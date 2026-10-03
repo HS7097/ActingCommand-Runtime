@@ -56,9 +56,10 @@ An operation carries exactly one effect: the existing `click` object, or
   `ApplicationLifecycle` path (`control_application`: adb `force-stop` for `stop`, `monkey`
   launch for `launch`, both for `restart`) under the run's lease, with the task and run ids on
   every event. The step records no `task.effect_intent` (there is no input to sample); its
-  chain is `task.step_started` -> `application.intent` -> `application.completed` /
-  `application.failed` -> `task.effect_completed`, then the ordinary post-step observation
-  and `task.step_finished`. No guard is evaluated and no foreground gate runs for this step:
+  chain is `task.step_started` -> `application.intent` -> `application.completed` ->
+  `task.effect_completed`, then the ordinary post-step observation and `task.step_finished`.
+  An `application.failed` ends the step and the task with no `task.effect_completed`. No
+  guard is evaluated and no foreground gate runs for this step:
   the effect is what brings the assigned application to the foreground.
 - A task-owned application failure keeps its original TaskFailureEvidence and lease until
   the Task owner closes its resources, commits the real terminal fact and releases the

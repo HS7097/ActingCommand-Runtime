@@ -10,6 +10,11 @@ skipped when its page does not appear ([Workflow #339](https://github.com/HS7097
 "Optional steps" below). Packages that do not declare the mode keep their page-graph execution
 unchanged. No game-specific values are part of this contract.
 
+A Lab recording generates such packages (`record stop`, [Lab recording](lab-recording.md)).
+How a scheduled linear task's failures are rerun, pause it and are lifted by a package update
+is [Policy suspension](policy-suspension.md); the content containers a package may come in
+(directory, ZIP, single JSON) are [Package references](package-reference.md), "Containers".
+
 ## Declaration
 
 The mode is declared only in `control.json`:
@@ -313,8 +318,11 @@ the frame after it is not the first.
 
 **Severity.** An adb failure of the effect is `application_backend_operation_failed` on the
 host's `application.failed` chain. The device error is fatal, so the task's terminal severity
-is `fatal`, as for an adb failure of a click, and the scheduling policy settles a fatal
-terminal as severe: the task pauses at its first such failure.
+is `fatal`, as for an adb failure of a click. The settlement of a scheduled linear task treats
+this code and `input_backend_operation_failed` as recoverable when the run was not poisoned:
+it is only run again and never pauses the task (R25-2, `policy-suspension.md`, "Which failures
+accumulate"); a poisoning failure, such as an unconfirmed resource close, still pauses it at
+the first failure. The terminal and its severity are unchanged.
 
 ## Prerequisite packages
 
@@ -623,7 +631,9 @@ list is not empty (an empty list is `offline_fixture_missing` before the interpr
 `lab run` and the Lab capability listing accept the mode; a built package is admitted by the
 rules above. `lab run` passes `transition` and `optional` through unread, ignores
 `prerequisite_package_id` and runs no prerequisite package; the offline simulation runs the
-package alone, without the gate.
+package alone, without the gate. `record stop` (`lab-recording.md`, "Package generation")
+generates a linear package from a Lab recording and admits it by these rules, without a vision
+provider, before it writes it.
 
 ## What a linear task cannot express
 
