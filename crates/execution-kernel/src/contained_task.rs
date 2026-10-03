@@ -3414,6 +3414,7 @@ impl PreparedContainedTask {
                             error.to_string(),
                         )
                     })?
+                    .with_sample_deadline(sample_deadline)
                     .with_sample_recorder(&mut recorder);
                 if let Some(page) = only_page {
                     Ok(self
@@ -5770,15 +5771,18 @@ impl TaskOperation {
                 .iter()
                 .chain(std::iter::once(&observation.scene))
                 .collect::<Vec<_>>();
-            let context = evaluator
+            let mut context = evaluator
                 .scene_context_with_samples(&scenes)
                 .map_err(|error| {
                     ContainedTaskError::with_detail(
                         "recognition_samples_unavailable",
                         error.to_string(),
                     )
-                })?
-                .with_sample_recorder(&mut recorder);
+                })?;
+            if let Some((_, deadline)) = observation.sampling {
+                context = context.with_sample_deadline(deadline);
+            }
+            let context = context.with_sample_recorder(&mut recorder);
             context.evaluate_target(&guard.target_id)
         };
         if let Some(error) = recording_error {

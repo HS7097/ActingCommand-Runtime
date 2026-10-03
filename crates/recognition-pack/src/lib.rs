@@ -923,6 +923,7 @@ pub struct SceneEvaluation<'a> {
     sample_scenes: Vec<&'a Scene>,
     sample_recorder: Option<RefCell<&'a mut TargetSampleRecorder<'a>>>,
     consensus_results: RefCell<HashMap<String, RecognitionPackResult<TargetEvaluation>>>,
+    sample_deadline: Option<std::time::Instant>,
 }
 
 impl SceneEvaluation<'_> {
@@ -1094,6 +1095,7 @@ impl RecognitionEvaluator {
             sample_scenes: vec![scene],
             sample_recorder: None,
             consensus_results: RefCell::new(HashMap::new()),
+            sample_deadline: None,
         }
     }
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {

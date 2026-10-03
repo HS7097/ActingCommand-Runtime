@@ -428,17 +428,21 @@ impl SceneEvaluation<'_> {
                                 return Ok(value.clone());
                             }
                             let started = Instant::now();
-                            let context =
+                            let mut result =
                                 if std::ptr::eq(scenes[usize::from(sample.frame)], self.scene) {
-                                    self
+                                    if feature.consensus.is_some() {
+                                        self.evaluate_candidate_sample(target_id, *sample)
+                                    } else {
+                                        self.evaluate_target(target_id)
+                                    }
                                 } else {
-                                    &contexts[usize::from(sample.frame)]
+                                    let context = &contexts[usize::from(sample.frame)];
+                                    if feature.consensus.is_some() {
+                                        context.evaluate_candidate_sample(target_id, *sample)
+                                    } else {
+                                        context.evaluate_target(target_id)
+                                    }
                                 };
-                            let mut result = if feature.consensus.is_some() {
-                                context.evaluate_candidate_sample(target_id, *sample)
-                            } else {
-                                context.evaluate_target(target_id)
-                            };
                             let ended = Instant::now();
                             if let Some(hashes) = &frame_hashes {
                                 let sample_data =

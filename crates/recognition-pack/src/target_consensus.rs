@@ -218,6 +218,11 @@ impl RecognitionEvaluator {
 }
 
 impl<'a> SceneEvaluation<'a> {
+    pub fn with_sample_deadline(mut self, deadline: Instant) -> Self {
+        self.sample_deadline = Some(deadline);
+        self
+    }
+
     pub fn with_sample_recorder(mut self, recorder: &'a mut TargetSampleRecorder<'a>) -> Self {
         self.sample_recorder = Some(RefCell::new(recorder));
         self
@@ -241,7 +246,22 @@ impl<'a> SceneEvaluation<'a> {
         let mut current = None;
         let mut reports = Vec::new();
         let mut sample_evaluations = Vec::new();
-        for sample in &declaration.samples {
+        for (index, sample) in declaration.samples.iter().enumerate() {
+            let remaining_provider_ms = match self.evaluator.target(id)? {
+                RecognitionTarget::Ocr(target) => {
+                    target.timeout_ms * (declaration.samples.len() - index) as u64
+                }
+                _ => 0,
+            };
+            if self.sample_deadline.is_some_and(|deadline| {
+                Instant::now() >= deadline
+                    || std::time::Duration::from_millis(remaining_provider_ms)
+                        > deadline.saturating_duration_since(Instant::now())
+            }) {
+                return Err(RecognitionPackError::fatal(
+                    "recognition sample budget insufficient before backend evaluation",
+                ));
+            }
             let scene = scenes[usize::from(sample.frame)];
             let started = Instant::now();
             let mut result = self

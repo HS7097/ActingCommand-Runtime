@@ -588,6 +588,15 @@ impl PreparedContainedTask {
         let scenes = std::iter::once(&first.scene)
             .chain(frames.iter().map(|frame| &frame.scene))
             .collect::<Vec<_>>();
+        let provider_ms = layout
+            .maximum_provider_and_wait_ms(&self.evaluator)
+            .saturating_sub(
+                layout.required_frames().saturating_sub(1) as u64
+                    * u64::from(layout.sample_interval_ms),
+            );
+        if Duration::from_millis(provider_ms) > deadline.saturating_duration_since(Instant::now()) {
+            return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+        }
         let mut recording_error = None;
         let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).project_candidates_with_samples(
             &layout.id, &scenes, &mut |target, result, started, ended| {
