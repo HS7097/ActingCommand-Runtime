@@ -230,7 +230,9 @@ pub(crate) fn first_decision(
                 json!({"decision": result.decision, "capture_count": result.capture_count}),
             ));
         }
-        let warning = (!first.is_entry()).then(|| {
+        // Only a click of step 1 is left unsimulated; an application step 1 has nothing to
+        // simulate offline.
+        let warning = first.step.click.is_some().then(|| {
             not_evaluated_warning(
                 APPLICATION_OFFLINE,
                 "the package has an application step, so the offline simulation stops before \
