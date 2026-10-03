@@ -1,0 +1,87 @@
+name: one-off 336 L4b (to be reverted)
+
+# One-off evidence for the Workflow #336 L4 fix round (PR #601 review item 2): record stop on a
+# recording that already generated its package refuses a generation option with another value
+# (record_stop_option_conflict, exit 3) before anything is written and accepts an equal value.
+# The binaries are the Windows exact-SHA build artifacts of the product commit; frames are
+# synthetic, built from assets of a pack of the public umbrella v0.9.0 standard package.
+# Reverted right after its run; the PR's final diff contains neither this file nor one-off-336l4b/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  l4b:
+    name: L4 fix round option conflict evidence
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PRODUCT_SHA: 73c216da82ea19c8ab5412df4bbe7d7efbf0c343
+      BASE_SHA: 2421054bb9090efa2334bb1dfe30c99a4da151b1
+      GH_TOKEN: ${{ github.token }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git -C head rev-parse HEAD).Trim()
+          Write-Host "L4B|SCOPE|head $head product $env:PRODUCT_SHA base (the reviewed head) $env:BASE_SHA"
+          $diff = @(& git -C head diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-336l4b' ':(exclude).github/workflows/oneoff-336l4b.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+          & git -C head diff --stat $env:BASE_SHA $env:PRODUCT_SHA | ForEach-Object { Write-Host "L4B|SCOPE|fix round $_" }
+      - name: Inputs (umbrella standard package, product exact-SHA tools)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Get-Sha([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+          $root = $env:RUNNER_TEMP
+          $dir = Join-Path $root 'umbrella'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          foreach ($name in @('bluearchive-resources-193cfdd.zip', 'SHA256SUMS')) {
+            Invoke-WebRequest -Uri "https://github.com/HS7097/ActingCommand/releases/download/v0.9.0/$name" -OutFile (Join-Path $dir $name)
+          }
+          $actual = Get-Sha (Join-Path $dir 'bluearchive-resources-193cfdd.zip')
+          $line = @(Get-Content -LiteralPath (Join-Path $dir 'SHA256SUMS') | Where-Object { $_ -match 'bluearchive-resources-193cfdd\.zip$' })
+          if ($line.Count -ne 1 -or -not $line[0].StartsWith($actual)) { throw "umbrella package does not match SHA256SUMS" }
+          Write-Host "L4B|INPUT|umbrella v0.9.0 bluearchive-resources-193cfdd.zip sha256 $actual matches SHA256SUMS"
+          $runId = (& gh run list -R $env:GITHUB_REPOSITORY --workflow windows-remote-build.yml --commit $env:PRODUCT_SHA --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if ($LASTEXITCODE -ne 0 -or -not $runId) { throw "no successful exact-SHA build run for $env:PRODUCT_SHA" }
+          Write-Host "L4B|INPUT|exact-SHA build run $runId for $env:PRODUCT_SHA"
+          & gh run download $runId -R $env:GITHUB_REPOSITORY -n "actingcommand-tools-$env:PRODUCT_SHA" -D (Join-Path $root 'new/tools')
+          if ($LASTEXITCODE -ne 0) { throw "tools artifact download failed with exit code $LASTEXITCODE" }
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $root 'new/tools/BUILD-MANIFEST.json') | ConvertFrom-Json
+          if ($manifest.commit_sha -ne $env:PRODUCT_SHA) { throw "BUILD-MANIFEST commit $($manifest.commit_sha) is not $env:PRODUCT_SHA" }
+          foreach ($file in $manifest.files) {
+            if ((Get-Sha (Join-Path $root "new/tools/$($file.path)")) -ne $file.sha256) { throw "$($file.path) does not match BUILD-MANIFEST.json" }
+          }
+          Write-Host "L4B|INPUT|tools commit $($manifest.commit_sha) run $($manifest.workflow_run_id) files $(@($manifest.files).Count) verified"
+          & python -m pip install --quiet --disable-pip-version-check pillow
+          if ($LASTEXITCODE -ne 0) { throw "pip install pillow failed with exit code $LASTEXITCODE" }
+      - name: Evidence (option conflict)
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $root = $env:RUNNER_TEMP
+          & python head/one-off-336l4b/evidence.py prepare (Join-Path $root 'work') (Join-Path $root 'umbrella/bluearchive-resources-193cfdd.zip')
+          if ($LASTEXITCODE -ne 0) { throw "prepare failed with exit code $LASTEXITCODE" }
+          & python head/one-off-336l4b/evidence.py run (Join-Path $root 'work') (Join-Path $root 'new/tools')
+          if ($LASTEXITCODE -ne 0) { throw "evidence run failed with exit code $LASTEXITCODE" }
