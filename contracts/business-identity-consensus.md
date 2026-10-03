@@ -1,7 +1,7 @@
 # Business identity, consensus and catalog authoring
 
-These optional declarations extend recognition pack `0.7` candidate layouts and their task
-source declarations. The package carrier, physical `{layout_id}#{slot}` IDs, feature limit
+These optional declarations extend recognition pack `0.7` targets, candidate layouts and task
+source declarations (task `0.6` through `0.9`). The package carrier, physical `{layout_id}#{slot}` IDs, feature limit
 (8), slot limit (64), provider evaluation limit (16 OCR/NN calls per projection), and 32 KiB
 core projection limit remain unchanged. An undeclared capability uses the single-frame path.
 
@@ -33,12 +33,12 @@ Normalization folds fullwidth ASCII and halfwidth katakana, composes voiced kana
 removes whitespace, then applies up to 32 explicit simultaneous single-character confusion
 substitutions. The same normalization applies to aliases and readings. The bounded edit
 distance is at most 8; the required runner-up margin is 1..=9. Confidence is integer milli
-in 0..=1000; missing confidence remains unknown even at a zero floor.
+in 0..=1000, with a required floor in 1..=1000; missing confidence remains unknown.
 
 Icon recognition instead declares `{"kind":"icon_templates","minimum_score_milli":900,
 "minimum_margin_milli":50}` and each slot supplies `identity_templates[feature_name]`, with
 1..=16 `{id, variant?, target_id}` entries naming existing template targets. Thresholds are
-0..=1000, margins 1..=1000. The template score is normalized integer milli. Each pool closes
+1..=1000, margins 1..=1000. The template score is normalized integer milli. Each pool closes
 against the feature's identity domain and contains no repeated target ID.
 
 Best/runner-up comparison is between different business IDs. Multiple aliases or templates
@@ -71,6 +71,24 @@ evidence; the click rectangle and input frame reference come from its current fi
 
 ## Finite consensus
 
+The task and recognition pack can declare `target_consensus`, keyed by an existing target ID:
+
+```json
+{"target_consensus":{"ready":{"samples":[{"frame":0},{"frame":1},{"frame":2}],"k":2,"sample_interval_ms":50}}}
+```
+
+OCR, template, color and color-digest predicates use `k`-of-N through
+`SceneEvaluation::evaluate_target`; page rules, composite checks and input guards consume
+that same result. A target's frame indices are contiguous from zero, its interval is bounded
+to 1..=1000 ms when multiple frames are used, and multiple targets share the pack's interval.
+At least one sample uses the current frame with zero jitter. The current sample supplies
+the result's geometry. Single-frame target parameter variants require no additional captures.
+NN and composite targets do not declare sampling; composite members may declare it.
+Candidate feature mapping declares its own sampling on raw targets. One raw target has one
+sampling declaration owner: a target used by a candidate feature or as an OCR per-frame
+template anchor cannot also declare target consensus. Raw OCR observation explicitly refuses
+predicate consensus; authors use a separate raw reading target for inventory fields.
+
 Each feature may declare `consensus: {samples, aggregate}`. `samples` has 1..=5 entries:
 
 ```json
@@ -90,8 +108,10 @@ OCR, template, color and color-digest targets support sampling. NN and composite
 retain their single evaluation semantics and cannot declare consensus.
 
 The sample list is the one total budget: frames, jitter and parameter variants are not
-multiplied into separate hidden lists. Repeated identical entries are distinct actual samples;
-shared references to the same target/sample can share that recorded evaluation. Unaggregated
+multiplied into separate hidden lists. Samples must differ in actual frame, region or effective
+recognition parameter. Duplicate declarations, including an explicit default metric paired
+with the same implicit default, are refused before execution. Reusing a frame reference does
+not create another frame. Shared references to the same target/sample share its recorded evaluation. Unaggregated
 attributes are read from the transaction's latest frame. Evaluations cannot be reused across
 transactions, geometry changes, effects, or H1/H2.
 
@@ -116,6 +136,14 @@ are recorded as page-recognition waits and actual backend time as recognition ev
 No sample delay occurs after an input Intent. The final tap still uses the normal fenced input
 path. A consumer without the sampling checkpoint explicitly refuses sampled task execution.
 
+The kernel captures one bounded frame transaction for page detection, required-home checks
+and input guards; it checks geometry and active permission between captures and records each
+backend call before continuing. Target raw outcomes carry typed sample frame hashes, effective
+parameters, actual durations and optional verdicts (`null` on a failed call). Target aggregate
+rows retain `k`, per-sample evidence and the verdict. Sample records and their OCR children do
+not claim the latest capture's frame ID. The existing diagnostic artifact keeps raw inputs;
+single-frame offline consumers retain them inside `sample_evaluations` instead.
+
 `SceneEvaluation::project_candidates` is the single-frame adapter;
 `project_candidates_with_samples` consumes the exact scene set and uses the same mapping and
 aggregation. Offline `observe` and online contained observation use this owner. They currently
@@ -123,6 +151,9 @@ supply one frame: same-frame jitter/parameter consensus works, and a declaration
 more frames reports `candidate_samples_unavailable` with coverage. Online observation records
 that refusal as a partial observation with no successful recognition. Public candidate rows
 use the strictest privacy of their referenced targets; full inputs stay in controlled evidence.
+Target sampling likewise reports required/provided frames and `recognition_coverage`; an
+unsupported multi-frame observation has no successful recognition. Required raw sample
+evidence exceeding the existing observation budget fails instead of being omitted.
 
 ## One static catalog
 

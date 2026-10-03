@@ -739,11 +739,7 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         >,
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
-        self.inner.task_timing.record_evaluation(
-            timing,
-            self.inner.last_frame_id.map(|id| *id.transport()),
-            self.inner.current_recognition_id.map(|id| *id.transport()),
-        );
+        self.inner.task_timing.record_evaluation(timing, None, None);
         self.inner
             .diagnostic_guard(Some(target_id), Some(result), "candidate_sample")?;
         self.inner.ensure_active()
@@ -2472,11 +2468,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         >,
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
-        self.task_timing.record_evaluation(
-            timing,
-            self.last_frame_id.map(|id| *id.transport()),
-            self.current_recognition_id.map(|id| *id.transport()),
-        );
+        self.task_timing.record_evaluation(timing, None, None);
         self.diagnostic_guard(Some(target_id), Some(result), "candidate_sample")?;
         self.ensure_active()
     }

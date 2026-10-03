@@ -326,6 +326,17 @@ impl SceneEvaluation<'_> {
                 .validate_coordinate_space(scene)
                 .map_err(|error| CandidateProjectionFailure::feature(layout_id, error))?;
         }
+        if scenes.iter().enumerate().any(|(index, scene)| {
+            scenes[..index]
+                .iter()
+                .any(|prior| std::ptr::eq(*prior, *scene))
+        }) {
+            return Err(CandidateProjectionFailure::new(
+                "candidate_samples_unavailable",
+                "frames",
+                "frame references must name distinct captures",
+            ));
+        }
         if layout.kind != CandidateLayoutKind::FixedSlots {
             return Err(CandidateProjectionFailure::new(
                 CANDIDATE_LAYOUT_UNKNOWN,
@@ -406,10 +417,13 @@ impl SceneEvaluation<'_> {
             for feature in &layout.features {
                 let samples = layout.feature_samples(feature);
                 let mut observed = Vec::with_capacity(samples.len());
-                for (sample_index, sample) in samples.iter().enumerate() {
+                for sample in &samples {
                     let mut evaluate =
                         |target_id: &str| -> Result<TargetEvaluation, CandidateProjectionFailure> {
-                            let key = sample_key(sample_index, *sample, target_id);
+                            let key = sample_key(
+                                sample.effective(evaluator.pack.defaults.match_metric),
+                                target_id,
+                            );
                             if let Some(value) = evaluations.get(&key) {
                                 return Ok(value.clone());
                             }
@@ -420,12 +434,49 @@ impl SceneEvaluation<'_> {
                                 } else {
                                     &contexts[usize::from(sample.frame)]
                                 };
-                            let result = if feature.consensus.is_some() {
+                            let mut result = if feature.consensus.is_some() {
                                 context.evaluate_candidate_sample(target_id, *sample)
                             } else {
                                 context.evaluate_target(target_id)
                             };
                             let ended = Instant::now();
+                            if let Some(hashes) = &frame_hashes {
+                                let sample_data =
+                                    actingcommand_contract::TaskDiagnosticSampleData {
+                                        frame_index: sample.frame,
+                                        frame_rgb8_sha256: hashes[usize::from(sample.frame)]
+                                            .clone(),
+                                        dx: sample.dx,
+                                        dy: sample.dy,
+                                        template_metric: matches!(
+                                            evaluator.target(target_id),
+                                            Ok(RecognitionTarget::Template(_))
+                                        )
+                                        .then(|| {
+                                            match sample
+                                                .template_metric
+                                                .unwrap_or(evaluator.pack.defaults.match_metric)
+                                            {
+                                                crate::RecognitionMatchMetric::CcorrNormed => {
+                                                    "ccorr_normed"
+                                                }
+                                                crate::RecognitionMatchMetric::CcoeffNormed => {
+                                                    "ccoeff_normed"
+                                                }
+                                            }
+                                            .to_owned()
+                                        }),
+                                        elapsed_us: u64::try_from(
+                                            ended.duration_since(started).as_micros(),
+                                        )
+                                        .unwrap_or(u64::MAX),
+                                        passed: result.as_ref().ok().map(|value| value.passed),
+                                    };
+                                match &mut result {
+                                    Ok(value) => value.sampling = Some(actingcommand_contract::TaskDiagnosticSamplingData::Sample { sample: sample_data }),
+                                    Err(error) => error.sample = Some(Box::new(sample_data)),
+                                }
+                            }
                             record(target_id, &result, started, ended)?;
                             let result = result.map_err(|error| {
                                 CandidateProjectionFailure::feature(target_id, error)
@@ -567,11 +618,10 @@ impl SceneEvaluation<'_> {
     }
 }
 
-type SampleKey = (usize, u8, i16, i16, u8, String);
+type SampleKey = (u8, i16, i16, u8, String);
 
-fn sample_key(index: usize, sample: CandidateSampleVariant, target: &str) -> SampleKey {
+fn sample_key(sample: CandidateSampleVariant, target: &str) -> SampleKey {
     (
-        index,
         sample.frame,
         sample.dx,
         sample.dy,
@@ -648,7 +698,7 @@ impl CandidateLayout {
     pub fn maximum_provider_and_wait_ms(&self, evaluator: &RecognitionEvaluator) -> u64 {
         let provider = sample_calls(self)
             .keys()
-            .map(|key| match evaluator.target(&key.5).ok() {
+            .map(|key| match evaluator.target(&key.4).ok() {
                 Some(RecognitionTarget::Ocr(target)) => target.timeout_ms,
                 Some(RecognitionTarget::Nn(target)) => target.timeout_ms,
                 Some(RecognitionTarget::Composite(target)) => target
@@ -672,13 +722,13 @@ fn sample_calls(layout: &CandidateLayout) -> BTreeMap<SampleKey, CandidateSample
     let mut calls = BTreeMap::new();
     for slot in &layout.slots {
         for feature in &layout.features {
-            for (index, sample) in layout.feature_samples(feature).into_iter().enumerate() {
+            for sample in layout.feature_samples(feature) {
                 if let Some(target) = slot.targets.get(&feature.name) {
-                    calls.insert(sample_key(index, sample, target), sample);
+                    calls.insert(sample_key(sample, target), sample);
                 }
                 if let Some(templates) = slot.identity_templates.get(&feature.name) {
                     for template in templates {
-                        calls.insert(sample_key(index, sample, &template.target_id), sample);
+                        calls.insert(sample_key(sample, &template.target_id), sample);
                     }
                 }
             }
@@ -858,7 +908,7 @@ fn provider_evaluations<'t>(
     };
     sample_calls(layout)
         .into_keys()
-        .map(|key| match target(&key.5) {
+        .map(|key| match target(&key.4) {
             Some(RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_)) => 1,
             Some(RecognitionTarget::Composite(composite)) => composite
                 .members
@@ -1162,6 +1212,12 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
                         );
                     for id in ids {
                         if let Some(target) = targets.get(id) {
+                            crate::target_consensus::validate_sample_variants(
+                                pack,
+                                target,
+                                &consensus.samples,
+                                errors,
+                            );
                             for sample in &consensus.samples {
                                 match sample.target(target) {
                                     Err(error) => errors.push(format!(
@@ -1250,6 +1306,16 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
                     errors.push(format!(
                         "{slot_pointer}/identity_templates/{name}: undeclared identity feature"
                     ));
+                }
+            }
+            for id in slot.targets.values().chain(
+                slot.identity_templates
+                    .values()
+                    .flatten()
+                    .map(|template| &template.target_id),
+            ) {
+                if pack.target_consensus.contains_key(id) {
+                    errors.push(format!("{slot_pointer}: candidate feature sampling requires a raw target; '{id}' also declares target consensus"));
                 }
             }
         }

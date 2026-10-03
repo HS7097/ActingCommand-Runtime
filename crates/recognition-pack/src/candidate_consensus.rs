@@ -59,6 +59,16 @@ impl CandidateConsensus {
         {
             return Err("consensus requires 1..=5 samples; frame 0..=4 and jitter -8..=8".into());
         }
+        if self
+            .samples
+            .iter()
+            .enumerate()
+            .any(|(index, sample)| self.samples[..index].contains(sample))
+        {
+            return Err(
+                "consensus samples must differ in frame, region or recognition parameter".into(),
+            );
+        }
         let valid = match (value, self.aggregate) {
             (
                 CandidateFeatureValue::Passed
@@ -90,7 +100,14 @@ impl CandidateConsensus {
             reason: CandidateUnknownReason::NoConsensus,
             source: None,
         };
-        if values.len() != self.samples.len() || values.is_empty() {
+        if values.len() != self.samples.len()
+            || values.is_empty()
+            || self
+                .samples
+                .iter()
+                .enumerate()
+                .any(|(index, sample)| self.samples[..index].contains(sample))
+        {
             return unknown();
         }
         let confidence = values
@@ -238,6 +255,12 @@ impl CandidateConsensus {
 }
 
 impl CandidateSampleVariant {
+    pub(crate) fn effective(self, metric: RecognitionMatchMetric) -> Self {
+        Self {
+            template_metric: Some(self.template_metric.unwrap_or(metric)),
+            ..self
+        }
+    }
     pub(crate) fn target(
         &self,
         target: &RecognitionTarget,

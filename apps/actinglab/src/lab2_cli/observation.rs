@@ -305,6 +305,7 @@ pub(super) fn project(
             "frame_path",
             "candidate_sets",
             "candidate_coverage",
+            "recognition_coverage",
         ]
         .map(str::to_string),
     );

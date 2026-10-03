@@ -980,6 +980,27 @@ impl OperationParser {
         validate_check_members(&targets, &self.bundles)?;
         propagate_color_checks(&mut targets, &order);
         let candidate_layouts = derive_candidate_layouts(&targets, &self.bundles, &self.game)?;
+        let mut target_consensus = Map::new();
+        for bundle in &self.bundles {
+            if let Some(declarations) = bundle
+                .data
+                .get("target_consensus")
+                .and_then(Value::as_object)
+            {
+                for (id, declaration) in declarations {
+                    if !targets.contains_key(id)
+                        || target_consensus
+                            .get(id)
+                            .is_some_and(|prior| prior != declaration)
+                    {
+                        return Err(CliError::package_invalid(format!(
+                            "target_consensus/{id}: missing target or conflicting declaration"
+                        )));
+                    }
+                    target_consensus.insert(id.clone(), declaration.clone());
+                }
+            }
+        }
         let targets = order
             .iter()
             .filter_map(|id| targets.get(id).cloned())
@@ -999,6 +1020,10 @@ impl OperationParser {
         // The key is written only when a layout is declared, so every other pack is unchanged.
         if !candidate_layouts.is_empty() {
             pack["candidate_layouts"] = Value::Array(candidate_layouts);
+        }
+        if !target_consensus.is_empty() {
+            pack["schema_version"] = Value::String("0.7".into());
+            pack["target_consensus"] = Value::Object(target_consensus);
         }
         validate_generated_ocr_targets(&self.root, &pack, files)?;
         Ok(pack)

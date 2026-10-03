@@ -262,7 +262,33 @@ impl PreparedPageObservation {
                 error,
             )
         })?;
-        let context = evaluator.scene_context(&scene);
+        let sample_facts = std::cell::RefCell::new(ObservationFacts::default());
+        let sample_reports = std::cell::RefCell::new(PpocrDiagnostics::new());
+        let mut sample_recorder =
+            |target: &str,
+             result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
+             _started: std::time::Instant,
+             _ended: std::time::Instant| {
+                let reports = match result {
+                    Ok(value) => value.ppocr_diagnostics(),
+                    Err(error) => error.ppocr_diagnostics(),
+                };
+                sample_reports.borrow_mut().extend_from_slice(reports);
+                let row = json!({"kind":"recognition_sample","target_id":target,"result":result});
+                let mut facts = sample_facts.borrow_mut();
+                facts.push(row, 1).map_err(|error| {
+                    actingcommand_recognition_pack::RecognitionPackError::fatal(error.to_string())
+                })?;
+                if facts.omitted_count > 0 {
+                    return Err(actingcommand_recognition_pack::RecognitionPackError::fatal(
+                        "recognition sample evidence exceeds observation budget",
+                    ));
+                }
+                Ok(())
+            };
+        let context = evaluator
+            .scene_context(&scene)
+            .with_sample_recorder(&mut sample_recorder);
         let (pages, batch_error) = match detector.evaluate_all_outcomes_in_context(&context) {
             Ok(pages) => (pages, None),
             Err(error) => (error.completed.clone(), Some(error)),
@@ -281,6 +307,13 @@ impl PreparedPageObservation {
         let mut complete = batch_error.is_none() && pages.iter().all(|page| page.result.is_ok());
         let mut private_facts = ObservationFacts::default();
         let mut facts = ObservationFacts::default();
+        if !evaluator.pack().target_consensus.is_empty() {
+            let supported = evaluator.target_sample_frames() == 1;
+            complete &= supported;
+            let row = json!({"kind":"recognition_coverage","provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":if supported { "production_owner" } else { "not_completed" }});
+            private_facts.push(row.clone(), 0).map_err(fact_error)?;
+            facts.push(row, 0).map_err(fact_error)?;
+        }
         let mut actual: Vec<(Option<String>, PageTargetEvaluation)> = Vec::new();
         let mut matched_pages = Vec::new();
         for page in &pages {
@@ -483,6 +516,21 @@ impl PreparedPageObservation {
                     .with_ppocr_diagnostics(ppocr_diagnostics));
                 }
             }
+        }
+        ppocr_diagnostics.extend(sample_reports.borrow().iter().cloned());
+        for row in &sample_facts.borrow().rows {
+            private_facts.push(row.clone(), 1).map_err(fact_error)?;
+            facts
+                .push(redact_row(row.clone(), metadata), 1)
+                .map_err(fact_error)?;
+        }
+        if !evaluator.pack().target_consensus.is_empty()
+            && (private_facts.omitted_count > 0 || sample_facts.borrow().omitted_count > 0)
+        {
+            return Err(
+                fact_error("recognition sample evidence exceeds observation budget")
+                    .with_ppocr_diagnostics(ppocr_diagnostics),
+            );
         }
         let status = if !complete {
             PageObservationStatus::Partial

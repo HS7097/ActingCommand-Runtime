@@ -22,6 +22,8 @@ use std::sync::Arc;
 mod candidate_consensus;
 mod candidate_identity;
 mod candidate_layout;
+mod target_consensus;
+pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 
 pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, CandidateSampleVariant};
 
@@ -82,6 +84,8 @@ pub struct RecognitionPackError {
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
     #[serde(skip)]
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sample: Option<Box<actingcommand_contract::TaskDiagnosticSampleData>>,
 }
 
 impl RecognitionPackError {
@@ -98,6 +102,7 @@ impl RecognitionPackError {
             timing: None,
             declaration_issue: None,
             ppocr_diagnostics: Vec::new(),
+            sample: None,
         }
     }
 
@@ -111,6 +116,10 @@ impl RecognitionPackError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn sample(&self) -> Option<&actingcommand_contract::TaskDiagnosticSampleData> {
+        self.sample.as_deref()
     }
 
     pub fn ppocr_diagnostics(&self) -> &actingcommand_contract::PpocrDiagnostics {
@@ -235,6 +244,8 @@ pub struct RecognitionPack {
     /// Schema 0.7: the candidate layouts the pack's pages declare; absent means none.
     #[serde(default)]
     pub candidate_layouts: Vec<CandidateLayout>,
+    #[serde(default)]
+    pub target_consensus: std::collections::BTreeMap<String, TargetConsensus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -708,6 +719,10 @@ pub struct TargetEvaluation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub composite: Option<Box<CompositeEvaluation>>,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<actingcommand_contract::TaskDiagnosticSamplingData>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sample_evaluations: Vec<TargetEvaluation>,
 }
 
 impl TargetEvaluation {
@@ -905,6 +920,9 @@ pub struct SceneEvaluation<'a> {
     evaluator: &'a RecognitionEvaluator,
     scene: &'a Scene,
     templates: RefCell<HashMap<String, RecognitionPackResult<TargetEvaluation>>>,
+    sample_scenes: Vec<&'a Scene>,
+    sample_recorder: Option<RefCell<&'a mut TargetSampleRecorder<'a>>>,
+    consensus_results: RefCell<HashMap<String, RecognitionPackResult<TargetEvaluation>>>,
 }
 
 impl SceneEvaluation<'_> {
@@ -916,6 +934,16 @@ impl SceneEvaluation<'_> {
     }
 
     pub fn evaluate_target(&self, target_id: &str) -> RecognitionPackResult<TargetEvaluation> {
+        if let Some(consensus) = self.evaluator.pack.target_consensus.get(target_id) {
+            if let Some(result) = self.consensus_results.borrow().get(target_id) {
+                return result.clone();
+            }
+            let result = self.evaluate_consensus(target_id, consensus);
+            self.consensus_results
+                .borrow_mut()
+                .insert(target_id.to_owned(), result.clone());
+            return result;
+        }
         let is_template = self.evaluator.target_kind(target_id)? == TargetKind::Template;
         if is_template && let Some(result) = self.templates.borrow().get(target_id) {
             return result.clone();
@@ -934,6 +962,11 @@ impl SceneEvaluation<'_> {
         &self,
         target_id: &str,
     ) -> RecognitionPackResult<OcrObservationEvaluation> {
+        if self.evaluator.pack.target_consensus.contains_key(target_id) {
+            return Err(RecognitionPackError::fatal(
+                "raw OCR observation does not consume target predicate consensus; declare a separate raw OCR target",
+            ));
+        }
         self.evaluator
             .evaluate_ocr_observation_in_scene(self, target_id, None)
     }
@@ -1001,6 +1034,7 @@ impl SceneEvaluation<'_> {
                 timing: None,
                 declaration_issue: None,
                 ppocr_diagnostics: Vec::new(),
+                sample: None,
             }
         };
         if !evaluated.passed {
@@ -1057,6 +1091,9 @@ impl RecognitionEvaluator {
             evaluator: self,
             scene,
             templates: RefCell::new(HashMap::new()),
+            sample_scenes: vec![scene],
+            sample_recorder: None,
+            consensus_results: RefCell::new(HashMap::new()),
         }
     }
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {
@@ -1549,6 +1586,8 @@ impl RecognitionEvaluator {
         Ok(TargetEvaluation {
             id: target.id.clone(),
             kind: TargetKind::Template,
+            sample_evaluations: Vec::new(),
+            sampling: None,
             passed,
             template: Some(template),
             color,
@@ -1644,6 +1683,8 @@ impl RecognitionEvaluator {
         Ok(TargetEvaluation {
             id: target.id.clone(),
             kind: TargetKind::Template,
+            sample_evaluations: Vec::new(),
+            sampling: None,
             passed,
             template: Some(TemplateEvaluation {
                 x: matched.x,
@@ -1688,6 +1729,8 @@ impl RecognitionEvaluator {
         Ok(TargetEvaluation {
             id: target.id.clone(),
             kind: TargetKind::Color,
+            sample_evaluations: Vec::new(),
+            sampling: None,
             passed,
             template: None,
             color: Some(color),
@@ -1751,6 +1794,8 @@ impl RecognitionEvaluator {
             Ok(TargetEvaluation {
                 id: target.id.clone(),
                 kind: TargetKind::Ocr,
+                sample_evaluations: Vec::new(),
+                sampling: None,
                 passed,
                 template: None,
                 color: None,
@@ -1815,6 +1860,8 @@ impl RecognitionEvaluator {
         Ok(TargetEvaluation {
             id: target.id.clone(),
             kind: TargetKind::Nn,
+            sample_evaluations: Vec::new(),
+            sampling: None,
             passed,
             template: None,
             color: None,
@@ -1862,6 +1909,8 @@ impl RecognitionEvaluator {
         Ok(TargetEvaluation {
             id: target.id.clone(),
             kind: TargetKind::ColorDigest,
+            sample_evaluations: Vec::new(),
+            sampling: None,
             passed,
             template: None,
             color: None,
@@ -1941,6 +1990,8 @@ impl RecognitionEvaluator {
         Ok(TargetEvaluation {
             id: target.id.clone(),
             kind: TargetKind::Composite,
+            sample_evaluations: Vec::new(),
+            sampling: None,
             passed,
             template: None,
             color: None,
@@ -2069,7 +2120,9 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             ));
         }
     }
-    if schema != SCHEMA_0_7 && root.contains_key("candidate_layouts") {
+    if schema != SCHEMA_0_7
+        && (root.contains_key("candidate_layouts") || root.contains_key("target_consensus"))
+    {
         return Err(RecognitionPackError::fatal(format!(
             "schema {schema} recognition pack declares candidate_layouts, which requires schema_version '{SCHEMA_0_7}'"
         ))
@@ -2090,6 +2143,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             "defaults",
             "targets",
             "candidate_layouts",
+            "target_consensus",
         ],
         "",
     )?;
@@ -2622,6 +2676,7 @@ fn validate_pack(
             }
         }
     }
+    target_consensus::validate_target_consensus(pack, errors);
     candidate_layout::validate_candidate_layouts(pack, errors);
 }
 
@@ -3666,7 +3721,12 @@ mod tests {
             }
         ));
         let consensus = CandidateConsensus {
-            samples: vec![CandidateSampleVariant::default(); 3],
+            samples: (0..3)
+                .map(|frame| CandidateSampleVariant {
+                    frame,
+                    ..CandidateSampleVariant::default()
+                })
+                .collect(),
             aggregate: CandidateAggregation::Majority { k: 2 },
         };
         let values = [
@@ -3685,7 +3745,12 @@ mod tests {
             }
         ));
         let median = CandidateConsensus {
-            samples: vec![CandidateSampleVariant::default(); 4],
+            samples: (0..4)
+                .map(|frame| CandidateSampleVariant {
+                    frame,
+                    ..CandidateSampleVariant::default()
+                })
+                .collect(),
             aggregate: CandidateAggregation::Median,
         };
         assert_eq!(
@@ -3702,15 +3767,64 @@ mod tests {
         projected.pack.schema_version = "0.7".into();
         projected.pack.candidate_layouts = vec![serde_json::from_value(serde_json::json!({
             "id":"choices","page_id":"home","kind":"fixed_slots",
-            "features":[{"name":"business_id","value":"identity","identity":identity,"consensus":{"samples":[{},{},{}],"aggregate":{"kind":"majority","k":2}}}],
+            "sample_interval_ms":1,
+            "features":[{"name":"business_id","value":"identity","identity":identity,"consensus":{"samples":[{"frame":0},{"frame":1},{"frame":2}],"aggregate":{"kind":"majority","k":2}}}],
             "slots":[{"rect":{"x":0,"y":0,"width":2,"height":1},"click":{"x":0,"y":0,"width":2,"height":1},"targets":{"business_id":"ocr/page"}}]
         })).unwrap()];
+        let second = Scene::from_rgb8(2, 1, &[1, 2, 3, 4, 5, 6]).unwrap();
+        let third = Scene::from_rgb8(2, 1, &[1, 2, 3, 4, 5, 6]).unwrap();
         let projection = projected
-            .scene_context(&scene)
-            .project_candidates("choices")
+            .scene_context(&third)
+            .project_candidates_with_samples(
+                "choices",
+                &[&scene, &second, &third],
+                &mut |_, _, _, _| Ok(()),
+            )
             .unwrap();
         projection.validate().unwrap();
         assert_eq!(projection.recognition_evidence()[0].samples.len(), 3);
+        let repeated = CandidateConsensus {
+            samples: vec![CandidateSampleVariant::default(); 3],
+            aggregate: CandidateAggregation::KOfN { k: 2 },
+        };
+        assert!(repeated.validate(CandidateFeatureValue::Passed).is_err());
+        assert!(matches!(
+            repeated.aggregate(&[true; 3].map(|value| CandidateFeature::Boolean {
+                value,
+                confidence: None
+            })),
+            CandidateFeature::Unknown { .. }
+        ));
+        let mut predicate = exact.clone();
+        predicate.pack.target_consensus.insert(
+            "ocr/page".into(),
+            TargetConsensus {
+                samples: consensus.samples.clone(),
+                k: 2,
+                sample_interval_ms: 1,
+            },
+        );
+        assert!(
+            predicate
+                .scene_context(&scene)
+                .evaluate_target("ocr/page")
+                .is_err()
+        );
+        let context = predicate
+            .scene_context_with_samples(&[&scene, &second, &third])
+            .unwrap();
+        let result = context.evaluate_target("ocr/page").unwrap();
+        assert!(result.passed);
+        assert_eq!(result.sample_evaluations.len(), 3);
+        assert!(matches!(
+            result.sampling,
+            Some(actingcommand_contract::TaskDiagnosticSamplingData::Consensus { k: 2, .. })
+        ));
+        assert!(
+            predicate
+                .scene_context_with_samples(&[&scene, &scene, &third])
+                .is_err()
+        );
         assert!(
             matches!(&projection.candidates()[0].features["business_id"], CandidateFeature::Identity { value, .. } if value == "first")
         );
@@ -4887,6 +5001,7 @@ mod tests {
                 height: 20,
             }),
             defaults: RecognitionDefaults::default(),
+            target_consensus: Default::default(),
             candidate_layouts: Vec::new(),
             targets: Vec::new(),
         }

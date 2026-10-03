@@ -230,6 +230,8 @@ pub struct TaskDiagnosticRecognitionError {
     pub region: Option<Box<crate::OcrRegionEvidence>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<super::TemplateMatchTimingObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<Box<TaskDiagnosticSampleData>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,6 +244,32 @@ pub struct TaskDiagnosticTargetData {
     pub template: Option<TaskDiagnosticTemplateData>,
     pub color: Option<TaskDiagnosticColorData>,
     pub source: TaskDiagnosticTargetSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<TaskDiagnosticSamplingData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticSampleData {
+    pub frame_index: u8,
+    pub frame_rgb8_sha256: String,
+    pub dx: i16,
+    pub dy: i16,
+    pub template_metric: Option<String>,
+    pub elapsed_us: u64,
+    pub passed: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskDiagnosticSamplingData {
+    Sample {
+        sample: TaskDiagnosticSampleData,
+    },
+    Consensus {
+        k: u8,
+        samples: Vec<TaskDiagnosticSampleData>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

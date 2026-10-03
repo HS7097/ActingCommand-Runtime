@@ -116,7 +116,7 @@ impl CandidateIdentityDeclaration {
             } => {
                 if *max_distance > 8
                     || !(1..=9).contains(minimum_margin)
-                    || *minimum_confidence_milli > 1000
+                    || !(1..=1000).contains(minimum_confidence_milli)
                     || confusions.len() > 32
                     || confusions.iter().any(|(from, to)| {
                         from.chars().count() != 1
@@ -134,7 +134,9 @@ impl CandidateIdentityDeclaration {
                 minimum_score_milli,
                 minimum_margin_milli,
             } => {
-                if *minimum_score_milli > 1000 || !(1..=1000).contains(minimum_margin_milli) {
+                if !(1..=1000).contains(minimum_score_milli)
+                    || !(1..=1000).contains(minimum_margin_milli)
+                {
                     return Err("invalid icon identity score or margin".into());
                 }
             }

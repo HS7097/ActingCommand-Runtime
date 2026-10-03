@@ -312,18 +312,18 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
             }
         }
     }
-    if layout
-        .features
-        .iter()
-        .any(|feature| feature.identity.is_some())
-        && policy.gates.iter().any(|gate| {
-            matches!(
-                gate.on_unknown,
-                GateUnknownHandling::SubstituteVerdict { passes: true }
-            )
-        })
-    {
-        return Err("identity selection requires fail-closed hard gates".into());
+    if layout.features.iter().any(|feature| {
+        feature.identity.is_some() || feature.integer.is_some() || feature.consensus.is_some()
+    }) && policy.gates.iter().any(|gate| {
+        matches!(
+            gate.on_unknown,
+            GateUnknownHandling::SubstituteVerdict { passes: true }
+        )
+    }) {
+        return Err(
+            "declared identity, integer or consensus selection requires fail-closed hard gates"
+                .into(),
+        );
     }
     if layout.unknown_identity == UnknownIdentityHandling::ReadableAttributes {
         for term in &policy.scoring {
@@ -568,7 +568,7 @@ impl PreparedContainedTask {
             });
             check_deadline()?;
             let frame = self
-                .capture_frame(runtime, None, None, timing)?
+                .capture_frame(runtime, None, None, timing, None)?
                 .ok_or_else(|| ContainedTaskError::new(SELECTION_PAGE_CHANGED))?;
             if !crate::page_anchor_matches(&self.control.game, &frame.page_label, &operation.from)
                 || frame.scene.width() != first.scene.width()
@@ -718,7 +718,6 @@ impl PreparedContainedTask {
             Some(candidate_id) => self.confirm(
                 runtime,
                 operation,
-                prepared,
                 &projection,
                 candidate_id,
                 timing,
@@ -759,13 +758,16 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         operation: &TaskOperation,
-        prepared: &PreparedSelect,
         projection: &CandidateProjection,
         candidate_id: &str,
         timing: ContainedTaskTimingContext,
         deadline: Instant,
     ) -> Result<Confirmation<R::Error>, ContainedTaskRunError<R::Error>> {
-        let frame = match self.capture_frame(runtime, None, None, timing) {
+        let prepared = operation
+            .prepared_select
+            .as_deref()
+            .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+        let frame = match self.capture_frame(runtime, None, None, timing, None) {
             Ok(frame) => frame,
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((

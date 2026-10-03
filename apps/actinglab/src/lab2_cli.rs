@@ -82,6 +82,12 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let instance = lab2_instance(global, &flags);
     let resources = super::contained_resources::load(&flags, "observe")?;
     let (evaluator, _) = super::contained_resources::recognition_pipeline(&resources)?;
+    if evaluator.target_sample_frames() > 1 {
+        return Err(CliError::package_invalid(format!(
+            "recognition samples unavailable: offline observe provides 1 frame; target consensus requires {}; aggregation not completed",
+            evaluator.target_sample_frames()
+        )));
+    }
     let view = super::contained_resources::observation_resources(&resources)?;
     let loaded_scene = load_lab2_scene(global, &flags)?;
     let (outcome, recovery_hint) = observation::detect(resources, &loaded_scene.scene)?;
@@ -107,6 +113,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "targets": targets,
         "actions": actions,
         "arbitration": isolated_offline_projection(),
+        "recognition_coverage": {"provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":"production_owner"},
     });
     if outcome.matched {
         let mut sets = Vec::new();

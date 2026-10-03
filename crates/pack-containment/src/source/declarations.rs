@@ -2449,6 +2449,7 @@ impl Declaration<'_> {
                 "ocr_targets",
                 "checks",
                 "candidate_layouts",
+                "target_consensus",
                 "page_rules",
             ],
         )?;
@@ -2495,6 +2496,12 @@ impl Declaration<'_> {
         if object.contains_key("candidate_layouts") && !self.schema_0_6_or_later() {
             return Err(self.error(
                 "/candidate_layouts",
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
+        if object.contains_key("target_consensus") && !self.schema_0_6_or_later() {
+            return Err(self.error(
+                "/target_consensus",
                 ResourceDeclarationReason::UnconsumedField,
             ));
         }
@@ -2556,6 +2563,19 @@ impl Declaration<'_> {
                 }
                 "checks" => self.checks(value, &pointer)?,
                 "candidate_layouts" => self.candidate_layouts(value, &pointer, frame)?,
+                "target_consensus" => {
+                    let values: std::collections::BTreeMap<
+                        String,
+                        actingcommand_recognition_pack::TargetConsensus,
+                    > = serde_json::from_value(value.clone()).map_err(|_| {
+                        self.error(&pointer, ResourceDeclarationReason::InvalidType)
+                    })?;
+                    for declaration in values.values() {
+                        declaration.validate().map_err(|_| {
+                            self.error(&pointer, ResourceDeclarationReason::InvalidValue)
+                        })?;
+                    }
+                }
                 "page_rules" => {
                     let rules = value.as_object().ok_or_else(|| {
                         self.error(&pointer, ResourceDeclarationReason::InvalidType)
