@@ -407,9 +407,10 @@ return-home package.
 **Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
 detail of its task failure is always the native detail of the run's runtime lifecycle failure
 record (at most 1024 bytes): for example `operation=<id> attempts=<n> after_page=<page>
-hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's details above, the failure
-of a prerequisite or return-home package it ran included. A page-graph package's failure is
-unchanged: only the two resource-reading codes carry their detail.
+hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's own details above. The gate
+carries a prerequisite or return-home package's own failure out as its code, with its detail
+only for a recognition failure or an unknown page ("Prerequisite packages" above). A page-graph
+package's failure is unchanged: only the two resource-reading codes carry their detail.
 
 ## Failure codes
 
