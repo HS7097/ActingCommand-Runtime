@@ -21,7 +21,7 @@
 //! opened (`EntryRecoveryPackageAdmitted`) and not yet closed (`EntryRecoveryCompleted` /
 //! `EntryRecoveryFailed`), or to the dependent package when none is open.
 
-use super::contained_task::{EntryRecoveryRuntime, prepare_contained_task};
+use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, prepare_contained_task};
 use super::*;
 use actingcommand_contract::{PackageRef, TaskTimingBudgetOrigin};
 
@@ -36,7 +36,7 @@ const CYCLE: &str = "contained_task_prerequisite_cycle";
 const DEPTH_EXCEEDED: &str = "contained_task_prerequisite_depth_exceeded";
 const ADMISSION_FAILED: &str = "contained_task_prerequisite_admission_failed";
 const MISMATCH: &str = "contained_task_prerequisite_mismatch";
-const INCOMPATIBLE: &str = "contained_task_prerequisite_incompatible";
+pub(super) const INCOMPATIBLE: &str = "contained_task_prerequisite_incompatible";
 const STEP_LIMIT: &str = "contained_task_prerequisite_step_limit";
 const FINAL_PAGE_MISSING: &str = "contained_task_prerequisite_final_page_missing";
 const RESOLVE_OPERATION: &str = "resolve_prerequisite_chain";
@@ -67,6 +67,38 @@ fn prerequisite_admission_failure(mut failure: RequestFailure, detail: String) -
     error.lifecycle.resource_declaration = failure.error.lifecycle.resource_declaration.take();
     failure.error = Box::new(error);
     failure
+}
+
+/// Workflow #336 L2d: why a return-home package from `return_home_packages` cannot stand in for
+/// `dependent` on the stuck-recovery ladder's first rung or in the page-graph home entry, as the
+/// detail of a `contained_task_prerequisite_incompatible` refusal: the checks the chain applies to
+/// a return-home layer, then a prerequisite package of its own, which neither path runs.
+pub(super) fn configured_return_home_incompatibility(
+    package: &PreparedContainedTask,
+    dependent: &PackageIdentity,
+) -> Option<String> {
+    let reason = package.prerequisite_incompatibility().or_else(|| {
+        if package.game() != dependent.game {
+            Some("game")
+        } else if package.server() != dependent.server {
+            Some("server")
+        } else if package.resolution() != dependent.resolution {
+            Some("resolution")
+        } else if package.prerequisite_package_id().is_some() {
+            Some("return_home_declares_prerequisite")
+        } else {
+            None
+        }
+    })?;
+    Some(format!(
+        "package_id={} reason={reason} source=return_home",
+        package.package_label()
+    ))
+}
+
+/// Workflow #336 L2d: the ladder's refusal of a configured return-home package, before any lease.
+pub(super) fn configured_return_home_refusal(detail: String) -> RequestFailure {
+    prerequisite_refusal(INCOMPATIBLE, detail)
 }
 
 impl HostShared {

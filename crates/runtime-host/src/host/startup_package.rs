@@ -78,6 +78,9 @@ pub(super) struct PendingStartupPackage {
     /// admission id).
     pub(super) control_request_id: RequestId,
     pub(super) run: HostPackageRun,
+    /// Workflow #336 L2d: on a ladder rung run of the configured return-home package, the
+    /// failed package it must match.
+    pub(super) configured_return_home: Option<super::contained_task::PackageIdentity>,
 }
 
 /// Binds the configured startup packages to registered physical instances at startup. An
@@ -190,6 +193,7 @@ impl HostShared {
             causation_id,
             control_request_id,
             run: HostPackageRun::StartupPackage,
+            configured_return_home: None,
         }))
     }
 

@@ -27,7 +27,7 @@
 //! correlation id, under the ladder's own request and causation ids; the `return_home` run
 //! carries that causation id, the startup package runs the one of their scheduling event.
 
-use super::contained_task::ContainedRunControl;
+use super::contained_task::{ContainedRunControl, PackageIdentity};
 use super::startup_package::{HostPackageRun, PendingHostWork, PendingStartupPackage};
 use super::*;
 use actingcommand_contract::{
@@ -54,8 +54,9 @@ pub(super) struct PendingRecoveryLadder {
     instance_alias: String,
     trigger: RecoveryLadderTrigger,
     recovery: Option<ContainedTaskRecoveryBinding>,
-    /// Workflow #336 L2d: `recovery` is the configured return-home package (the run bound none).
-    recovery_configured: bool,
+    /// Workflow #336 L2d: when `recovery` is the configured return-home package (the run bound
+    /// none), the failed package it must match.
+    recovery_configured: Option<PackageIdentity>,
     /// Instance, trigger correlation id, the ladder's request id and causation id.
     links: EventLinksDraft,
     /// The ladder's request id: task timing admission id of its rung runs.
@@ -153,13 +154,16 @@ impl HostShared {
         }
         // Workflow #336 L2d (R23): a run that binds no recovery package takes the return-home
         // package actingd configures for its package's game and server.
-        let configured = match task_request.recovery() {
-            Some(_) => None,
+        let (recovery, recovery_configured) = match task_request.recovery() {
+            Some(binding) => (Some(binding.clone()), None),
             None => {
-                let (game, server) = control
-                    .package_game_server()
+                let failed = control
+                    .package()
                     .ok_or_else(|| ladder_invariant("recovery_ladder_package_missing"))?;
-                self.configured_return_home(game, server)?
+                match self.configured_return_home(&failed.game, &failed.server)? {
+                    Some(binding) => (Some(binding.clone()), Some(failed.clone())),
+                    None => (None, None),
+                }
             }
         };
         let issuer = self.events.issuer();
@@ -177,8 +181,8 @@ impl HostShared {
                 task_id: *terminal.task_id.transport(),
                 failure_code: terminal.failure_code.to_owned(),
             },
-            recovery: task_request.recovery().or(configured).cloned(),
-            recovery_configured: configured.is_some(),
+            recovery,
+            recovery_configured,
             links: request
                 .event_links(Some(instance_id), None, None)
                 .with_request_id(request_id)
@@ -387,7 +391,7 @@ impl HostShared {
         // as a startup package and a scheduled run do; a bound one keeps the default.
         let request = ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256())
             .and_then(|request| {
-                if pending.recovery_configured {
+                if pending.recovery_configured.is_some() {
                     request
                         .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
                 } else {
@@ -410,6 +414,7 @@ impl HostShared {
             causation_id: pending.causation_id,
             control_request_id: pending.request_id,
             run: HostPackageRun::ReturnHome,
+            configured_return_home: pending.recovery_configured.clone(),
         })
     }
 

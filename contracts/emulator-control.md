@@ -301,12 +301,14 @@ Rungs, in this fixed order, each existing work under the instance lease:
   standalone contained task (default response deadline, self-minted request / correlation /
   holder ids, its own lease and `task.*` chain, under the ladder's causation id). When the run
   had none bound, the return-home package that `actingd`'s `return_home_packages` names for the
-  failed package's game and server runs instead, with the maximum response deadline
-  (Workflow #336 L2d; `contracts/linear-steps.md`, "Return-home fallback"). Skipped with
-  `no_recovery_package` when the run had none bound and none is configured. An ADB baseline
-  probe failure is `recovery_ladder_adb_not_ready`; admission refusals keep their
-  `contained_task_package_*` code; failures are recorded as `runtime.failed` with category
-  `recovery_ladder`.
+  failed package's game and server runs instead, with the maximum response deadline; one that
+  does not match the failed package's game, server or resolution, fails a check of a return-home
+  chain layer or declares a prerequisite package of its own is refused before any lease with
+  `contained_task_prerequisite_incompatible` (Workflow #336 L2d; `contracts/linear-steps.md`,
+  "Return-home fallback"). Skipped with `no_recovery_package` when the run had none bound and
+  none is configured. An ADB baseline probe failure is `recovery_ladder_adb_not_ready`;
+  admission refusals keep their `contained_task_package_*` code; failures are recorded as
+  `runtime.failed` with category `recovery_ladder`.
 - `application_restart`: the instance's startup package is scheduled
   (`startup_package_scheduled` under the ladder's links, a fresh causation id) and run, exactly
   as after `emulator start`. Skipped with `no_startup_package` when none is configured.
