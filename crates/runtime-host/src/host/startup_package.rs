@@ -80,7 +80,7 @@ pub(super) struct PendingStartupPackage {
     pub(super) run: HostPackageRun,
     /// Workflow #336 L2d: on a ladder rung run of the configured return-home package, the
     /// failed package it must match.
-    pub(super) configured_return_home: Option<super::contained_task::PackageIdentity>,
+    pub(super) configured_return_home: Option<Box<super::contained_task::PackageIdentity>>,
 }
 
 /// Binds the configured startup packages to registered physical instances at startup. An

@@ -414,7 +414,7 @@ impl HostShared {
             causation_id: pending.causation_id,
             control_request_id: pending.request_id,
             run: HostPackageRun::ReturnHome,
-            configured_return_home: pending.recovery_configured.clone(),
+            configured_return_home: pending.recovery_configured.clone().map(Box::new),
         })
     }
 
