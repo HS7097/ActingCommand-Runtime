@@ -49,18 +49,18 @@ use actingcommand_contract::{
     CapturePayload, CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft,
     CatalogPromotionAuthorization, CatalogProposal, CatalogTransitionEventData, ClientActionRecord,
     ClientPayload, ClientPayloadDraft, CommandPayloadDraft, ContainedTaskCancellationReason,
-    ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRequest,
-    CorrelationId, DiagnosticCode, DiagnosticDetailDraft, EFFECTIVE_CONFIGURATION_SCHEMA,
-    EffectDisposition, EffectiveCaptureSelection, EffectiveConfigurationFacts,
-    EffectiveConfigurationRecord, EffectiveInputSelection, EffectiveMumuInstallation, EventAction,
-    EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
-    EventSource, EventType, FactContent, FactPayloadDraft, FactRecord, FactScalar, FactScope,
-    FactValue as ContractFactValue, FencedWrite, FrameId, InputAction, InputExecutionPlanEvent,
-    InputExecutionPlanRecord, InputPayload, InputPayloadDraft, InstanceBindingSource,
-    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
-    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
-    IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_RUNTIME_FACTS, MonitorPayloadDraft,
+    ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRecoveryBinding,
+    ContainedTaskRequest, CorrelationId, DiagnosticCode, DiagnosticDetailDraft,
+    EFFECTIVE_CONFIGURATION_SCHEMA, EffectDisposition, EffectiveCaptureSelection,
+    EffectiveConfigurationFacts, EffectiveConfigurationRecord, EffectiveInputSelection,
+    EffectiveMumuInstallation, EventAction, EventActor, EventDraft, EventId, EventLinksDraft,
+    EventPayload, EventQuery, EventSeverity, EventSource, EventType, FactContent, FactPayloadDraft,
+    FactRecord, FactScalar, FactScope, FactValue as ContractFactValue, FencedWrite, FrameId,
+    InputAction, InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayload,
+    InputPayloadDraft, InstanceBindingSource, InstanceFactContext, InstanceFactSnapshot,
+    InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
+    IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
+    LeaseToken, MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_RUNTIME_FACTS, MonitorPayloadDraft,
     MonitorRecoveryCoordinationReason, ObservedMicroseconds, OriginModule,
     OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary,
     PerformanceContext, PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData,
@@ -179,6 +179,7 @@ mod policy_catalog;
 mod policy_dispatch;
 mod policy_outcome;
 mod ppocr_diagnostic;
+mod prerequisite;
 mod read_events;
 mod recovery_ladder;
 mod requests;
@@ -395,6 +396,10 @@ pub struct RuntimeHostConfig {
     /// Per instance alias: the stuck-recovery ladder settings (slice #316-B4); an instance
     /// without an entry uses the defaults (enabled, 600 s cool-down).
     stuck_recovery: BTreeMap<String, actingcommand_contract::InstanceStuckRecovery>,
+    /// Workflow #336 L2b: per package id, the locator and content reference of a package a
+    /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
+    /// run resolves it; not a configuration fact.
+    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
 }
 
 impl RuntimeHostConfig {
@@ -422,6 +427,7 @@ impl RuntimeHostConfig {
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
+            prerequisite_packages: BTreeMap::new(),
         }
     }
 
@@ -580,6 +586,22 @@ impl RuntimeHostConfig {
         &self,
     ) -> &BTreeMap<String, actingcommand_contract::InstanceStuckRecovery> {
         &self.stuck_recovery
+    }
+
+    /// Installs the prerequisite packages, keyed by package id (Workflow #336 L2b). A
+    /// `linear_steps` package that declares a `prerequisite_package_id` is resolved against
+    /// them at preparation; each package is admitted against its content reference only then.
+    pub fn with_prerequisite_packages(
+        mut self,
+        prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
+    ) -> Self {
+        self.prerequisite_packages = prerequisite_packages;
+        self
+    }
+
+    /// The configured prerequisite packages, keyed by package id.
+    pub const fn prerequisite_packages(&self) -> &BTreeMap<String, ContainedTaskRecoveryBinding> {
+        &self.prerequisite_packages
     }
 
     pub fn state_root(&self) -> &Path {
@@ -756,6 +778,10 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &self.resource_packages.keys().collect::<Vec<_>>(),
             )
             .field("stuck_recovery", &self.stuck_recovery)
+            .field(
+                "prerequisite_packages",
+                &(!self.prerequisite_packages.is_empty()).then_some("<runtime-owned>"),
+            )
             .finish()
     }
 }
@@ -1310,6 +1336,7 @@ impl RuntimeHost {
             stuck_recovery,
             recovery_ladders: Mutex::new(BTreeMap::new()),
             parked_recovery_ladders: Mutex::new(BTreeMap::new()),
+            prerequisite_packages: config.prerequisite_packages,
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -2917,6 +2944,8 @@ struct HostShared {
     stuck_recovery: BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>,
     recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
     parked_recovery_ladders: Mutex<BTreeMap<RequestId, recovery_ladder::PendingRecoveryLadder>>,
+    // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
+    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]

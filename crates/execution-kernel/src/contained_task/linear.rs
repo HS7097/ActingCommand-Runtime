@@ -43,7 +43,7 @@ const APPLICATION_UNCONFIRMED: &str = "contained_task_linear_application_unconfi
 const PAGE_CONFIRMATION_FAILED: &str = "page_confirmation_failed";
 const UNRECOGNIZED_PAGE: &str = "<unrecognized>";
 /// The `from` / `entry_page` of an application entry: any screen, never a detector page.
-const ANY_PAGE: &str = "any";
+pub(super) const ANY_PAGE: &str = "any";
 
 /// An operation's declared intermediate state, as the package writes it (Workflow #336 R13).
 #[derive(Debug, Clone, Deserialize)]
@@ -533,6 +533,14 @@ impl TaskProgram {
         }
         if steps[0].from != entry {
             return Err(invalid("entry_page", Some(&self.operations[0])));
+        }
+        // Workflow #336 L2b (R24): an application entry recognizes nothing before its effect, so
+        // there is no first step a prerequisite package could lead to.
+        if entry == LinearFrom::Any && control.prerequisite_package_id.is_some() {
+            return Err(invalid(
+                "prerequisite_with_application_entry",
+                Some(&self.operations[0]),
+            ));
         }
         for (index, pair) in steps.windows(2).enumerate() {
             if !matches!(&pair[1].from, LinearFrom::Page(from) if *from == pair[0].to) {
