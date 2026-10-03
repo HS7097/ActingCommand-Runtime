@@ -850,9 +850,10 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
 
 /// The default task timeout (R24 section 4.3 with Workflow #339 section 2.5):
 /// `S·[step 1 is no application entry] + Σ a·(w + (b − w)⁺ + p + T) + Σ_app E
-///  + Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000`. The sums before the settles take every
-/// optional step as shown, the longest path; a run settles only when it is skipped, at most
-/// once, so it adds its largest settle.
+///  + Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000`.
+///
+/// The sums before the settles take every optional step as shown, the longest path; a run
+/// settles only when it is skipped, at most once, so it adds its largest settle.
 fn default_timeout(
     steps: &[PlanStep],
     runs: &[OptionalRun],
