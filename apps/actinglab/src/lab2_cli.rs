@@ -108,6 +108,31 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "actions": actions,
         "arbitration": isolated_offline_projection(),
     });
+    if outcome.matched {
+        let mut sets = Vec::new();
+        let mut evidence = Vec::new();
+        for layout in evaluator
+            .pack()
+            .candidate_layouts
+            .iter()
+            .filter(|layout| layout.page_id == outcome.page)
+        {
+            let projected = evaluator.scene_context(&loaded_scene.scene).project_candidates(&layout.id)
+                .map_err(|error| CliError::package_invalid(format!("{}: layout={} offline observe provides 1 frame, requires {}; aggregation not completed: {}", error.code(), layout.id, layout.required_frames(), error.detail())))?;
+            let (public, _) = projected
+                .split(&layout.candidate_privacy(&view.metadata))
+                .map_err(|error| CliError::package_invalid(error.to_string()))?;
+            sets.push(public);
+            evidence.push(projected);
+        }
+        actingcommand_contract::validate_candidate_sets_budget(&sets)
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        if !sets.is_empty() {
+            payload["candidate_sets"] = json!(sets);
+            payload["candidate_evidence"] = json!(evidence);
+            payload["candidate_coverage"] = json!({"provided_frames":1,"aggregation":"production_owner","task_preparation":"not_requested"});
+        }
+    }
     if !outcome.matched {
         payload["candidates"] = json!(lab2_page_candidates(&outcome));
     }

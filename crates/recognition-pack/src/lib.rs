@@ -19,12 +19,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod candidate_consensus;
+mod candidate_identity;
 mod candidate_layout;
+
+pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, CandidateSampleVariant};
+
+pub use candidate_identity::{
+    CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
+    CandidateIdentityTemplate, normalize_name,
+};
 
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
-    CandidateFeatureDeclaration, CandidateFeatureValue, CandidateLayout,
-    CandidateProjectionFailure, CandidateSlot,
+    CandidateFeatureDeclaration, CandidateFeatureValue, CandidateIntegerDeclaration,
+    CandidateLayout, CandidateProjectionFailure, CandidateSlot, UnknownIdentityHandling,
 };
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
@@ -3628,6 +3637,115 @@ mod tests {
                 .evaluate_target(&scene, "ocr/page")
                 .expect("contains")
                 .passed
+        );
+        // WF345 R1/R3: the existing OCR specification now includes its business projection
+        // and bounded consensus; source strings, not backend repeatability, determine votes.
+        use actingcommand_contract::{CandidateFeature, CandidateUnknownReason};
+        let identity: CandidateIdentityDeclaration = serde_json::from_value(serde_json::json!({
+            "entries":[{"id":"first","aliases":["hello runtime","HELLO　RUNTIME"]},{"id":"second","aliases":["other name"]}],
+            "recognition":{"kind":"ocr_aliases","max_distance":1,"minimum_margin":1,"minimum_confidence_milli":800,"confusions":{"0":"o"}}
+        })).unwrap();
+        identity.validate().unwrap();
+        assert!(
+            matches!(identity.map_ocr("Ｈｅｌｌ０　Ｒｕｎｔｉｍｅ", Some(950)), CandidateFeature::Identity { value, .. } if value == "first")
+        );
+        assert!(matches!(
+            identity.map_ocr("hello runtime", None),
+            CandidateFeature::Unknown {
+                reason: CandidateUnknownReason::LowConfidence,
+                ..
+            }
+        ));
+        let mut ambiguous = identity.clone();
+        ambiguous.entries[1].aliases = vec!["hello runtime".to_owned()];
+        assert!(matches!(
+            ambiguous.map_ocr("hello runtime", Some(950)),
+            CandidateFeature::Unknown {
+                reason: CandidateUnknownReason::Ambiguous,
+                ..
+            }
+        ));
+        let consensus = CandidateConsensus {
+            samples: vec![CandidateSampleVariant::default(); 3],
+            aggregate: CandidateAggregation::Majority { k: 2 },
+        };
+        let values = [
+            identity.map_ocr("hello runtime", Some(950)),
+            identity.map_ocr("hell0 runtime", Some(950)),
+            identity.map_ocr("other name", Some(950)),
+        ];
+        assert!(
+            matches!(consensus.aggregate(&values), CandidateFeature::Identity { value, .. } if value == "first")
+        );
+        assert!(matches!(
+            consensus.aggregate(&values[..2]),
+            CandidateFeature::Unknown {
+                reason: CandidateUnknownReason::NoConsensus,
+                ..
+            }
+        ));
+        let median = CandidateConsensus {
+            samples: vec![CandidateSampleVariant::default(); 4],
+            aggregate: CandidateAggregation::Median,
+        };
+        assert_eq!(
+            median.aggregate(&[9, 2, 5, 3].map(|value| CandidateFeature::Integer {
+                value,
+                confidence: None
+            })),
+            CandidateFeature::Integer {
+                value: 3,
+                confidence: None
+            }
+        );
+        let mut projected = exact.clone();
+        projected.pack.schema_version = "0.7".into();
+        projected.pack.candidate_layouts = vec![serde_json::from_value(serde_json::json!({
+            "id":"choices","page_id":"home","kind":"fixed_slots",
+            "features":[{"name":"business_id","value":"identity","identity":identity,"consensus":{"samples":[{},{},{}],"aggregate":{"kind":"majority","k":2}}}],
+            "slots":[{"rect":{"x":0,"y":0,"width":2,"height":1},"click":{"x":0,"y":0,"width":2,"height":1},"targets":{"business_id":"ocr/page"}}]
+        })).unwrap()];
+        let projection = projected
+            .scene_context(&scene)
+            .project_candidates("choices")
+            .unwrap();
+        projection.validate().unwrap();
+        assert_eq!(projection.recognition_evidence()[0].samples.len(), 3);
+        assert!(
+            matches!(&projection.candidates()[0].features["business_id"], CandidateFeature::Identity { value, .. } if value == "first")
+        );
+        let mut changed = projection.candidates().to_vec();
+        if let CandidateFeature::Identity { value, .. } =
+            changed[0].features.get_mut("business_id").unwrap()
+        {
+            *value = "second".into();
+        }
+        let changed = actingcommand_contract::CandidateProjection::new(
+            "home",
+            "choices",
+            projection.layout_kind(),
+            projection.frame(),
+            changed,
+        )
+        .unwrap();
+        assert_ne!(
+            projection.candidate_set_sha256(),
+            changed.candidate_set_sha256()
+        );
+        projected.pack.candidate_layouts[0].features[0]
+            .consensus
+            .as_mut()
+            .unwrap()
+            .samples[2]
+            .frame = 1;
+        projected.pack.candidate_layouts[0].sample_interval_ms = 1;
+        assert_eq!(
+            projected
+                .scene_context(&scene)
+                .project_candidates("choices")
+                .unwrap_err()
+                .code(),
+            "candidate_samples_unavailable"
         );
     }
 

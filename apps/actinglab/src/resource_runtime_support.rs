@@ -20,7 +20,7 @@ use actingcommand_recognition::{MatchMetric, Scene, ScenePixelFormat};
 use serde_json::{Value, json};
 use std::env;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use zip::{ZipWriter, write::FileOptions};
 
@@ -37,6 +37,36 @@ pub(super) fn run_resource(
         "validate" => resource_declarations::run_resource_validation(&repo, &flags),
         "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
+        "catalog" => {
+            for name in flags.flags.keys() {
+                if !matches!(
+                    name.as_str(),
+                    "--repo" | "--catalog" | "--catalog-server" | "--field"
+                ) {
+                    return Err(CliError::usage(format!(
+                        "resource catalog does not accept {name}"
+                    )));
+                }
+            }
+            let path = repo.join(flags.required_path("--catalog")?);
+            let server = flags.required("--catalog-server")?;
+            let field = flags
+                .optional("--field")
+                .unwrap_or_else(|| "business_id".to_owned());
+            let file = File::open(&path).map_err(|error| {
+                CliError::package_invalid(format!("catalog open failed: {error}"))
+            })?;
+            let mut bytes = Vec::new();
+            file.take((actingcommand_resource_tooling::MAX_BUSINESS_CATALOG_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|error| {
+                    CliError::package_invalid(format!("catalog read failed: {error}"))
+                })?;
+            serde_json::to_value(actingcommand_resource_tooling::compile_business_catalog(
+                &bytes, &server, &field,
+            )?)
+            .map_err(|error| CliError::package_invalid(format!("catalog output failed: {error}")))
+        }
         "import-alas" | "drift-alas" => {
             let alas_root = flags.required_path("--alas-root")?;
             Ok(json!({

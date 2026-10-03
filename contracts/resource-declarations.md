@@ -1,5 +1,8 @@
 # Read-only resource declaration validation
 
+Candidate identity, readable integer, consensus and catalog authoring fields use the same
+declaration owner; see [business-identity-consensus.md](business-identity-consensus.md).
+
 `actinglab --json resource validate --repo <root> --changed-path <relative-path>`
 validates the selected program declarations. `--changed-path` is repeatable.
 `--changed-paths-file <relative-path>` accepts the NUL-terminated status/path pairs from

@@ -1130,7 +1130,15 @@ impl Declaration<'_> {
             let object = self.object(
                 layout,
                 &pointer,
-                &["id", "page_id", "kind", "features", "slots"],
+                &[
+                    "id",
+                    "page_id",
+                    "kind",
+                    "features",
+                    "slots",
+                    "unknown_identity",
+                    "sample_interval_ms",
+                ],
             )?;
             let id_pointer = child(&pointer, "id");
             let id = self.required(object, &pointer, "id")?;
@@ -1159,7 +1167,11 @@ impl Declaration<'_> {
             let mut names = BTreeSet::new();
             for (feature_index, feature) in features.iter().enumerate() {
                 let feature_pointer = child(&features_pointer, &feature_index.to_string());
-                let feature = self.object(feature, &feature_pointer, &["name", "value"])?;
+                let feature = self.object(
+                    feature,
+                    &feature_pointer,
+                    &["name", "value", "identity", "consensus", "integer"],
+                )?;
                 let name_pointer = child(&feature_pointer, "name");
                 let name = self.required(feature, &feature_pointer, "name")?;
                 self.string(name, &name_pointer)?;
@@ -1170,7 +1182,10 @@ impl Declaration<'_> {
                 let value_pointer = child(&feature_pointer, "value");
                 let value = self.required(feature, &feature_pointer, "value")?;
                 self.string(value, &value_pointer)?;
-                if !matches!(value.as_str(), Some("passed" | "measure_milli")) {
+                if !matches!(
+                    value.as_str(),
+                    Some("passed" | "measure_milli" | "identity" | "ocr_integer")
+                ) {
                     return Err(self.error(&value_pointer, ResourceDeclarationReason::InvalidValue));
                 }
             }
@@ -1181,7 +1196,11 @@ impl Declaration<'_> {
             }
             for (slot_index, slot) in slots.iter().enumerate() {
                 let slot_pointer = child(&slots_pointer, &slot_index.to_string());
-                let slot = self.object(slot, &slot_pointer, &["rect", "click", "targets"])?;
+                let slot = self.object(
+                    slot,
+                    &slot_pointer,
+                    &["rect", "click", "targets", "identity_templates"],
+                )?;
                 for field in ["rect", "click"] {
                     self.frame_rect(
                         self.required(slot, &slot_pointer, field)?,
@@ -1204,6 +1223,51 @@ impl Declaration<'_> {
                         );
                     }
                     self.string(target, &target_pointer)?;
+                }
+            }
+            let typed: actingcommand_recognition_pack::CandidateLayout =
+                serde_json::from_value(layout.clone()).map_err(|error| {
+                    self.refuse(
+                        &pointer,
+                        ResourceDeclarationReason::InvalidType,
+                        &error.to_string(),
+                    )
+                })?;
+            for feature in &typed.features {
+                if (feature.value
+                    == actingcommand_recognition_pack::CandidateFeatureValue::OcrInteger)
+                    != feature.integer.is_some()
+                {
+                    return Err(self.refuse(
+                        &pointer,
+                        ResourceDeclarationReason::InvalidValue,
+                        "ocr_integer value and declaration must appear together",
+                    ));
+                }
+                if let Some(integer) = &feature.integer {
+                    integer.validate().map_err(|error| {
+                        self.refuse(&pointer, ResourceDeclarationReason::InvalidValue, error)
+                    })?;
+                }
+                if (feature.value
+                    == actingcommand_recognition_pack::CandidateFeatureValue::Identity)
+                    != feature.identity.is_some()
+                {
+                    return Err(self.refuse(
+                        &pointer,
+                        ResourceDeclarationReason::InvalidValue,
+                        "identity value and declaration must appear together",
+                    ));
+                }
+                if let Some(identity) = &feature.identity {
+                    identity.validate().map_err(|error| {
+                        self.refuse(&pointer, ResourceDeclarationReason::InvalidValue, &error)
+                    })?;
+                }
+                if let Some(consensus) = &feature.consensus {
+                    consensus.validate(feature.value).map_err(|error| {
+                        self.refuse(&pointer, ResourceDeclarationReason::InvalidValue, &error)
+                    })?;
                 }
             }
         }
@@ -1813,7 +1877,32 @@ fn select_policy(
                 .and_then(|feature| feature.get("value").and_then(Value::as_str));
             match (feature, &field.value_type) {
                 (Some("passed"), ValueType::Boolean)
-                | (Some("measure_milli"), ValueType::Integer) => {}
+                | (Some("measure_milli" | "ocr_integer"), ValueType::Integer) => {}
+                (Some("identity"), ValueType::EnumString { allowed }) => {
+                    let declaration = super::array_field(layout, "features")
+                        .iter()
+                        .find(|feature| feature["name"].as_str() == Some(field.name.as_str()))
+                        .and_then(|feature| feature.get("identity"))
+                        .cloned()
+                        .ok_or_else(|| {
+                            refuse(
+                                &format!("/fields/{field_index}"),
+                                "identity declaration missing".to_owned(),
+                            )
+                        })?;
+                    let identity: actingcommand_recognition_pack::CandidateIdentityDeclaration =
+                        serde_json::from_value(declaration).map_err(|error| {
+                            refuse(&format!("/fields/{field_index}"), error.to_string())
+                        })?;
+                    let mut allowed = allowed.clone();
+                    allowed.sort();
+                    if allowed != identity.domain() {
+                        return Err(refuse(
+                            &format!("/fields/{field_index}/value_type"),
+                            "identity enum differs from its closed domain".to_owned(),
+                        ));
+                    }
+                }
                 (None, _) => {
                     return Err(refuse(
                         &format!("/fields/{field_index}/name"),

@@ -221,6 +221,10 @@ with `contained_task_recognition_invalid`, and online observation preparation wi
 
 ### Feature values
 
+Identity and OCR integer values, explicit attribute fallback, and finite consensus are defined
+in [business-identity-consensus.md](business-identity-consensus.md). They extend this same
+source/pack family and projection owner within its existing budgets.
+
 | Target kind | `passed` | `measure_milli` | `confidence` |
 |---|---|---|---|
 | `template` | verdict | `floor(score × 1000)` | `floor(score × 1000)` |

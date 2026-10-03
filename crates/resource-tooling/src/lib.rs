@@ -9,6 +9,7 @@
 
 mod api;
 mod authoring;
+mod business_catalog;
 mod environment;
 mod maa_task_graph;
 mod package_build;
@@ -20,6 +21,7 @@ mod resource_restore;
 
 pub use api::*;
 pub use authoring::*;
+pub use business_catalog::*;
 pub use environment::AuthoringEnvironmentSnapshot;
 pub use maa_task_graph::{
     MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,

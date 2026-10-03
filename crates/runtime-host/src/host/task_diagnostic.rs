@@ -491,6 +491,11 @@ impl RuntimeContainedTask<'_> {
         result: Option<&RecognitionPackResult<TargetEvaluation>>,
         reason: &'static str,
     ) -> Result<(), RequestFailure> {
+        let phase = if reason == "candidate_sample" {
+            "candidate_sample"
+        } else {
+            "guard"
+        };
         let reports = match result {
             Some(Ok(value)) => value.ppocr_diagnostics().to_vec(),
             Some(Err(error)) => error.ppocr_diagnostics().clone(),
@@ -508,20 +513,20 @@ impl RuntimeContainedTask<'_> {
                     crate::error::PpocrFailureSource::Recognition(Box::new(error.clone())),
                 )
             });
-        self.archive_task_ppocr_diagnostics(&reports, "guard", target, primary.clone())?;
+        self.archive_task_ppocr_diagnostics(&reports, phase, target, primary.clone())?;
         let recorded = match result {
             Some(Ok(value)) => self.diagnostic_target(
                 None,
                 value,
                 TaskDiagnosticTargetSource::Guard {
-                    phase: "guard".to_owned(),
+                    phase: phase.to_owned(),
                 },
             ),
             Some(Err(error)) => self
                 .diagnostic(
                     None,
                     Payload::Error(Box::new(TaskDiagnosticErrorData::Recognition {
-                        phase: "guard".to_owned(),
+                        phase: phase.to_owned(),
                         target_id: target.map(str::to_owned),
                         error: recognition_error(error),
                     })),
@@ -531,7 +536,7 @@ impl RuntimeContainedTask<'_> {
                 .diagnostic(
                     None,
                     Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
-                        phase: "guard".to_owned(),
+                        phase: phase.to_owned(),
                         target_id: target.map(str::to_owned),
                         reason: reason.to_owned(),
                     }),

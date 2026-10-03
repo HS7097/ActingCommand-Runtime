@@ -434,6 +434,56 @@ impl PreparedPageObservation {
                 }
             }
         }
+        if complete && matched_pages.len() == 1 {
+            let mut public_sets = Vec::new();
+            for layout in evaluator
+                .pack()
+                .candidate_layouts
+                .iter()
+                .filter(|layout| layout.page_id == matched_pages[0])
+            {
+                let projected = context.project_candidates_with_samples(&layout.id, &[&scene], &mut |target, result, started, ended| {
+                    match result {
+                        Ok(value) => ppocr_diagnostics.extend(value.ppocr_diagnostics().iter().cloned()),
+                        Err(error) => ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned()),
+                    }
+                    let row = json!({"kind":"candidate_sample", "target_id":target, "evaluation":result, "elapsed_us":crate::observe_instant_span(started, ended)});
+                    let before = private_facts.omitted_count;
+                    private_facts.push(row.clone(), 1).map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.to_string()))?;
+                    facts.push(redact_row(row, metadata), 1).map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.to_string()))?;
+                    if private_facts.omitted_count != before { return Err(actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed("candidate sample evidence exceeds observation budget")); }
+                    Ok(())
+                });
+                let (private, public) = match projected {
+                    Ok(projected) => {
+                        let (public, _) = projected
+                            .split(&layout.candidate_privacy(metadata))
+                            .map_err(fact_error)?;
+                        public_sets.push(public.clone());
+                        actingcommand_contract::validate_candidate_sets_budget(&public_sets)
+                            .map_err(fact_error)?;
+                        (
+                            json!({"kind":"candidate_projection", "projection":projected}),
+                            json!({"kind":"candidate_projection", "projection":public}),
+                        )
+                    }
+                    Err(error) => {
+                        complete = false;
+                        let row = json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
+                        (row.clone(), row)
+                    }
+                };
+                let before = private_facts.omitted_count;
+                private_facts.push(private, 0).map_err(fact_error)?;
+                facts.push(public, 0).map_err(fact_error)?;
+                if private_facts.omitted_count != before {
+                    return Err(fact_error(
+                        "candidate projection evidence exceeds observation budget",
+                    )
+                    .with_ppocr_diagnostics(ppocr_diagnostics));
+                }
+            }
+        }
         let status = if !complete {
             PageObservationStatus::Partial
         } else {

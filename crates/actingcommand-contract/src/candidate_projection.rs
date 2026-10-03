@@ -153,7 +153,7 @@ impl CandidateRect {
 /// `passed` features are booleans and `measure_milli` features are integers. `confidence` is
 /// the backend's own confidence in integer milli, or `null` when the backend has none; it is
 /// not part of the candidate-set hash and v1 does not hand it to the evaluator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CandidateFeature {
     Integer {
@@ -163,6 +163,68 @@ pub enum CandidateFeature {
     Boolean {
         value: bool,
         confidence: Option<i64>,
+    },
+    Identity {
+        value: String,
+        variant: Option<String>,
+        source: CandidateIdentitySource,
+        distance: u16,
+        confidence: Option<i64>,
+    },
+    Unknown {
+        reason: CandidateUnknownReason,
+        source: Option<CandidateIdentitySource>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateIdentitySource {
+    OcrAlias,
+    IconTemplate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateUnknownReason {
+    Missing,
+    OutOfDomain,
+    LowConfidence,
+    Ambiguous,
+    NoConsensus,
+}
+
+/// Actual finite inputs used to derive an identity or consensus feature. These travel only
+/// in the core ledger projection, never in its public privacy split or content hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateRecognitionEvidence {
+    pub candidate_id: String,
+    pub feature: String,
+    pub samples: Vec<CandidateRecognitionSample>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateRecognitionSample {
+    pub frame_index: u8,
+    pub frame_rgb8_sha256: String,
+    pub input: CandidateRecognitionInput,
+    pub value: CandidateFeature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CandidateRecognitionInput {
+    Ocr {
+        text: String,
+        confidence_milli: Option<u16>,
+    },
+    Icons {
+        scores_milli: Vec<u16>,
+    },
+    Scalar {
+        value: Option<CandidateFeature>,
     },
 }
 
@@ -195,6 +257,8 @@ pub struct CandidateProjection {
     frame: CandidateFrame,
     candidates: Vec<ProjectedCandidate>,
     candidate_set_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recognition_evidence: Vec<CandidateRecognitionEvidence>,
 }
 
 impl CandidateProjection {
@@ -214,6 +278,7 @@ impl CandidateProjection {
             frame,
             candidates,
             candidate_set_sha256: String::new(),
+            recognition_evidence: Vec::new(),
         };
         projection.validate_shape()?;
         projection.candidate_set_sha256 = projection.compute_candidate_set_sha256()?;
@@ -251,6 +316,19 @@ impl CandidateProjection {
 
     pub fn candidate(&self, id: &str) -> Option<&ProjectedCandidate> {
         self.candidates.iter().find(|candidate| candidate.id == id)
+    }
+
+    pub fn recognition_evidence(&self) -> &[CandidateRecognitionEvidence] {
+        &self.recognition_evidence
+    }
+
+    pub fn with_recognition_evidence(
+        mut self,
+        evidence: Vec<CandidateRecognitionEvidence>,
+    ) -> Result<Self, CandidateProjectionError> {
+        self.recognition_evidence = evidence;
+        self.validate()?;
+        Ok(self)
     }
 
     /// Checks the shape, that the sealed hash equals the recomputed one, and the byte budget.
@@ -318,7 +396,7 @@ impl CandidateProjection {
                     features: candidate
                         .features
                         .iter()
-                        .map(|(name, feature)| (name.as_str(), HashedFeature::from(*feature)))
+                        .map(|(name, feature)| (name.as_str(), HashedFeature::from(feature)))
                         .collect(),
                 })
                 .collect(),
@@ -389,6 +467,49 @@ impl CandidateProjection {
     }
 
     fn validate_shape(&self) -> Result<(), CandidateProjectionError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for evidence in &self.recognition_evidence {
+            let candidate = self.candidate(&evidence.candidate_id).ok_or_else(|| {
+                CandidateProjectionError::invalid(
+                    "recognition_evidence",
+                    "sample candidate is missing",
+                )
+            })?;
+            if !candidate.features.contains_key(&evidence.feature)
+                || !seen.insert((&evidence.candidate_id, &evidence.feature))
+                || !(1..=5).contains(&evidence.samples.len())
+            {
+                return Err(CandidateProjectionError::invalid(
+                    "recognition_evidence",
+                    "sample feature, count or uniqueness is invalid",
+                ));
+            }
+            for sample in &evidence.samples {
+                let valid = sample.frame_index < 5
+                    && is_lower_hex_sha256(&sample.frame_rgb8_sha256)
+                    && match &sample.input {
+                        CandidateRecognitionInput::Ocr {
+                            text,
+                            confidence_milli,
+                        } => {
+                            text.len() <= 512 && confidence_milli.is_none_or(|value| value <= 1000)
+                        }
+                        CandidateRecognitionInput::Icons { scores_milli } => {
+                            (1..=16).contains(&scores_milli.len())
+                                && scores_milli.iter().all(|score| *score <= 1000)
+                        }
+                        CandidateRecognitionInput::Scalar { value } => {
+                            !matches!(value, Some(CandidateFeature::Identity { .. }))
+                        }
+                    };
+                if !valid {
+                    return Err(CandidateProjectionError::invalid(
+                        "recognition_evidence",
+                        "sample exceeds its input bounds",
+                    ));
+                }
+            }
+        }
         validate_set_header(
             &self.schema_version,
             &self.page_id,
@@ -699,8 +820,31 @@ fn validate_candidate_row(
             format!("candidate `{expected}` is not actionable and carries features"),
         ));
     }
-    for name in features.keys() {
+    for (name, feature) in features {
         validate_candidate_feature_name(name)?;
+        if let CandidateFeature::Identity {
+            value,
+            variant,
+            distance,
+            confidence,
+            ..
+        } = feature
+            && (value.is_empty()
+                || value.len() > 128
+                || value.chars().any(char::is_control)
+                || variant.as_ref().is_some_and(|variant| {
+                    variant.is_empty()
+                        || variant.len() > 128
+                        || variant.chars().any(char::is_control)
+                })
+                || *distance > 1000
+                || confidence.is_some_and(|value| !(0..=1000).contains(&value)))
+        {
+            return Err(CandidateProjectionError::invalid(
+                "features",
+                "invalid business identity",
+            ));
+        }
     }
     Ok(())
 }
@@ -722,21 +866,48 @@ struct HashedCandidate<'a> {
     actionable: bool,
     rect: CandidateRect,
     click: CandidateRect,
-    features: BTreeMap<&'a str, HashedFeature>,
+    features: BTreeMap<&'a str, HashedFeature<'a>>,
 }
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum HashedFeature {
-    Integer { value: i64 },
-    Boolean { value: bool },
+enum HashedFeature<'a> {
+    Integer {
+        value: i64,
+    },
+    Boolean {
+        value: bool,
+    },
+    Identity {
+        value: &'a str,
+        variant: &'a Option<String>,
+        source: CandidateIdentitySource,
+    },
+    Unknown {
+        reason: CandidateUnknownReason,
+        source: Option<CandidateIdentitySource>,
+    },
 }
 
-impl From<CandidateFeature> for HashedFeature {
-    fn from(feature: CandidateFeature) -> Self {
+impl<'a> From<&'a CandidateFeature> for HashedFeature<'a> {
+    fn from(feature: &'a CandidateFeature) -> Self {
         match feature {
-            CandidateFeature::Integer { value, .. } => Self::Integer { value },
-            CandidateFeature::Boolean { value, .. } => Self::Boolean { value },
+            CandidateFeature::Integer { value, .. } => Self::Integer { value: *value },
+            CandidateFeature::Boolean { value, .. } => Self::Boolean { value: *value },
+            CandidateFeature::Identity {
+                value,
+                variant,
+                source,
+                ..
+            } => Self::Identity {
+                value,
+                variant,
+                source: *source,
+            },
+            CandidateFeature::Unknown { reason, source } => Self::Unknown {
+                reason: *reason,
+                source: *source,
+            },
         }
     }
 }

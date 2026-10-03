@@ -303,6 +303,8 @@ pub(super) fn project(
             "recovery_hint",
             "frame_source",
             "frame_path",
+            "candidate_sets",
+            "candidate_coverage",
         ]
         .map(str::to_string),
     );

@@ -46,11 +46,16 @@ An actionable candidate's `rect` and `click` lie entirely inside the frame. A re
 positive width and height; its origin is signed because an instance at the frame edge may
 start outside it.
 
-A feature is `{"type": "boolean"|"integer", "value": …, "confidence": …}`. A `passed` feature
+A scalar feature is `{"type": "boolean"|"integer", "value": …, "confidence": …}`. A `passed` feature
 is a boolean; a `measure_milli` feature is an integer. `confidence` is the backend's own
 confidence in integer milli for template, OCR and NN targets (the same value as their
 measure), and `null` for color, color digest and composite targets. v1 does not hand
 `confidence` to the evaluator.
+
+The optional identity, OCR-integer and consensus features, their typed Unknown results and
+controlled `recognition_evidence` are specified in [business-identity-consensus.md](business-identity-consensus.md).
+Identity features hash `value`, `variant` and `source`; Unknown features hash `reason` and
+`source`. Distance, confidence and raw recognition evidence do not enter the content hash.
 
 ## Candidate IDs
 

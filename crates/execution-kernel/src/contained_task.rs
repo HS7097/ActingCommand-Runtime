@@ -1731,6 +1731,21 @@ pub trait ContainedTaskRuntime {
         Ok(())
     }
 
+    /// A finite sampler needs the production cancellation/lease checkpoint. Consumers that
+    /// cannot provide it explicitly refuse multi-sample execution.
+    fn candidate_sampling_checkpoint(&mut self) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+
+    fn record_candidate_evaluation(
+        &mut self,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
+        _timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.record_guard_evaluation(Some(target_id), Some(result), "candidate_sample")
+    }
+
     fn record_ocr_evaluation(
         &mut self,
         _target_id: &str,
@@ -1856,7 +1871,9 @@ impl PreparedContainedTask {
         Self::from_bundle(bundle)
     }
 
-    fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
+    /// Preparation over the already contained, externally verified package. Lab authoring
+    /// preflight shares this exact owner with Runtime and never executes the prepared task.
+    pub fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
         let package_sha256 = bundle.loaded_bundle().package_ref().clone();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();

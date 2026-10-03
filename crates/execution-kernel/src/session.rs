@@ -31,6 +31,12 @@ pub struct InputFrameContext {
 }
 
 impl InputFrameContext {
+    pub(crate) fn same_geometry(&self, other: &Self) -> bool {
+        self.reference.width == other.reference.width
+            && self.reference.height == other.reference.height
+            && self.geometry == other.geometry
+    }
+
     pub const fn reference(&self) -> InputFrameReference {
         self.reference
     }

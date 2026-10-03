@@ -1212,6 +1212,50 @@ fn build_pack_maps_schema_06_ocr_target_to_canonical_output() {
             "click": {"x":11,"y":21,"width":30,"height":20}
         }))
     );
+    // WF345 R2: static catalog output uses the production identity and inline lookup types.
+    let catalog = json!({
+        "schema_version":"actingcommand.business-catalog.v1","catalog_id":"synthetic","pools":{"material":10},
+        "recognition":{"kind":"ocr_aliases","max_distance":1,"minimum_margin":1,"minimum_confidence_milli":800},
+        "entries":[{"id":"first","names":{"test":["Synthetic text"]},"duration_seconds":60,
+            "source":{"uri":"https://example.invalid/source","date":"2026-10-03"},
+            "rewards":[{"pool_id":"material","quantity_milli":1000,"probability_milli":400,"batches":1,"confidence_milli":700,"observation_source":"self_reported","observed_amount":2}]}]
+    });
+    let bytes = serde_json::to_vec(&catalog).unwrap();
+    let compiled = crate::compile_business_catalog(&bytes, "test", "business_id").unwrap();
+    assert_eq!(
+        compiled.scheduling_produces["first"][0].expected_amount_milli,
+        400
+    );
+    assert_eq!(
+        compiled.scheduling_produces["first"][0].confidence_milli,
+        700
+    );
+    assert_eq!(
+        compiled.provenance.entries[0].rewards[0].observed_amount,
+        Some(2)
+    );
+    assert_eq!(
+        serde_json::to_value(&compiled).unwrap(),
+        serde_json::to_value(
+            crate::compile_business_catalog(&bytes, "test", "business_id").unwrap()
+        )
+        .unwrap()
+    );
+    let mut unresolved = catalog;
+    unresolved["entries"][0]["rewards"][0]["quantity_milli"] = Value::Null;
+    let unresolved = crate::compile_business_catalog(
+        &serde_json::to_vec(&unresolved).unwrap(),
+        "test",
+        "business_id",
+    )
+    .unwrap();
+    assert!(unresolved.scheduling_produces["first"].is_empty());
+    assert!(
+        unresolved
+            .unknown_values
+            .iter()
+            .any(|value| value.field == "expected_reward_milli:material")
+    );
 }
 
 #[test]
