@@ -1,0 +1,110 @@
+name: one-off 336 L4 (to be reverted)
+
+# One-off evidence for Workflow #336 L4 (model v2 section 8 "L4" items 1-7, a15 "L4" items 8-10,
+# a20 section 4.8, R24 "L4" items 1-8 with item 2 replaced per R25 5961093808, an R25 refusal,
+# the optional-step refusal and the dry-run preview). The binaries are the Windows exact-SHA build
+# artifacts of the product commit; the old actingledger is the Runtime v0.9.0 release asset
+# (885947c9). Frames are synthetic, built from assets of two packs of the public umbrella v0.9.0
+# standard package. Reverted right after its run; the PR's final diff contains neither this file
+# nor one-off-336l4/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  l4:
+    name: L4 record stop generation evidence
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      PRODUCT_SHA: 52270b649632aa270e329030b2064447087eb47e
+      BASE_SHA: 45a8cef341e29316604d84702dfbda9af610b989
+      OLD_SHA: 885947c90dd6561d6e5c9b7bae3fe736ec36f7c8
+      GH_TOKEN: ${{ github.token }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git -C head rev-parse HEAD).Trim()
+          Write-Host "L4|SCOPE|head $head product $env:PRODUCT_SHA base (first commit, the merge) $env:BASE_SHA"
+          $diff = @(& git -C head diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-336l4' ':(exclude).github/workflows/oneoff-336l4.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+          & git -C head merge-base --is-ancestor $env:BASE_SHA $env:PRODUCT_SHA
+          if ($LASTEXITCODE -ne 0) { throw "the base $env:BASE_SHA is not an ancestor of $env:PRODUCT_SHA" }
+          & git -C head diff --stat $env:BASE_SHA $env:PRODUCT_SHA | ForEach-Object { Write-Host "L4|SCOPE|product $_" }
+      - name: Inputs (umbrella standard package, v0.9.0 tools, product exact-SHA artifacts)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Get-Sha([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+          function Get-Release([string] $Repository, [string] $Tag, [string[]] $Names, [string] $Dir) {
+            New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+            foreach ($name in @($Names) + 'SHA256SUMS') {
+              Invoke-WebRequest -Uri "https://github.com/$Repository/releases/download/$Tag/$name" -OutFile (Join-Path $Dir $name)
+            }
+            $sums = Get-Content -LiteralPath (Join-Path $Dir 'SHA256SUMS')
+            foreach ($name in $Names) {
+              $line = @($sums | Where-Object { $_ -match "^([0-9a-f]{64})\s+\*?$([regex]::Escape($name))$" })
+              $actual = Get-Sha (Join-Path $Dir $name)
+              if ($line.Count -ne 1 -or -not $line[0].StartsWith($actual)) { throw "$Repository $Tag $name does not match SHA256SUMS" }
+              Write-Host "L4|INPUT|$Repository $Tag $name sha256 $actual matches SHA256SUMS"
+            }
+          }
+          function Test-Manifest([string] $Dir, [string] $Commit) {
+            $manifest = Get-Content -Raw -LiteralPath (Join-Path $Dir 'BUILD-MANIFEST.json') | ConvertFrom-Json
+            if ($manifest.commit_sha -ne $Commit) { throw "$Dir BUILD-MANIFEST commit $($manifest.commit_sha) is not $Commit" }
+            foreach ($file in $manifest.files) {
+              if ((Get-Sha (Join-Path $Dir $file.path)) -ne $file.sha256) { throw "$Dir $($file.path) does not match BUILD-MANIFEST.json" }
+            }
+            Write-Host "L4|INPUT|$Dir $($manifest.source_artifact_name) commit $($manifest.commit_sha) run $($manifest.workflow_run_id) files $(@($manifest.files).Count) verified"
+          }
+          $root = $env:RUNNER_TEMP
+          Get-Release 'HS7097/ActingCommand' 'v0.9.0' @('bluearchive-resources-193cfdd.zip') (Join-Path $root 'umbrella')
+          Get-Release 'HS7097/ActingCommand-Runtime' 'v0.9.0' @("actingcommand-tools-$env:OLD_SHA.zip") (Join-Path $root 'old-release')
+          Expand-Archive -LiteralPath (Join-Path $root "old-release/actingcommand-tools-$env:OLD_SHA.zip") -DestinationPath (Join-Path $root 'old/tools')
+          Test-Manifest (Join-Path $root 'old/tools') $env:OLD_SHA
+          $runId = (& gh run list -R $env:GITHUB_REPOSITORY --workflow windows-remote-build.yml --commit $env:PRODUCT_SHA --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if ($LASTEXITCODE -ne 0 -or -not $runId) { throw "no successful exact-SHA build run for $env:PRODUCT_SHA" }
+          Write-Host "L4|INPUT|exact-SHA build run $runId for $env:PRODUCT_SHA"
+          foreach ($kind in @('runtime', 'tools')) {
+            & gh run download $runId -R $env:GITHUB_REPOSITORY -n "actingcommand-$kind-$env:PRODUCT_SHA" -D (Join-Path $root "new/$kind")
+            if ($LASTEXITCODE -ne 0) { throw "$kind artifact download failed with exit code $LASTEXITCODE" }
+            Test-Manifest (Join-Path $root "new/$kind") $env:PRODUCT_SHA
+          }
+          & python -m pip install --quiet --disable-pip-version-check pillow
+          if ($LASTEXITCODE -ne 0) { throw "pip install pillow failed with exit code $LASTEXITCODE" }
+      - name: Prepare synthetic frames
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          & python head/one-off-336l4/evidence.py prepare (Join-Path $env:RUNNER_TEMP 'work') (Join-Path $env:RUNNER_TEMP 'umbrella/bluearchive-resources-193cfdd.zip')
+          if ($LASTEXITCODE -ne 0) { throw "prepare failed with exit code $LASTEXITCODE" }
+      - name: Evidence (L4)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $root = $env:RUNNER_TEMP
+          & python head/one-off-336l4/evidence.py run (Join-Path $root 'work') (Join-Path $root 'new/tools') (Join-Path $root 'new/runtime') (Join-Path $root 'old/tools') (Resolve-Path head/contracts/scheduling/examples/catalog-a).Path
+          if ($LASTEXITCODE -ne 0) { throw "evidence run failed with exit code $LASTEXITCODE" }
