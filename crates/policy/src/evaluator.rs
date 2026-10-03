@@ -666,9 +666,9 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
 
 /// `evaluate_with_eligibility` where every (task, instance) pair in `immediate_retries` counts
 /// as triggered and passes its task cooldown (Workflow #336 R22): the Runtime names the pairs
-/// whose latest failure is a failure identity scheduled for a retry, so the rerun waits only
-/// for the retry backoff, which the eligibility callback still enforces, and not for the next
-/// clock occurrence. The feedback stop, placement, budgets and activity windows are unchanged.
+/// whose failure is scheduled for a retry within its original admission's window and budget
+/// cycle. The eligibility callback still enforces backoff and other admission gates. The
+/// feedback stop, placement, budgets and activity windows are unchanged.
 pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -6320,6 +6320,33 @@ mod tests {
             catalog.catalog().tasks.tasks[0].procedure_ref
         );
         assert_eq!(preload.not_before_unix_ms, NOW + 3_600_000);
+        // WF342 P specification: an ended Runtime round restores the normal trigger gate.
+        let retries = BTreeSet::from([(
+            "fixture.observe".to_owned(),
+            "fixture-instance-a".to_owned(),
+        )]);
+        let no_retries = BTreeSet::new();
+        for (pairs, last_dispatch, should_dispatch) in [
+            (&retries, Some(NOW), true),
+            (&no_retries, Some(NOW), false),
+            (&no_retries, None, true),
+        ] {
+            facts.tasks[0].last_dispatched_unix_ms = last_dispatch;
+            let result = evaluate_with_immediate_retries::<PolicyEvaluationError>(
+                &catalog,
+                &facts,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+                6,
+                pairs,
+                |_| Ok(CandidateEligibility::Eligible),
+            )
+            .expect("trigger with Runtime retry eligibility");
+            assert_eq!(!result.dispatch_intents.is_empty(), should_dispatch);
+        }
     }
 
     #[test]

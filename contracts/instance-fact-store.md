@@ -20,6 +20,16 @@ at startup by replaying every event, afterwards synchronizes incrementally from
 store's acceptance rules (idempotent identical retries, `not newer`, capacity,
 invalidated snapshots, incomplete refreshes).
 
+The official input path holds `fact_write_gate` from outcome construction through the durable
+`input.committed` or `input.failed` append and synchronization of its declared invalidations.
+Policy admission holds the same gate from its authoritative fact projection through the
+dispatch intent append. Thus an input result that precedes a later intent also precedes that
+intent's fact validation, including shared game/server facts across instances. An already
+committed intent retains its existing execution semantics. Device execution, lifecycle
+cleanup and pipeline observation run outside this hold; the lock order remains
+`policy_outcome_gate` → `policy` → `fact_write_gate` → facts. Lock, append or synchronization
+failure propagates as a fatal host failure.
+
 This document freezes the store's role as the source of the policy input
 instance set (Workflow #313, item 4).
 

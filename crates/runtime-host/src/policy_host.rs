@@ -1226,7 +1226,9 @@ impl PolicyHost {
             .ok_or_else(|| request("policy_catalog_unavailable", "evaluate_policy_cycle"))?;
         let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
         // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun.
-        let immediate_retries = self.control.immediate_retry_pairs();
+        let immediate_retries = self
+            .control
+            .immediate_retry_pairs(&active.compiled, time.unix_ms)?;
         let started = Instant::now();
         let mut evaluation = evaluate_with_immediate_retries::<RuntimeHostError>(
             &active.compiled,
@@ -1402,6 +1404,14 @@ impl PolicyHost {
                 "validate_policy_dispatch",
             ));
         }
+        if reason_chain
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "failure_retry_immediate")
+        {
+            self.control
+                .validate_immediate_retry(&active.compiled, intent, context.now_unix_ms)?;
+        }
         if intent
             .approval_refs
             .iter()
@@ -1503,13 +1513,21 @@ impl PolicyHost {
         &mut self,
         intent: &DispatchIntent,
         admission: &PolicyAdmissionRecord,
+        reason_chain: &DecisionReasonChain,
     ) -> RuntimeHostResult<()> {
         let active = self
             .active
             .as_ref()
             .ok_or_else(|| request("policy_catalog_unavailable", "commit_policy_budget"))?;
-        self.control
-            .commit_admission(&active.compiled, intent, admission)?;
+        self.control.commit_admission(
+            &active.compiled,
+            intent,
+            admission,
+            reason_chain
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "failure_retry_immediate"),
+        )?;
         // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b).
         self.eligibility
             .forget(&intent.task_id, &intent.instance_id);
@@ -2324,7 +2342,16 @@ impl PolicyHost {
                     })?;
                     let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
                     let intent = control_intent(&dispatch.data, &catalog.compiled, &admission)?;
-                    control.commit_admission(&catalog.compiled, &intent, &admission)?;
+                    control.commit_admission(
+                        &catalog.compiled,
+                        &intent,
+                        &admission,
+                        dispatch
+                            .data
+                            .reasons
+                            .iter()
+                            .any(|reason| reason.code == "failure_retry_immediate"),
+                    )?;
                     dispatch.admission = Some(admission);
                 }
                 PolicyPayload::DispatchRejected(payload) => {

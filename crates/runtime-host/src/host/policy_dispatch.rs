@@ -927,26 +927,29 @@ impl HostShared {
                     "admit_policy_dispatch",
                 ));
             }
-            let elapsed_ms = self
-                .monotonic_ms()?
-                .checked_sub(trusted.observed_monotonic_ms)
-                .ok_or_else(|| {
-                    policy_admission_fatal(
-                        "policy_admission_clock_regressed",
-                        "admit_policy_dispatch",
-                    )
-                })?;
-            let now_unix_ms = trusted
-                .intent
-                .prerequisites
-                .evaluated_at_unix_ms
-                .checked_add(elapsed_ms)
-                .ok_or_else(|| {
-                    policy_admission_fatal(
-                        "policy_admission_clock_overflow",
-                        "admit_policy_dispatch",
-                    )
-                })?;
+            let admission_time = || {
+                let elapsed_ms = self
+                    .monotonic_ms()?
+                    .checked_sub(trusted.observed_monotonic_ms)
+                    .ok_or_else(|| {
+                        policy_admission_fatal(
+                            "policy_admission_clock_regressed",
+                            "admit_policy_dispatch",
+                        )
+                    })?;
+                trusted
+                    .intent
+                    .prerequisites
+                    .evaluated_at_unix_ms
+                    .checked_add(elapsed_ms)
+                    .ok_or_else(|| {
+                        policy_admission_fatal(
+                            "policy_admission_clock_overflow",
+                            "admit_policy_dispatch",
+                        )
+                    })
+            };
+            let now_unix_ms = admission_time()?;
             // Approval projection and dispatch admission share one order so a concurrent revocation
             // cannot appear in the ledger before a dispatch authorized by the superseded fact.
             let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
@@ -1198,6 +1201,22 @@ impl HostShared {
                             effect: EffectDisposition::NotPerformed,
                         };
                     }
+                    // Lock acquisition and durable intent append may cross a retry boundary.
+                    // Final eligibility and the receipt use one fresh, trusted monotonic time.
+                    let now_unix_ms = match admission_time() {
+                        Ok(now) => now,
+                        Err(error) => {
+                            return CriticalActionReport::Failed {
+                                error: RequestFailure::poison_without_terminal(error),
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
+                    let final_context = PolicyAdmissionContext {
+                        now_unix_ms,
+                        ..context.clone()
+                    };
+                    let context = &final_context;
                     let catalog = match policy.validate_dispatch(
                         intent,
                         reason_chain,
@@ -1287,7 +1306,7 @@ impl HostShared {
                                 #[cfg(test)]
                                 policy_crash_test_barrier("after_lease_grant");
                                 if let Err(error) =
-                                    policy.commit_admission(intent, &admission_record)
+                                    policy.commit_admission(intent, &admission_record, reason_chain)
                                 {
                                     return CriticalActionReport::Failed {
                                         error: RequestFailure::poison_without_terminal(error),

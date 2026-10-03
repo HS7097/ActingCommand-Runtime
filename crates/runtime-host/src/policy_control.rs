@@ -57,6 +57,14 @@ struct PausedOn {
     layers: Vec<IdentityLayer>,
 }
 
+/// The normal admission that opened a retry round. Rebuilt in ledger order, never from
+/// restart time or a later failure identity. Limits belong to that admission's cycle.
+struct RetryRound {
+    admission: PolicyAdmissionRecord,
+    until_unix_ms: u64,
+    expected_duration_ms: u64,
+}
+
 #[derive(Default)]
 pub(crate) struct PolicyControlState {
     task_daily: BTreeMap<(String, String, i64), u32>,
@@ -67,6 +75,7 @@ pub(crate) struct PolicyControlState {
     activity_runtime: BTreeMap<(String, String, String), u64>,
     next_activity_eligible: BTreeMap<(String, String), u64>,
     failure_streaks: BTreeMap<(String, String), FailureStreak>,
+    retry_rounds: BTreeMap<(String, String), RetryRound>,
 }
 
 impl PolicyControlState {
@@ -320,6 +329,7 @@ impl PolicyControlState {
         catalog: &CompiledCatalog,
         intent: &DispatchIntent,
         admission: &PolicyAdmissionRecord,
+        immediate_retry: bool,
     ) -> RuntimeHostResult<()> {
         // Replaying an accepted admission validates its original budget receipt.
         // Live failure disposition is checked by preview_admission under the owner lock.
@@ -330,6 +340,20 @@ impl PolicyControlState {
                 "policy_budget_receipt_mismatch",
                 "commit_policy_budget",
             ));
+        }
+        if !immediate_retry {
+            let (_, profile) = task_and_profile(catalog, intent)?;
+            let window = activity_window_at(profile, admission.activity.admitted_at_unix_ms)
+                .map_err(|_| fatal("policy_activity_day_overflow", "commit_policy_budget"))?
+                .ok_or_else(|| fatal("policy_activity_window_closed", "commit_policy_budget"))?;
+            self.retry_rounds.insert(
+                (intent.task_id.clone(), intent.instance_id.clone()),
+                RetryRound {
+                    admission: admission.clone(),
+                    until_unix_ms: window.until_unix_ms,
+                    expected_duration_ms: intent.expected_duration_ms,
+                },
+            );
         }
         let task_daily_key = (
             intent.task_id.clone(),
@@ -374,6 +398,8 @@ impl PolicyControlState {
             ),
             admission.activity.next_eligible_unix_ms,
         );
+        // Counts are spent on admission. Runtime reservations settle to actual usage first.
+        self.end_exhausted_retry_rounds(&intent.instance_id, false);
         Ok(())
     }
 
@@ -556,6 +582,7 @@ impl PolicyControlState {
         match &data.outcome {
             PolicyExecutionOutcome::Succeeded { .. } => {
                 self.failure_streaks.remove(&key);
+                self.retry_rounds.remove(&key);
             }
             PolicyExecutionOutcome::Failed { failure } => {
                 // Live settlement and replay both pass here, so a restarted host rebuilds the
@@ -584,6 +611,7 @@ impl PolicyControlState {
                 );
             }
         }
+        self.end_exhausted_retry_rounds(&intent.instance_id, true);
         Ok(())
     }
 
@@ -595,17 +623,135 @@ impl PolicyControlState {
             .map(|failure| (failure.error_code.as_str(), failure.decision_id.as_str()))
     }
 
-    /// Workflow #336 R22: the pairs whose latest failure carries a failure identity and is
-    /// scheduled for a retry; the evaluator treats them as triggered once the backoff ends.
-    pub(crate) fn immediate_retry_pairs(&self) -> BTreeSet<(String, String)> {
-        self.failure_streaks
+    /// R22 eligibility is bounded by the original normal admission, including after replay.
+    /// Backoff and all remaining admission gates are checked by the ordinary predicate.
+    pub(crate) fn immediate_retry_pairs(
+        &self,
+        catalog: &CompiledCatalog,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<BTreeSet<(String, String)>> {
+        let mut pairs = BTreeSet::new();
+        for (pair, failure) in &self.failure_streaks {
+            if failure.disposition != PolicyFailureDisposition::RetryScheduled
+                || FailureIdentity::parse(&failure.error_code).is_none()
+            {
+                continue;
+            }
+            let Some(round) = self.retry_rounds.get(pair) else {
+                continue;
+            };
+            let origin = &round.admission.activity;
+            if now_unix_ms < origin.admitted_at_unix_ms || now_unix_ms >= round.until_unix_ms {
+                continue;
+            }
+            if !catalog.catalog().tasks.tasks.iter().any(|task| {
+                task.id == pair.0 && task.expected_duration_ms == round.expected_duration_ms
+            }) {
+                continue;
+            }
+            let Some(profile) = catalog
+                .catalog()
+                .activity
+                .profiles
+                .iter()
+                .find(|profile| profile.id == origin.profile_id)
+            else {
+                continue;
+            };
+            let window = activity_window_at(profile, now_unix_ms)
+                .map_err(|_| fatal("policy_activity_day_overflow", "resolve_retry_round"))?;
+            if window.is_some_and(|window| {
+                window.local_day == origin.local_day && window.window_id == origin.window_id
+            }) && self.retry_round_has_budget(pair, round, true)
+            {
+                pairs.insert(pair.clone());
+            }
+        }
+        Ok(pairs)
+    }
+
+    fn retry_round_has_budget(
+        &self,
+        pair: &(String, String),
+        round: &RetryRound,
+        include_runtime: bool,
+    ) -> bool {
+        let origin = &round.admission.activity;
+        let limits = &round.admission.budget;
+        let task_daily = (pair.0.clone(), pair.1.clone(), origin.local_day);
+        let task_window = (pair.0.clone(), pair.1.clone(), origin.window_id.clone());
+        let activity_daily = (origin.profile_id.clone(), pair.1.clone(), origin.local_day);
+        let activity_window = (
+            origin.profile_id.clone(),
+            pair.1.clone(),
+            origin.window_id.clone(),
+        );
+        self.task_daily.get(&task_daily).copied().unwrap_or(0) < limits.task_daily_limit
+            && self.task_window.get(&task_window).copied().unwrap_or(0) < limits.task_window_limit
+            && self
+                .activity_daily
+                .get(&activity_daily)
+                .copied()
+                .unwrap_or(0)
+                < limits.activity_daily_limit
+            && self
+                .activity_window
+                .get(&activity_window)
+                .copied()
+                .unwrap_or(0)
+                < limits.activity_window_limit
+            && (!include_runtime
+                || (self
+                    .task_runtime
+                    .get(&task_window)
+                    .copied()
+                    .unwrap_or(0)
+                    .checked_add(round.expected_duration_ms)
+                    .is_some_and(|next| next <= limits.task_runtime_limit_ms)
+                    && self
+                        .activity_runtime
+                        .get(&activity_window)
+                        .copied()
+                        .unwrap_or(0)
+                        .checked_add(round.expected_duration_ms)
+                        .is_some_and(|next| next <= limits.activity_runtime_limit_ms)))
+    }
+
+    pub(crate) fn validate_immediate_retry(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let pair = (intent.task_id.clone(), intent.instance_id.clone());
+        if !self
+            .immediate_retry_pairs(catalog, now_unix_ms)?
+            .contains(&pair)
+            || self.retry_rounds.get(&pair).is_none_or(|round| {
+                round.admission.activity.profile_id != intent.prerequisites.activity_profile_id
+                    || intent.expected_duration_ms != round.expected_duration_ms
+            })
+        {
+            return Err(request(
+                "policy_retry_round_ended",
+                "validate_policy_dispatch",
+            ));
+        }
+        Ok(())
+    }
+
+    fn end_exhausted_retry_rounds(&mut self, instance_id: &str, include_runtime: bool) {
+        let ended: Vec<_> = self
+            .retry_rounds
             .iter()
-            .filter(|(_, failure)| {
-                failure.disposition == PolicyFailureDisposition::RetryScheduled
-                    && FailureIdentity::parse(&failure.error_code).is_some()
+            .filter(|(pair, round)| {
+                pair.1 == instance_id && !self.retry_round_has_budget(pair, round, include_runtime)
             })
             .map(|(pair, _)| pair.clone())
-            .collect()
+            .collect();
+        for pair in ended {
+            self.retry_rounds.remove(&pair);
+        }
     }
 }
 
@@ -1249,6 +1395,7 @@ mod tests {
             |activity| activity["profiles"][0]["daily_budget"] = serde_json::json!(2),
         );
         let mut state = PolicyControlState::default();
+        let mut replay = PolicyControlState::default();
         for index in 0..2 {
             let now = NOW + index * 600_000;
             let intent = intent(&catalog, index + 1);
@@ -1256,8 +1403,41 @@ mod tests {
                 .preview_admission(&catalog, &intent, now)
                 .expect("budget admission");
             state
-                .commit_admission(&catalog, &intent, &admission)
+                .commit_admission(&catalog, &intent, &admission, index != 0)
                 .expect("commit budget");
+            replay
+                .commit_admission(&catalog, &intent, &admission, index != 0)
+                .unwrap();
+            let execution = state.preview_execution(
+                &catalog, &intent, &admission,
+                PolicyExecutionTiming { observed_at_unix_ms: now + 100, runtime_ms: 100 },
+                &PolicyExecutionInput::Failed {
+                    error_code: format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}"),
+                    class: PolicyFailureClass::Recoverable,
+                },
+                &unavailable(now + 100),
+            ).unwrap();
+            state
+                .commit_execution(&catalog, &intent, &admission, &execution)
+                .unwrap();
+            replay
+                .commit_execution(&catalog, &intent, &admission, &execution)
+                .unwrap();
+            // WF342 P specification: identity changes do not restore an exhausted round.
+            for control in [&state, &replay] {
+                assert_eq!(
+                    control
+                        .immediate_retry_pairs(&catalog, now + 100)
+                        .unwrap()
+                        .is_empty(),
+                    index == 1
+                );
+                assert!(
+                    control
+                        .latest_failure(&intent.task_id, &intent.instance_id)
+                        .is_some()
+                );
+            }
         }
         let error = state
             .preview_admission(&catalog, &intent(&catalog, 3), NOW + 1_200_000)
@@ -1277,6 +1457,35 @@ mod tests {
         state
             .preview_admission(&catalog, &intent(&catalog, 3), next)
             .expect("same predicate permits the reported next time");
+        for control in [&state, &replay] {
+            assert!(
+                control
+                    .immediate_retry_pairs(&catalog, next)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                control
+                    .validate_immediate_retry(&catalog, &intent(&catalog, 3), next)
+                    .unwrap_err()
+                    .code(),
+                "policy_retry_round_ended"
+            );
+        }
+        let next_intent = intent(&catalog, 3);
+        let next_admission = state
+            .preview_admission(&catalog, &next_intent, next)
+            .unwrap();
+        state
+            .commit_admission(&catalog, &next_intent, &next_admission, false)
+            .unwrap();
+        assert_eq!(
+            state.retry_rounds[&(next_intent.task_id.clone(), next_intent.instance_id.clone())]
+                .admission
+                .activity
+                .admitted_at_unix_ms,
+            next
+        );
 
         // B11 first red: Workflow #269 issuecomment-5587376490. The shared
         // activity limits must be visible through the same read-only predicate.
@@ -1303,7 +1512,7 @@ mod tests {
             let first = intent(&catalog, 1);
             let admission = state.preview_admission(&catalog, &first, NOW).unwrap();
             state
-                .commit_admission(&catalog, &first, &admission)
+                .commit_admission(&catalog, &first, &admission, false)
                 .unwrap();
             let next_intent = intent(&catalog, 2);
             let error = state
@@ -1338,6 +1547,86 @@ mod tests {
 
     #[test]
     fn runtime_owned_window_and_runtime_budgets_cannot_be_bypassed() {
+        // WF342 P specification: ordinary/full-day/overnight occurrences and ordered replay.
+        for (start, end, admitted_minute) in [(480, 1320, 1300), (0, 0, 1420), (1320, 120, 1430)] {
+            let catalog = catalog_with(
+                |_| {},
+                |activity| {
+                    activity["profiles"][0]["windows"][0]["start_minute_of_day"] =
+                        serde_json::json!(start);
+                    activity["profiles"][0]["windows"][0]["end_minute_of_day"] =
+                        serde_json::json!(end);
+                },
+            );
+            let mut state = PolicyControlState::default();
+            let mut replay = PolicyControlState::default();
+            let origin_at = NOW / 86_400_000 * 86_400_000 + admitted_minute * 60_000;
+            let original_window =
+                activity_window_at(&catalog.catalog().activity.profiles[0], origin_at)
+                    .unwrap()
+                    .unwrap();
+            for index in 0..2 {
+                let now = origin_at + index * 600_000;
+                let dispatch = intent(&catalog, index + 1);
+                let admission = state.preview_admission(&catalog, &dispatch, now).unwrap();
+                assert_eq!(admission.activity.local_day, original_window.local_day);
+                assert_eq!(admission.activity.window_id, original_window.window_id);
+                state
+                    .commit_admission(&catalog, &dispatch, &admission, index != 0)
+                    .unwrap();
+                replay
+                    .commit_admission(&catalog, &dispatch, &admission, index != 0)
+                    .unwrap();
+                let execution = state.preview_execution(
+                    &catalog, &dispatch, &admission,
+                    PolicyExecutionTiming { observed_at_unix_ms: now + 100, runtime_ms: 100 },
+                    &PolicyExecutionInput::Failed {
+                        error_code: format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}"),
+                        class: PolicyFailureClass::Recoverable,
+                    },
+                    &unavailable(now + 100),
+                ).unwrap();
+                state
+                    .commit_execution(&catalog, &dispatch, &admission, &execution)
+                    .unwrap();
+                replay
+                    .commit_execution(&catalog, &dispatch, &admission, &execution)
+                    .unwrap();
+                let pair = (dispatch.task_id.clone(), dispatch.instance_id.clone());
+                for control in [&state, &replay] {
+                    assert_eq!(
+                        control.retry_rounds[&pair]
+                            .admission
+                            .activity
+                            .admitted_at_unix_ms,
+                        origin_at
+                    );
+                    assert!(
+                        control
+                            .immediate_retry_pairs(&catalog, now + 100)
+                            .unwrap()
+                            .contains(&pair)
+                    );
+                    assert!(
+                        control
+                            .immediate_retry_pairs(&catalog, original_window.until_unix_ms)
+                            .unwrap()
+                            .is_empty()
+                    );
+                    assert_eq!(
+                        control
+                            .validate_immediate_retry(
+                                &catalog,
+                                &dispatch,
+                                original_window.until_unix_ms
+                            )
+                            .unwrap_err()
+                            .code(),
+                        "policy_retry_round_ended"
+                    );
+                }
+            }
+        }
         let window_catalog = catalog_with(
             |tasks| {
                 tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(10);
@@ -1359,7 +1648,7 @@ mod tests {
                 .expect("window admission through the declared limit");
             assert_eq!(admission.budget.task_window_used, index as u32 + 1);
             window_state
-                .commit_admission(&window_catalog, &intent, &admission)
+                .commit_admission(&window_catalog, &intent, &admission, false)
                 .expect("commit window budget");
         }
         let error = window_state
@@ -1401,7 +1690,7 @@ mod tests {
                 .preview_admission(&runtime_catalog, &intent, now)
                 .expect("runtime admission through 300000ms cumulative usage");
             runtime_state
-                .commit_admission(&runtime_catalog, &intent, &admission)
+                .commit_admission(&runtime_catalog, &intent, &admission, false)
                 .expect("commit runtime reservation");
             let execution = runtime_state
                 .preview_execution(
@@ -1454,35 +1743,61 @@ mod tests {
                 activity["profiles"][0]["session_max_ms"] = serde_json::json!(100000);
             },
         );
-        let mut state = PolicyControlState::default();
-        let first = intent(&catalog, 1);
-        let admission = state
-            .preview_admission(&catalog, &first, NOW)
-            .expect("first admission");
-        state
-            .commit_admission(&catalog, &first, &admission)
-            .expect("commit first admission");
-        let execution = state
-            .preview_execution(
-                &catalog,
-                &first,
-                &admission,
-                PolicyExecutionTiming {
-                    observed_at_unix_ms: NOW + 80000,
-                    runtime_ms: 80_000,
-                },
-                &PolicyExecutionInput::Succeeded,
-                &unavailable(NOW + 80000),
-            )
-            .expect("first execution");
-        state
-            .commit_execution(&catalog, &first, &admission, &execution)
-            .expect("commit actual runtime");
+        for input in [
+            PolicyExecutionInput::Succeeded,
+            PolicyExecutionInput::Failed {
+                error_code:
+                    "input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu000000000001"
+                        .to_owned(),
+                class: PolicyFailureClass::Recoverable,
+            },
+        ] {
+            let mut state = PolicyControlState::default();
+            let first = intent(&catalog, 1);
+            let admission = state
+                .preview_admission(&catalog, &first, NOW)
+                .expect("first admission");
+            state
+                .commit_admission(&catalog, &first, &admission, false)
+                .expect("commit first admission");
+            let execution = state
+                .preview_execution(
+                    &catalog,
+                    &first,
+                    &admission,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: NOW + 80000,
+                        runtime_ms: 80_000,
+                    },
+                    &input,
+                    &unavailable(NOW + 80000),
+                )
+                .expect("first execution");
+            state
+                .commit_execution(&catalog, &first, &admission, &execution)
+                .expect("commit actual runtime");
 
-        let error = state
-            .preview_admission(&catalog, &intent(&catalog, 2), NOW + 600000)
-            .expect_err("actual runtime must constrain the next admission");
-        assert_eq!(error.code(), "policy_budget_exhausted");
+            let error = state
+                .preview_admission(&catalog, &intent(&catalog, 2), NOW + 600000)
+                .expect_err("actual runtime must constrain the next admission");
+            assert_eq!(error.code(), "policy_budget_exhausted");
+            assert!(
+                state
+                    .immediate_retry_pairs(&catalog, NOW + 600000)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                state.retry_rounds.is_empty(),
+                "settled exhaustion ends the round"
+            );
+            assert_eq!(
+                state
+                    .latest_failure(&first.task_id, &first.instance_id)
+                    .is_some(),
+                matches!(input, PolicyExecutionInput::Failed { .. })
+            );
+        }
     }
 
     #[test]
@@ -1499,7 +1814,7 @@ mod tests {
         assert_eq!(first, replay);
         assert!(first.activity.seed > 0);
         state
-            .commit_admission(&catalog, &first_intent, &first)
+            .commit_admission(&catalog, &first_intent, &first, false)
             .expect("commit sample");
         let error = state
             .preview_admission(&catalog, &intent(&catalog, 2), NOW)

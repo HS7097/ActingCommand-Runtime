@@ -592,7 +592,10 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
          this package's own steps is run once more, and the same problem again suspends the \
          task (R17). The rerun happens immediately (R22): at the first policy evaluation after \
          retry_backoff_ms (0 in the example), without waiting for the next trigger or for \
-         cooldown_ms. Changing on_failure changes the catalog, which needs a new approval."
+         cooldown_ms, while the original normal admission's activity window and budget cycle \
+         remain valid. Exhausting that budget or ending that window ends immediate retries; \
+         the next normal trigger is required even after budgets reset. Other admission gates \
+         still apply. Changing on_failure changes the catalog, which needs a new approval."
             .to_string(),
     );
     if plan.has_application_step() {
