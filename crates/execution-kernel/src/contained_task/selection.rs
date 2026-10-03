@@ -198,25 +198,6 @@ pub(super) fn prepare_select_steps(
                     ),
                 )
             })?;
-        if layout.has_consensus() {
-            let required_ms = layout
-                .maximum_provider_and_wait_ms(evaluator)
-                .saturating_mul(2);
-            if required_ms
-                > control
-                    .step_timeout()
-                    .milliseconds
-                    .min(control.task_timeout().milliseconds)
-            {
-                return Err(failure(
-                    SELECT_INVALID,
-                    format!(
-                        "layout={} H1/H2 declared provider and wait budget {required_ms}ms exceeds the original task/step budget",
-                        layout.id
-                    ),
-                ));
-            }
-        }
         if crate::canonical_page_anchor(&control.game, &layout.page_id)
             != crate::canonical_page_anchor(&control.game, &operation.from)
         {
@@ -251,6 +232,73 @@ pub(super) fn prepare_select_steps(
         operation.prepared_select = Some(Box::new(prepared));
     }
     Ok(())
+}
+
+pub(super) fn page_recognition_budget_ms(
+    evaluator: &RecognitionEvaluator,
+    detector: &actingcommand_page_detector::PageDetector,
+    only_page: Option<&str>,
+) -> Result<u64, ContainedTaskError> {
+    let targets = detector
+        .page_definitions()
+        .iter()
+        .filter(|page| only_page.is_none_or(|id| id == page.id))
+        .flat_map(|page| {
+            page.required
+                .iter()
+                .chain(page.any_of.iter().flatten())
+                .chain(page.optional.iter())
+                .chain(page.forbidden.iter())
+                .map(String::as_str)
+        });
+    evaluator
+        .maximum_provider_ms(targets)
+        .map(|provider| provider.saturating_add(evaluator.target_sample_wait_ms()))
+        .map_err(|error| ContainedTaskError::with_detail(SELECT_INVALID, error.to_string()))
+}
+
+/// Known calls and declared waits on one complete pre-input path. Initial page recognition
+/// precedes StepStarted; each additional candidate frame and H2 capture recognizes pages.
+pub(super) fn sampling_budget_ms(
+    operation: &TaskOperation,
+    evaluator: &RecognitionEvaluator,
+    detector: &actingcommand_page_detector::PageDetector,
+) -> Result<Option<u64>, ContainedTaskError> {
+    let layout = operation
+        .select
+        .as_ref()
+        .map(|select| {
+            evaluator
+                .candidate_layout(&select.layout_id)
+                .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))
+        })
+        .transpose()?;
+    if evaluator.pack().target_consensus.is_empty()
+        && layout.is_none_or(|layout| !layout.has_consensus())
+    {
+        return Ok(None);
+    }
+    let guard = if operation.unguarded_trusted_coordinate {
+        0
+    } else {
+        evaluator
+            .maximum_provider_ms(operation.guard.iter().map(|guard| guard.target_id.as_str()))
+            .map_err(|error| ContainedTaskError::with_detail(SELECT_INVALID, error.to_string()))?
+    };
+    let required = if let Some(layout) = layout {
+        let frames = layout.required_frames() as u64;
+        let pages = page_recognition_budget_ms(evaluator, detector, None)?;
+        // H1/H2 each add F-1 frames; H2 starts with another fresh page capture. Its guard
+        // runs before projection and again on the last frame when the projection adds frames.
+        layout
+            .maximum_provider_and_wait_ms(evaluator)
+            .saturating_mul(2)
+            .saturating_add(pages.saturating_mul(2 * frames - 1))
+            .saturating_add(guard.saturating_mul(if frames > 1 { 2 } else { 1 }))
+    } else {
+        guard
+    };
+    Ok(Some(required))
 }
 
 /// The selection-policy crate's own reading: the byte limit, the typed decode, the canonical
@@ -540,7 +588,13 @@ impl PreparedContainedTask {
                     ContainedTaskError::new("candidate_sampling_runtime_unsupported").into(),
                 );
             }
-            if Duration::from_millis(layout.maximum_provider_and_wait_ms(&self.evaluator))
+            let transaction_ms = layout
+                .maximum_provider_and_wait_ms(&self.evaluator)
+                .saturating_add(
+                    page_recognition_budget_ms(&self.evaluator, &self.detector, None)?
+                        .saturating_mul(layout.required_frames().saturating_sub(1) as u64),
+                );
+            if Duration::from_millis(transaction_ms)
                 > deadline.saturating_duration_since(Instant::now())
             {
                 return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
@@ -568,7 +622,7 @@ impl PreparedContainedTask {
             });
             check_deadline()?;
             let frame = self
-                .capture_frame(runtime, None, None, timing, None)?
+                .capture_frame(runtime, None, None, timing, None, Some(deadline))?
                 .ok_or_else(|| ContainedTaskError::new(SELECTION_PAGE_CHANGED))?;
             if !crate::page_anchor_matches(&self.control.game, &frame.page_label, &operation.from)
                 || frame.scene.width() != first.scene.width()
@@ -598,7 +652,7 @@ impl PreparedContainedTask {
             return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
         }
         let mut recording_error = None;
-        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).project_candidates_with_samples(
+        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(deadline).project_candidates_with_samples(
             &layout.id, &scenes, &mut |target, result, started, ended| {
                 let measured = super::ContainedTaskEvaluationTiming {
                     elapsed_us: super::observe_instant_span(started, ended), budget_before: timing.budget_at(started),
@@ -654,12 +708,15 @@ impl PreparedContainedTask {
             .evaluator
             .candidate_layout(&prepared.layout_id)
             .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(
-                self.control.step_timeout().milliseconds,
-            ))
-            .ok_or_else(|| ContainedTaskError::new("candidate_sample_deadline_overflow"))?
-            .min(timing.deadline());
+        let deadline = timing.deadline();
+        let sampling_budget = sampling_budget_ms(operation, &self.evaluator, &self.detector)?;
+        if let Some(required_ms) = sampling_budget
+            && (Instant::now() >= deadline
+                || Duration::from_millis(required_ms)
+                    > deadline.saturating_duration_since(Instant::now()))
+        {
+            return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+        }
         let (projection, _) =
             self.project_transaction(runtime, operation, observation, layout, timing, deadline)?;
         let state = runtime
@@ -748,7 +805,7 @@ impl PreparedContainedTask {
         });
         match recorded {
             Err(error) if !run_ending => Err(ContainedTaskRunError::Boundary(error)),
-            Ok(()) if result.is_ok() && layout.has_consensus() && Instant::now() >= deadline => {
+            Ok(()) if result.is_ok() && sampling_budget.is_some() && Instant::now() >= deadline => {
                 Err(ContainedTaskError::new("candidate_sample_deadline_exceeded").into())
             }
             // A `run_ending` record's failure stays with the runtime; the capture's error is
@@ -776,7 +833,15 @@ impl PreparedContainedTask {
             .prepared_select
             .as_deref()
             .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
-        let frame = match self.capture_frame(runtime, None, None, timing, None) {
+        let scoped = sampling_budget_ms(operation, &self.evaluator, &self.detector)?.is_some();
+        let frame = match self.capture_frame(
+            runtime,
+            None,
+            None,
+            timing,
+            None,
+            scoped.then_some(deadline),
+        ) {
             Ok(frame) => frame,
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
@@ -833,19 +898,24 @@ impl PreparedContainedTask {
                 ));
             }
         };
-        let mut guard =
-            match operation.guard_outcome(&self.control, &frame, &self.evaluator, runtime) {
-                Ok((guard, _)) => guard,
-                Err(ContainedTaskRunError::Task(error)) => {
-                    return Ok((
-                        TaskSelectionConfirmation::GuardFailed {
-                            code: error.code().to_owned(),
-                        },
-                        Err(error.into()),
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
+        let mut guard = match operation.guard_outcome(
+            &self.control,
+            &frame,
+            &self.evaluator,
+            runtime,
+            Some(timing),
+        ) {
+            Ok((guard, _)) => guard,
+            Err(ContainedTaskRunError::Task(error)) => {
+                return Ok((
+                    TaskSelectionConfirmation::GuardFailed {
+                        code: error.code().to_owned(),
+                    },
+                    Err(error.into()),
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         let layout = self
             .evaluator
             .candidate_layout(&prepared.layout_id)
@@ -860,6 +930,7 @@ impl PreparedContainedTask {
                             &frame,
                             &self.evaluator,
                             runtime,
+                            Some(timing),
                         ) {
                             Ok((guard, _)) => guard,
                             Err(ContainedTaskRunError::Task(error)) => {

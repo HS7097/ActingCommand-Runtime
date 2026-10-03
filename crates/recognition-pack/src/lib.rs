@@ -935,6 +935,14 @@ impl SceneEvaluation<'_> {
     }
 
     pub fn evaluate_target(&self, target_id: &str) -> RecognitionPackResult<TargetEvaluation> {
+        if self
+            .sample_deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err(RecognitionPackError::fatal(
+                "recognition sample deadline exceeded before target evaluation",
+            ));
+        }
         if let Some(consensus) = self.evaluator.pack.target_consensus.get(target_id) {
             if let Some(result) = self.consensus_results.borrow().get(target_id) {
                 return result.clone();
@@ -944,6 +952,19 @@ impl SceneEvaluation<'_> {
                 .borrow_mut()
                 .insert(target_id.to_owned(), result.clone());
             return result;
+        }
+        let provider_ms = match self.evaluator.target(target_id)? {
+            RecognitionTarget::Ocr(target) => target.timeout_ms,
+            RecognitionTarget::Nn(target) => target.timeout_ms,
+            _ => 0,
+        };
+        if self.sample_deadline.is_some_and(|deadline| {
+            std::time::Duration::from_millis(provider_ms)
+                > deadline.saturating_duration_since(std::time::Instant::now())
+        }) {
+            return Err(RecognitionPackError::fatal(
+                "recognition sample budget insufficient before target evaluation",
+            ));
         }
         let is_template = self.evaluator.target_kind(target_id)? == TargetKind::Template;
         if is_template && let Some(result) = self.templates.borrow().get(target_id) {
@@ -3826,6 +3847,41 @@ mod tests {
             predicate
                 .scene_context_with_samples(&[&scene, &scene, &third])
                 .is_err()
+        );
+        let RecognitionTarget::Ocr(target) = predicate.target("ocr/page").unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(
+            predicate
+                .maximum_provider_ms(["ocr/page", "ocr/page"])
+                .unwrap(),
+            target.timeout_ms * 3,
+            "one sampled target context shares its completed transaction"
+        );
+        assert_eq!(
+            exact.maximum_provider_ms(["ocr/page", "ocr/page"]).unwrap(),
+            target.timeout_ms * 2,
+            "ordinary OCR references remain distinct calls"
+        );
+        let expired = std::time::Instant::now() - std::time::Duration::from_millis(1);
+        assert!(
+            predicate
+                .scene_context_with_samples(&[&scene, &second, &third])
+                .unwrap()
+                .with_sample_deadline(expired)
+                .evaluate_target("ocr/page")
+                .unwrap_err()
+                .message()
+                .contains("deadline")
+        );
+        assert!(
+            exact
+                .scene_context(&scene)
+                .with_sample_deadline(expired)
+                .evaluate_target("ocr/page")
+                .unwrap_err()
+                .message()
+                .contains("deadline")
         );
         assert!(
             matches!(&projection.candidates()[0].features["business_id"], CandidateFeature::Identity { value, .. } if value == "first")

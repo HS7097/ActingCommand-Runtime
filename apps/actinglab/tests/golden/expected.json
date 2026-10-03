@@ -538,6 +538,11 @@
       "cli_version": "0.1.0",
       "command": "package validate",
       "data": {
+        "coverage": {
+          "execution": "not_run",
+          "package_format": "passed",
+          "task_prepare": "not_run"
+        },
         "dangerous_entries": [],
         "entries": null,
         "entry_count": 3,

@@ -330,6 +330,19 @@ impl SceneEvaluation<'_> {
         target_id: &str,
         sample: CandidateSampleVariant,
     ) -> RecognitionPackResult<TargetEvaluation> {
+        let provider_ms = match self.evaluator().target(target_id)? {
+            RecognitionTarget::Ocr(target) => target.timeout_ms,
+            _ => 0,
+        };
+        if self.sample_deadline.is_some_and(|deadline| {
+            std::time::Instant::now() >= deadline
+                || std::time::Duration::from_millis(provider_ms)
+                    > deadline.saturating_duration_since(std::time::Instant::now())
+        }) {
+            return Err(RecognitionPackError::fatal(
+                "recognition sample budget insufficient before backend evaluation",
+            ));
+        }
         let target = sample.target(self.evaluator().target(target_id)?)?;
         let mut evaluator: RecognitionEvaluator = self.evaluator().clone();
         if let Some(metric) = sample.template_metric {

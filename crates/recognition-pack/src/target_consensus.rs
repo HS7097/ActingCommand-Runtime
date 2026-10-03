@@ -173,20 +173,51 @@ impl RecognitionEvaluator {
             .unwrap_or(0)
     }
 
-    /// All declared sampled targets are admitted conservatively, including guards.
-    pub fn target_sample_provider_and_wait_ms(&self) -> u64 {
-        self.pack
-            .target_consensus
-            .iter()
-            .map(|(id, value)| match self.target(id) {
-                Ok(RecognitionTarget::Ocr(target)) => {
-                    target.timeout_ms * value.samples.len() as u64
-                }
-                _ => 0,
-            })
-            .sum::<u64>()
-            + self.target_sample_interval_ms()
-                * self.target_sample_frames().saturating_sub(1) as u64
+    pub fn target_sample_wait_ms(&self) -> u64 {
+        self.target_sample_interval_ms() * self.target_sample_frames().saturating_sub(1) as u64
+    }
+
+    /// One SceneEvaluation transaction: sampled target results share that context's cache;
+    /// every ordinary OCR/NN reference remains an actual provider call, including members.
+    pub fn maximum_provider_ms<'a>(
+        &self,
+        targets: impl IntoIterator<Item = &'a str>,
+    ) -> RecognitionPackResult<u64> {
+        let mut sampled = std::collections::BTreeSet::new();
+        targets.into_iter().try_fold(0_u64, |total, id| {
+            total
+                .checked_add(self.target_provider_ms(id, &mut sampled)?)
+                .ok_or_else(|| RecognitionPackError::fatal("recognition provider budget overflow"))
+        })
+    }
+
+    fn target_provider_ms(
+        &self,
+        id: &str,
+        sampled: &mut std::collections::BTreeSet<String>,
+    ) -> RecognitionPackResult<u64> {
+        let count = if let Some(declaration) = self.pack.target_consensus.get(id) {
+            if !sampled.insert(id.to_owned()) {
+                return Ok(0);
+            }
+            declaration.samples.len() as u64
+        } else {
+            1
+        };
+        match self.target(id)? {
+            RecognitionTarget::Ocr(target) => Ok(target.timeout_ms * count),
+            RecognitionTarget::Nn(target) => Ok(target.timeout_ms),
+            RecognitionTarget::Composite(target) => {
+                target.members.iter().try_fold(0_u64, |total, member| {
+                    total
+                        .checked_add(self.target_provider_ms(member, sampled)?)
+                        .ok_or_else(|| {
+                            RecognitionPackError::fatal("recognition provider budget overflow")
+                        })
+                })
+            }
+            _ => Ok(0),
+        }
     }
 
     pub fn scene_context_with_samples<'a>(

@@ -1909,17 +1909,30 @@ impl PreparedContainedTask {
             })?;
         program.validate(&control, &bundle, &detector)?;
         selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
-        if evaluator
-            .target_sample_provider_and_wait_ms()
-            .saturating_mul(2)
-            > control
-                .step_timeout()
-                .milliseconds
-                .min(control.task_timeout().milliseconds)
+        let admission_limit = control
+            .step_timeout()
+            .milliseconds
+            .min(control.task_timeout().milliseconds);
+        if !evaluator.pack().target_consensus.is_empty()
+            && selection::page_recognition_budget_ms(&evaluator, &detector, None)? > admission_limit
         {
             return Err(ContainedTaskError::new(
                 "recognition_sample_budget_insufficient",
             ));
+        }
+        for operation in &program.operations {
+            if let Some(required_ms) =
+                selection::sampling_budget_ms(operation, &evaluator, &detector)?
+                && required_ms > admission_limit
+            {
+                return Err(ContainedTaskError::with_detail(
+                    "recognition_sample_budget_insufficient",
+                    format!(
+                        "operation={} requires {required_ms}ms across page/candidate/guard calls and waits; limit={admission_limit}ms",
+                        operation.id
+                    ),
+                ));
+            }
         }
         let entry_page = program.required_home_entry_page(&control, &detector)?;
         let post_admission_ocr =
@@ -2053,7 +2066,14 @@ impl PreparedContainedTask {
                 actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
             );
             return self
-                .capture_frame(runtime, None, None, timing, Some(page))
+                .capture_frame(
+                    runtime,
+                    None,
+                    None,
+                    timing,
+                    Some(page),
+                    Some(timing.deadline()),
+                )
                 .map(|observation| observation.is_some_and(|value| value.page_label == page));
         }
         let frame = runtime
@@ -2247,20 +2267,22 @@ impl PreparedContainedTask {
                 && operation.application.is_some()
                 && self.control.execution_mode != "recognize_only"
         });
+        let entry_timing = if self.evaluator.pack().target_consensus.is_empty() {
+            observation_timing
+        } else {
+            observation_timing.with_deadline(Instant::now() + step_timeout)
+        };
         let mut observation = if entry == ContainedTaskEntry::Ordinary
             && let Some(required_page) = self.required_home_entry_page()
         {
             Some(
-                self.capture_page(
-                    runtime,
-                    ocr_collector,
-                    Some(required_page),
-                    observation_timing,
-                )?
-                .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?,
+                self.capture_page(runtime, ocr_collector, Some(required_page), entry_timing)?
+                    .ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_home_entry_not_matched")
+                    })?,
             )
         } else if initial_application.is_some() {
-            self.capture_page(runtime, ocr_collector, None, observation_timing)?
+            self.capture_page(runtime, ocr_collector, None, entry_timing)?
         } else {
             Some(self.capture_until_page(
                 runtime,
@@ -2386,6 +2408,13 @@ impl PreparedContainedTask {
                                 .task_timeout_error(TaskTimingStage::Dispatch, task_deadline, None)
                                 .into());
                         }
+                        let step_timing =
+                            observation_timing.with_deadline(Instant::now() + step_timeout);
+                        let sampling_budget = selection::sampling_budget_ms(
+                            operation,
+                            &self.evaluator,
+                            &self.detector,
+                        )?;
                         runtime
                             .record(ContainedTaskTrace::StepStarted {
                                 step_index,
@@ -2432,7 +2461,7 @@ impl PreparedContainedTask {
                                     operation,
                                     observation,
                                     step_index,
-                                    observation_timing,
+                                    step_timing,
                                 )
                                 .map(|selected| (selected.guard.clone(), None, Some(selected)))
                             } else {
@@ -2442,6 +2471,7 @@ impl PreparedContainedTask {
                                         observation,
                                         &self.evaluator,
                                         runtime,
+                                        Some(step_timing),
                                     )
                                     .map(|(guard, target)| (guard, target, None))
                             };
@@ -2502,6 +2532,13 @@ impl PreparedContainedTask {
                                     (action, sampling, observation.input_context.clone())
                                 }
                             };
+                            if sampling_budget.is_some() && Instant::now() >= step_timing.deadline()
+                            {
+                                return Err(ContainedTaskError::new(
+                                    "recognition_sample_deadline_exceeded",
+                                )
+                                .into());
+                            }
                             runtime
                                 .record(ContainedTaskTrace::EffectIntent {
                                     step_index,
@@ -2519,6 +2556,13 @@ impl PreparedContainedTask {
                                         None,
                                     )
                                     .into());
+                            }
+                            if sampling_budget.is_some() && Instant::now() >= step_timing.deadline()
+                            {
+                                return Err(ContainedTaskError::new(
+                                    "recognition_sample_deadline_exceeded",
+                                )
+                                .into());
                             }
                             runtime
                                 .input(action, input_context)
@@ -3146,6 +3190,11 @@ impl PreparedContainedTask {
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let started = Instant::now();
+        let timing = if self.evaluator.pack().target_consensus.is_empty() {
+            timing
+        } else {
+            timing.with_deadline(started + timeout)
+        };
         loop {
             if Instant::now() >= task_deadline {
                 return Err(self
@@ -3205,6 +3254,7 @@ impl PreparedContainedTask {
             required_entry_page,
             timing,
             None,
+            None,
         )
     }
 
@@ -3219,6 +3269,7 @@ impl PreparedContainedTask {
         required_entry_page: Option<&str>,
         timing: ContainedTaskTimingContext,
         only_page: Option<&str>,
+        sampling_deadline: Option<Instant>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let feeds_collectors = ocr_collector.is_some();
         let mut unfed = PostAdmissionOcrCollector::default();
@@ -3227,10 +3278,11 @@ impl PreparedContainedTask {
         let identity = runtime.task_boundary_identity(boundary);
         let capture_started = Instant::now();
         let result = (|| {
-            let sampled = !self.evaluator.pack().target_consensus.is_empty();
-            let sample_deadline = timing.deadline().min(
-                Instant::now() + Duration::from_millis(self.control.step_timeout().milliseconds),
-            );
+            let sampled =
+                !self.evaluator.pack().target_consensus.is_empty() || sampling_deadline.is_some();
+            let sample_deadline = sampling_deadline
+                .unwrap_or(timing.deadline())
+                .min(timing.deadline());
             let mut sample_scenes = Vec::new();
             let mut sample_geometry: Option<Option<InputFrameContext>> = None;
             if sampled {
@@ -3243,18 +3295,24 @@ impl PreparedContainedTask {
                     )
                     .into());
                 }
-                // One page transaction and its fresh guard may each evaluate the target.
-                if Duration::from_millis(
-                    self.evaluator
-                        .target_sample_provider_and_wait_ms()
-                        .saturating_mul(2),
-                ) > sample_deadline.saturating_duration_since(Instant::now())
+                if Instant::now() >= sample_deadline
+                    || Duration::from_millis(selection::page_recognition_budget_ms(
+                        &self.evaluator,
+                        &self.detector,
+                        only_page,
+                    )?) > sample_deadline.saturating_duration_since(Instant::now())
                 {
                     return Err(
                         ContainedTaskError::new("recognition_sample_budget_insufficient").into(),
                     );
                 }
                 for _ in 1..self.evaluator.target_sample_frames() {
+                    if Instant::now() >= sample_deadline {
+                        return Err(ContainedTaskError::new(
+                            "recognition_sample_deadline_exceeded",
+                        )
+                        .into());
+                    }
                     let sample = runtime
                         .capture()
                         .map_err(ContainedTaskRunError::operation::<R>)?;
@@ -3313,6 +3371,9 @@ impl PreparedContainedTask {
                         .into());
                     }
                 }
+            }
+            if sampled && Instant::now() >= sample_deadline {
+                return Err(ContainedTaskError::new("recognition_sample_deadline_exceeded").into());
             }
             let frame = runtime
                 .capture()
@@ -3405,17 +3466,19 @@ impl PreparedContainedTask {
                     .iter()
                     .chain(std::iter::once(&scene))
                     .collect::<Vec<_>>();
-                let context = self
-                    .evaluator
-                    .scene_context_with_samples(&scenes)
-                    .map_err(|error| {
-                        ContainedTaskError::with_detail(
-                            "recognition_samples_unavailable",
-                            error.to_string(),
-                        )
-                    })?
-                    .with_sample_deadline(sample_deadline)
-                    .with_sample_recorder(&mut recorder);
+                let mut context =
+                    self.evaluator
+                        .scene_context_with_samples(&scenes)
+                        .map_err(|error| {
+                            ContainedTaskError::with_detail(
+                                "recognition_samples_unavailable",
+                                error.to_string(),
+                            )
+                        })?;
+                if sampled {
+                    context = context.with_sample_deadline(sample_deadline);
+                }
+                let context = context.with_sample_recorder(&mut recorder);
                 if let Some(page) = only_page {
                     Ok(self
                         .detector
@@ -3583,6 +3646,11 @@ impl PreparedContainedTask {
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let started = Instant::now();
+        let timing = if self.evaluator.pack().target_consensus.is_empty() {
+            timing
+        } else {
+            timing.with_deadline(started + timeout)
+        };
         let mut last_observation = None;
         loop {
             if Instant::now() >= task_deadline {
@@ -5693,6 +5761,7 @@ impl TaskOperation {
         observation: &PageObservation,
         evaluator: &RecognitionEvaluator,
         runtime: &mut R,
+        step_timing: Option<ContainedTaskTimingContext>,
     ) -> Result<
         (ContainedTaskGuardOutcome, Option<TargetEvaluation>),
         ContainedTaskRunError<R::Error>,
@@ -5720,9 +5789,14 @@ impl TaskOperation {
             )
             .into());
         }
+        let sampling = observation.sampling.map(|original| {
+            step_timing
+                .map(|timing| (timing, timing.deadline()))
+                .unwrap_or(original)
+        });
         let mut recording_error = None;
         let result = {
-            if let Some((_, deadline)) = observation.sampling
+            if let Some((_, deadline)) = sampling
                 && (!runtime
                     .candidate_sampling_checkpoint()
                     .map_err(ContainedTaskRunError::operation::<R>)?
@@ -5739,7 +5813,7 @@ impl TaskOperation {
             >,
                                 started: Instant,
                                 ended: Instant| {
-                let Some((timing, deadline)) = observation.sampling else {
+                let Some((timing, deadline)) = sampling else {
                     return Err(actingcommand_recognition_pack::RecognitionPackError::fatal(
                         "recognition sampling context unavailable",
                     ));
@@ -5779,7 +5853,7 @@ impl TaskOperation {
                         error.to_string(),
                     )
                 })?;
-            if let Some((_, deadline)) = observation.sampling {
+            if let Some((_, deadline)) = sampling {
                 context = context.with_sample_deadline(deadline);
             }
             let context = context.with_sample_recorder(&mut recorder);
@@ -9353,7 +9427,7 @@ mod retry_wiring_tests {
 
     #[test]
     fn pre_execution_guard_passes_when_page_and_target_match() {
-        let task = omitted_policy_task(false, false);
+        let mut task = omitted_policy_task(false, false);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
             sampling: None,
@@ -9365,7 +9439,13 @@ mod retry_wiring_tests {
         };
         let mut runtime = ScriptedRuntime::new("home");
         let (outcome, target) = task.program.operations[0]
-            .guard_outcome(&task.control, &observation, &task.evaluator, &mut runtime)
+            .guard_outcome(
+                &task.control,
+                &observation,
+                &task.evaluator,
+                &mut runtime,
+                None,
+            )
             .expect("guard evaluation");
         assert_eq!(
             outcome,
@@ -9378,6 +9458,64 @@ mod retry_wiring_tests {
         let target = target.expect("guard target");
         assert!(target.passed);
         assert_eq!(target.id, "guard/ready");
+        // The same pre-input specification covers the complete sampled select budget.
+        let mut pack = task.evaluator.pack().clone();
+        pack.schema_version = "0.7".into();
+        pack.targets[0] = serde_json::from_value(json!({
+            "type":"ocr","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},
+            "languages":["en"],"timeout_ms":2000,"match_mode":"exact","expected":["ready"],
+            "case_sensitive":true,"minimum_confidence":0.8,"model_ref":"PP-OCRv6_medium","model_sha256":"a".repeat(64)
+        })).unwrap();
+        let RecognitionTarget::Ocr(mut candidate) = pack.targets[0].clone() else {
+            unreachable!()
+        };
+        candidate.id = "candidate/name".into();
+        pack.targets.push(RecognitionTarget::Ocr(candidate));
+        pack.target_consensus.insert(
+            "page/home".into(),
+            serde_json::from_value(json!({"samples":[{}, {"dx":1}],"k":2})).unwrap(),
+        );
+        pack.candidate_layouts = vec![serde_json::from_value(json!({
+            "id":"choices","page_id":"neutral/home","kind":"fixed_slots",
+            "features":[{"name":"business_id","value":"identity","identity":{"entries":[{"id":"known","aliases":["ready"]}],"recognition":{"kind":"ocr_aliases","max_distance":1,"minimum_margin":1,"minimum_confidence_milli":800}},"consensus":{"samples":[{}, {"dx":1}],"aggregate":{"kind":"majority","k":2}}}],
+            "slots":[{"rect":{"x":0,"y":0,"width":2,"height":1},"click":{"x":0,"y":0,"width":2,"height":1},"targets":{"business_id":"candidate/name"}}]
+        })).unwrap()];
+        task.program.operations[0].select = Some(serde_json::from_value(json!({"layout_id":"choices","policy":{"path":"policies/choices.json","sha256":"b".repeat(64)}})).unwrap());
+        task.program.operations[0].click = None;
+        task.control.step_timeout_ms = Some(10_000);
+        task.evaluator = RecognitionEvaluator::new(PathBuf::new(), pack.clone()).unwrap();
+        let required = selection::sampling_budget_ms(
+            &task.program.operations[0],
+            &task.evaluator,
+            &task.detector,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            required, 12_000,
+            "two candidate projections plus the fresh page predicate"
+        );
+        assert!(required > task.control.step_timeout().milliseconds);
+        pack.candidate_layouts[0].sample_interval_ms = 10;
+        pack.candidate_layouts[0].features[0]
+            .consensus
+            .as_mut()
+            .unwrap()
+            .samples[1] = actingcommand_recognition_pack::CandidateSampleVariant {
+            frame: 1,
+            ..Default::default()
+        };
+        task.evaluator = RecognitionEvaluator::new(PathBuf::new(), pack).unwrap();
+        assert_eq!(
+            selection::sampling_budget_ms(
+                &task.program.operations[0],
+                &task.evaluator,
+                &task.detector
+            )
+            .unwrap(),
+            Some(20_020),
+            "each H1/H2 added frame recognizes pages and retains its declared wait"
+        );
     }
 
     #[test]
@@ -9404,6 +9542,7 @@ mod retry_wiring_tests {
             &observation,
             &task.evaluator,
             &mut runtime,
+            None,
         ) else {
             panic!("changed page must fail");
         };
@@ -9434,7 +9573,13 @@ mod retry_wiring_tests {
         };
         let mut runtime = ScriptedRuntime::new("terminal");
         let (outcome, target) = task.program.operations[0]
-            .guard_outcome(&task.control, &observation, &task.evaluator, &mut runtime)
+            .guard_outcome(
+                &task.control,
+                &observation,
+                &task.evaluator,
+                &mut runtime,
+                None,
+            )
             .expect("guard evaluation");
         assert_eq!(
             outcome,
@@ -9469,6 +9614,7 @@ mod retry_wiring_tests {
             &observation,
             &task.evaluator,
             &mut runtime,
+            None,
         ) else {
             panic!("target mismatch must fail");
         };

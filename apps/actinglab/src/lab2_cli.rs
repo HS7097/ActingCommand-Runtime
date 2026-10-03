@@ -113,8 +113,10 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "targets": targets,
         "actions": actions,
         "arbitration": isolated_offline_projection(),
-        "recognition_coverage": {"provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":"production_owner"},
     });
+    if !evaluator.pack().target_consensus.is_empty() {
+        payload["recognition_coverage"] = json!({"provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":"production_owner"});
+    }
     if outcome.matched {
         let mut sets = Vec::new();
         let mut evidence = Vec::new();

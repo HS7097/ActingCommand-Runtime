@@ -85,8 +85,9 @@ At least one sample uses the current frame with zero jitter. The current sample 
 the result's geometry. Single-frame target parameter variants require no additional captures.
 NN and composite targets do not declare sampling; composite members may declare it.
 Candidate feature mapping declares its own sampling on raw targets. One raw target has one
-sampling declaration owner: a target used by a candidate feature or as an OCR per-frame
-template anchor cannot also declare target consensus. Raw OCR observation explicitly refuses
+sampling declaration owner: targets throughout a candidate feature's reference closure,
+including composite members, and OCR per-frame template anchors use raw recognition.
+Raw OCR observation explicitly refuses
 predicate consensus; authors use a separate raw reading target for inventory fields.
 
 Each feature may declare `consensus: {samples, aggregate}`. `samples` has 1..=5 entries:
@@ -130,8 +131,17 @@ reading, and its mapped value. Aggregation is a pure function of these recorded 
 The original artifact and projection byte limits apply; a refusal never truncates a decision.
 
 The kernel owns capture and waiting under its existing Runtime lease/cancellation checks.
-Admission counts worst-case provider calls and both H1/H2 declared provider timeouts plus waits
-against the original task/step budgets. Execution also checks remaining time; bounded waits
+For one select, admission sums `2*C + (2*F-1)*P + G*(1 + (F>1))`: `C` is one candidate
+projection's declared provider timeouts and waits, `F` its frame count, `P` one complete page
+capture transaction's provider timeouts and target-sample waits, and `G` one guard's provider
+timeouts. H1 and H2 each add `F-1` page capture transactions, H2 has one fresh initial capture,
+and an H2 projection that adds frames also checks its guard on the final frame. The initial
+page transaction before StepStarted has its own entry-observation budget. The sum must fit
+the original step/task limits at preparation and the remaining budget before selection starts.
+Page references include all predicate roles and composite members; sampled target cache reuse
+is counted once per context, while ordinary provider references retain their actual call count.
+Capture, local computation and ledger costs use the same absolute deadline without a separate
+duration allowance. Execution also checks remaining time; bounded waits
 are recorded as page-recognition waits and actual backend time as recognition evaluation.
 No sample delay occurs after an input Intent. The final tap still uses the normal fenced input
 path. A consumer without the sampling checkpoint explicitly refuses sampled task execution.
@@ -143,6 +153,11 @@ parameters, actual durations and optional verdicts (`null` on a failed call). Ta
 rows retain `k`, per-sample evidence and the verdict. Sample records and their OCR children do
 not claim the latest capture's frame ID. The existing diagnostic artifact keeps raw inputs;
 single-frame offline consumers retain them inside `sample_evaluations` instead.
+
+The select deadline is fixed at StepStarted and capped by the existing task deadline. H1/H2,
+each additional page capture, target and candidate evaluation, confirmation guard and final
+pre-input check inherit it. Entry-recognition and postcondition observation loops likewise
+retain the deadline established by their caller for that observation phase.
 
 `SceneEvaluation::project_candidates` is the single-frame adapter;
 `project_candidates_with_samples` consumes the exact scene set and uses the same mapping and

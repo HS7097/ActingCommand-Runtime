@@ -373,7 +373,10 @@ impl SceneEvaluation<'_> {
             )
             .into());
         }
-        let provider = provider_evaluations(layout, |target_id| evaluator.target(target_id).ok());
+        let provider =
+            provider_evaluations(layout, evaluator.pack.defaults.match_metric, |target_id| {
+                evaluator.target(target_id).ok()
+            });
         if provider > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
             return Err(CandidateProjectionError::budget_exceeded(
                 "provider_evaluations",
@@ -390,7 +393,11 @@ impl SceneEvaluation<'_> {
         };
         let contexts = scenes
             .iter()
-            .map(|scene| evaluator.scene_context(scene))
+            .map(|scene| {
+                let mut context = evaluator.scene_context(scene);
+                context.sample_deadline = self.sample_deadline;
+                context
+            })
             .collect::<Vec<_>>();
         let frame_hashes = (layout.has_consensus()
             || layout
@@ -700,7 +707,7 @@ impl CandidateLayout {
     /// Declared worst provider time plus waits. Capture/CPU work still uses the original
     /// task and step deadline; this admission lower bound never allocates another budget.
     pub fn maximum_provider_and_wait_ms(&self, evaluator: &RecognitionEvaluator) -> u64 {
-        let provider = sample_calls(self)
+        let provider = sample_calls(self, evaluator.pack.defaults.match_metric)
             .keys()
             .map(|key| match evaluator.target(&key.4).ok() {
                 Some(RecognitionTarget::Ocr(target)) => target.timeout_ms,
@@ -722,17 +729,23 @@ impl CandidateLayout {
     }
 }
 
-fn sample_calls(layout: &CandidateLayout) -> BTreeMap<SampleKey, CandidateSampleVariant> {
+fn sample_calls(
+    layout: &CandidateLayout,
+    default_metric: crate::RecognitionMatchMetric,
+) -> BTreeMap<SampleKey, CandidateSampleVariant> {
     let mut calls = BTreeMap::new();
     for slot in &layout.slots {
         for feature in &layout.features {
             for sample in layout.feature_samples(feature) {
                 if let Some(target) = slot.targets.get(&feature.name) {
-                    calls.insert(sample_key(sample, target), sample);
+                    calls.insert(sample_key(sample.effective(default_metric), target), sample);
                 }
                 if let Some(templates) = slot.identity_templates.get(&feature.name) {
                     for template in templates {
-                        calls.insert(sample_key(sample, &template.target_id), sample);
+                        calls.insert(
+                            sample_key(sample.effective(default_metric), &template.target_id),
+                            sample,
+                        );
                     }
                 }
             }
@@ -902,6 +915,7 @@ fn floor_milli(target_id: &str, value: f32) -> Result<i64, CandidateProjectionFa
 /// target its slots read, and one per OCR or NN member of each distinct composite they read.
 fn provider_evaluations<'t>(
     layout: &CandidateLayout,
+    default_metric: crate::RecognitionMatchMetric,
     target: impl Fn(&str) -> Option<&'t RecognitionTarget>,
 ) -> usize {
     let is_provider = |target_id: &str| {
@@ -910,7 +924,7 @@ fn provider_evaluations<'t>(
             Some(RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_))
         )
     };
-    sample_calls(layout)
+    sample_calls(layout, default_metric)
         .into_keys()
         .map(|key| match target(&key.4) {
             Some(RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_)) => 1,
@@ -1318,12 +1332,16 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
                     .flatten()
                     .map(|template| &template.target_id),
             ) {
-                if pack.target_consensus.contains_key(id) {
-                    errors.push(format!("{slot_pointer}: candidate feature sampling requires a raw target; '{id}' also declares target consensus"));
+                if pack.target_consensus.contains_key(id)
+                    || matches!(targets.get(id.as_str()), Some(RecognitionTarget::Composite(composite)) if composite.members.iter().any(|member| pack.target_consensus.contains_key(member)))
+                {
+                    errors.push(format!("{slot_pointer}: candidate feature '{id}' requires raw targets throughout its reference closure"));
                 }
             }
         }
-        let provider = provider_evaluations(layout, |target_id| targets.get(target_id).copied());
+        let provider = provider_evaluations(layout, pack.defaults.match_metric, |target_id| {
+            targets.get(target_id).copied()
+        });
         if provider > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
             errors.push(format!(
                 "{pointer}/slots: {provider} OCR and NN evaluations exceed the {CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS}-evaluation projection budget"

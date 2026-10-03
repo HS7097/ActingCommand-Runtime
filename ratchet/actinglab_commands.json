@@ -53,7 +53,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 134,
+  "command_count": 136,
   "commands": [
     "help",
     "version",
@@ -110,6 +110,7 @@
     "lab arbitrator",
     "lab vendor-stdio-selftest",
     "package validate",
+    "package preflight",
     "package dry-run",
     "package inspect",
     "package run",
@@ -138,6 +139,7 @@
     "resource validate",
     "resource convert",
     "resource compile-maa",
+    "resource catalog",
     "resource import-alas",
     "resource drift-alas",
     "resource check-release",
