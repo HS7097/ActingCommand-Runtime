@@ -256,6 +256,7 @@ fn execute_policy_cycle(
                 cycle,
                 recompute_wakes,
                 yielded_intents: 0,
+                failed_runs: false,
             });
         }
         return Err(ActingdError::process(
@@ -263,6 +264,7 @@ fn execute_policy_cycle(
         ));
     };
     let mut yielded_intents = 0;
+    let mut failed_runs = false;
     for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
         if policy_cycle_budget_exhausted(index, started.elapsed()) {
             // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
@@ -326,7 +328,10 @@ fn execute_policy_cycle(
                 Ok(receipt) => receipt,
                 // Runtime owns the original failure and same-run settlement. A later
                 // candidate must pass its recovered failure disposition at admission.
-                Err(error) if !error.is_fatal() => continue,
+                Err(error) if !error.is_fatal() => {
+                    failed_runs = true;
+                    continue;
+                }
                 Err(error) => return Err(ActingdError::runtime(error)),
             };
             let (execution, projection) =
@@ -351,6 +356,7 @@ fn execute_policy_cycle(
         cycle,
         recompute_wakes,
         yielded_intents,
+        failed_runs,
     })
 }
 
@@ -366,6 +372,10 @@ struct PolicyCycleExecution {
     recompute_wakes: Vec<PolicyRecomputeWake>,
     /// Pending intents not yet attempted when the cycle reached its budget.
     yielded_intents: usize,
+    /// Workflow #336 R22: a scheduled run of this cycle failed. The driver evaluates again at
+    /// once, so a failure scheduled for an immediate rerun waits only for its retry backoff,
+    /// not for the wake the evaluation before the run computed.
+    failed_runs: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1165,7 +1175,7 @@ fn drive_policy(
     for wake in initial_cycle.recompute_wakes {
         control.notify_recompute(wake)?;
     }
-    if initial_cycle.yielded_intents > 0 {
+    if initial_cycle.yielded_intents > 0 || initial_cycle.failed_runs {
         control.notify(PolicyTrigger::FactsChanged)?;
     }
     loop {
@@ -1281,7 +1291,7 @@ fn apply_policy_cycle_result(
                 for wake in execution.recompute_wakes {
                     control.notify_recompute(wake)?;
                 }
-                if execution.yielded_intents > 0 {
+                if execution.yielded_intents > 0 || execution.failed_runs {
                     control.notify(PolicyTrigger::FactsChanged)?;
                 }
                 Ok(())

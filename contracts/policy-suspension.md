@@ -28,7 +28,9 @@ catalog change to be approved again.
 A pair (catalog task, instance) whose latest failure carries a failure identity and is
 scheduled for a retry is treated by the evaluator as triggered and past its task cooldown
 (reason `failure_retry_immediate`): it is rerun as soon as its retry backoff has passed, at the
-next evaluation, instead of at the next clock occurrence. The feedback stop, placement, the
+next evaluation, instead of at the next clock occurrence. `actingd` evaluates again right after
+a cycle in which a scheduled run failed, so that evaluation, not the wake computed before the
+run, sets the next wake (the end of the backoff). The feedback stop, placement, the
 loop and activity budgets and the activity windows still apply, and every rerun consumes the
 budgets like any dispatch. A page-graph task and a failure recorded with its original code
 keep waiting for their trigger and cooldown. Admission replay never reads triggers, so the
