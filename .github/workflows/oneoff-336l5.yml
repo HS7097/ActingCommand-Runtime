@@ -1,0 +1,125 @@
+name: one-off 336 L5 (to be reverted)
+
+# One-off check for Workflow #336 L5 (docs plus the R22 on_failure in record stop). The PR's
+# `rust` check builds the merge of this head with the current main, which has moved past the
+# stack's base (16f1c766) and no longer compiles with the stacked kernel; this job runs the same
+# gates on the exact head: the L6 branch (#606) with the L4o branch (#605) merged once, the L5
+# docs and the code commit 75a0c825. It also runs one offline Lab recording with the actinglab it
+# built and prints the record stop --dry-run output of catalog_on_failure_example and the
+# binding_requires item about on_failure. Reverted right after its run; the PR's final diff
+# contains neither this file nor one-off-336l5/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: Exact-head gates (fmt, build, clippy, tests)
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
+      - name: Rust cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-trybuild-clean-v1-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-trybuild-clean-v1-${{ steps.toolchain.outputs.cachekey }}-
+      - name: Head and scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git rev-parse HEAD).Trim()
+          Write-Host "L5|GATES|head $head"
+          foreach ($tip in @('6160dc3f0f01b5b321f480acf458b9c3596f1ed9', 'd0b53a28f458c5685ccbfe0ff1ee42beab82d4f7')) {
+            & git merge-base --is-ancestor $tip HEAD
+            if ($LASTEXITCODE -ne 0) { throw "$tip is not an ancestor of the head" }
+            Write-Host "L5|GATES|ancestor $tip"
+          }
+          $merge = 'cdffa2b7405dd8cd9992505d038a753439209ade'
+          $product = '75a0c825ba8018fae6a9ee83e9babd2fdb7f2635'
+          & git merge-base --is-ancestor $product HEAD
+          if ($LASTEXITCODE -ne 0) { throw "$product is not an ancestor of the head" }
+          $extra = @(& git diff --name-only $product HEAD -- . ':(exclude)one-off-336l5' ':(exclude).github/workflows/oneoff-336l5.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($extra.Count -ne 0) { throw "product files differ from ${product}: $($extra -join ', ')" }
+          $code = @(& git diff --name-only $merge $product -- . ':(exclude)*.md' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          Write-Host "L5|GATES|non-*.md files changed after the merge ${merge}: $($code -join ', ')"
+          if ($code.Count -ne 1 -or $code[0] -ne 'crates/lab/src/recording_api.rs') { throw "unexpected code change after the merge: $($code -join ', ')" }
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Build locked workspace
+        run: cargo build --locked
+      - name: record stop --dry-run with the built actinglab
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          & python one-off-336l5/dry_run.py (Resolve-Path -LiteralPath 'target/debug/actinglab.exe').Path (Join-Path $env:RUNNER_TEMP 'l5-dry-run')
+          if ($LASTEXITCODE -ne 0) { throw "dry run evidence failed with exit code $LASTEXITCODE" }
+      - name: Clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: Test
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo build --locked -p actingledger --bin actingledger
+          if ($LASTEXITCODE -ne 0) { throw "actingledger build failed with exit code $LASTEXITCODE" }
+          $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
+          cargo test --workspace --exclude actingcommand-actingd --exclude actingcommand-runtime-client --no-fail-fast
+          $workspaceExitCode = $LASTEXITCODE
+          Write-Host "L5|GATES|workspace excluding actingd and runtime-client exit code: $workspaceExitCode"
+          cargo test -p actingcommand-runtime-client --no-fail-fast -- --test-threads=1
+          $runtimeClientExitCode = $LASTEXITCODE
+          Write-Host "L5|GATES|runtime-client package tests exit code: $runtimeClientExitCode"
+          cargo test --workspace --bin actingcommand-actingd --no-fail-fast
+          $actingdExitCode = $LASTEXITCODE
+          Write-Host "L5|GATES|actingd binary tests exit code: $actingdExitCode"
+          cargo --config 'profile.test.opt-level=3' --config 'profile.test.debug-assertions=true' --config 'profile.test.overflow-checks=true' --config 'profile.test.debug=2' test --workspace --test process --no-fail-fast -- --test-threads=1
+          $processExitCode = $LASTEXITCODE
+          Write-Host "L5|GATES|process integration tests exit code: $processExitCode"
+          if ($workspaceExitCode -ne 0 -or $runtimeClientExitCode -ne 0 -or $actingdExitCode -ne 0 -or $processExitCode -ne 0) { exit 1 }
+          exit 0
+      - name: Test observation
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::runtime_input_proxy_renews_before_short_lease_expiry -- --exact --test-threads=1
+          $heartbeat = $LASTEXITCODE
+          Write-Host "L5|GATES|heartbeat proxy observation test exit code: $heartbeat"
+          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::long_input_extends_only_its_response_wait -- --exact --test-threads=1
+          $longInput = $LASTEXITCODE
+          Write-Host "L5|GATES|long input observation test exit code: $longInput"
+          if ($heartbeat -ne 0 -or $longInput -ne 0) { exit 1 }
+          exit 0
+      - name: Remove trybuild cache artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath target/tests) {
+            Remove-Item -LiteralPath target/tests -Recurse -Force -ErrorAction Stop
+          }
