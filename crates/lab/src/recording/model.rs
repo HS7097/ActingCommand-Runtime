@@ -100,6 +100,21 @@ pub struct RecordingArtifact {
     /// The prerequisite package id written into control.json (`--requires`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<String>,
+    /// The game, server and locale the package was generated with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// The task timeout, arrival timeout and application arrival timeout the package was
+    /// generated with (defaults applied).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival_timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_arrival_timeout_ms: Option<u64>,
     pub generated_at_unix_ms: u64,
 }
 

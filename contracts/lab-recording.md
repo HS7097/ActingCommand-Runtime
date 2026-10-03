@@ -588,7 +588,7 @@ the package directory.
 |---|---|
 | no Lab recording, or one without steps | as before: the session file is stopped, `lab: null` (an empty Lab recording is stopped too) |
 | an active Lab recording with steps | the package is generated, checked and written (below); `lab.status: "generated"` |
-| a stopped Lab recording with a package | nothing is generated; with `--lab-dir` the package is copied there again (steps 2 and 4 of "Writing"); `lab.status: "already_generated"` |
+| a stopped Lab recording with a package | nothing is generated; with `--lab-dir` the package is copied there again (steps 1 and 3 of "Writing"); `lab.status: "already_generated"` |
 | the session file was already stopped (for example by v0.9.0) but the Lab recording is active | generated as above; `lab.session_already_stopped: true` |
 
 **`--dry-run`** (also the global `--dry-run`) runs everything: the pre-checks, generation,
@@ -599,8 +599,9 @@ Its `lab.warnings` are those the final stop prints: run it first, mark what it a
 run `record stop`. The final stop closes the recording; afterwards `record mark` only answers
 `record_session_not_active` and a missing mark means recording again.
 
-Any refusal leaves the recording and the session active and writes nothing; fix the recording
-and run `record stop` again.
+A refusal before the writing stage leaves the recording and the session active and writes
+nothing; a failure during writing is described under "Writing" (with `written_files`). Fix the
+recording and run `record stop` again.
 
 **Optional steps.** A recording with an effective optional step is refused with
 `record_stop_generation_not_implemented` (exit 6, `details.reason: "optional_steps"`) before
@@ -770,12 +771,19 @@ Everything above is computed in memory first. Then:
    `record_artifact_name_conflict` and the `.part` file stays.
 4. `recording.json` becomes `stopped` with its `artifact` (`container`, `digest`, `path`,
    `lab_dir_path`, `sha256` of the container bytes, `byte_count`, `package_id`, `requires`,
-   `generated_at_unix_ms`); then the session file is stopped.
+   `game`, `server`, `locale`, `timeout_ms`, `arrival_timeout_ms`,
+   `application_arrival_timeout_ms` (defaults applied), `generated_at_unix_ms`); then the
+   session file is stopped.
 
 A failure in steps 2–4 leaves both states active and names the files already written
 (`details.written_files`, `.part` files included); nothing is deleted. A stopped recording
-given `--lab-dir` again checks its copy's sha256 and repeats steps 1 and 3; a different
-`--requires` is `record_requires_conflict` (3).
+given `--lab-dir` again checks its copy's sha256 and repeats steps 1 and 3. It is not generated
+again, so a generation option that differs from what its package was generated with is refused
+before anything is written: a different `--requires` is `record_requires_conflict` (3); a
+different `--package-id`, `--game`, `--server`, `--locale`, `--timeout-ms`,
+`--arrival-timeout-ms` or `--application-arrival-timeout-ms` is `record_stop_option_conflict`
+(3, `details{field, recorded, given}`; a value the artifact did not record conflicts too). An
+equal value is accepted.
 
 ### Output
 
@@ -816,7 +824,7 @@ given `--lab-dir` again checks its copy's sha256 and repeats steps 1 and 3; a di
 | exit | codes |
 |---|---|
 | 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_step_self_mismatch`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict` |
+| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_step_self_mismatch`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict`, `record_stop_option_conflict` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator, or a recording with optional steps, `details.reason: "optional_steps"`) |

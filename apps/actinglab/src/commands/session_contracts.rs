@@ -358,7 +358,7 @@ fn session_record_policy_payload(
                 "offline_insertion": "record mark --frame <png> ... --click ... --optional, then record mark --close-step, then capture --record"
             },
             "stop": {
-                "command": "record stop [--lab-dir <dir>] [--package-id <id>] [--requires <package_id>] [--dry-run]",
+                "command": "record stop [--lab-dir <dir>] [--package-id <id>] [--requires <package_id>] [--game <game>] [--server <server>] [--locale <locale>] [--timeout-ms <ms>] [--arrival-timeout-ms <ms>] [--application-arrival-timeout-ms <ms>] [--dry-run] [--state-dir <dir>]",
                 "execution_mode": "linear_steps",
                 "containers": ["zip", "json"],
                 "file_name": "<content-directory digest>.<zip|json>",

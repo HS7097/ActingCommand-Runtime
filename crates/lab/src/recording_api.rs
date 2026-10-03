@@ -313,6 +313,12 @@ pub fn record_stop(
             byte_count: bytes.len() as u64,
             package_id: plan.package_id.clone(),
             requires: plan.requires.clone(),
+            game: Some(plan.game.clone()),
+            server: Some(plan.server.clone()),
+            locale: Some(plan.locale.clone()),
+            timeout_ms: Some(plan.timeout_ms),
+            arrival_timeout_ms: Some(plan.arrival_timeout_ms),
+            application_arrival_timeout_ms: Some(plan.application_arrival_timeout_ms),
             generated_at_unix_ms: now_unix_ms(),
         });
         save_recording(state_dir, &stopped).map_err(|error| {
@@ -625,6 +631,67 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
     items
 }
 
+/// A stopped recording is not generated again: a generation option given with a value other
+/// than the one its package was generated with is `record_stop_option_conflict` (exit 3)
+/// instead of being ignored; an equal value is accepted. A value the package did not record
+/// (a package generated before the field existed) cannot be equal and conflicts too.
+fn refuse_option_conflict(
+    recording: &LabRecording,
+    artifact: &RecordingArtifact,
+    options: &RecordStopOptions,
+) -> LabResult<()> {
+    let text = |value: &Option<String>| value.as_ref().map(|value| json!(value));
+    let number = |value: Option<u64>| value.map(|value| json!(value));
+    let fields = [
+        (
+            "package_id",
+            text(&options.package_id),
+            Some(json!(artifact.package_id)),
+        ),
+        ("game", text(&options.game), text(&artifact.game)),
+        ("server", text(&options.server), text(&artifact.server)),
+        ("locale", text(&options.locale), text(&artifact.locale)),
+        (
+            "timeout_ms",
+            number(options.timeout_ms),
+            number(artifact.timeout_ms),
+        ),
+        (
+            "arrival_timeout_ms",
+            number(options.arrival_timeout_ms),
+            number(artifact.arrival_timeout_ms),
+        ),
+        (
+            "application_arrival_timeout_ms",
+            number(options.application_arrival_timeout_ms),
+            number(artifact.application_arrival_timeout_ms),
+        ),
+    ];
+    for (field, given, recorded) in fields {
+        let Some(given) = given else {
+            continue;
+        };
+        if recorded.as_ref() == Some(&given) {
+            continue;
+        }
+        return Err(LabError::safety_blocked(
+            "record_stop_option_conflict",
+            format!(
+                "the package of recording {} was generated with {field} {}; the given {field} \
+                 {given} would need a new package, and a stopped recording is not generated \
+                 again; nothing was written",
+                recording.record_id,
+                recorded
+                    .as_ref()
+                    .map_or_else(|| "unrecorded".to_string(), Value::to_string)
+            ),
+            &["session_record"],
+        )
+        .with_details(json!({"field": field, "recorded": recorded, "given": given})));
+    }
+    Ok(())
+}
+
 /// `record stop` on a stopped recording with a package: with `--lab-dir` the package is copied
 /// there again (section 4.7 steps 2 and 4); nothing is generated.
 fn stop_already_generated(
@@ -650,6 +717,7 @@ fn stop_already_generated(
             "generated_requires": artifact.requires
         })));
     }
+    refuse_option_conflict(recording, artifact, options)?;
     let bytes = read_verified(Path::new(&artifact.path), &artifact.sha256)?;
     let file_name = format!("{}.{}", artifact.digest, artifact.container);
     let lab_dir_plan = options
