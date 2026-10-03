@@ -405,15 +405,15 @@ no part, and neither the stuck-recovery ladder nor the page-graph home entry use
 return-home package.
 
 **Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
-detail of its task failure is always the native detail of the receipt and of a runtime
-lifecycle failure record (the existing `runtime.failed` with its lifecycle part, severity error)
-written right after the task terminal and naming it, as an outcome with an extra native detail
-is recorded; at most 1024 bytes. For example `operation=<id> attempts=<n> after_page=<page>
+detail of its task failure is always the native detail of a runtime lifecycle failure record
+(the existing `runtime.failed` with its lifecycle part, severity error) written right after the
+task terminal and naming it, as an outcome with an extra native detail is recorded; at most
+1024 bytes. The receipt does not carry it. For example `operation=<id> attempts=<n> after_page=<page>
 hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's own details above. A
 failure without a detail is recorded by the terminal alone, as before. The gate
 carries a prerequisite or return-home package's own failure out as its code, with its detail
 only for a recognition failure or an unknown page ("Prerequisite packages" above). A page-graph
-package's failure is unchanged: only the two resource-reading codes carry their detail.
+package's failure is recorded as before.
 
 ## Failure codes
 
