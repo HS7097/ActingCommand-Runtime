@@ -141,7 +141,7 @@ Hash" below).
 | `gap.weight_milli` (G) | 1..=1,000,000 | extra milli for each produced step per missing step of shortfall | `limit_exceeded` |
 
 The resource kind is the pool `id`; there is no separate kind field. Task
-quantities stay in `tasks[].produces` (`amount`, `confidence_milli`). Both
+quantities stay in `tasks[].produces` (`amount` or v2 `expected_amount_milli`, plus `confidence_milli`). Both
 objects reject unknown fields (`unknown_field`), and a missing required field is
 `missing_required_field`. Every violation rejects the complete catalog. A bound
 violation or an unknown `rule` value carries the field's own JSON Pointer and
@@ -163,6 +163,40 @@ rejected at compilation. A Runtime build without this field rejects a catalog
 that declares it (`unknown_field`) and cannot reopen a state root on which such
 a catalog was activated or dispatched, even after its configuration returns to
 an older catalog.
+
+## Expected production (v2)
+
+Each effect has exactly one quantity. `amount` is a positive integer in real inventory
+units and keeps its existing semantics. Only v2 `produces` may instead declare
+`expected_amount_milli`, an integer in `0..=9007199254740991` measured in thousandths of
+a real unit per completed task run. It has no default, cannot exceed `pool.capacity * 1000`,
+and is mutually exclusive with `amount`. Explicit null, missing quantities and unknown
+fields are invalid. V1 effects and all `consumes` require `amount`.
+
+```json
+{"pool_id":"material","direction":"produce","expected_amount_milli":400,"observation_source":"self_reported","confidence_milli":1000}
+```
+
+This declares an expected 0.4 units per completed run. Zero is a known zero yield;
+an unknown yield must remain undeclared, not be replaced by zero. The producer computes
+the expectation from separately established drop probabilities, quantities and batch counts.
+The declaration is already that total: the Runtime does not multiply it by a probability,
+batch count or `confidence_milli`. `observation_source` and `confidence_milli` remain required
+evidence metadata; confidence is in `0..=1000` and is not a drop probability.
+
+Task mapping, coverage and resource scoring retain these milli-units. Actual inventory
+facts, pool capacities and inventory targets remain in real units. See
+[`resource-targets.md`](../resource-targets.md) for final score rounding and checked bounds.
+Forward projection returns `EvidenceInsufficient` with `effect_evidence_insufficient`
+before applying a dispatched expected effect. The integer strategy planner returns an
+unavailable production rate for a relevant expected producer, which follows its existing
+needs-detection path; it rejects a reported definite rate inconsistent with that result.
+Neither path records expected production as actual inventory.
+
+The compiler enforces quantity exclusivity, version, direction and capacity together;
+the declaration-only parser checks wire types. Existing integer declarations serialize
+identically when the new field is absent. A binary that does not understand the field
+rejects it, so a state lineage containing these declarations requires a compatible reader.
 
 ## Compatibility
 
