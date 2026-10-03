@@ -238,6 +238,12 @@ pub(super) fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOut
             "unknown session app action: {other}"
         )))?,
     };
+    crate::dry_run_gate::refuse(
+        global,
+        &format!("session app {}", args[0]),
+        Some("session status --diagnostics"),
+        json!({"action": args[0], "instance": instance_id}),
+    )?;
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         runtime_state_root()?,
         EventActor::Cli,

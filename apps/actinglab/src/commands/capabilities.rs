@@ -481,14 +481,16 @@ where
         "available" => ("available", "offline_handler_ready"),
         _ => ("unverified", "availability_evidence_missing"),
     };
-    json!({
+    let mut capability = json!({
         "command": command,
         "needs": needs,
         "status": status,
         "available": status == "available",
         "reason_code": reason_code,
         "availability_scope": "offline_declaration"
-    })
+    });
+    crate::dry_run_gate::annotate_capability(&mut capability);
+    capability
 }
 
 pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {

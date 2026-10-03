@@ -5,8 +5,10 @@ Lab2 verb/schema summaries consume the same command declarations. These queries
 do not connect to Runtime, start a provider, inspect a device, load a model or
 fetch backend assets.
 
-Each command has `status`, `available`, `reason_code`, `needs` and
-`availability_scope: offline_declaration`. `available` is true only for the
+Each command has `status`, `available`, `reason_code`, `needs`,
+`availability_scope: offline_declaration` and `dry_run_mode`, with
+`dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires
+(`actinglab-dry-run.md`). `available` is true only for the
 `available` status. Status values are:
 
 - `available`: an implemented offline handler has a normal path with its caller

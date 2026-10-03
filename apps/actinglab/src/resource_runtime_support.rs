@@ -33,7 +33,10 @@ pub(super) fn run_resource(
     let repo = flags.required_path("--repo")?;
     let resource_root = resolve_resource_root(&repo);
     match sub {
-        "restore" => crate::resource_restore::run_resource_restore(args),
+        "restore" => {
+            crate::dry_run_gate::refuse(global, "resource restore", None, Value::Null)?;
+            crate::resource_restore::run_resource_restore(args)
+        }
         "validate" => resource_declarations::run_resource_validation(&repo, &flags),
         "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
@@ -59,7 +62,7 @@ pub(super) fn run_resource(
     }
 }
 
-pub(super) fn run_report(sub: &str, _global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+pub(super) fn run_report(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "export" => {
             let flags = FlagArgs::parse(args)?;
@@ -67,6 +70,7 @@ pub(super) fn run_report(sub: &str, _global: &GlobalOptions, args: &[String]) ->
                 return Err(CliError::usage("report export requires --last-error"));
             }
             let out = flags.required_path("--out")?;
+            crate::dry_run_gate::refuse(global, "report export", None, Value::Null)?;
             let report =
                 create_error_report_zip(&out, "last-error", "last-error report placeholder")?;
             Ok(json!({
