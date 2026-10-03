@@ -183,7 +183,8 @@ On a frame where several candidates pass, the first one wins, so an optional pag
 optional page runs its operation next; `N` skips the rest of the run and continues after it,
 or finishes the run when the run ends the path. Within a run the order is free and every
 optional operation runs at most once per run; a page outside the candidates is never
-recognized, and nothing before the run is awaited again.
+recognized, no candidate lies past `N`, and nothing before the operation that precedes the run
+is awaited again.
 
 **Settle.** The settle `S` of candidates is the largest `settle_ms` of their optional pages
 (0 when they have none). An optional page that passes is reached at once. `N` is reached only
@@ -192,7 +193,10 @@ that an optional page appearing within `S` of `N` is still run; frames on which 
 passes are ignored. The wait gives up after the arrival budget `T` (as in "Intermediate
 states"), or, once `N` was seen, `S + T` after the capture on which `N` first passed. The
 settle only shortens the sleeps while it lasts; after it, captures keep the interval and never
-run back to back. With one candidate, the wait is the wait above, unchanged.
+run back to back. With one candidate, the wait is the wait above, unchanged. When the retry
+decision's frame shows `N` (below), the settle counts from the moment that frame has been
+evaluated rather than from its capture start, so on that path the settle may last longer by
+one capture and its recognition; this is conservative and never judges "no popup" early.
 
 **Guard and retries.** An optional operation's guard is evaluated on the frame on which its
 page passed; the operation after `N` is guarded on the frame that ended the settle. An optional
@@ -315,17 +319,6 @@ terminal as severe: the task pauses at its first such failure.
 | The intermediate page is not seen within its timeout, with no attempt left | `contained_task_linear_intermediate_unobserved` | `postcondition` / `postcondition` |
 | The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
-
-When the operation awaited more than one candidate (a run of optional steps), the detail of
-these two codes ends with ` awaited=<the candidates' detector page ids, comma-separated>`,
-followed by ` skip_target_seen=true` when the skip target had passed; with one candidate the
-detail is unchanged. Neither key is part of a detail whitelist. An optional step adds no
-runtime failure code; its admission refusals are new `reason` values of
-`contained_task_linear_invalid`. A known limit: one cause can fail at the operation before a
-run on a day without a popup and at the optional step just run on a day with one, so the last
-`StepStarted` operation and the detail's `operation=` differ between such runs, and a rule that
-keys repeated failures by operation counts them apart; this favours rerunning and hides no
-failure.
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused` | none |
@@ -333,6 +326,17 @@ failure.
 | A recognition error | `contained_task_recognition_failed` | none |
 | A frame of another size | `contained_task_frame_resolution_mismatch` | none |
 | A package outside the admission rules | `contained_task_linear_invalid` (admission) | none |
+
+When the operation awaited more than one candidate (a run of optional steps), the detail of
+`page_confirmation_failed` and `contained_task_linear_application_unconfirmed` ends with
+` awaited=<the candidates' detector page ids, comma-separated>`, followed by
+` skip_target_seen=true` when the skip target had passed; with one candidate the detail is
+unchanged. Neither key is part of a detail whitelist. An optional step adds no runtime failure
+code; its admission refusals are new `reason` values of `contained_task_linear_invalid`. A
+known limit: one cause can fail at the operation before a run on a day without a popup and at
+the optional step just run on a day with one, so the last `StepStarted` operation and the
+detail's `operation=` differ between such runs, and a rule that keys repeated failures by
+operation counts them apart; this favours rerunning and hides no failure.
 
 The new codes are strings; none of them starts the stuck-recovery ladder.
 
@@ -373,8 +377,8 @@ application entry, so its step has no pre-input frame evidence; the entry itself
 A build without this mode refuses a linear package before `PackageAdmitted`: the control's
 `execution_mode` is `contained_task_control_invalid`, and an operation's `transition` is
 first refused by the resource declaration check (`resource_declaration_invalid`, reason
-`UnknownField`). A build with this mode but without optional steps (v0.9.0, v0.9.1 and the
-earlier `linear_steps` builds) refuses an operation's `optional` the same way, before
+`UnknownField`). A build without optional steps (v0.9.0, v0.9.1, and the earlier
+`linear_steps` builds) refuses an operation's `optional` the same way, before
 `PackageAdmitted`: `resource_declaration_invalid`, `UnknownField` at
 `/operations/<k>/optional`; so does its `package build`.
 
