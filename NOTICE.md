@@ -31,6 +31,18 @@ No upstream automation source code has been copied into this repository as part 
 - Purpose: optional local-only minitouch binary path for `MinitouchBackend`.
 - Notes: P6.5-A1.1 implements the public minitouch text protocol in clean-room Rust and does not vendor or commit a minitouch binary. Operators must provide a local binary path when using this backend.
 
+## Redistributed in release artifacts, not committed
+
+### Android SDK Platform-Tools 37.0.1
+
+- Upstream: Android SDK Platform-Tools by Google, version 37.0.1 (`adb version` reports `Version 37.0.1-15733141`).
+- Source URL: https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip (the official versioned URL; no other source, no self-hosting).
+- Verification: every Windows exact-SHA build downloads the archive and fails unless it has the size (8044989 bytes) and SHA-1 (`e03e78b1d80b396f1c3358e31251cb31740e1110`) that Google publishes in its repository XML, the pinned SHA-256 (`45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99`), and each shipped file its pinned size and SHA-256. The pin and its provenance are `components."platform-tools-37.0.1"` in `scripts/windows-tools/windows-tool-sources.v1.json`.
+- Distributed files: `platform-tools/adb.exe`, `platform-tools/AdbWinApi.dll`, `platform-tools/AdbWinUsbApi.dll`, `platform-tools/NOTICE.txt` and `platform-tools/source.properties`, in the Tools release artifact (`actingcommand-tools-<sha>`) only; acsetup installs them under `<install root>\tools\platform-tools\`. Nothing of it is committed to this repository. The archive's other files are not distributed.
+- License and notices: `NOTICE.txt` (it begins with the Apache License) and `source.properties` ship unchanged in the same `platform-tools` directory as the binaries.
+- Redistribution: redistributed by the owner's decision (Workflow #337, 2026-10-03). Android SDK License section 3.4 forbids copying or redistributing the SDK except where a third-party license requires otherwise; section 3.5 places components released under an open-source license only under that license. This records the owner's decision; it is not a legal opinion.
+- Purpose: the adb `actingd` uses by default from an install root (see `external-tools/NOTICE.md`, "ADB version boundary").
+
 ## Reviewed but not bundled OCR/NN dependencies
 
 ### FastDeploy / PPOCR

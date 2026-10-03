@@ -31,7 +31,11 @@ pwsh -NoProfile -File scripts/windows-tools/Get-ExactBuildArtifact.ps1 `
   -OutputPath D:\task\runtime-install\artifacts\runtime
 ```
 
-Replace the bracketed values before use. The task directory must already exist;
+Replace the bracketed values before use. With an output directory named
+`runtime` as in this example, its parent (`artifacts`) becomes an install root
+for this Runtime (see "Bundled adb"): instances without `adb_path` then use
+`artifacts\tools\platform-tools\adb.exe` (startup refuses while it is missing),
+so choose another name to keep the MuMu adb. The task directory must already exist;
 the output directory must be new and a strict child of it. The downloader selects
 the exact native Actions artifact, extracts it to staging and verifies it before
 making the output directory available. It checks the source repository, commit,
@@ -53,8 +57,28 @@ The artifact root contains exactly these six files:
 The manifest binds the five payload files individually. Historical Runtime
 artifacts without the layout field have the fixed two-executable payload plus
 their manifest. An explicit unknown, empty or non-string layout is rejected;
-`distribution-v1` always requires all five payloads. Tools use their separate
-artifact and fixed five-binary/DLL payload.
+`distribution-v1` always requires all five payloads.
+
+Tools use their separate artifact (`-ArtifactKind Tools`,
+`actingcommand-tools-<sha>`). Its manifest declares
+`tools_payload_layout: "platform-tools-v1"`: the root holds `actinglab.exe`,
+`actingledger.exe`, `actingcommand-vision-provider-check.exe`,
+`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and
+`BUILD-MANIFEST.json`, and the one subdirectory `platform-tools` holds the
+official Android platform-tools 37.0.1 files `adb.exe`, `AdbWinApi.dll`,
+`AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. The manifest binds all
+ten payload files (paths use `/`). Historical Tools artifacts without the layout
+field have only the five root files; any other layout is rejected.
+
+The build takes these platform-tools files only from Google's official archive
+`https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip`, after
+checking its size and the SHA-1 that Google publishes, a pinned SHA-256, and each
+file's pinned size and SHA-256 (`scripts/windows-tools/windows-tool-sources.v1.json`);
+`adb.exe version` reports `Version 37.0.1-15733141`. Keep `NOTICE.txt` and
+`source.properties` with the binaries. Installed, the files are in
+`<install root>\tools\platform-tools\`, and
+`<install root>\tools\platform-tools\adb.exe` is the adb that an instance without
+`adb_path` (key omitted) uses.
 
 ## Prepare private configuration
 
@@ -74,7 +98,9 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
 - Populate `instances` with your already authorized instance configuration.
   Each entry requires `alias` and the existing typed `instance_id`; device entries
   also need the explicit backend and connection fields required by the same
-  config schema. The template's `"instances": []` starts a control-plane-only
+  config schema. `adb_path` may be left out when the daemon runs from an install
+  root; otherwise an explicit entry (`serial`, or `host` and `port`) still needs
+  it (see "Bundled adb"). The template's `"instances": []` starts a control-plane-only
   daemon with no device targets; instances are added later by editing the
   configuration and restarting the daemon. Retain the existing identity,
   unique-registration, path, backend and timeout rules.
@@ -82,7 +108,9 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   of `instance_index` (the index `MuMuManager info -v all` reports) or
   `instance_name` (the exact instance name) and omit `serial`. `adb_path`,
   `host` and `port` may then be omitted; no default host or port applies, and
-  any of them you do declare is cross-checked against the discovered value.
+  any of them you do declare is cross-checked against the discovered value
+  (a declared `adb_path` may also name the install root's adb, see "Bundled
+  adb").
   The optional top-level `mumu_root` names the MuMu install root explicitly and
   must be absolute. At startup the daemon runs `MuMuManager.exe version` and
   `info -v all` once (read-only, 10 s timeout, never any mutating subcommand),
@@ -127,6 +155,71 @@ nothing under `state_root`, does not read the vision provider manifest, and
 resolves relative policy package paths against the current directory exactly as
 startup does; see `contracts/actingd-check-config.md`.
 
+## Bundled adb
+
+An install root is the layout acsetup installs: `<install root>\runtime\` holds
+this Runtime artifact with its `BUILD-MANIFEST.json`, and `<install root>\tools\`
+the Tools artifact. The daemon recognises it from its own executable path alone
+(two levels above `actingcommand-actingd.exe`, `runtime\BUILD-MANIFEST.json` must
+be a file). So any directory named `runtime` that holds this Runtime artifact
+makes its parent an install root, whoever laid it out: an acsetup install,
+acsetup's upgrade staging directory (the check acsetup runs with the staged
+Runtime then uses the staged adb), or a hand layout such as `<dir>\runtime\` +
+`<dir>\tools\`. A hand layout that should keep using the MuMu adb must give the
+Runtime directory another name or declare `adb_path` on every instance.
+
+When the daemon runs from an install root, an instance without `adb_path`
+(explicit or discovery-bound) uses `<install root>\tools\platform-tools\adb.exe`.
+An `adb_path` that names that file is the same choice. Before the ledger opens,
+startup and `check-config` read `adb.exe`, `AdbWinApi.dll` and `AdbWinUsbApi.dll`
+there and compare their SHA-256 with the values pinned at build time. A missing or
+unreadable file refuses with `adb_install_missing`, a different one with
+`adb_install_mismatch`; the `FATAL actingd:` line (and `check-config`'s
+`error.detail`) names the file, the expected and the actual value. Nothing falls
+back to another adb. Two fixes:
+
+- reinstall `tools\platform-tools` (for an acsetup install, run acsetup v0.10 or
+  later on it again; for a hand layout, copy the Tools artifact's
+  `platform-tools` directory);
+- or set the instance's `adb_path` to another adb: MuMu's own adb to use it as
+  before (an explicit instance may name any other adb too).
+
+An explicit instance may name any other adb; that one is used as before, without
+a hash check. Naming the install root's adb is the same choice as omitting the
+key and is checked as above. A discovery-bound instance may name only the
+discovered MuMu adb or the install root's adb; anything else fails startup with
+`instance_discovery_conflict` (`adb_path_conflict`), whose message lists both
+accepted values. An empty or blank `adb_path` is refused with
+`instance_config_invalid`, as before. Outside an install root (a development
+build, or a Runtime directory under another name than `runtime`) nothing
+changes: an explicit instance
+without `adb_path` is refused with `instance_config_invalid`, and a
+discovery-bound one uses the discovered MuMu adb. `check-config` reports the
+install root's adb as `adb_default`: `{"path": ..., "state": "ok" | "missing" |
+"sha256_mismatch"}`, or `null` outside an install root; a state other than `ok`
+fails the check only when an instance uses that adb.
+
+`actinglab` resolves an adb on its own only for its `adb_source` label and its
+doctor output; its device commands run in the Runtime. That label does not show
+which adb the Runtime uses.
+
+Sharing the adb server (port 5037) with other tools:
+
+- Do not point ALAS, MAA or other tools at the install root's adb. An upgrade
+  moves `tools\` into `previous\`, so that path does not exist until the new
+  Tools are laid out and their adb calls fail meanwhile; an adb server they
+  started keeps running from `previous\`, and until it stops every later upgrade
+  warns that the older previous version could not be removed. To use 37.0.1
+  there as well, keep a separate byte-identical copy elsewhere.
+- Do not change into `tools\`, `tools\platform-tools\` or `runtime\` and start
+  adb or `actingcommand-actingd.exe` by hand there. The adb server started that
+  way keeps that directory as its working directory, and an upgrade then stops
+  and restores everything because the directory cannot be moved.
+- An adb client reuses a running server whose protocol version equals its own
+  (the third field of the first line of `adb version`, `41` for 37.0.1) and
+  otherwise kills and restarts it. This has not been measured with several adb
+  versions; keep the tools that share port 5037 on the same adb version.
+
 ## Start, inspect and close
 
 From the verified Runtime directory, using your filled private configuration:
@@ -165,3 +258,32 @@ provenance. Confirm compatibility with the selected source before changing an
 existing installation. This candidate supplies no automatic state migration,
 recovery, cleanup or rollback procedure. Installation or successful Actions
 verification does not establish real-device acceptance or authorize publication.
+
+Rolling back to v0.9.0 (moving `previous\` back by hand, or v0.9.0's acsetup
+with a downgrade) needs two configuration edits first, because v0.9.0 requires
+`adb_path` on every explicit instance and its Tools contain no
+`platform-tools`:
+
+1. Give every explicit instance without `adb_path` an adb that still exists after
+   the rollback: MuMu's own adb or a separate 37.0.1 copy, not
+   `<install root>\tools\platform-tools\adb.exe`.
+2. Remove an `adb_path` that names the install root's adb from discovery-bound
+   instances.
+
+Forgetting either is not silent, but they surface at different points.
+Forgetting edit 1 makes v0.9.0's `check-config` refuse with
+`instance_config_invalid` (stage `assemble`), so v0.9.0's acsetup stops before it
+changes anything (and v0.9.0 startup refuses the same way). Forgetting edit 2 is
+not caught before the swap, because `check-config` does not run discovery: the
+rollback completes, and the v0.9.0 Runtime then fails at provider startup with
+`instance_discovery_conflict` (`adb_path_conflict`); remove that `adb_path` and
+start it again. v0.9.0's acsetup also cannot move `ui\` entry by entry: if
+`ui\` is the working directory of a running adb server at the moment of the
+rollback (an adb server started by a Runtime the console launched), it reports
+that the console must be closed first and restores everything, although the
+console is closed. Then either stop the adb server and retry (this disconnects
+other tools that share port 5037, such as ALAS or MAA), or roll back by hand:
+move `runtime\` and `tools\` aside as whole directories and move the ones in
+`previous\` back; when renaming `ui\` fails, move its entries out one by one and
+the previous ones in one by one. Rolling back to an earlier v0.10.x, whose
+`previous\tools` already holds `platform-tools`, needs no configuration edit.

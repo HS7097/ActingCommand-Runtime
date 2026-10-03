@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub(super) mod ac_adb;
 mod manifest;
 mod provider_startup;
 
@@ -424,6 +425,10 @@ struct InstanceConfig {
     /// `assemble` like `device_paths`.
     #[serde(skip)]
     env_overrides: EnvOverrides,
+    /// Workflow #337: the install root's adb and whether this instance uses it (`adb_path`
+    /// absent or naming that file), resolved once by `assemble` like `device_paths`.
+    #[serde(skip)]
+    adb: ac_adb::InstanceAdb,
 }
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
@@ -493,6 +498,9 @@ pub(super) struct RuntimeAssembly {
     /// The `ACTINGCOMMAND_*` variables that are set but ignored because
     /// `allow_env_overrides` is off, in `EnvOverrides::VARIABLES` order.
     pub(super) ignored_env_overrides: Vec<&'static str>,
+    /// Workflow #337: the install root's adb and the instances that use it, checked by
+    /// `ac_adb::require` before any side effect. Internal; never a configuration field.
+    pub(super) adb_requirement: ac_adb::AdbRequirement,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -790,6 +798,9 @@ impl ActingdConfigFile {
             env_overrides(self.allow_env_overrides.unwrap_or(false), |name| {
                 std::env::var_os(name)
             });
+        // Workflow #337: resolved once; every device instance carries the result.
+        let installed_adb = ac_adb::InstalledAdb::detect();
+        let mut adb_requirement = ac_adb::AdbRequirement::new(installed_adb.clone());
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
@@ -798,6 +809,15 @@ impl ActingdConfigFile {
         for instance in &mut instances {
             instance.device_paths = device_paths.clone();
             instance.env_overrides = env_overrides.clone();
+            if instance.fixture_backend.is_none() {
+                instance.adb = ac_adb::InstanceAdb::resolve(
+                    installed_adb.as_ref(),
+                    instance.adb_path.as_deref(),
+                );
+                if instance.adb.selected().is_some() {
+                    adb_requirement.add_user(&instance.alias);
+                }
+            }
             let settings = actingcommand_contract::InstanceStuckRecovery {
                 enabled: instance.stuck_recovery.unwrap_or(true),
                 cooldown_secs: instance.stuck_recovery_cooldown_secs.unwrap_or(
@@ -942,6 +962,7 @@ impl ActingdConfigFile {
             manifest,
             resource_packages,
             ignored_env_overrides,
+            adb_requirement,
         })
     }
 }
@@ -1268,7 +1289,8 @@ impl InstanceConfig {
 
     /// Validates everything that does not need discovery; the ADB target is completed later.
     /// Declared `adb_path`/`host`/`port` stay declared values to be cross-checked; no default
-    /// host or port applies to a discovery-bound instance.
+    /// host or port applies to a discovery-bound instance. An `adb_path` that is absent or
+    /// names the install root's adb selects that adb instead (Workflow #337).
     fn deferred_backend(self, key: InstanceBindingKey) -> Result<ConfiguredInstance, &'static str> {
         if self.serial.is_some() {
             return Err("instance_binding_key_invalid");
@@ -1345,7 +1367,13 @@ impl InstanceConfig {
     }
 
     fn device_backend(self) -> Result<InstanceSpec, &'static str> {
-        let adb_path = self.adb_path.clone().ok_or("instance_config_invalid")?;
+        // Workflow #337 (A4): an absent `adb_path` takes the install root's adb, checked by
+        // `ac_adb::require`; outside an install root it is still refused.
+        let adb_path = self
+            .adb_path
+            .clone()
+            .or_else(|| self.adb.selected().map(ac_adb::InstalledAdb::path_string))
+            .ok_or("instance_config_invalid")?;
         let host = self.host.clone().unwrap_or_else(default_device_host);
         let port = self.port.unwrap_or_else(default_device_port);
         self.device_registration(adb_path, host, Some(port))

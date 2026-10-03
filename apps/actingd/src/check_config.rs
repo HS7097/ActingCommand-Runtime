@@ -63,7 +63,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 manifest,
                 resource_packages,
                 ignored_env_overrides,
+                adb_requirement,
             } = assembly;
+            // Workflow #337: the install root's adb, checked exactly as at startup.
+            let adb_default = config::ac_adb::require(&adb_requirement).map_err(|refused| {
+                let code = refused.code();
+                rejection = Some(Rejection::AdbInstall(refused));
+                (code, "assemble")
+            })?;
             let modes = provider.modes();
             let deferred = provider.deferred_bindings();
             let mumu_root = provider.mumu_root().map(Path::to_path_buf);
@@ -78,7 +85,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             let resource_packages = config::validate_resource_packages(&resource_packages)
                 .map_err(|refused| {
                     let code = refused.code;
-                    rejection = Some(refused);
+                    rejection = Some(Rejection::ResourcePackage(refused));
                     (code, "resource_package")
                 })?;
             let checked = CheckedAssembly {
@@ -91,6 +98,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 policy_configured: policy.is_some(),
                 manifest,
                 ignored_env_overrides,
+                adb_default,
             };
             summarize(&config_path, &checked, &resource_packages)
         });
@@ -100,8 +108,12 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             let mut error = json!({ "code": code, "stage": stage });
             let mut failure = ActingdError::config(code);
             if let Some(rejection) = rejection {
-                error["detail"] = rejection.detail();
-                failure = failure.with_detail(rejection.to_string());
+                let (detail, message) = match rejection {
+                    Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
+                    Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
+                };
+                error["detail"] = detail;
+                failure = failure.with_detail(message);
             }
             (
                 json!({
@@ -119,6 +131,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     result
 }
 
+/// A refusal that carries `error.detail`: a resource package (stage `resource_package`) or
+/// the install root's adb (Workflow #337, stage `assemble`).
+enum Rejection {
+    ResourcePackage(config::ResourcePackageRejection),
+    AdbInstall(config::ac_adb::AdbInstallRejection),
+}
+
 /// Everything `summarize` reports once every check passed: the registry as configured and
 /// the declarations only startup can complete.
 struct CheckedAssembly {
@@ -133,6 +152,8 @@ struct CheckedAssembly {
     manifest: RuntimeConfigManifest,
     /// Set `ACTINGCOMMAND_*` variables ignored because `allow_env_overrides` is off.
     ignored_env_overrides: Vec<&'static str>,
+    /// Workflow #337: the install root's adb and its state; `None` outside an install root.
+    adb_default: Option<config::ac_adb::AdbDefault>,
 }
 
 fn summarize(
@@ -255,6 +276,11 @@ fn summarize(
         "config_manifest": checked.manifest,
         "not_checked": not_checked,
         "mumu_root": mumu_root,
+        // Workflow #337: `null` outside an install root, else `{ path, state }`.
+        "adb_default": checked
+            .adb_default
+            .as_ref()
+            .map(config::ac_adb::AdbDefault::report),
         // Workflow #318 (cfg3): one `env_override_ignored:<VAR>` per set variable that
         // `allow_env_overrides` off leaves unread; empty otherwise.
         "warnings": checked

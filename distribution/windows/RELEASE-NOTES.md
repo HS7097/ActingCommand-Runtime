@@ -17,9 +17,46 @@ and individually bound by size and SHA-256.
 
 The existing exact-artifact downloader understands this layout and the historical
 fixed two-executable Runtime layout whose manifest omits the field. It continues
-to reject incomplete or unexpected payloads. The separate Tools artifact retains
+to reject incomplete or unexpected payloads. The separate Tools artifact carries
 `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and its own manifest.
+`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and, under
+`platform-tools/`, the official Android platform-tools 37.0.1 files `adb.exe`,
+`AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. Its
+own manifest declares `tools_payload_layout: "platform-tools-v1"` and binds all
+ten files; the downloader still accepts the historical five-file Tools layout
+whose manifest omits the field and rejects any other layout.
+
+The build takes `platform-tools_r37.0.1-win.zip` only from Google's official
+`https://dl.google.com/android/repository/` URL and fails unless the archive has
+the size and SHA-1 that Google publishes, the pinned SHA-256, and each shipped
+file its pinned size and SHA-256, and unless `adb.exe version` reports
+`37.0.1-15733141`. Of the archive's binaries only `adb.exe` and its two DLLs are
+shipped; Google's `NOTICE.txt` and `source.properties` stay unchanged beside them.
+They are redistributed by the owner's decision under the Android SDK License and
+the open-source licenses in `NOTICE.txt`. Installed, they are in
+`<install root>\tools\platform-tools\`, and
+`<install root>\tools\platform-tools\adb.exe` is the adb that an instance without
+`adb_path` (key omitted) uses.
+
+The daemon recognises an install root from its own path: any directory named
+`runtime` that holds this artifact with its `BUILD-MANIFEST.json` makes its
+parent one (an acsetup install, acsetup's upgrade staging, or a hand layout). There an instance without `adb_path`, explicit or discovery-bound,
+uses that adb; startup and `check-config` compare the SHA-256 of `adb.exe`,
+`AdbWinApi.dll` and `AdbWinUsbApi.dll` with the build's pin before the ledger
+opens and refuse with `adb_install_missing` or `adb_install_mismatch`, with no
+fallback; a discovery-bound `adb_path` may name the discovered MuMu adb or the
+install root's adb. Outside an install root behaviour is unchanged.
+`check-config` reports the adb as `adb_default`. See `INSTALL.md`, "Bundled adb".
+
+Before rolling back to v0.9.0, give every explicit instance without `adb_path`
+an adb that still exists afterwards (MuMu's own or a separate 37.0.1 copy, not
+the install root's), and remove an `adb_path` that names the install root's adb
+from discovery-bound instances; otherwise v0.9.0 refuses with
+`instance_config_invalid` or `instance_discovery_conflict`. When `ui\` is the
+working directory of a running adb server, v0.9.0's acsetup reports that the
+console must be closed first although it is closed; stop the adb server and
+retry (this disconnects other tools sharing port 5037), or roll back by hand
+(see `INSTALL.md`, "Upgrade boundary").
 
 Configuration uses `actingcommand.actingd.config.v1` and the existing
 `actingcommand-actingd --config <path>` entry. The supplied template has empty
@@ -31,7 +68,8 @@ and the exact source schema to provide a private configuration and any required
 provider dependencies before use.
 
 This distribution change adds packaging and documentation to the existing
-Actions build. It does not change daemon/client operation, install dependencies
+Actions build. Apart from the adb default above, it does not change
+daemon/client operation, install dependencies
 or services, or perform startup, state migration or device actions. Actions
 results establish only their recorded build and check outcomes; installation,
 provider availability, real-device behavior and functional acceptance require
