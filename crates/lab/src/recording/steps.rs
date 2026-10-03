@@ -1540,20 +1540,24 @@ pub(crate) fn apply_optional(
         ));
     }
     if let Some(application) = &step.application {
-        return Err(with_details(
-            blocked(
-                "record_optional_application",
-                format!(
-                    "step {target} has the application operation {}; an application step cannot \
-                     be optional (there is no conditional restart): mark the screens after it \
-                     optional, or clear the step with --not-optional",
-                    application.action
-                ),
-            ),
-            json!({"step": target, "application": application.action}),
-        ));
+        return Err(optional_application(target, &application.action));
     }
     Ok(())
+}
+
+/// An optional step whose effect is (or would become) an application operation.
+fn optional_application(index: u32, action: &str) -> LabError {
+    with_details(
+        blocked(
+            "record_optional_application",
+            format!(
+                "step {index} is optional and its effect is the application operation {action}; \
+                 an application step cannot be optional (there is no conditional restart): mark \
+                 the screens after it optional, or clear the step with --not-optional"
+            ),
+        ),
+        json!({"step": index, "application": action}),
+    )
 }
 
 /// `record mark --step k --transition none|page|window`.
@@ -2113,6 +2117,9 @@ pub(crate) fn plan_application(
                 }),
             ))
         }
+        // The operation would land on an optional step (Workflow #339): refused before any
+        // request, as `record mark --application` is.
+        _ if step.optional.is_some() => Err(optional_application(index, action)),
         (None, Some(_)) => Ok(plan(index, false)),
         (None, None) if !has_marks(step) => Err(application_marks_missing(index)),
         (None, None) => Ok(plan(index, false)),

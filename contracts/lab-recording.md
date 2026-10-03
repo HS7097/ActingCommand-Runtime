@@ -506,6 +506,9 @@ record mark [--step <k>] --not-optional
 | `record_optional_application` | 3 | the step has an application operation, also one declared in the same command or added to an optional step: there is no conditional restart |
 | `record_to_transition_invalid`, reason `optional` | 3 | `--to-transition n` on an optional step: a transition must be seen |
 
+- `session app <verb> --record` and `session instance app <verb> --record` that would land on
+  an optional step are refused with `record_optional_application` (3) while the step is
+  planned, before any Runtime request; nothing is sent and the recording is unchanged.
 - Whether an optional step is the last step, or the main interface after a restart, is
   checked by `record stop` (second half of this contract), not by `record mark`.
 - `recording.json`: the step carries `"optional":{"settle_ms":2000,"marked_at_unix_ms":…}`;
