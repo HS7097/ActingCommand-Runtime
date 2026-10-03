@@ -726,6 +726,25 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.diagnostic_pages(phase, results)?;
         self.inner.record_capture_recognition(results)
     }
+    fn candidate_sampling_checkpoint(&mut self) -> Result<bool, Self::Error> {
+        self.inner.ensure_active()?;
+        Ok(true)
+    }
+
+    fn record_candidate_evaluation(
+        &mut self,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::TargetEvaluation,
+        >,
+        timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.inner.task_timing.record_evaluation(timing, None, None);
+        self.inner
+            .diagnostic_guard(Some(target_id), Some(result), "candidate_sample")?;
+        self.inner.ensure_active()
+    }
+
     fn record_guard_evaluation(
         &mut self,
         target: Option<&str>,
@@ -2435,6 +2454,24 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
+
+    fn candidate_sampling_checkpoint(&mut self) -> Result<bool, Self::Error> {
+        self.ensure_active()?;
+        Ok(true)
+    }
+
+    fn record_candidate_evaluation(
+        &mut self,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::TargetEvaluation,
+        >,
+        timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.task_timing.record_evaluation(timing, None, None);
+        self.diagnostic_guard(Some(target_id), Some(result), "candidate_sample")?;
+        self.ensure_active()
+    }
 
     fn update_run_progress(&mut self, executed_steps: u32) {
         self.executed_steps = self.step_index_offset.checked_add(executed_steps);

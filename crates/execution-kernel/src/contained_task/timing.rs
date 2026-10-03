@@ -47,6 +47,14 @@ impl ContainedTaskTimingContext {
         self.deadline
     }
 
+    /// Narrow an existing operation/observation budget without restarting its clock.
+    pub(super) fn with_deadline(self, deadline: Instant) -> Self {
+        Self {
+            deadline: self.deadline.min(deadline),
+            ..self
+        }
+    }
+
     pub fn origin(self) -> TaskTimingBudgetOrigin {
         self.origin
     }

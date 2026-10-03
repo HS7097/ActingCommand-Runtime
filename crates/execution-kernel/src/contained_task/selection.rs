@@ -27,14 +27,16 @@ use actingcommand_device::Frame;
 use actingcommand_pack_containment::{LoadedBundle, Sha256Hash};
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
-    CandidateFeatureValue, CandidateLayout, RecognitionEvaluator,
+    CandidateFeatureValue, CandidateLayout, RecognitionEvaluator, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{
-    Candidate, MAX_DOCUMENT_BYTES, ScalarValue, SelectionDecision, SelectionFactSnapshot,
-    SelectionOutcome, SelectionPolicy, ValueType, evaluate, parse_canonical_json,
+    Candidate, GateUnknownHandling, MAX_DOCUMENT_BYTES, ScalarValue, SelectionDecision,
+    SelectionFactSnapshot, SelectionOutcome, SelectionPolicy, TermUnknownHandling, ValueRef,
+    ValueType, evaluate, parse_canonical_json,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 const SELECT_INVALID: &str = "contained_task_select_invalid";
 const SELECT_POLICY_MISSING: &str = "contained_task_select_policy_missing";
@@ -232,6 +234,73 @@ pub(super) fn prepare_select_steps(
     Ok(())
 }
 
+pub(super) fn page_recognition_budget_ms(
+    evaluator: &RecognitionEvaluator,
+    detector: &actingcommand_page_detector::PageDetector,
+    only_page: Option<&str>,
+) -> Result<u64, ContainedTaskError> {
+    let targets = detector
+        .page_definitions()
+        .iter()
+        .filter(|page| only_page.is_none_or(|id| id == page.id))
+        .flat_map(|page| {
+            page.required
+                .iter()
+                .chain(page.any_of.iter().flatten())
+                .chain(page.optional.iter())
+                .chain(page.forbidden.iter())
+                .map(String::as_str)
+        });
+    evaluator
+        .maximum_provider_ms(targets)
+        .map(|provider| provider.saturating_add(evaluator.target_sample_wait_ms()))
+        .map_err(|error| ContainedTaskError::with_detail(SELECT_INVALID, error.to_string()))
+}
+
+/// Known calls and declared waits on one complete pre-input path. Initial page recognition
+/// precedes StepStarted; each additional candidate frame and H2 capture recognizes pages.
+pub(super) fn sampling_budget_ms(
+    operation: &TaskOperation,
+    evaluator: &RecognitionEvaluator,
+    detector: &actingcommand_page_detector::PageDetector,
+) -> Result<Option<u64>, ContainedTaskError> {
+    let layout = operation
+        .select
+        .as_ref()
+        .map(|select| {
+            evaluator
+                .candidate_layout(&select.layout_id)
+                .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))
+        })
+        .transpose()?;
+    if evaluator.pack().target_consensus.is_empty()
+        && layout.is_none_or(|layout| !layout.has_consensus())
+    {
+        return Ok(None);
+    }
+    let guard = if operation.unguarded_trusted_coordinate {
+        0
+    } else {
+        evaluator
+            .maximum_provider_ms(operation.guard.iter().map(|guard| guard.target_id.as_str()))
+            .map_err(|error| ContainedTaskError::with_detail(SELECT_INVALID, error.to_string()))?
+    };
+    let required = if let Some(layout) = layout {
+        let frames = layout.required_frames() as u64;
+        let pages = page_recognition_budget_ms(evaluator, detector, None)?;
+        // H1/H2 each add F-1 frames; H2 starts with another fresh page capture. Its guard
+        // runs before projection and again on the last frame when the projection adds frames.
+        layout
+            .maximum_provider_and_wait_ms(evaluator)
+            .saturating_mul(2)
+            .saturating_add(pages.saturating_mul(2 * frames - 1))
+            .saturating_add(guard.saturating_mul(if frames > 1 { 2 } else { 1 }))
+    } else {
+        guard
+    };
+    Ok(Some(required))
+}
+
 /// The selection-policy crate's own reading: the byte limit, the typed decode, the canonical
 /// form (no floats, no unsafe integers, no duplicate keys) and the document validation.
 fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
@@ -262,11 +331,21 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
         let feature = layout
             .features
             .iter()
-            .find(|feature| feature.name == field.name)
-            .map(|feature| feature.value);
-        match (feature, &field.value_type) {
+            .find(|feature| feature.name == field.name);
+        match (feature.map(|feature| feature.value), &field.value_type) {
             (Some(CandidateFeatureValue::Passed), ValueType::Boolean)
-            | (Some(CandidateFeatureValue::MeasureMilli), ValueType::Integer) => {}
+            | (
+                Some(CandidateFeatureValue::MeasureMilli | CandidateFeatureValue::OcrInteger),
+                ValueType::Integer,
+            ) => {}
+            (Some(CandidateFeatureValue::Identity), ValueType::EnumString { allowed })
+                if feature
+                    .and_then(|feature| feature.identity.as_ref())
+                    .is_some_and(|identity| {
+                        let mut allowed = allowed.clone();
+                        allowed.sort();
+                        identity.domain() == allowed
+                    }) => {}
             (None, _) => {
                 return Err(format!(
                     "field={} is not a feature of layout={}",
@@ -278,6 +357,30 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
                     "field={} is typed unlike its feature of layout={}",
                     field.name, layout.id
                 ));
+            }
+        }
+    }
+    if layout.features.iter().any(|feature| {
+        feature.identity.is_some() || feature.integer.is_some() || feature.consensus.is_some()
+    }) && policy.gates.iter().any(|gate| {
+        matches!(
+            gate.on_unknown,
+            GateUnknownHandling::SubstituteVerdict { passes: true }
+        )
+    }) {
+        return Err(
+            "declared identity, integer or consensus selection requires fail-closed hard gates"
+                .into(),
+        );
+    }
+    if layout.unknown_identity == UnknownIdentityHandling::ReadableAttributes {
+        for term in &policy.scoring {
+            if let TermUnknownHandling::SubstituteMilli { value_milli } = term.on_unknown {
+                let identity_term = matches!(&term.value, ValueRef::Field { field }
+                    if layout.features.iter().any(|feature| feature.name == *field && feature.identity.is_some()));
+                if !identity_term || i128::from(value_milli) * i128::from(term.weight_milli) > 0 {
+                    return Err("readable_attributes permits only a nonpositive identity substitution; other scoring inputs must be known".into());
+                }
             }
         }
     }
@@ -314,6 +417,7 @@ fn project(
 /// field of its name: a boolean or an integer as the projection carries it.
 fn decide(
     policy: &SelectionPolicy,
+    layout: &CandidateLayout,
     projection: &CandidateProjection,
     facts: &SelectionFactSnapshot,
     now_unix_ms: u64,
@@ -322,17 +426,46 @@ fn decide(
         .candidates()
         .iter()
         .filter(|candidate| candidate.actionable)
+        .filter(|candidate| {
+            layout
+                .features
+                .iter()
+                .filter(|feature| feature.consensus.is_some())
+                .all(|feature| {
+                    candidate
+                        .features
+                        .get(&feature.name)
+                        .is_some_and(|value| !matches!(value, CandidateFeature::Unknown { .. }))
+                })
+        })
+        .filter(|candidate| {
+            layout.unknown_identity == UnknownIdentityHandling::ReadableAttributes
+                || layout
+                    .features
+                    .iter()
+                    .filter(|feature| feature.identity.is_some())
+                    .all(|feature| {
+                        matches!(
+                            candidate.features.get(&feature.name),
+                            Some(CandidateFeature::Identity { .. })
+                        )
+                    })
+        })
         .map(|candidate| Candidate {
             candidate_id: candidate.id.clone(),
             fields: candidate
                 .features
                 .iter()
-                .map(|(name, feature)| {
+                .filter_map(|(name, feature)| {
                     let value = match feature {
                         CandidateFeature::Boolean { value, .. } => ScalarValue::Boolean(*value),
                         CandidateFeature::Integer { value, .. } => ScalarValue::Integer(*value),
+                        CandidateFeature::Identity { value, .. } => {
+                            ScalarValue::String(value.clone())
+                        }
+                        CandidateFeature::Unknown { .. } => return None,
                     };
-                    (name.clone(), value)
+                    Some((name.clone(), value))
                 })
                 .collect(),
         })
@@ -418,6 +551,135 @@ type Confirmation<E> = (
 );
 
 impl PreparedContainedTask {
+    fn project_transaction<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        first: &PageObservation,
+        layout: &CandidateLayout,
+        timing: ContainedTaskTimingContext,
+        deadline: Instant,
+    ) -> Result<(CandidateProjection, Option<PageObservation>), ContainedTaskRunError<R::Error>>
+    {
+        let enhanced = layout.has_consensus()
+            || layout
+                .features
+                .iter()
+                .any(|feature| feature.identity.is_some() || feature.integer.is_some());
+        if !enhanced {
+            return Ok((project(&self.evaluator, &first.scene, &layout.id)?, None));
+        }
+        let check_deadline = || {
+            if Instant::now() >= deadline {
+                Err(ContainedTaskError::new(
+                    "candidate_sample_deadline_exceeded",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        check_deadline()?;
+        if layout.has_consensus() {
+            if !runtime
+                .candidate_sampling_checkpoint()
+                .map_err(ContainedTaskRunError::operation::<R>)?
+            {
+                return Err(
+                    ContainedTaskError::new("candidate_sampling_runtime_unsupported").into(),
+                );
+            }
+            let transaction_ms = layout
+                .maximum_provider_and_wait_ms(&self.evaluator)
+                .saturating_add(
+                    page_recognition_budget_ms(&self.evaluator, &self.detector, None)?
+                        .saturating_mul(layout.required_frames().saturating_sub(1) as u64),
+                );
+            if Duration::from_millis(transaction_ms)
+                > deadline.saturating_duration_since(Instant::now())
+            {
+                return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+            }
+        }
+        let mut frames = Vec::with_capacity(layout.required_frames().saturating_sub(1));
+        for _ in 1..layout.required_frames() {
+            check_deadline()?;
+            let interval = Duration::from_millis(u64::from(layout.sample_interval_ms));
+            if interval > deadline.saturating_duration_since(Instant::now()) {
+                return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+            }
+            let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
+            let identity = runtime.task_boundary_identity(boundary);
+            let started = Instant::now();
+            std::thread::sleep(interval);
+            let ended = Instant::now();
+            runtime.observe_task_boundary(super::ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started,
+                ended,
+                succeeded: true,
+            });
+            check_deadline()?;
+            let frame = self
+                .capture_frame(runtime, None, None, timing, None, Some(deadline))?
+                .ok_or_else(|| ContainedTaskError::new(SELECTION_PAGE_CHANGED))?;
+            if !crate::page_anchor_matches(&self.control.game, &frame.page_label, &operation.from)
+                || frame.scene.width() != first.scene.width()
+                || frame.scene.height() != first.scene.height()
+                || match (&frame.input_context, &first.input_context) {
+                    (Some(current), Some(first)) => !current.same_geometry(first),
+                    (None, None) => false,
+                    _ => true,
+                }
+            {
+                return Err(
+                    ContainedTaskError::new("candidate_sample_page_or_geometry_changed").into(),
+                );
+            }
+            frames.push(frame);
+        }
+        let scenes = std::iter::once(&first.scene)
+            .chain(frames.iter().map(|frame| &frame.scene))
+            .collect::<Vec<_>>();
+        let provider_ms = layout
+            .maximum_provider_and_wait_ms(&self.evaluator)
+            .saturating_sub(
+                layout.required_frames().saturating_sub(1) as u64
+                    * u64::from(layout.sample_interval_ms),
+            );
+        if Duration::from_millis(provider_ms) > deadline.saturating_duration_since(Instant::now()) {
+            return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+        }
+        let mut recording_error = None;
+        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(deadline).project_candidates_with_samples(
+            &layout.id, &scenes, &mut |target, result, started, ended| {
+                let measured = super::ContainedTaskEvaluationTiming {
+                    elapsed_us: super::observe_instant_span(started, ended), budget_before: timing.budget_at(started),
+                    result: if result.is_ok() { actingcommand_contract::TaskTimingResult::Ok } else { actingcommand_contract::TaskTimingResult::Err },
+                };
+                if let Err(error) = runtime.record_candidate_evaluation(target, result, measured) {
+                    recording_error = Some(error);
+                    return Err(actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed("runtime rejected candidate sample recording"));
+                }
+                check_deadline().map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.code()))
+            });
+        if let Some(error) = recording_error {
+            return Err(ContainedTaskRunError::Boundary(error));
+        }
+        let projection = projection.map_err(|failure| {
+            ContainedTaskError::with_detail(failure.code(), failure.detail())
+                .with_ppocr_diagnostics(
+                    failure
+                        .cause()
+                        .map(|cause| cause.ppocr_diagnostics().clone())
+                        .unwrap_or_default(),
+                )
+        })?;
+        check_deadline()?;
+        Ok((projection, frames.pop()))
+    }
+
     /// One attempt of a select step on its step frame `observation`. A failure before the
     /// decision (projection, snapshot, context, evaluation) returns without a record: no
     /// decision exists to record, and the task fails with that code. Once a decision exists,
@@ -442,7 +704,21 @@ impl PreparedContainedTask {
                 format!("operation={} has no admitted select step", operation.id),
             )
         })?;
-        let projection = project(&self.evaluator, &observation.scene, &prepared.layout_id)?;
+        let layout = self
+            .evaluator
+            .candidate_layout(&prepared.layout_id)
+            .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+        let deadline = timing.deadline();
+        let sampling_budget = sampling_budget_ms(operation, &self.evaluator, &self.detector)?;
+        if let Some(required_ms) = sampling_budget
+            && (Instant::now() >= deadline
+                || Duration::from_millis(required_ms)
+                    > deadline.saturating_duration_since(Instant::now()))
+        {
+            return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+        }
+        let (projection, _) =
+            self.project_transaction(runtime, operation, observation, layout, timing, deadline)?;
         let state = runtime
             .selection_state(SelectionStateRequest {
                 step_index,
@@ -489,7 +765,7 @@ impl PreparedContainedTask {
             .into());
         }
         let facts = SelectionFactSnapshot::from_instance_snapshot(&snapshot, now_unix_ms);
-        let decision = decide(&prepared.policy, &projection, &facts, now_unix_ms)?;
+        let decision = decide(&prepared.policy, layout, &projection, &facts, now_unix_ms)?;
         let mut record =
             selection_record(prepared, &projection, &snapshot, now_unix_ms, &decision)?;
         let (confirmation, result): Confirmation<R::Error> = match chosen(&decision)? {
@@ -508,10 +784,10 @@ impl PreparedContainedTask {
             Some(candidate_id) => self.confirm(
                 runtime,
                 operation,
-                prepared,
                 &projection,
                 candidate_id,
                 timing,
+                deadline,
             )?,
         };
         record.confirmation = confirmation;
@@ -529,6 +805,9 @@ impl PreparedContainedTask {
         });
         match recorded {
             Err(error) if !run_ending => Err(ContainedTaskRunError::Boundary(error)),
+            Ok(()) if result.is_ok() && sampling_budget.is_some() && Instant::now() >= deadline => {
+                Err(ContainedTaskError::new("candidate_sample_deadline_exceeded").into())
+            }
             // A `run_ending` record's failure stays with the runtime; the capture's error is
             // returned unchanged.
             _ => result,
@@ -545,12 +824,24 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         operation: &TaskOperation,
-        prepared: &PreparedSelect,
         projection: &CandidateProjection,
         candidate_id: &str,
         timing: ContainedTaskTimingContext,
+        deadline: Instant,
     ) -> Result<Confirmation<R::Error>, ContainedTaskRunError<R::Error>> {
-        let frame = match self.capture_frame(runtime, None, None, timing) {
+        let prepared = operation
+            .prepared_select
+            .as_deref()
+            .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+        let scoped = sampling_budget_ms(operation, &self.evaluator, &self.detector)?.is_some();
+        let frame = match self.capture_frame(
+            runtime,
+            None,
+            None,
+            timing,
+            None,
+            scoped.then_some(deadline),
+        ) {
             Ok(frame) => frame,
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
@@ -581,7 +872,7 @@ impl PreparedContainedTask {
             }
             Err(error) => return Err(error),
         };
-        let frame = match frame {
+        let mut frame = match frame {
             Some(frame)
                 if crate::page_anchor_matches(
                     &self.control.game,
@@ -607,7 +898,13 @@ impl PreparedContainedTask {
                 ));
             }
         };
-        let guard = match operation.guard_outcome(&self.control, &frame, &self.evaluator, runtime) {
+        let mut guard = match operation.guard_outcome(
+            &self.control,
+            &frame,
+            &self.evaluator,
+            runtime,
+            Some(timing),
+        ) {
             Ok((guard, _)) => guard,
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
@@ -619,22 +916,71 @@ impl PreparedContainedTask {
             }
             Err(error) => return Err(error),
         };
-        let confirmed = match project(&self.evaluator, &frame.scene, &prepared.layout_id) {
-            Ok(confirmed) => confirmed,
-            Err(error) => {
-                return Ok((
-                    TaskSelectionConfirmation::CaptureFailed {
-                        code: error.code().to_owned(),
-                    },
-                    Err(error.into()),
-                ));
-            }
-        };
+        let layout = self
+            .evaluator
+            .candidate_layout(&prepared.layout_id)
+            .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+        let confirmed =
+            match self.project_transaction(runtime, operation, &frame, layout, timing, deadline) {
+                Ok((confirmed, last)) => {
+                    if let Some(last) = last {
+                        frame = last;
+                        guard = match operation.guard_outcome(
+                            &self.control,
+                            &frame,
+                            &self.evaluator,
+                            runtime,
+                            Some(timing),
+                        ) {
+                            Ok((guard, _)) => guard,
+                            Err(ContainedTaskRunError::Task(error)) => {
+                                return Ok((
+                                    TaskSelectionConfirmation::GuardFailed {
+                                        code: error.code().to_owned(),
+                                    },
+                                    Err(error.into()),
+                                ));
+                            }
+                            Err(error) => return Err(error),
+                        };
+                    }
+                    confirmed
+                }
+                Err(ContainedTaskRunError::Task(error)) => {
+                    return Ok((
+                        TaskSelectionConfirmation::CaptureFailed {
+                            code: error.code().to_owned(),
+                        },
+                        Err(error.into()),
+                    ));
+                }
+                Err(ContainedTaskRunError::NonfatalOperation(error)) => {
+                    return Ok((
+                        TaskSelectionConfirmation::CaptureFailed {
+                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
+                        },
+                        Err(ContainedTaskRunError::NonfatalOperation(error)),
+                    ));
+                }
+                Err(ContainedTaskRunError::Boundary(error))
+                    if R::classify_error(&error) == ContainedTaskRuntimeErrorClass::Fatal =>
+                {
+                    return Ok((
+                        TaskSelectionConfirmation::CaptureFailed {
+                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
+                        },
+                        Err(ContainedTaskRunError::Boundary(error)),
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
         let candidate_set_sha256 = confirmed.candidate_set_sha256().to_owned();
         if candidate_set_sha256 != projection.candidate_set_sha256() {
             return Ok((
                 TaskSelectionConfirmation::Mismatched {
                     candidate_set_sha256: candidate_set_sha256.clone(),
+                    projection: (!confirmed.recognition_evidence().is_empty())
+                        .then(|| Box::new(confirmed.clone())),
                 },
                 Err(ContainedTaskError::with_detail(
                     SELECTION_PROJECTION_MISMATCH,
@@ -671,6 +1017,8 @@ impl PreparedContainedTask {
         Ok((
             TaskSelectionConfirmation::Matched {
                 candidate_set_sha256,
+                projection: (!confirmed.recognition_evidence().is_empty())
+                    .then(|| Box::new(confirmed.clone())),
             },
             selected,
         ))
@@ -756,7 +1104,11 @@ pub fn dry_run_select(
         None => &prepared.policy,
     };
     let candidate_projection = project(&task.evaluator, &scene, &prepared.layout_id)?;
-    let decision = decide(policy, &candidate_projection, facts, now_unix_ms)?;
+    let layout = task
+        .evaluator
+        .candidate_layout(&prepared.layout_id)
+        .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+    let decision = decide(policy, layout, &candidate_projection, facts, now_unix_ms)?;
     Ok(SelectionDryRun {
         candidate_projection,
         decision,

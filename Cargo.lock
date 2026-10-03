@@ -311,6 +311,7 @@ dependencies = [
  "actingcommand-recognition",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -323,6 +324,7 @@ dependencies = [
  "actingcommand-policy",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
+ "actingcommand-selection-policy",
  "serde",
  "serde_json",
  "sha2",

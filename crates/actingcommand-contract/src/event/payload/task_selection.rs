@@ -158,11 +158,23 @@ pub struct TaskSelectionVerdict {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSelectionConfirmation {
     NotAttempted,
-    Matched { candidate_set_sha256: String },
-    Mismatched { candidate_set_sha256: String },
+    Matched {
+        candidate_set_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        projection: Option<Box<CandidateProjection>>,
+    },
+    Mismatched {
+        candidate_set_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        projection: Option<Box<CandidateProjection>>,
+    },
     PageChanged,
-    GuardFailed { code: String },
-    CaptureFailed { code: String },
+    GuardFailed {
+        code: String,
+    },
+    CaptureFailed {
+        code: String,
+    },
 }
 
 /// One select step's decision record.
@@ -260,6 +272,19 @@ impl TaskSelectionRecord {
         self.projection
             .validate_encoded_size()
             .map_err(projection_error)?;
+        if let TaskSelectionConfirmation::Matched {
+            projection: Some(projection),
+            ..
+        }
+        | TaskSelectionConfirmation::Mismatched {
+            projection: Some(projection),
+            ..
+        } = &self.confirmation
+        {
+            projection
+                .validate_encoded_size()
+                .map_err(projection_error)?;
+        }
         let bytes = serde_json::to_vec(self).map_err(|_| invalid("selection"))?;
         if bytes.len() > TASK_SELECTION_RECORD_MAX_BYTES {
             return Err(SanitizationError::new(
@@ -277,10 +302,28 @@ impl TaskSelectionRecord {
             return Err(invalid("confirmation"));
         }
         let evaluated = self.projection.candidate_set_sha256();
+        if let TaskSelectionConfirmation::Matched {
+            candidate_set_sha256,
+            projection: Some(projection),
+        }
+        | TaskSelectionConfirmation::Mismatched {
+            candidate_set_sha256,
+            projection: Some(projection),
+        } = &self.confirmation
+        {
+            projection.validate_decoded().map_err(projection_error)?;
+            if projection.candidate_set_sha256() != candidate_set_sha256
+                || projection.layout_id() != self.layout_id
+                || projection.page_id() != self.page_id
+            {
+                return Err(invalid("confirmation"));
+            }
+        }
         match &self.confirmation {
             TaskSelectionConfirmation::NotAttempted | TaskSelectionConfirmation::PageChanged => {}
             TaskSelectionConfirmation::Matched {
                 candidate_set_sha256,
+                ..
             } => {
                 if candidate_set_sha256 != evaluated {
                     return Err(invalid("confirmation"));
@@ -288,6 +331,7 @@ impl TaskSelectionRecord {
             }
             TaskSelectionConfirmation::Mismatched {
                 candidate_set_sha256,
+                ..
             } => {
                 if !is_candidate_set_sha256(candidate_set_sha256)
                     || candidate_set_sha256 == evaluated

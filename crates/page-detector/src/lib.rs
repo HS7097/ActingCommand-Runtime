@@ -602,7 +602,7 @@ impl PageDetector {
         self.evaluate_page_in_context(&evaluator.scene_context(scene), page)
     }
 
-    fn evaluate_page_in_context(
+    pub fn evaluate_page_in_context(
         &self,
         context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
         page: &PageDefinition,
@@ -1149,6 +1149,7 @@ mod tests {
                 height: 4,
             }),
             defaults: RecognitionDefaults::default(),
+            target_consensus: Default::default(),
             candidate_layouts: Vec::new(),
             targets: vec![
                 RecognitionTarget::Template(TemplateTarget {
@@ -1951,6 +1952,7 @@ mod tests {
                 height: 16,
             }),
             defaults: RecognitionDefaults::default(),
+            target_consensus: Default::default(),
             candidate_layouts: Vec::new(),
             targets: vec![
                 RecognitionTarget::Color(ColorTarget {

@@ -980,6 +980,27 @@ impl OperationParser {
         validate_check_members(&targets, &self.bundles)?;
         propagate_color_checks(&mut targets, &order);
         let candidate_layouts = derive_candidate_layouts(&targets, &self.bundles, &self.game)?;
+        let mut target_consensus = Map::new();
+        for bundle in &self.bundles {
+            if let Some(declarations) = bundle
+                .data
+                .get("target_consensus")
+                .and_then(Value::as_object)
+            {
+                for (id, declaration) in declarations {
+                    if !targets.contains_key(id)
+                        || target_consensus
+                            .get(id)
+                            .is_some_and(|prior| prior != declaration)
+                    {
+                        return Err(CliError::package_invalid(format!(
+                            "target_consensus/{id}: missing target or conflicting declaration"
+                        )));
+                    }
+                    target_consensus.insert(id.clone(), declaration.clone());
+                }
+            }
+        }
         let targets = order
             .iter()
             .filter_map(|id| targets.get(id).cloned())
@@ -999,6 +1020,10 @@ impl OperationParser {
         // The key is written only when a layout is declared, so every other pack is unchanged.
         if !candidate_layouts.is_empty() {
             pack["candidate_layouts"] = Value::Array(candidate_layouts);
+        }
+        if !target_consensus.is_empty() {
+            pack["schema_version"] = Value::String("0.7".into());
+            pack["target_consensus"] = Value::Object(target_consensus);
         }
         validate_generated_ocr_targets(&self.root, &pack, files)?;
         Ok(pack)
@@ -2507,10 +2532,16 @@ fn derive_candidate_layouts(
                 let name = required_string(feature, "name")?;
                 let value = required_string(feature, "value")?;
                 values.insert(name.clone(), value.clone());
-                features.push(ordered_object([
+                let mut generated = ordered_object([
                     ("name", Value::String(name)),
                     ("value", Value::String(value)),
-                ]));
+                ]);
+                for key in ["identity", "consensus", "integer"] {
+                    if let Some(value) = feature.get(key) {
+                        generated[key] = value.clone();
+                    }
+                }
+                features.push(generated);
             }
             let mut slots = Vec::new();
             for (slot_index, slot) in array_field(layout, "slots").iter().enumerate() {
@@ -2558,7 +2589,7 @@ fn derive_candidate_layouts(
                     };
                     return Err(refuse(&field, &detail));
                 }
-                slots.push(ordered_object([
+                let mut generated = ordered_object([
                     (
                         "rect",
                         canonical_ocr_rect(required_field(slot, "rect")?, "candidate slot rect")?,
@@ -2568,15 +2599,42 @@ fn derive_candidate_layouts(
                         canonical_ocr_rect(required_field(slot, "click")?, "candidate slot click")?,
                     ),
                     ("targets", Value::Object(slot_targets)),
-                ]));
+                ]);
+                if let Some(pools) = slot.get("identity_templates") {
+                    for template in pools
+                        .as_object()
+                        .into_iter()
+                        .flat_map(|pools| pools.values())
+                        .flat_map(|pool| pool.as_array().into_iter().flatten())
+                    {
+                        let target = required_string(template, "target_id")?;
+                        if targets
+                            .get(&target)
+                            .and_then(|target| target["type"].as_str())
+                            != Some("template")
+                        {
+                            return Err(refuse(
+                                &format!("slots/{slot_index}/identity_templates"),
+                                &format!("icon target '{target}' is not a declared template"),
+                            ));
+                        }
+                    }
+                    generated["identity_templates"] = pools.clone();
+                }
+                slots.push(generated);
             }
-            let derived = ordered_object([
+            let mut derived = ordered_object([
                 ("id", Value::String(id.clone())),
                 ("page_id", Value::String(page_id)),
                 ("kind", required_field(layout, "kind")?.clone()),
                 ("features", Value::Array(features)),
                 ("slots", Value::Array(slots)),
             ]);
+            for key in ["unknown_identity", "sample_interval_ms"] {
+                if let Some(value) = layout.get(key) {
+                    derived[key] = value.clone();
+                }
+            }
             match layouts
                 .iter()
                 .find(|existing| existing["id"] == derived["id"])

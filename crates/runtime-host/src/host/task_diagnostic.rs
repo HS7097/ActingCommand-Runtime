@@ -97,6 +97,7 @@ fn recognition_error(
         message: error.message().to_owned(),
         region: error.region().cloned().map(Box::new),
         timing: error.timing().copied(),
+        sample: error.sample().cloned().map(Box::new),
     }
 }
 
@@ -491,6 +492,39 @@ impl RuntimeContainedTask<'_> {
         result: Option<&RecognitionPackResult<TargetEvaluation>>,
         reason: &'static str,
     ) -> Result<(), RequestFailure> {
+        let sampled = match result {
+            Some(Ok(value)) => matches!(
+                value.sampling,
+                Some(actingcommand_contract::TaskDiagnosticSamplingData::Sample { .. })
+            ),
+            Some(Err(error)) => error.sample().is_some(),
+            None => false,
+        };
+        if sampled {
+            // Sample rows carry their own immutable frame hash. During serialization their
+            // OCR children and provider artifacts must not claim the latest capture ID.
+            let frame = self.last_frame_id.take();
+            let recognition = self.current_recognition_id.take();
+            let recorded = self.diagnostic_guard_inner(target, result, reason);
+            self.last_frame_id = frame;
+            self.current_recognition_id = recognition;
+            recorded
+        } else {
+            self.diagnostic_guard_inner(target, result, reason)
+        }
+    }
+
+    fn diagnostic_guard_inner(
+        &mut self,
+        target: Option<&str>,
+        result: Option<&RecognitionPackResult<TargetEvaluation>>,
+        reason: &'static str,
+    ) -> Result<(), RequestFailure> {
+        let phase = if reason == "candidate_sample" {
+            "candidate_sample"
+        } else {
+            "guard"
+        };
         let reports = match result {
             Some(Ok(value)) => value.ppocr_diagnostics().to_vec(),
             Some(Err(error)) => error.ppocr_diagnostics().clone(),
@@ -508,20 +542,20 @@ impl RuntimeContainedTask<'_> {
                     crate::error::PpocrFailureSource::Recognition(Box::new(error.clone())),
                 )
             });
-        self.archive_task_ppocr_diagnostics(&reports, "guard", target, primary.clone())?;
+        self.archive_task_ppocr_diagnostics(&reports, phase, target, primary.clone())?;
         let recorded = match result {
             Some(Ok(value)) => self.diagnostic_target(
                 None,
                 value,
                 TaskDiagnosticTargetSource::Guard {
-                    phase: "guard".to_owned(),
+                    phase: phase.to_owned(),
                 },
             ),
             Some(Err(error)) => self
                 .diagnostic(
                     None,
                     Payload::Error(Box::new(TaskDiagnosticErrorData::Recognition {
-                        phase: "guard".to_owned(),
+                        phase: phase.to_owned(),
                         target_id: target.map(str::to_owned),
                         error: recognition_error(error),
                     })),
@@ -531,7 +565,7 @@ impl RuntimeContainedTask<'_> {
                 .diagnostic(
                     None,
                     Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
-                        phase: "guard".to_owned(),
+                        phase: phase.to_owned(),
                         target_id: target.map(str::to_owned),
                         reason: reason.to_owned(),
                     }),
@@ -547,7 +581,7 @@ impl RuntimeContainedTask<'_> {
         target: &TargetEvaluation,
         source: TaskDiagnosticTargetSource,
     ) -> Result<(), RequestFailure> {
-        let index = self.diagnostic(
+        let mut record = self.diagnostic_record(
             parent,
             Payload::Target(Box::new(TaskDiagnosticTargetData {
                 id: target.id.clone(),
@@ -580,8 +614,16 @@ impl RuntimeContainedTask<'_> {
                     region: value.region.map(Into::into),
                 }),
                 source,
+                sampling: target.sampling.clone(),
             })),
-        )?;
+        );
+        if matches!(
+            target.sampling,
+            Some(actingcommand_contract::TaskDiagnosticSamplingData::Sample { .. })
+        ) {
+            record.frame_id = None;
+        }
+        let index = self.write_diagnostic_record(record)?;
         if let Some(ocr) = &target.ocr {
             let ocr_index = self.diagnostic(
                 Some(index),

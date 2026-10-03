@@ -202,10 +202,13 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
 - Candidates are the actionable candidates of the step layout's candidate projection
   ([candidate-projection.md](candidate-projection.md)), identified by their candidate IDs
   `<layout_id>#NN`. Each feature is a field of its name: a `passed` feature is a `boolean`, a
-  `measure_milli` feature an `integer`. The document's `fields` are features of that layout
+  `measure_milli` or `ocr_integer` feature an `integer`, and an `identity` feature an
+  `enum_string` of the declared business-ID domain. The document's `fields` are features of that layout
   with those types, and `applies_to.candidate_layout_id` is the step's layout. A candidate whose
   feature is absent has no such field, and the document's `on_unknown` decides. `confidence` is
   not handed to the evaluator in v1.
+  Identity rejection, explicit attribute fallback and unresolved consensus obey
+  [business-identity-consensus.md](business-identity-consensus.md) before an input is permitted.
 - The fact snapshot is `from_instance_snapshot` of the instance's own ledger-pinned fact
   snapshot, which the host takes for the step; the evaluation instant is the host's clock
   when the snapshot is taken. The evaluator still reads no clock and no ledger.

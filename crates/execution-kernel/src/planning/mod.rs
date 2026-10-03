@@ -567,6 +567,7 @@ mod tests {
                 height: 16,
             }),
             defaults: RecognitionDefaults::default(),
+            target_consensus: Default::default(),
             candidate_layouts: Vec::new(),
             targets: vec![
                 RecognitionTarget::Color(ColorTarget {
