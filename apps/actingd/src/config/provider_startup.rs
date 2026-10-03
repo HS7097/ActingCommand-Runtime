@@ -312,14 +312,37 @@ fn resolve_deferred_instance(
         instance.adb_port,
         instance.adb_path.display()
     );
-    if let Some(declared) = config.adb_path.as_deref()
+    // Workflow #337: an instance whose `adb_path` is absent or names the install root's adb
+    // uses that adb, which `ac_adb::require` verified before the ledger opened; any other
+    // declared `adb_path` must be the discovered MuMu adb.
+    let installed_adb = config.adb.selected().map(|installed| {
+        config
+            .adb_path
+            .clone()
+            .unwrap_or_else(|| installed.path_string())
+    });
+    if installed_adb.is_none()
+        && let Some(declared) = config.adb_path.as_deref()
         && !fs::canonicalize(declared).is_ok_and(|path| path == instance.adb_path)
     {
+        let accepted = match config.adb.installed() {
+            Some(installed) => format!(
+                "the discovered MuMu adb {} or this install root's adb {} (the default when adb_path is omitted)",
+                instance.adb_path.display(),
+                installed.path_string()
+            ),
+            None => format!(
+                "the discovered MuMu adb {} (the default when adb_path is omitted; the daemon does not run from an AC install root, so there is no AC adb)",
+                instance.adb_path.display()
+            ),
+        };
         return Err((
             "instance_discovery_conflict",
             failure(
                 "adb_path_conflict",
-                format!("{facts}; declared adb_path={declared:?}; {discovered}"),
+                format!(
+                    "{facts}; declared adb_path={declared:?}; {discovered}; accepted adb_path: {accepted}"
+                ),
             ),
         ));
     }
@@ -367,15 +390,22 @@ fn resolve_deferred_instance(
         .clone()
         .or_else(|| config.host.as_deref().map(str::trim).map(str::to_owned))
         .unwrap_or_else(default_device_host);
-    let adb_path = instance.adb_path.to_str().ok_or_else(|| {
-        (
-            "instance_discovery_unavailable",
-            failure(
-                "adb_path_encoding_invalid",
-                format!("{facts}; {discovered}"),
-            ),
-        )
-    })?;
+    let adb_path = match installed_adb {
+        Some(path) => path,
+        None => instance
+            .adb_path
+            .to_str()
+            .ok_or_else(|| {
+                (
+                    "instance_discovery_unavailable",
+                    failure(
+                        "adb_path_encoding_invalid",
+                        format!("{facts}; {discovered}"),
+                    ),
+                )
+            })?
+            .to_owned(),
+    };
     let binding = DiscoveredInstanceBinding::new(
         instance.instance_index,
         instance.instance_name.clone(),
@@ -384,7 +414,7 @@ fn resolve_deferred_instance(
     );
     let adb_port = instance.adb_port;
     let registration = config
-        .device_registration(adb_path.to_owned(), adb_host, adb_port)
+        .device_registration(adb_path, adb_host, adb_port)
         .map_err(|code| (code, failure(code, format!("{facts}; {discovered}"))))?;
     let registration = match adb_port {
         Some(_) => registration.with_discovered_binding(binding),

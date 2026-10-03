@@ -16,9 +16,43 @@ pub(super) fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> Cli
             lab_run::run_lab_run(global, args)
         }
         "validate" => lab_run::run_lab_validate(args),
-        "signatures" => crate::signature_cli::run_signatures(args),
-        "debug-package" | "watch" | "unpin" => runtime_debug::run_runtime_debug(sub, args),
-        "export-evidence" | "replay-evidence" => runtime_debug::run_runtime_debug(sub, args),
+        "signatures" => {
+            let form = args.first().map_or_else(
+                || "lab signatures".to_string(),
+                |operation| format!("lab signatures {operation}"),
+            );
+            crate::dry_run_gate::refuse(
+                global,
+                &form,
+                Some(
+                    "actingledger --state-root <historical-root> signatures --through <sequence> --catalog-state-root <registered-ledger-root> --catalog-through <sequence>",
+                ),
+                Value::Null,
+            )?;
+            crate::signature_cli::run_signatures(args)
+        }
+        "debug-package" | "watch" | "unpin" => {
+            if sub != "watch" {
+                let alternative = if sub == "unpin" {
+                    "lab watch"
+                } else {
+                    "lab validate"
+                };
+                crate::dry_run_gate::refuse(
+                    global,
+                    &format!("lab {sub}"),
+                    Some(alternative),
+                    Value::Null,
+                )?;
+            }
+            runtime_debug::run_runtime_debug(sub, args)
+        }
+        "export-evidence" | "replay-evidence" => {
+            if sub == "export-evidence" {
+                crate::dry_run_gate::refuse(global, "lab export-evidence", None, Value::Null)?;
+            }
+            runtime_debug::run_runtime_debug(sub, args)
+        }
         "start" => {
             require_runtime(global)?;
             let flags = FlagArgs::parse(args)?;
@@ -85,6 +119,12 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
                     "package run requires --instance or --game/--server selector",
                 ));
             }
+            crate::dry_run_gate::refuse(
+                global,
+                "package run",
+                Some("package dry-run"),
+                Value::Null,
+            )?;
             let result_zip = out
                 .map(|out| create_package_blocked_result_zip(&out, &validation))
                 .transpose()?;
@@ -117,7 +157,15 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
         "build-task" => package_build::run_build_task(global, &flags),
         "build-pack" => package_build::run_build_pack(global, &flags),
         "digest" => package_build::run_digest(&flags),
-        "bundle" => package_build::run_bundle(&flags),
+        "bundle" => {
+            crate::dry_run_gate::refuse(
+                global,
+                "package bundle",
+                Some("package digest"),
+                Value::Null,
+            )?;
+            package_build::run_bundle(&flags)
+        }
         _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
     }
 }

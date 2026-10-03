@@ -404,6 +404,8 @@ impl HostShared {
         // deferred exactly as admission would refuse it.
         let scheduling_pause =
             lock(&self.scheduling_pause, "read_policy_scheduling_pause")?.clone();
+        // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration.
+        let suspension_lift = self.suspension_lift_view(&procedure_manifest);
         let (mut cycle, eligibility_unknown_pairs) = {
             let mut policy = lock(&self.policy, "evaluate_policy_cycle")?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
@@ -417,6 +419,7 @@ impl HostShared {
                     trigger,
                     sampled_at_monotonic_ms: observed_monotonic_ms,
                     scheduling_pause: &|instance_alias| scheduling_pause.deferral(instance_alias),
+                    suspension_lift: &suspension_lift,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -924,26 +927,29 @@ impl HostShared {
                     "admit_policy_dispatch",
                 ));
             }
-            let elapsed_ms = self
-                .monotonic_ms()?
-                .checked_sub(trusted.observed_monotonic_ms)
-                .ok_or_else(|| {
-                    policy_admission_fatal(
-                        "policy_admission_clock_regressed",
-                        "admit_policy_dispatch",
-                    )
-                })?;
-            let now_unix_ms = trusted
-                .intent
-                .prerequisites
-                .evaluated_at_unix_ms
-                .checked_add(elapsed_ms)
-                .ok_or_else(|| {
-                    policy_admission_fatal(
-                        "policy_admission_clock_overflow",
-                        "admit_policy_dispatch",
-                    )
-                })?;
+            let admission_time = || {
+                let elapsed_ms = self
+                    .monotonic_ms()?
+                    .checked_sub(trusted.observed_monotonic_ms)
+                    .ok_or_else(|| {
+                        policy_admission_fatal(
+                            "policy_admission_clock_regressed",
+                            "admit_policy_dispatch",
+                        )
+                    })?;
+                trusted
+                    .intent
+                    .prerequisites
+                    .evaluated_at_unix_ms
+                    .checked_add(elapsed_ms)
+                    .ok_or_else(|| {
+                        policy_admission_fatal(
+                            "policy_admission_clock_overflow",
+                            "admit_policy_dispatch",
+                        )
+                    })
+            };
+            let now_unix_ms = admission_time()?;
             // Approval projection and dispatch admission share one order so a concurrent revocation
             // cannot appear in the ledger before a dispatch authorized by the superseded fact.
             let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
@@ -1141,15 +1147,17 @@ impl HostShared {
                     "admit_policy_dispatch",
                 ));
             }
-            lock(&self.procedure_manifest, "validate_procedure_manifest")?
-                .as_ref()
+            let procedure_manifest = lock(&self.procedure_manifest, "validate_procedure_manifest")?
+                .clone()
                 .ok_or_else(|| {
                     policy_admission_request(
                         "procedure_manifest_unconfigured",
                         "admit_policy_dispatch",
                     )
-                })?
-                .validate_intent(intent, "admit_policy_dispatch")?;
+                })?;
+            procedure_manifest.validate_intent(intent, "admit_policy_dispatch")?;
+            // Workflow #336 L6 (§12.7): the evaluation's lift rule, under the admission lock.
+            let suspension_lift = self.suspension_lift_view(&procedure_manifest);
             let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
             let success_links = links.clone();
             let failure_links = links;
@@ -1193,6 +1201,22 @@ impl HostShared {
                             effect: EffectDisposition::NotPerformed,
                         };
                     }
+                    // Lock acquisition and durable intent append may cross a retry boundary.
+                    // Final eligibility and the receipt use one fresh, trusted monotonic time.
+                    let now_unix_ms = match admission_time() {
+                        Ok(now) => now,
+                        Err(error) => {
+                            return CriticalActionReport::Failed {
+                                error: RequestFailure::poison_without_terminal(error),
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
+                    let final_context = PolicyAdmissionContext {
+                        now_unix_ms,
+                        ..context.clone()
+                    };
+                    let context = &final_context;
                     let catalog = match policy.validate_dispatch(
                         intent,
                         reason_chain,
@@ -1213,9 +1237,11 @@ impl HostShared {
                             };
                         }
                     };
-                    let admission_record = match policy
-                        .preview_admission(intent, context.now_unix_ms)
-                    {
+                    let admission_record = match policy.preview_admission(
+                        intent,
+                        context.now_unix_ms,
+                        &suspension_lift,
+                    ) {
                         Ok(record) => record,
                         Err(error) => {
                             let failure = if error.is_fatal() {
@@ -1280,7 +1306,7 @@ impl HostShared {
                                 #[cfg(test)]
                                 policy_crash_test_barrier("after_lease_grant");
                                 if let Err(error) =
-                                    policy.commit_admission(intent, &admission_record)
+                                    policy.commit_admission(intent, &admission_record, reason_chain)
                                 {
                                     return CriticalActionReport::Failed {
                                         error: RequestFailure::poison_without_terminal(error),

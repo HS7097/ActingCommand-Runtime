@@ -56,9 +56,10 @@ An operation carries exactly one effect: the existing `click` object, or
   `ApplicationLifecycle` path (`control_application`: adb `force-stop` for `stop`, `monkey`
   launch for `launch`, both for `restart`) under the run's lease, with the task and run ids on
   every event. The step records no `task.effect_intent` (there is no input to sample); its
-  chain is `task.step_started` -> `application.intent` -> `application.completed` /
-  `application.failed` -> `task.effect_completed`, then the ordinary post-step observation
-  and `task.step_finished`. No guard is evaluated and no foreground gate runs for this step:
+  chain is `task.step_started` -> `application.intent` -> `application.completed` ->
+  `task.effect_completed`, then the ordinary post-step observation and `task.step_finished`.
+  An `application.failed` ends the step and the task with no `task.effect_completed`. No
+  guard is evaluated and no foreground gate runs for this step:
   the effect is what brings the assigned application to the foreground.
 - A task-owned application failure keeps its original TaskFailureEvidence and lease until
   the Task owner closes its resources, commits the real terminal fact and releases the
@@ -96,6 +97,19 @@ then requires the declared target recognition through its existing postcondition
 Known pages and already recognized terminal pages keep their original selection/termination
 rules. Coordinate inputs still require a recognized page. No desktop recognition template
 is required solely to start the assigned application.
+
+In `linear_steps` packages ([Linear steps](linear-steps.md), Workflow #336 R24/R25) any
+operation may carry this effect instead of a click. Only the first may be `from: "any"`, with
+`entry_page` `"any"`, and that application entry captures and recognizes nothing before its
+effect. The step records `task.step_started`, `application.intent`, then
+`application.completed` followed by `task.effect_completed`; an `application.failed` ends the
+step and the task with no `task.effect_completed` (no guard, no foreground gate, no
+`task.effect_intent`). Its arrival is the next step's recognition, and it is never retried.
+The capability check above runs for linear packages too, before any capture. A `stop` may be
+followed only by a `launch` or `restart`, and the main interface must follow the last
+`launch` or `restart` of the package: a page whose canonical anchor is `home`, or
+`step_<digits>_home` exactly (the page Lab records for `--page home`). Only `linear_steps`
+packages accept the second form; page-graph packages keep the literal `home`.
 
 ## The foreground gate
 
@@ -209,7 +223,7 @@ runtime.lifecycle_observed                      startup_package_scheduled, causa
 --- scheduling thread, every event below carries causation C ---
 command.received / command.validated            runtime.task_run (scheduler / runtime)
 lease.requested / lease.granted
-task.requested / task.started ... task.effect_intent
+task.requested / task.started ... task.step_started
 application.intent / application.completed      application.restart
 task.effect_completed ... task.step_finished
 runtime.fact_recorded                           application.foreground = <assigned package>

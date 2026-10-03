@@ -3,10 +3,21 @@
 `capabilities`, help and `list commands` use the existing command inventory.
 Lab2 verb/schema summaries consume the same command declarations. These queries
 do not connect to Runtime, start a provider, inspect a device, load a model or
-fetch backend assets.
+fetch backend assets. The Lab recording entries (`record mark`, `capture --record`,
+`session capture --record`, `observe --capture --record`, `do --capture --record`,
+`session app --record` and `session instance app --record`, Workflow #336) are
+declared like any other command; their behaviour is `lab-recording.md`.
+Both `record mark` aliases and the L4 `record stop` aliases declare a `dry_run` preview;
+`resource catalog` and `package preflight` declare `no_effect`. Their metadata is shared by
+capabilities, help and command listing.
+The six device `--record` forms declare `refused`. Capture and its session alias use
+`dry_run_unsupported`; observe/do with `--capture --record` and both session application
+recording forms use `record_flag_unsupported`, before recording locks or Runtime access.
 
-Each command has `status`, `available`, `reason_code`, `needs` and
-`availability_scope: offline_declaration`. `available` is true only for the
+Each command has `status`, `available`, `reason_code`, `needs`,
+`availability_scope: offline_declaration` and `dry_run_mode`, with
+`dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires
+(`actinglab-dry-run.md`). `available` is true only for the
 `available` status. Status values are:
 
 - `available`: an implemented offline handler has a normal path with its caller
@@ -39,7 +50,9 @@ CLI envelope, legacy task, task operation, recognition pack, control and package
 reference. No common highest version is defined. Each resource still passes
 its existing version-specific validation; schema support does not prove an
 installed resource or provider is usable. Package references include the
-accepted typed content-directory version and the legacy ZIP digest form; the
+accepted typed content-directory version, with the `containers` its locator may be
+(`["directory", "zip", "json"]`, Workflow #336, `package-reference.md` "Containers"), and
+the legacy ZIP digest form; the
 retired Git source-tree form is not listed (its records still decode). The recognition pack domain lists `0.1` and `0.3` through
 `0.7`; a pack is written at `0.7` only when it declares a `color_digest` or
 `composite` target or a per-target color `max_distance` (`selection-graph.md`).

@@ -195,10 +195,10 @@ impl LabControl {
         }
         if !matches!(
             self.execution_mode.as_str(),
-            "navigable_route" | "recognize_only" | "in_page_guard"
+            "navigable_route" | "recognize_only" | "in_page_guard" | "linear_steps"
         ) {
             return Err(CliError::package_invalid(format!(
-                "unsupported execution_mode '{}', expected navigable_route, recognize_only, or in_page_guard",
+                "unsupported execution_mode '{}', expected navigable_route, recognize_only, in_page_guard, or linear_steps",
                 self.execution_mode
             )));
         }

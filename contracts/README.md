@@ -27,12 +27,16 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `selection-graph.md` — the #308 selection graph; section Checks: named composite checks (recognition pack `0.7` `composite` targets), their evaluation and where they may be used; section Candidate layouts: recognition pack `0.7` `candidate_layouts`, their rules and feature values; section Records: the `task.selection_evaluated` ledger record and its evaluator mirror.
 - `resource-targets.md` — the instance resource target policy: the frozen v1 and the valuation-aware v2 documents, their rejection reasons, the `ApplyResourceTargets` entry and receipts, and their storage as the instance fact `session.resource_targets` (the evaluation is specified in `resource-targets.md`, section "Evaluation", with "Resource weights (v2)").
 - `server-keys.md` — persisted server variant key policy.
+- `actinglab-dry-run.md` — the global actinglab `--dry-run`: each command's declared mode (preview, refused, no_effect, mixed), the `dry_run_unsupported` refusal, the preview shapes and the registered bootstrap and transient writes.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
 - `actingd-unlock-owner.md` — offline `actingd unlock-owner`: the operator's confirmation appended as the retained owner epoch's close evidence, the `owner.unlock` fact and its result schema.
 - `owner-journal.md` — the `owner.lock` owner journal: records, the reader's derived state, the in-epoch checkpoint fold, its side-file crash recovery and error codes.
 - `emulator-control.md` — explicit emulator instance start/stop/restart: origin gate, per-instance fence, close-before-stop, tool timeouts and wait criteria, event shape, the `device.connected` program fact and `actingctl emulator`.
 - `scheduling-pause.md` — operator scheduling pause / resume: origin gate, the dispatch gate and its `Deferred` presentation, the instance drain with `contained_task_paused`, status fields, no persistence or expiry, and `actingctl pause` / `resume`.
+- `linear-steps.md` — the `linear_steps` execution mode: its control declaration and the operation `transition` and `optional` fields, admission rules, step-by-step execution with intermediate states, optional steps with their settle and retries for a swallowed input, failure codes and the mapping onto existing ledger records.
+- `policy-suspension.md` — the failure identity a scheduled `linear_steps` task's settlement records as its `error_code`, which failures accumulate toward a pause, the immediate rerun, lifting a pause by a package update, and the read-only `actingd suspended` report.
+- `lab-recording.md` — the Lab recording (`actinglab record start` / `mark` / `status` / `stop` and `--record` on the device commands): marks and their self-test, steps, intermediate states, application and optional steps, the recording lock, and the `linear_steps` package `record stop` generates, checks and writes as a content container (`package-reference.md`, "Containers") with its binding snippets.
 - `application-lifecycle.md` — the `application` effect of task packages (launch / restart / stop of the instance's assigned application), the foreground gate before every pointer input with the `application.foreground` program fact, and the startup package the host schedules after emulator `start` / `restart`.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
 
@@ -208,6 +212,20 @@ the actual effect and does not restart a phase or submit another task. Ordinary
 declarations without phases retain their page-driven semantics. Consumers that
 cannot interpret 0.9/control.v2 reject them explicitly; Lab deep validation uses
 Runtime admission for this contract.
+
+A `Lab-1y.control.v2` control may instead declare `execution_mode` `linear_steps`
+([Linear steps](linear-steps.md)): the task's operations form one chain from its
+entry page to its target page, run step by step without phases, without page-graph
+operation selection and without global page recognition. Each wait evaluates only
+the page it waits for; an operation may declare a `transition` (a recognizable
+intermediate page or a time window), and an operation after the first may be
+`optional` (Workflow #339): its page may not appear, and the run then skips it, with
+a settle that watches the next page for a late one. The run writes only existing
+ledger records; builds without the mode refuse such packages before
+`PackageAdmitted`, and builds without optional steps refuse an `optional` field.
+A Lab recording generates such packages ([Lab recording](lab-recording.md)); a
+scheduled linear task's failure is rerun at once, the same problem again pauses it,
+and a package update lifts the pause ([Policy suspension](policy-suspension.md)).
 
 The Rust mainline contract crate lives in:
 

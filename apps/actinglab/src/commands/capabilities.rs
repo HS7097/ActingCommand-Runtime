@@ -396,6 +396,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session record start", ["offline"], "available"),
         command_cap("session record status", ["offline"], "available"),
         command_cap("session record stop", ["offline"], "available"),
+        command_cap("session record mark", ["offline"], "available"),
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
@@ -405,11 +406,26 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record start", ["offline"], "available"),
         command_cap("record status", ["offline"], "available"),
         command_cap("record stop", ["offline"], "available"),
+        command_cap("record mark", ["offline"], "available"),
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
         command_cap("record build-task", ["offline"], "available"),
         command_cap("record promote", ["offline"], "available"),
+        command_cap("capture --record", ["device"], "available"),
+        command_cap("session capture --record", ["device"], "available"),
+        command_cap("session app --record", ["device"], "available"),
+        command_cap("session instance app --record", ["device"], "available"),
+        command_cap(
+            "observe --capture --record",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
+            "do --capture --record",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
@@ -483,14 +499,16 @@ where
         "available" => ("available", "offline_handler_ready"),
         _ => ("unverified", "availability_evidence_missing"),
     };
-    json!({
+    let mut capability = json!({
         "command": command,
         "needs": needs,
         "status": status,
         "available": status == "available",
         "reason_code": reason_code,
         "availability_scope": "offline_declaration"
-    })
+    });
+    crate::dry_run_gate::annotate_capability(&mut capability);
+    capability
 }
 
 pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
@@ -583,11 +601,11 @@ pub(crate) fn session_layer_capability_contract() -> Value {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
                 "recovery_policy_defers_without_matching_lease": true,
-                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "session record build-task", "session record promote"]
+                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "session record build-task", "session record promote", "record mark --frame <png>", "record mark --request <file>", "record mark --step <k> --optional [--settle-ms <ms>]", "record mark --step <k> --not-optional", "capture --record", "observe --capture --record"]
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"]
             }
         },
         "safety": {
@@ -617,7 +635,10 @@ pub(crate) fn schema_capabilities() -> Value {
         "control": {"supported": ["Lab-1y.control.v1", actingcommand_contract::PHASED_CONTROL_SCHEMA]},
         "package_reference": {
             "legacy_zip": {"kind": "sha256"},
-            "content_directory": {"schema_version": actingcommand_contract::ContentDirectoryVersion::V1}
+            "content_directory": {
+                "schema_version": actingcommand_contract::ContentDirectoryVersion::V1,
+                "containers": ["directory", "zip", "json"]
+            }
         }
     })
 }

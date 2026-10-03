@@ -29,6 +29,8 @@ mod ports;
 mod projection;
 mod readonly;
 mod readonly_api;
+mod recording;
+mod recording_api;
 mod resource_convert;
 mod scheduling;
 mod state;
@@ -50,6 +52,8 @@ pub use package_build::PackageBuildCatalog;
 pub use ports::*;
 pub use projection::*;
 pub use readonly_api::*;
+pub use recording::*;
+pub use recording_api::*;
 pub use scheduling::*;
 pub use state::*;
 

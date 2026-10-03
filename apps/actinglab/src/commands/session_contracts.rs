@@ -313,6 +313,73 @@ fn session_record_policy_payload(
             "record_policy_query": "session record-policy",
             "daemon_record_policy_query": "session request record-policy"
         },
+        "record_flag": {
+            "commands": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"],
+            "dry_run_refused": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app --record", "session instance app --record"],
+            "unflagged_commands_recorded": false,
+            "unsupported_with_flag": "record_flag_unsupported",
+            "flag_with_value": "record_flag_takes_no_value",
+            "state_dir": "env_or_default_only",
+            "state_dir_flag": "record_state_dir_unsupported",
+            "tap_rect_requires_record": true,
+            "instance_mismatch": "record_instance_mismatch",
+            "do_point": "rect_center unless --tap x,y inside the rectangle",
+            "application_may_have_run_codes": ["record_application_indeterminate", "record_append_failed_after_input"]
+        },
+        "lab_recording": {
+            "schema_version": "actingcommand.lab-recording.v1",
+            "path": "<state>/record-artifacts/<record_id>/lab/recording.json",
+            "mark_command": "record mark",
+            "mark_request_schema": "actingcommand.lab-record-mark.v1",
+            "families": ["template", "color", "color_digest", "ocr", "check"],
+            "self_test_statuses": ["passed", "failed", "not_evaluated"],
+            "ocr_self_test": "not_evaluated",
+            "step_operations": ["--drop-step", "--reopen-step", "--close-step", "--to-transition"],
+            "transitions": ["none", "page", "window"],
+            "application_steps": {
+                "device_command": "session app <launch|restart|stop|force-stop> --record",
+                "mark_flag": "--application <launch|restart|stop|force-stop>",
+                "actions": ["launch", "restart", "stop"],
+                "force_stop_recorded_as": "stop",
+                "one_effect_per_step": true,
+                "entry_step": "first step only, no frame",
+                "frames_stored": false,
+                "recorded": "application_recorded",
+                "indeterminate": "record_application_indeterminate"
+            },
+            "optional_steps": {
+                "mark_flags": ["--optional", "--settle-ms <0..60000>", "--not-optional"],
+                "request_fields": ["optional", "optional_settle_ms"],
+                "default_settle_ms": 2000,
+                "batched_with": ["marks", "click"],
+                "not_batched_with": ["--transition", "--drop-step", "--reopen-step", "--close-step", "--to-transition"],
+                "refusals": ["record_optional_settle_invalid", "record_optional_first_step", "record_optional_application"],
+                "to_transition_refusal_reason": "optional",
+                "offline_insertion": "record mark --frame <png> ... --click ... --optional, then record mark --close-step, then capture --record"
+            },
+            "stop": {
+                "command": "record stop [--lab-dir <dir>] [--package-id <id>] [--requires <package_id>] [--game <game>] [--server <server>] [--locale <locale>] [--timeout-ms <ms>] [--arrival-timeout-ms <ms>] [--application-arrival-timeout-ms <ms>] [--dry-run] [--state-dir <dir>]",
+                "execution_mode": "linear_steps",
+                "containers": ["zip", "json"],
+                "file_name": "<content-directory digest>.<zip|json>",
+                "dry_run": "every check runs, nothing is written, status validated",
+                "statuses": ["generated", "validated", "already_generated"],
+                "warnings": ["arrival_unconfirmed", "first_decision_not_evaluated", "task_timeout_clamped", "step_timeout_clamped", "requires_prefix_mismatch", "entry_overlay_insensitive", "application_stop_target_external", "optional_ambiguity_not_evaluated"],
+                "optional_steps": {
+                    "operation_field": "optional: {settle_ms}",
+                    "output": "lab.optional_steps[{step, op, settle_ms, skip_to, same_as}]",
+                    "default_timeout_adds": "the largest settle_ms of each run of optional steps",
+                    "refusals": ["record_optional_first_step", "record_optional_final_step", "record_optional_application", "record_optional_restart_segment_end", "record_optional_step_ambiguous", "record_optional_skip_target_insensitive"]
+                }
+            },
+            "recording_lock": {
+                "file": "<state>/record-<instance>.lock",
+                "busy": "record_busy",
+                "failure": "record_lock_failed",
+                "unlocked_actions": ["status", "candidates"]
+            },
+            "ledger_writes": false
+        },
         "live_validation": {
             "status": "deferred",
             "deferred_code": "requires-live-device",

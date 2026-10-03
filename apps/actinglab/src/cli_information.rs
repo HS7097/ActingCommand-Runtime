@@ -27,7 +27,7 @@ pub(super) fn help_data() -> Value {
             "--backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
             "--touch-backend <auto|auto-fastest|maatouch|minitouch|adb_shell_input>",
             "--require-session",
-            "--dry-run",
+            "--dry-run (global; read at any argv position; commands[].dry_run_mode states each command's behaviour)",
             "--verbose",
             "--quiet",
             "--version"
@@ -56,7 +56,7 @@ pub(super) fn help_data() -> Value {
             "resource compile-maa": [
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
-            "package digest": ["--package <directory>"],
+            "package digest": ["--package <directory | .zip | .json container>"],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>"
@@ -93,7 +93,7 @@ pub(super) fn run_paths(global: &GlobalOptions) -> CliOutcome<Value> {
     }))
 }
 
-pub(super) fn run_config(sub: &str, args: &[String]) -> CliOutcome<Value> {
+pub(super) fn run_config(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "get" => {
             let config = read_user_config()?;
@@ -114,6 +114,17 @@ pub(super) fn run_config(sub: &str, args: &[String]) -> CliOutcome<Value> {
             }
             let mut config = read_user_config()?;
             config_set(&mut config, &args[0], &args[1])?;
+            if global.dry_run {
+                return Ok(json!({
+                    "config_path": config_path()?.display().to_string(),
+                    "key": args[0],
+                    "value": args[1],
+                    "status": "validated",
+                    "dry_run": true,
+                    "persisted": false,
+                    "next": "re-run without --dry-run to write config.json"
+                }));
+            }
             write_user_config(&config)?;
             Ok(json!({
                 "config_path": config_path()?.display().to_string(),
@@ -205,7 +216,7 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "schema_version": "Lab-1y.control.v1",
             "domain": "control",
             "supported_schema_versions": crate::commands::capabilities::schema_capabilities()["control"]["supported"],
-            "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
+            "execution_modes": ["navigable_route", "recognize_only", "in_page_guard", "linear_steps"],
             "capture_backend": ["auto", "auto-fastest", "adb", "droidcast_raw", "nemu_ipc"],
             "touch_backend": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
             "frame_store": {

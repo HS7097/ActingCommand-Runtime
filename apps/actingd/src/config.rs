@@ -4,16 +4,18 @@ use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
 use actingcommand_contract::{
-    ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion, InstanceId,
-    InstanceResourcePackage, InstanceResourcePackageKind, PackageRef, RuntimeConfigManifest,
-    digest_named,
+    ContainedTaskRecoveryBinding, ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion,
+    InstanceId, InstanceResourcePackage, InstanceResourcePackageKind, PackageRef,
+    RuntimeConfigManifest, digest_named,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
     EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig,
 };
-use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
+use actingcommand_execution_kernel::{
+    ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
+};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
@@ -38,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub(super) mod ac_adb;
 mod manifest;
 mod provider_startup;
 
@@ -112,9 +115,118 @@ pub(super) struct ActingdConfigFile {
     /// ignored and named as `env_override_ignored:<VAR>`, never silently used.
     #[serde(default)]
     allow_env_overrides: Option<bool>,
+    /// Workflow #336 L2b: the packages a `linear_steps` package may name as its
+    /// `prerequisite_package_id`, each with its locator and content reference. Not a
+    /// configuration fact; read at startup.
+    #[serde(default)]
+    prerequisite_packages: Option<Vec<PrerequisitePackageConfigFile>>,
+    /// Workflow #336 L2c: per (game, server), the `prerequisite_packages` id of the return-home
+    /// package a `linear_steps` package without a declared prerequisite package falls back to.
+    /// Not a configuration fact; read at startup.
+    #[serde(default)]
+    return_home_packages: Option<Vec<ReturnHomePackageConfigFile>>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
+}
+
+/// One `prerequisite_packages` entry (Workflow #336 L2b): the package id a `linear_steps`
+/// package names, the package locator (a relative path resolves against the configuration
+/// file's directory) and its content reference, in the form of a procedure binding's
+/// `package_digest`. Nothing is opened or hashed at assembly; a run admits the package against
+/// the reference when it resolves its prerequisite chain.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrerequisitePackageConfigFile {
+    package_id: String,
+    package_path: PathBuf,
+    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
+    package_digest: PackageRef,
+}
+
+/// The prerequisite package map by package id: at most `MAX_TASKS` entries
+/// (`prerequisite_packages_size_invalid`), each id valid (`prerequisite_package_id_invalid`)
+/// and unique (`prerequisite_package_duplicate`), each locator checked as a procedure
+/// binding's `package_path` is, under the `prerequisite_package_*` codes.
+fn assemble_prerequisite_packages(
+    configured: Vec<PrerequisitePackageConfigFile>,
+    source_root: &Path,
+) -> Result<BTreeMap<String, ContainedTaskRecoveryBinding>, &'static str> {
+    if configured.len() > MAX_TASKS {
+        return Err("prerequisite_packages_size_invalid");
+    }
+    let mut packages = BTreeMap::new();
+    for entry in configured {
+        if !prerequisite_package_id_valid(&entry.package_id) {
+            return Err("prerequisite_package_id_invalid");
+        }
+        let request =
+            contained_task_request(source_root, &entry.package_digest, Some(entry.package_path))
+                .map_err(|code| match code {
+                    "procedure_package_unavailable" => "prerequisite_package_unavailable",
+                    "procedure_package_not_regular" => "prerequisite_package_not_regular",
+                    "procedure_package_container_unsupported" => {
+                        "prerequisite_package_container_unsupported"
+                    }
+                    "procedure_package_digest_invalid" => "prerequisite_package_digest_invalid",
+                    "procedure_task_request_invalid" | "procedure_package_path_missing" => {
+                        "prerequisite_package_request_invalid"
+                    }
+                    other => other,
+                })?;
+        let binding = ContainedTaskRecoveryBinding::new(
+            request.package_path(),
+            request.expected_sha256().clone(),
+        )
+        .map_err(|_| "prerequisite_package_request_invalid")?;
+        if packages.insert(entry.package_id, binding).is_some() {
+            return Err("prerequisite_package_duplicate");
+        }
+    }
+    Ok(packages)
+}
+
+/// One `return_home_packages` entry (Workflow #336 L2c): a game and server and the package id
+/// of their return-home package, a key of `prerequisite_packages`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReturnHomePackageConfigFile {
+    game: String,
+    server: String,
+    package_id: String,
+}
+
+/// The return-home package ids by (game, server): at most `MAX_TASKS` entries
+/// (`return_home_packages_size_invalid`); game and server not empty, at most 64 bytes, with no
+/// control character (`return_home_package_key_invalid`); each package id a key of
+/// `prerequisite_packages` (`return_home_package_unbound`); one entry per (game, server)
+/// (`return_home_package_duplicate`).
+fn assemble_return_home_packages(
+    configured: Vec<ReturnHomePackageConfigFile>,
+    prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
+) -> Result<BTreeMap<(String, String), String>, &'static str> {
+    if configured.len() > MAX_TASKS {
+        return Err("return_home_packages_size_invalid");
+    }
+    let key_valid = |value: &str| {
+        !value.trim().is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
+    };
+    let mut packages = BTreeMap::new();
+    for entry in configured {
+        if !key_valid(entry.game.as_str()) || !key_valid(entry.server.as_str()) {
+            return Err("return_home_package_key_invalid");
+        }
+        if !prerequisite_packages.contains_key(&entry.package_id) {
+            return Err("return_home_package_unbound");
+        }
+        if packages
+            .insert((entry.game, entry.server), entry.package_id)
+            .is_some()
+        {
+            return Err("return_home_package_duplicate");
+        }
+    }
+    Ok(packages)
 }
 
 /// `PerformanceMonitorConfig` pressure streaks (`1..=30`, default 3 each).
@@ -313,6 +425,10 @@ struct InstanceConfig {
     /// `assemble` like `device_paths`.
     #[serde(skip)]
     env_overrides: EnvOverrides,
+    /// Workflow #337: the install root's adb and whether this instance uses it (`adb_path`
+    /// absent or naming that file), resolved once by `assemble` like `device_paths`.
+    #[serde(skip)]
+    adb: ac_adb::InstanceAdb,
 }
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
@@ -382,6 +498,9 @@ pub(super) struct RuntimeAssembly {
     /// The `ACTINGCOMMAND_*` variables that are set but ignored because
     /// `allow_env_overrides` is off, in `EnvOverrides::VARIABLES` order.
     pub(super) ignored_env_overrides: Vec<&'static str>,
+    /// Workflow #337: the install root's adb and the instances that use it, checked by
+    /// `ac_adb::require` before any side effect. Internal; never a configuration field.
+    pub(super) adb_requirement: ac_adb::AdbRequirement,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -679,6 +798,9 @@ impl ActingdConfigFile {
             env_overrides(self.allow_env_overrides.unwrap_or(false), |name| {
                 std::env::var_os(name)
             });
+        // Workflow #337: resolved once; every device instance carries the result.
+        let installed_adb = ac_adb::InstalledAdb::detect();
+        let mut adb_requirement = ac_adb::AdbRequirement::new(installed_adb.clone());
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
@@ -687,6 +809,15 @@ impl ActingdConfigFile {
         for instance in &mut instances {
             instance.device_paths = device_paths.clone();
             instance.env_overrides = env_overrides.clone();
+            if instance.fixture_backend.is_none() {
+                instance.adb = ac_adb::InstanceAdb::resolve(
+                    installed_adb.as_ref(),
+                    instance.adb_path.as_deref(),
+                );
+                if instance.adb.selected().is_some() {
+                    adb_requirement.add_user(&instance.alias);
+                }
+            }
             let settings = actingcommand_contract::InstanceStuckRecovery {
                 enabled: instance.stuck_recovery.unwrap_or(true),
                 cooldown_secs: instance.stuck_recovery_cooldown_secs.unwrap_or(
@@ -739,6 +870,16 @@ impl ActingdConfigFile {
             .policy
             .map(|policy| policy.assemble(&self.source_root))
             .transpose()?;
+        let prerequisite_packages = self
+            .prerequisite_packages
+            .map(|configured| assemble_prerequisite_packages(configured, &self.source_root))
+            .transpose()?
+            .unwrap_or_default();
+        let return_home_packages = self
+            .return_home_packages
+            .map(|configured| assemble_return_home_packages(configured, &prerequisite_packages))
+            .transpose()?
+            .unwrap_or_default();
         if let Some(policy) = policy.as_ref() {
             policy.validate_registry_modes(&provider)?;
         }
@@ -767,7 +908,9 @@ impl ActingdConfigFile {
         let instances_startup_package_count = startup_packages.len();
         host = host
             .with_startup_packages(startup_packages)
-            .with_stuck_recovery(stuck_recovery);
+            .with_stuck_recovery(stuck_recovery)
+            .with_prerequisite_packages(prerequisite_packages)
+            .with_return_home_packages(return_home_packages);
         // Every effective value is read back from `host`; the file only says what it named.
         let manifest = manifest::build(&manifest::ManifestInputs {
             host: &host,
@@ -819,6 +962,7 @@ impl ActingdConfigFile {
             manifest,
             resource_packages,
             ignored_env_overrides,
+            adb_requirement,
         })
     }
 }
@@ -1045,12 +1189,31 @@ fn contained_task_request(
             .join(path),
     };
     let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
-    if match package_digest {
-        actingcommand_contract::PackageRef::LegacyZipSha256(_) => !metadata.is_file(),
-        actingcommand_contract::PackageRef::GitSourceTree(_)
-        | actingcommand_contract::PackageRef::ContentDirectory(_) => !metadata.is_dir(),
-    } {
-        return Err("procedure_package_not_regular");
+    // Workflow #336: a content-directory package is a directory or a content container file
+    // (`.zip` or `.json`, ASCII case-insensitive); containment reads and checks either.
+    let container = || {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("zip") || extension.eq_ignore_ascii_case("json")
+            })
+    };
+    let refusal = match package_digest {
+        actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
+            (!metadata.is_file()).then_some("procedure_package_not_regular")
+        }
+        actingcommand_contract::PackageRef::GitSourceTree(_) => {
+            (!metadata.is_dir()).then_some("procedure_package_not_regular")
+        }
+        actingcommand_contract::PackageRef::ContentDirectory(_) if metadata.is_file() => {
+            (!container()).then_some("procedure_package_container_unsupported")
+        }
+        actingcommand_contract::PackageRef::ContentDirectory(_) => {
+            (!metadata.is_dir()).then_some("procedure_package_not_regular")
+        }
+    };
+    if let Some(code) = refusal {
+        return Err(code);
     }
     package_digest
         .validate()
@@ -1126,7 +1289,8 @@ impl InstanceConfig {
 
     /// Validates everything that does not need discovery; the ADB target is completed later.
     /// Declared `adb_path`/`host`/`port` stay declared values to be cross-checked; no default
-    /// host or port applies to a discovery-bound instance.
+    /// host or port applies to a discovery-bound instance. An `adb_path` that is absent or
+    /// names the install root's adb selects that adb instead (Workflow #337).
     fn deferred_backend(self, key: InstanceBindingKey) -> Result<ConfiguredInstance, &'static str> {
         if self.serial.is_some() {
             return Err("instance_binding_key_invalid");
@@ -1203,7 +1367,13 @@ impl InstanceConfig {
     }
 
     fn device_backend(self) -> Result<InstanceSpec, &'static str> {
-        let adb_path = self.adb_path.clone().ok_or("instance_config_invalid")?;
+        // Workflow #337 (A4): an absent `adb_path` takes the install root's adb, checked by
+        // `ac_adb::require`; outside an install root it is still refused.
+        let adb_path = self
+            .adb_path
+            .clone()
+            .or_else(|| self.adb.selected().map(ac_adb::InstalledAdb::path_string))
+            .ok_or("instance_config_invalid")?;
         let host = self.host.clone().unwrap_or_else(default_device_host);
         let port = self.port.unwrap_or_else(default_device_port);
         self.device_registration(adb_path, host, Some(port))

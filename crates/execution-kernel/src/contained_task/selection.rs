@@ -237,12 +237,12 @@ pub(super) fn prepare_select_steps(
 pub(super) fn page_recognition_budget_ms(
     evaluator: &RecognitionEvaluator,
     detector: &actingcommand_page_detector::PageDetector,
-    only_page: Option<&str>,
+    candidates: Option<&[&str]>,
 ) -> Result<u64, ContainedTaskError> {
     let targets = detector
         .page_definitions()
         .iter()
-        .filter(|page| only_page.is_none_or(|id| id == page.id))
+        .filter(|page| candidates.is_none_or(|ids| ids.contains(&page.id.as_str())))
         .flat_map(|page| {
             page.required
                 .iter()

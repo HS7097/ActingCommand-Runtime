@@ -13,6 +13,12 @@ pub(super) fn human_summary(command: &str, data: &Value) -> String {
 }
 
 fn with_input_outcome(summary: String, data: &Value) -> String {
+    // Workflow #341: a dry-run preview or refusal says so in the human-readable line.
+    let summary = if data.get("dry_run") == Some(&Value::Bool(true)) {
+        format!("{summary} (dry run: nothing executed or stored)")
+    } else {
+        summary
+    };
     match data.get("input_outcome") {
         Some(outcome) => format!("{summary}\ninput_outcome: {outcome}"),
         None => summary,

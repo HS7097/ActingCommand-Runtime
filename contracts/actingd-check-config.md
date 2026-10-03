@@ -2,11 +2,13 @@
 
 `actingd check-config` validates a configuration file exactly as startup would
 and stops before the first side effect. It runs the configuration load, the
-typed assembly of `actingcommand.actingd.config.v1`,
+typed assembly of `actingcommand.actingd.config.v1`, the check of the install
+root's adb (see "Default ADB"),
 `RuntimeHostConfig::validate` and the instance resource package admission (see
 "Instance resource package"), the same checks as startup's first step, reports
 the MuMu install root startup would use (resolved read-only when `mumu_root` is
-not configured, see "MuMu install root"), then drops the assembly. It never
+not configured, see "MuMu install root") and the state of the install root's
+adb, then drops the assembly. It never
 stats, creates or reads anything under `state_root`, never opens the ledger,
 never acquires `owner.lock`, never binds a socket and records no lifecycle
 failure. A passing check is not a startup: the daemon's own startup path
@@ -28,15 +30,22 @@ Policy sections are assembled as at startup: catalog documents are read and
 resource packages are stat'ed or canonicalized from disk. Relative directory
 package paths (`GitSourceTree` or `ContentDirectory`) resolve against the process
 working directory, exactly as startup does, so run the check from the directory the
-daemon will be started in. An empty `instances` array passes, as at startup, and describes a
-control-plane-only daemon.
+daemon will be started in. A procedure binding's `scheduled_execution.package_path` must
+name a regular file for a ZIP digest, a directory for a Git source-tree reference, and a
+directory or a content container file (`.zip` or `.json`, ASCII case-insensitive; see
+"Containers" in `contracts/package-reference.md`, Workflow #336) for a content-directory
+reference. A content-directory binding to any other file fails
+`procedure_package_container_unsupported`; a path that is not of its reference's kind fails
+`procedure_package_not_regular`, as before. Procedure packages are not read here: their
+content is admitted when the task runs. An empty `instances` array passes, as at startup,
+and describes a control-plane-only daemon.
 
 ## Result
 
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"]}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -192,6 +201,12 @@ terminal with the chosen eligibility basis in the original eviction intent.
   (`mumu_root` is `null`).
 - `mumu_root` is always present; `mumu_root_unresolved` only when `mumu_root`
   is `null` (see "MuMu install root").
+- `adb_default` is always present: `null` when the daemon does not run from an
+  install root, otherwise `{ path, state }` for the install root's adb, with
+  `state` `ok`, `missing` or `sha256_mismatch` (see "Default ADB"). It is
+  computed whenever an install root is recognised, also for a configuration
+  with no instance; a state other than `ok` fails the check only when an
+  instance uses that adb.
 - `warnings` is always present: one `env_override_ignored:<VAR>` per
   `ACTINGCOMMAND_*` fallback variable that is set while `allow_env_overrides`
   is off, in the order of "Environment overrides", and empty otherwise. A
@@ -208,9 +223,12 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `duplicate_instance_id`, `stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
 `device_path_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
-`scheduled_execution_instance_unknown`, `governance_capability_retired`,
+`scheduled_execution_instance_unknown`, `procedure_package_not_regular`,
+`procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
-`config_manifest_incomplete`),
+`config_manifest_incomplete`, the `prerequisite_package*` and `return_home_package*` codes
+of "Prerequisite packages", and after the typed assembly the install root's
+adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
 `invalid_governance_policy` and the other
@@ -218,7 +236,9 @@ terminal with the chosen eligibility basis in the original eviction intent.
 (`resource_package_missing`, `resource_package_invalid`), in that order. The
 secret fingerprint salt is never printed.
 
-A `resource_package` failure also carries `error.detail`; no other stage does:
+A `resource_package` failure and an `adb_install_missing` /
+`adb_install_mismatch` failure (stage `assemble`, see "Default ADB") also carry
+`error.detail`; no other failure does:
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"resource_package_invalid","stage":"resource_package","detail":{"alias":"node.a","path":"D:/runtime/packages/neutral.zip","loader_code":"contained_task_admission_failed","loader_message":"fatal containment error: missing package entry: resources/operations/task/task.json"}}}
@@ -266,6 +286,67 @@ The admitted `{ path, kind }` (`kind` is `file` or `directory`) is echoed here
 and reported by the instance status entry (`RuntimeInstanceStatus`,
 `ProjectInstanceView`) as `resource_package`, omitted when none is configured.
 Nothing else consumes it yet.
+
+## Prerequisite packages
+
+Workflow #336 L2b adds the optional top-level `prerequisite_packages`, the
+packages a `linear_steps` package may name as its `prerequisite_package_id`
+(`contracts/linear-steps.md`, "Prerequisite packages"):
+
+```json
+"prerequisite_packages":[{"package_id":"neutral.test.stage_page","package_path":"packages/neutral/<D>.zip","package_digest":{"schema_version":"actingcommand.package.content-directory.v1","sha256":"<D>"}}]
+```
+
+Each entry has exactly these three fields. `package_id` is not empty, at most
+256 bytes and has no control character (`prerequisite_package_id_invalid`); no
+two entries share one (`prerequisite_package_duplicate`); at most as many
+entries as a catalog has tasks (`prerequisite_packages_size_invalid`).
+`package_digest` takes the forms of a procedure binding's `package_digest`, and
+`package_path` is checked as a procedure binding's
+`scheduled_execution.package_path` is (a relative path resolves against the
+configuration file's directory), under its own codes:
+`prerequisite_package_unavailable`, `prerequisite_package_not_regular`,
+`prerequisite_package_container_unsupported`,
+`prerequisite_package_digest_invalid`, `prerequisite_package_request_invalid`.
+All of them fail at stage `assemble`. No package is opened or hashed here: a
+run admits each package against its reference when it resolves its chain. The
+map needs no `policy` section, so a manual `task-run` uses it too; it is not a
+configuration fact (neither the `config_manifest` nor the `config.*` runtime
+facts name it) and it is read once at startup, so a change needs a restart. A
+build that predates the field refuses it with `config_decode_failed`. A Lab
+recording's `record stop` prints the entry of the package it wrote as
+`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output").
+
+Workflow #336 L2c adds the optional top-level `return_home_packages`, per game
+and server the return-home package a `linear_steps` package without a declared
+prerequisite package falls back to (`contracts/linear-steps.md`, "Return-home
+fallback"); since L2d the stuck-recovery ladder and the page-graph home entry of a
+run whose request binds no recovery package use it too:
+
+```json
+"return_home_packages":[{"game":"neutral","server":"test","package_id":"neutral.test.return_home"}]
+```
+
+Each entry has exactly these three fields. `game` and `server` are not empty, at
+most 64 bytes and have no control character (`return_home_package_key_invalid`);
+`package_id` is a `package_id` of `prerequisite_packages`
+(`return_home_package_unbound`); no two entries share one game and server
+(`return_home_package_duplicate`); at most as many entries as a catalog has
+tasks (`return_home_packages_size_invalid`). All of them fail at stage
+`assemble`; no package is opened here (a run checks the package's game, server
+and resolution when it resolves its chain). Like `prerequisite_packages`, it is
+not a configuration fact, it is read once at startup and a build that predates
+the field refuses it with `config_decode_failed`.
+
+A scheduled task paused by a failure is lifted once the daemon has restarted
+with a configuration in which its procedure binding's `package_digest` changed
+or, for a `linear_steps` task, a `prerequisite_packages` entry its paused run
+went through maps another digest, or its game and server's
+`return_home_packages` entry names another package or that package maps another
+digest. `actingd suspended --config <path>` loads and assembles the
+configuration exactly as this command does and lists the paused, lifted and
+repeating tasks (`contracts/policy-suspension.md`, "Lifting (R19)" and
+"`actingd suspended`").
 
 ## Performance and device paths
 
@@ -346,9 +427,12 @@ environment only when `allow_env_overrides` is `true`. The variables, in
 warning order:
 
 - `ACTINGCOMMAND_ADB_PATH`: preferred over a configured ADB by the device
-  crate's ADB resolver. `actingd` itself never resolves an ADB path (explicit
-  instances require `adb_path`, discovery-bound ones take the discovered one),
-  so the injected value has no reader in the daemon.
+  crate's ADB resolver. `actingd` itself never hands that resolver an empty
+  ADB path: an instance without `adb_path` uses the install root's adb when the
+  daemon runs from an install root (see "Default ADB"), otherwise an explicit
+  instance is refused and a discovery-bound one takes the discovered MuMu adb;
+  an instance with `adb_path` uses the configured one. The injected value
+  therefore still has no reader in the daemon.
 - `ACTINGCOMMAND_NEMU_FOLDER`: the `MuMuManager.exe` resolver's environment
   rung (startup discovery and "MuMu install root" here) and the Nemu IPC
   capture root when `device_paths.nemu_folder` is absent.
@@ -389,6 +473,9 @@ Checked here, without discovery:
 - the binding key and a declared `serial` (`instance_binding_key_invalid`);
   a non-empty `adb_path` and `host` and a non-zero `port` when declared
   (`instance_config_invalid`);
+- at an install root, an absent `adb_path` or one that names the install
+  root's adb: that adb is selected here and its files are hashed
+  (`adb_install_missing`, `adb_install_mismatch`, see "Default ADB");
 - `application_id` (`application_identity_missing`), explicit backends
   (`touch_backend_invalid`, `capture_backend_invalid`,
   `touch_backend_must_be_explicit`, `capture_backend_must_be_explicit`) and
@@ -405,9 +492,104 @@ Still deferred to startup, because each needs the discovery result
 (`contracts/provider-startup.md`): the `MuMuManager` version floor and
 capability admission, exactly one discovered instance matching the key
 (`instance_discovery_no_match`, `instance_discovery_ambiguous`), a declared
-`adb_path`, `host` or `port` against the discovered values
-(`instance_discovery_conflict`; a declared `adb_path` is only compared there,
-never resolved here) and the ADB endpoint itself.
+`host` or `port` against the discovered values and any other declared
+`adb_path` against the discovered MuMu adb (`instance_discovery_conflict`),
+and the ADB endpoint itself. A declared `adb_path` that names the install
+root's adb is recognised and hashed here instead, without the discovery
+result; every other declared `adb_path` is only compared at startup, never
+resolved here (see "Default ADB").
+
+## Default ADB
+
+Workflow #337 ships the official Android platform-tools in the Tools artifact,
+installed as `<install root>\tools\platform-tools\`. An instance without
+`adb_path` (key omitted) uses that adb when the daemon runs from an install
+root; an empty or blank `adb_path` is still refused.
+
+The install root is judged once per assembly from the running executable
+alone: `R` is two levels above the canonical path of the `actingd` executable,
+and `R` is an install root only when `R\runtime\BUILD-MANIFEST.json` is a file
+(the same evidence acsetup takes for "installed"). The install root's adb is
+then `R\tools\platform-tools\adb.exe`. acsetup's upgrade staging directory
+(`.staging-<ms>\runtime\`, `\ui\`, `\tools\`) has the same shape, so the
+`check-config` that acsetup runs with the staged `actingd` before it swaps
+anything sees and checks the staged adb; the Runtime has no special case for
+it. A development build, the H3 check of the exact-SHA build and a staging
+directory named after the zip files (older acsetup) are no install root and
+behave as before.
+
+Explicit instances (`serial`, or `host` and `port`):
+
+| `adb_path` | install root | adb used |
+|---|---|---|
+| absent | yes | the install root's adb, hashed below |
+| absent | no | refused, `instance_config_invalid` |
+| empty or blank | either | refused, `instance_config_invalid` |
+| names the install root's adb | yes | the install root's adb, hashed below |
+| anything else (including a relative path such as `adb`) | either | the configured path, not hashed |
+
+Discovery-bound instances (`instance_index` or `instance_name`):
+
+| `adb_path` | install root | adb used |
+|---|---|---|
+| absent | yes | the install root's adb, hashed below |
+| absent | no | the discovered MuMu adb |
+| canonically the discovered MuMu adb | either | the discovered MuMu adb |
+| names the install root's adb | yes | the install root's adb, hashed below |
+| anything else | either | refused at startup, `instance_discovery_conflict` / `adb_path_conflict`, whose message lists the accepted values |
+
+Whether a declared `adb_path` names the install root's adb needs no discovery
+and not even the file: only an absolute path can; it is canonicalized, or,
+when it does not exist, its nearest existing ancestor is canonicalized and the
+remaining components are joined back; the result is compared with the install
+root's adb ignoring case. A removed or quarantined adb therefore still
+refuses before the ledger opens. The MuMu adb is never hashed.
+
+When at least one instance uses the install root's adb, the three distributed
+binaries `platform-tools/adb.exe`, `platform-tools/AdbWinApi.dll` and
+`platform-tools/AdbWinUsbApi.dll` under `R\tools\` are read and their SHA-256
+compared with the `distributed_files` pin of
+`scripts/windows-tools/windows-tool-sources.v1.json`, the same pin the
+exact-SHA build verified the shipped bytes against (it embeds the file at
+build time, so there is one source of the expected values). Nothing is
+started: a file with the pinned SHA-256 is the file the build ran
+`adb version` on. The check runs after the typed assembly, before any side
+effect, identically here and at daemon startup:
+
+- `adb_install_missing`: a binary cannot be read (absent, quarantined, not a
+  file);
+- `adb_install_mismatch`: every binary can be read, but at least one has
+  another SHA-256 (or the pin embedded in the build cannot be read, so no file
+  can be confirmed).
+
+Both are stage `assemble` here, with `error.detail`, and the startup line
+`FATAL actingd: <code>: <message>` before the ledger is opened, so nothing is
+recorded. There is no fallback to the MuMu adb. `error.detail` names the adb,
+the instances that use it, every file that is not as pinned and the remedy:
+
+```json
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"adb_install_mismatch","stage":"assemble","detail":{"adb_path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","instances":["node.a"],"files":[{"path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","state":"sha256_mismatch","expected_sha256":"<64 hex>","actual_sha256":"<64 hex>"}],"remedy":"fix: reinstall tools\\platform-tools under this install root (acsetup v0.10 or later for an acsetup install), or set the instance's adb_path to another adb (MuMu's own adb as before; an explicit instance may name any other adb)"}}}
+```
+
+A missing file is `{"path":"...","state":"missing","error":"<OS error>"}`.
+The FATAL message carries the same facts:
+`AC-installed adb "<path>" used by instance(s) ["node.a"]: "<file>" sha256 expected <hex>, actual <hex>; fix: ...`
+(`missing "<file>" (<OS error>)` for a missing one).
+
+`adb_default` reports the result whenever an install root is recognised, also
+when no instance uses the adb (so a zero-instance smoke check shows it);
+outside an install root it is `null`. Paths are canonical (on Windows a `\\?\`
+verbatim path). The selected adb reaches the ledger only through the existing
+effective device configuration strings; nothing here is a configuration field
+or a ledger value.
+
+Rollback to v0.9.0: v0.9.0 requires `adb_path` on every explicit instance and
+compares a discovery-bound `adb_path` with the MuMu adb only. Before rolling
+back, give every explicit instance without `adb_path` an adb that still exists
+afterwards (not the install root's adb, which v0.9.0's Tools do not ship), and
+remove an `adb_path` that names the install root's adb from discovery-bound
+instances; otherwise v0.9.0 refuses with `instance_config_invalid` or
+`instance_discovery_conflict`.
 
 ## MuMu install root
 

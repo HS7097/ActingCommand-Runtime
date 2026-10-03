@@ -4,6 +4,9 @@ use actingcommand_contract::{
     CorrelationId, EffectDisposition, EventQuery, InputAction, NeedsDetection, ProjectionProfile,
     RuntimeDebugEvent, RuntimeDebugOperation, RuntimeResult,
 };
+use actingcommand_lab::{
+    AttachFrameRequest, OpaqueJson, record_attach_frame, record_frame_preflight,
+};
 use actingcommand_ledger::{
     EvidenceStore, IdIssuer, IdKind, ProjectionRequest, ProjectionVerbosity, error_projection,
     forbidden_target_suspicion, guard_reject_suspicion, low_margin_suspicion, project_record,
@@ -75,6 +78,9 @@ struct Lab2CommandContract {
 
 pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.optional_path("--with-frame").is_some() {
+        crate::dry_run_gate::refuse(global, "observe --with-frame", Some("observe"), Value::Null)?;
+    }
     if flags.bool("--capture") {
         return run_runtime_observe(global, &flags);
     }
@@ -160,6 +166,20 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
 fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "observe")?;
     let instance = lab2_instance(global, flags);
+    // `observe --capture --record`: the recording must accept a device frame before anything
+    // is captured.
+    let record_lock = if flags.bool("--record") {
+        let lock = crate::commands::record_flag_begin(
+            global,
+            flags,
+            &instance,
+            "observe --capture --record",
+        )?;
+        record_frame_preflight(&lock)?;
+        Some(lock)
+    } else {
+        None
+    };
     let reader = super::contained_resources::PackageInput::open(flags)?;
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
@@ -238,7 +258,29 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         session
             .record_event(terminal)
             .map_err(|error| CliError::device(error.to_string()))?;
-        observation::project(payload, observed.projection.clone(), flags, global.verbose)
+        let recorded = match &record_lock {
+            Some(lock) => Some(record_attach_frame(
+                lock,
+                AttachFrameRequest {
+                    png: verified.png().to_vec(),
+                    source: "runtime_observation".to_string(),
+                    runtime_artifact: Some(OpaqueJson::from_serializable(
+                        &observed.frame.artifact(),
+                    )?),
+                    capture_backend: None,
+                    freshness: None,
+                },
+            )?),
+            None => None,
+        };
+        let mut projected =
+            observation::project(payload, observed.projection.clone(), flags, global.verbose)?;
+        if let Some(recorded) = recorded {
+            projected["record"] = serde_json::to_value(recorded).map_err(|error| {
+                CliError::usage(format!("failed to encode the record: {error}"))
+            })?;
+        }
+        Ok(projected)
     })();
     super::contained_resources::finish_package_use(result, reader.close())
 }
@@ -1382,6 +1424,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--fields <field,field>",
                 "--verbose",
                 "--pretty",
+                "--record (with --capture: store the frame in the active recording)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
@@ -1393,6 +1436,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "observation",
                 "frame_age_ms",
                 "backend",
+                "record",
             ],
             requires_lease: false,
         },
@@ -1416,6 +1460,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--no-wait",
                 "--recovery-timeout-ms <ms>",
                 "--recovery-poll-ms <ms>",
+                "--record (with --capture: click the open recording step and record it)",
+                "--tap-rect <x,y,w,h> (only with --record: declare the step click rectangle)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
@@ -1432,6 +1478,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "guard_result",
                 "observation",
                 "ledger",
+                "record",
             ],
             requires_lease: true,
         },
@@ -1512,6 +1559,109 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             required: &["--id <evidence_id>", "--run-root <path> or config run_root"],
             optional: &[],
             output_fields: &["evidence_id", "count", "evidence"],
+            requires_lease: false,
+        },
+        Lab2CommandContract {
+            name: "record start",
+            summary: "start a recording session and its Lab recording",
+            required: &["--task-id <id>"],
+            optional: &[
+                "--locale <locale>",
+                "--metric <ccoeff_normed|ccorr_normed>",
+                "--template-threshold <0..1>",
+                "--record-id <id>",
+                "--force",
+                "--holder <id>",
+                "--lease-id <id>",
+                "--state-dir <dir>",
+            ],
+            output_fields: &[
+                "status",
+                "record",
+                "path",
+                "lab_recording",
+                "record_flag_state_dir",
+                "record_flag_reachable",
+            ],
+            requires_lease: false,
+        },
+        Lab2CommandContract {
+            name: "record mark",
+            summary: "add marks, a click, samples or a transition to a recording step, or remedy the last step; every mark is self-tested on the step frames",
+            required: &["flags, --request <file> or --request-json <json>"],
+            optional: &[
+                "--step <n>",
+                "--frame <png>",
+                "--sample <png>",
+                "--page <name>",
+                "--template <id>=x,y,w,h",
+                "--color <id>=x,y,w,h",
+                "--reuse <id>",
+                "--remove <id>",
+                "--click x,y,w,h",
+                "--click-from <id>",
+                "--click-guard <id>",
+                "--click-retry <2..5>",
+                "--replace-click",
+                "--transition none|page|window",
+                "--transition-timeout-ms <ms>",
+                "--min-ms <ms>",
+                "--max-ms <ms>",
+                "--replace-transition",
+                "--drop-step <n>",
+                "--reopen-step <n>",
+                "--close-step",
+                "--to-transition <n>",
+                "--application <launch|restart|stop|force-stop>",
+                "--optional",
+                "--settle-ms <0..60000>",
+                "--not-optional",
+                "--dry-run",
+                "--state-dir <dir>",
+            ],
+            output_fields: &[
+                "status",
+                "record_id",
+                "step",
+                "step_opened",
+                "frame",
+                "samples",
+                "marks",
+                "reused",
+                "removed",
+                "click",
+                "application",
+                "transition",
+                "step_state",
+            ],
+            requires_lease: false,
+        },
+        Lab2CommandContract {
+            name: "record stop",
+            summary: "stop the recording session and generate its linear-steps package",
+            required: &[],
+            optional: &[
+                "--lab-dir <dir>",
+                "--package-id <id>",
+                "--requires <package_id>",
+                "--game <game>",
+                "--server <server>",
+                "--locale <locale>",
+                "--timeout-ms <ms>",
+                "--arrival-timeout-ms <ms>",
+                "--application-arrival-timeout-ms <ms>",
+                "--dry-run",
+                "--state-dir <dir>",
+            ],
+            output_fields: &["status", "dry_run", "record", "path", "lab"],
+            requires_lease: false,
+        },
+        Lab2CommandContract {
+            name: "record status",
+            summary: "show the recording session and its Lab recording steps",
+            required: &[],
+            optional: &["--state-dir <dir>"],
+            output_fields: &["status", "instance", "record", "path", "lab"],
             requires_lease: false,
         },
         Lab2CommandContract {

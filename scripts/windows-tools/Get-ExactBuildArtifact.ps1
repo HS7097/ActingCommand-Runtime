@@ -431,10 +431,6 @@ try {
     if ($reparseItems.Count -ne 0) {
         throw "Downloaded artifact contains a reparse point: '$($reparseItems[0].FullName)'."
     }
-    $directories = @($downloadedItems | Where-Object { $_.PSIsContainer })
-    if ($directories.Count -ne 0) {
-        throw "Downloaded artifact contains unexpected directories; first: '$($directories[0].FullName)'."
-    }
 
     $manifestFiles = @(
         $downloadedItems | Where-Object {
@@ -482,6 +478,43 @@ try {
             'INSTALL.md',
             'RELEASE-NOTES.md'
         )
+    }
+
+    # A Tools manifest with tools_payload_layout 'platform-tools-v1' adds the official
+    # platform-tools files under the one subdirectory 'platform-tools'; without the field
+    # a Tools artifact keeps the historical five flat files. Any other layout fails.
+    $allowedDirectory = $null
+    if ($manifest.PSObject.Properties.Name -contains 'tools_payload_layout') {
+        $layout = $manifest.PSObject.Properties['tools_payload_layout']
+        if (
+            $ArtifactKind -cne 'Tools' -or
+            $layout.Name -cne 'tools_payload_layout' -or
+            $layout.Value -isnot [string] -or
+            $layout.Value -cne 'platform-tools-v1'
+        ) {
+            throw "Manifest tools_payload_layout must be exactly 'platform-tools-v1' for a Tools artifact."
+        }
+        $expectedFiles = @(
+            'actinglab.exe',
+            'actingledger.exe',
+            'actingcommand-vision-provider-check.exe',
+            'actingcommand-device-test.exe',
+            'ac_fastdeploy_ppocr.dll',
+            'platform-tools/adb.exe',
+            'platform-tools/AdbWinApi.dll',
+            'platform-tools/AdbWinUsbApi.dll',
+            'platform-tools/NOTICE.txt',
+            'platform-tools/source.properties'
+        )
+        $allowedDirectory = Join-Path $stagePath 'platform-tools'
+    }
+    $directories = @(
+        $downloadedItems | Where-Object {
+            $_.PSIsContainer -and $_.FullName -cne $allowedDirectory
+        }
+    )
+    if ($directories.Count -ne 0) {
+        throw "Downloaded artifact contains unexpected directories; first: '$($directories[0].FullName)'."
     }
 
     $rustToolchain = [string](Assert-Property -Object $manifest -Name 'rust_toolchain' -Context 'manifest')

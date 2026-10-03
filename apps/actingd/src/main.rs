@@ -8,6 +8,7 @@ mod check_config;
 mod config;
 mod ledger_maintenance;
 mod owner_unlock;
+mod suspended;
 
 // Test-only: the shared sealed C4 fixture support, reused for its 16x9 fake-device fixtures.
 #[cfg(test)]
@@ -75,16 +76,27 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     {
         return owner_unlock::run(arguments);
     }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "suspended")
+    {
+        return suspended::run(arguments);
+    }
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {
         host,
         provider,
         policy,
         resource_packages,
+        adb_requirement,
         ..
     } = config::load(&config_path)
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
+    // Workflow #337: the install root's adb check of `check-config`, before any side effect.
+    config::ac_adb::require(&adb_requirement).map_err(|rejection| {
+        ActingdError::config(rejection.code()).with_detail(rejection.to_string())
+    })?;
     // The same resource package admission as `check-config`, before any side effect.
     let resource_packages =
         config::validate_resource_packages(&resource_packages).map_err(|rejection| {
@@ -249,6 +261,7 @@ fn execute_policy_cycle(
                 cycle,
                 recompute_wakes,
                 yielded_intents: 0,
+                failed_runs: false,
             });
         }
         return Err(ActingdError::process(
@@ -256,6 +269,7 @@ fn execute_policy_cycle(
         ));
     };
     let mut yielded_intents = 0;
+    let mut failed_runs = false;
     for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
         if policy_cycle_budget_exhausted(index, started.elapsed()) {
             // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
@@ -319,7 +333,10 @@ fn execute_policy_cycle(
                 Ok(receipt) => receipt,
                 // Runtime owns the original failure and same-run settlement. A later
                 // candidate must pass its recovered failure disposition at admission.
-                Err(error) if !error.is_fatal() => continue,
+                Err(error) if !error.is_fatal() => {
+                    failed_runs = true;
+                    continue;
+                }
                 Err(error) => return Err(ActingdError::runtime(error)),
             };
             let (execution, projection) =
@@ -344,6 +361,7 @@ fn execute_policy_cycle(
         cycle,
         recompute_wakes,
         yielded_intents,
+        failed_runs,
     })
 }
 
@@ -359,6 +377,10 @@ struct PolicyCycleExecution {
     recompute_wakes: Vec<PolicyRecomputeWake>,
     /// Pending intents not yet attempted when the cycle reached its budget.
     yielded_intents: usize,
+    /// Workflow #336 R22: a scheduled run of this cycle failed. The driver evaluates again at
+    /// once, so a failure scheduled for an immediate rerun waits only for its retry backoff,
+    /// not for the wake the evaluation before the run computed.
+    failed_runs: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1158,7 +1180,7 @@ fn drive_policy(
     for wake in initial_cycle.recompute_wakes {
         control.notify_recompute(wake)?;
     }
-    if initial_cycle.yielded_intents > 0 {
+    if initial_cycle.yielded_intents > 0 || initial_cycle.failed_runs {
         control.notify(PolicyTrigger::FactsChanged)?;
     }
     loop {
@@ -1274,7 +1296,7 @@ fn apply_policy_cycle_result(
                 for wake in execution.recompute_wakes {
                     control.notify_recompute(wake)?;
                 }
-                if execution.yielded_intents > 0 {
+                if execution.yielded_intents > 0 || execution.failed_runs {
                     control.notify(PolicyTrigger::FactsChanged)?;
                 }
                 Ok(())

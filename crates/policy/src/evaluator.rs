@@ -651,6 +651,31 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
     resources: &EvaluationResources,
     time: EvaluationTime,
     seed: u64,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_immediate_retries(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        &BTreeSet::new(),
+        eligibility,
+    )
+}
+
+/// `evaluate_with_eligibility` where every (task, instance) pair in `immediate_retries` counts
+/// as triggered and passes its task cooldown (Workflow #336 R22): the Runtime names the pairs
+/// whose failure is scheduled for a retry within its original admission's window and budget
+/// cycle. The eligibility callback still enforces backoff and other admission gates. The
+/// feedback stop, placement, budgets and activity windows are unchanged.
+pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -778,7 +803,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                 instance_id: instance.instance_id.clone(),
             };
             let mut task_work = TaskWork::new(task.id.clone(), instance.instance_id.clone());
-            let trigger = evaluate_predicate(
+            let mut trigger = evaluate_predicate(
                 &task.trigger,
                 state,
                 &decision_scope,
@@ -789,6 +814,19 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                 &timeline_events,
                 &mut task_work.reasons,
             )?;
+            // Workflow #336 R22: a failed linear task reruns at once, without waiting for its
+            // trigger or its cooldown.
+            let immediate_retry = immediate_retries.iter().any(|(task_id, instance_id)| {
+                *task_id == task.id && *instance_id == instance.instance_id
+            });
+            if immediate_retry {
+                trigger.truth = PredicateTruth::True;
+                trigger.suggestions.clear();
+                task_work.reasons.push(reason(
+                    "failure_retry_immediate",
+                    "the latest failure is rerun at once: its trigger and cooldown are not awaited",
+                ));
+            }
             task_work.next_wake_unix_ms = trigger.next_wake_unix_ms;
             if let Some(not_before_unix_ms) = trigger.next_wake_unix_ms {
                 consider_preload_hint(
@@ -930,6 +968,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                                 min_wake(timeline_fresh_until, pool_fresh_until),
                             );
                             let cooldown_until = state
+                                .filter(|_| !immediate_retry)
                                 .and_then(|state| state.last_dispatched_unix_ms)
                                 .map(|last| {
                                     last.checked_add(task.cooldown_ms).ok_or_else(|| {
@@ -6281,6 +6320,33 @@ mod tests {
             catalog.catalog().tasks.tasks[0].procedure_ref
         );
         assert_eq!(preload.not_before_unix_ms, NOW + 3_600_000);
+        // WF342 P specification: an ended Runtime round restores the normal trigger gate.
+        let retries = BTreeSet::from([(
+            "fixture.observe".to_owned(),
+            "fixture-instance-a".to_owned(),
+        )]);
+        let no_retries = BTreeSet::new();
+        for (pairs, last_dispatch, should_dispatch) in [
+            (&retries, Some(NOW), true),
+            (&no_retries, Some(NOW), false),
+            (&no_retries, None, true),
+        ] {
+            facts.tasks[0].last_dispatched_unix_ms = last_dispatch;
+            let result = evaluate_with_immediate_retries::<PolicyEvaluationError>(
+                &catalog,
+                &facts,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+                6,
+                pairs,
+                |_| Ok(CandidateEligibility::Eligible),
+            )
+            .expect("trigger with Runtime retry eligibility");
+            assert_eq!(!result.dispatch_intents.is_empty(), should_dispatch);
+        }
     }
 
     #[test]

@@ -205,7 +205,7 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
     )))
 }
 
-/// Workflow #288 A2b: `package digest --package <directory>`.
+/// Workflow #288 A2b: `package digest --package <directory | .zip | .json container>`.
 pub(super) fn run_digest(flags: &FlagArgs) -> CliOutcome<Value> {
     let request = PackageDigestRequest {
         package: flags.required_path("--package")?,

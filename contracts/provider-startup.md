@@ -87,12 +87,18 @@ including a missing install), `mumu_manager_version_unsupported` (below the
 policy floor or unparseable), `instance_discovery_no_match` (no reported
 instance has the index or exact name), `instance_discovery_ambiguous` (more
 than one instance carries the name) and `instance_discovery_conflict` (a
-declared `adb_path`, `host` or `port` differs from the discovered value, or a
+declared `host` or `port` differs from the discovered value, a declared
+`adb_path` is neither canonically the discovered MuMu adb nor, when the daemon
+runs from an install root, that root's adb (code `adb_path_conflict`; the
+message also lists the accepted values), or a
 `port` is declared for a matched instance that is stopped and therefore cannot
 be cross-checked, code `port_unverifiable`; the failure message carries the
 declared and the discovered values). A resolved running instance is then
-registered exactly like an explicit one, with the discovered ADB path, host and
-port and no serial. A resolved instance that is stopped (it reports no ADB
+registered exactly like an explicit one, with the discovered host and port, no
+serial and the discovered MuMu adb, or the install root's adb when `adb_path`
+is absent or names it and the daemon runs from an install root (Workflow #337;
+that adb was hashed before the ledger opened, see
+`contracts/actingd-check-config.md`, "Default ADB"). A resolved instance that is stopped (it reports no ADB
 endpoint) is registered with a PENDING binding instead of being refused: the
 discovered facts plus the host the binding will be completed with (the reported
 `adb_host_ip` if any, else the declared `host`, else `127.0.0.1`), but no port;

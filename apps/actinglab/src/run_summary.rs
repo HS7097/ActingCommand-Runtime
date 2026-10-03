@@ -24,6 +24,7 @@ pub(super) fn dispatch(sub: &str, global: &GlobalOptions, args: &[String]) -> Cl
             let run_root = run_root(global)?;
             if sub == "export" {
                 let out = flags.required_path("--out")?;
+                crate::dry_run_gate::refuse(global, "run export", None, json!({"run_id": run_id}))?;
                 create_error_report_zip(&out, run_id, "run export placeholder")?;
                 return Ok(json!({
                     "run_id": run_id,

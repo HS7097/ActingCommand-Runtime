@@ -82,6 +82,28 @@ impl ExternallyVerifiedBundle {
         Ok(Self { bundle })
     }
 
+    /// Workflow #336: `load_path` for a content table already in memory, admitted against the
+    /// content-directory reference `expected`.
+    pub fn load_content_entries(
+        instance_label: &str,
+        entries: std::collections::BTreeMap<String, Vec<u8>>,
+        expected: &actingcommand_contract::ContentDirectory,
+        observation: bool,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, ExecutionBundleError> {
+        let instance = InstanceId::new(instance_label)?;
+        let mut containment = match vision_provider {
+            Some(provider) => Containment::with_vision_provider(provider),
+            None => Containment::new(),
+        };
+        containment.load_content_entries(&instance, entries, expected, observation, deadline)?;
+        let bundle = containment
+            .take_loaded(&instance)
+            .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
+        Ok(Self { bundle })
+    }
+
     pub fn load_observation(
         instance_label: &str,
         zip_bytes: &[u8],
