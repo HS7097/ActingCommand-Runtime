@@ -13,7 +13,7 @@ use crate::recording::crosscheck::{
 };
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings,
-    application_steps_summary, plan as generate_plan, refuse_optional_steps, render,
+    application_steps_summary, optional_steps_summary, plan as generate_plan, render,
     transitions_summary, validate_timeout_option,
 };
 use crate::recording::marks::match_metric;
@@ -193,7 +193,6 @@ pub fn record_stop(
     if recording.steps.is_empty() {
         return Ok(none);
     }
-    refuse_optional_steps(&recording)?;
     let settings = StopSettings {
         game: options
             .game
@@ -418,6 +417,10 @@ pub fn record_stop(
     lab.insert("pages".to_string(), json!(pages));
     lab.insert("transitions".to_string(), json!(transitions_summary(&plan)));
     lab.insert(
+        "optional_steps".to_string(),
+        json!(optional_steps_summary(&plan, &checks.same_as)?),
+    );
+    lab.insert(
         "timeouts".to_string(),
         json!({
             "timeout_ms": plan.timeout_ms,
@@ -615,8 +618,8 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
         );
         items.push(
             "Screens a cold start shows only sometimes (a daily sign-in, a notice, an update \
-             prompt) are optional steps between the title and the main interface; this build \
-             does not generate optional steps yet."
+             prompt) are recorded as optional steps between the title and the main interface \
+             (record mark --optional); the main interface step itself stays required."
                 .to_string(),
         );
         items.push(
@@ -625,6 +628,15 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
              and configure {package, expected_sha256: \"<D>\"}. As a prerequisite or return-home \
              package it restarts the game whenever the single-frame check of the layer above \
              fails."
+                .to_string(),
+        );
+    }
+    if !plan.runs.is_empty() {
+        items.push(
+            "Optional steps cover only screens that appear after the click of the step before \
+             them: a pop-up later than its settle_ms, a pop-up shown more often than the copies \
+             recorded, or a pop-up never recorded makes this package fail loudly; it is not \
+             handled automatically."
                 .to_string(),
         );
     }

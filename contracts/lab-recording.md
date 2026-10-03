@@ -226,7 +226,9 @@ outcomes moved aside by `--reopen-step`.
 Without Lab steps `record stop` behaves as before and adds `lab: null`; an empty active Lab
 recording is stopped with the session. With Lab steps it generates, checks and writes the
 package: see "Package generation". A build without the generator (#336 L3, L3b, L3c) refuses
-with `record_stop_generation_not_implemented` (exit 6) and leaves both states active.
+with `record_stop_generation_not_implemented` (exit 6) and leaves both states active; the #336
+L4 build refuses a recording with an optional step the same way (`details.reason:
+"optional_steps"`).
 
 ## Marks and the mark-time self-test
 
@@ -478,8 +480,9 @@ A step whose screen a run does not always show (a daily notice, a reward pop-up,
 prompt) is marked optional (Workflow #339). The package skips an optional step whose page
 does not appear: its page is not recognized, its effect is not executed and nothing is
 recorded for it. After the page that follows a run of optional steps is first seen, the
-package keeps watching for a late optional page for `settle_ms`. The generated operation
-carries `"optional":{"settle_ms":S}` once `record stop` generates optional steps.
+package keeps watching for a late optional page for `settle_ms`. `record stop` writes
+`"optional":{"settle_ms":S}` on the operation of an optional step and checks the optional
+pages against the screens a run may show instead ("Package generation").
 
 ```
 record mark [--step <k>] [--frame <png>] [marks…] [--click … | --click-from <id>] [--click-retry <n>]
@@ -510,9 +513,9 @@ record mark [--step <k>] --not-optional
   an optional step are refused with `record_optional_application` (3) while the step is
   planned, before any Runtime request; nothing is sent and the recording is unchanged.
 - Whether an optional step is the last step, or the main interface after a restart, is
-  checked by `record stop` when it generates optional steps, not by `record mark`; this build
-  refuses a recording with an optional step at `record stop` (`record_stop_generation_not_implemented`,
-  `details.reason: "optional_steps"`).
+  checked by `record stop` ("Pre-checks"), not by `record mark`; `record stop` also refuses an
+  optional page that passes where it is absent and a next page that passes under a pop-up
+  ("Self-checks", item 7). Run `record stop --dry-run` before the final stop.
 - `recording.json`: the step carries `"optional":{"settle_ms":2000,"marked_at_unix_ms":…}`;
   `marked_at_unix_ms` is set when the step becomes optional or its settle changes. A step
   without it has no `optional` key, so a recording without optional steps is byte-identical
@@ -603,10 +606,6 @@ A refusal before the writing stage leaves the recording and the session active a
 nothing; a failure during writing is described under "Writing" (with `written_files`). Fix the
 recording and run `record stop` again.
 
-**Optional steps.** A recording with an effective optional step is refused with
-`record_stop_generation_not_implemented` (exit 6, `details.reason: "optional_steps"`) before
-anything else, `--dry-run` included: this build does not generate optional operations.
-
 ### Pre-checks
 
 Only the effective steps count, numbered 1..n by serial number (`artifact_step`).
@@ -624,6 +623,7 @@ Only the effective steps count, numbered 1..n by serial number (`artifact_step`)
 | `--requires`: not empty, at most 256 bytes, without control characters, not this package's id, and not on a package whose step 1 is an application entry (`details.reason`: `prerequisite_id_invalid`, `prerequisite_self`, `application_entry`) | `record_requires_invalid` (2) |
 | after a `stop` step the next effect is a `launch` or `restart` | `record_step_after_stop_invalid` (3) |
 | R25: after the last `launch` or `restart` a later step is the main interface (the kernel predicate `linear_main_interface`: page anchor `home`, or `step_<nn>_home` from `record mark --page home`) | `record_application_without_home` (3) |
+| Workflow #339, in this order: step 1 is not optional (the entry gate checks only step 1); step n is not optional (every run ends on it); an application step is not optional (no conditional restart); the main interface after the last `launch` or `restart` (the first later step `linear_main_interface` recognizes) is not optional (`details{step, artifact_step}`) | `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end` (3) |
 | `--timeout-ms`, `--arrival-timeout-ms` and `--application-arrival-timeout-ms` given explicitly lie in 1..=1800000 | `validation_failed` (2) |
 | every live frame and template crop still has its recorded sha256 and the recording's size | `record_frame_hash_mismatch`, `record_frame_size_mismatch` (3) |
 
@@ -669,15 +669,22 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   retry.
 - A transition is `{"kind": "page", "page_id": "transition_kk"}` (with `timeout_ms` when
   declared) or `{"kind": "window", "min_ms", "max_ms"}`.
+- An optional step's operation adds `"optional": {"settle_ms": S}` (`linear-steps.md`,
+  "Optional steps"); its operation provenance and its entry in the task provenance add
+  `"optional": {"settle_ms", "marked_at_unix_ms"}`. A run is a maximal sequence of consecutive
+  optional steps; the page after it is its skip target N. A recording without optional steps
+  generates the same bytes as before.
 - `control.step_timeout_ms` is min(T, 60000); a larger T adds the warning
   `step_timeout_clamped`. Without `--timeout-ms` the task timeout is
   `S·[step 1 is no application entry] + Σ a·(w + (b − w)⁺ + p + T) + Σ_app 10000 +
-  Σ (a − 1)·(r + S) + 10000` over the steps with an effect, where S is the step timeout, a the
-  attempts, w max(post delay, window minimum), b the window maximum (0 without), p the page
-  transition timeout (T without its own, 0 without a page transition), T the arrival timeout
-  (A for an application step), r the retry interval. Above 1800000 it is clamped and the
-  warning `task_timeout_clamped` added. The default covers the usual path only; give
-  `--timeout-ms` for more.
+  Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000` over the steps with an effect, where S is the
+  step timeout, a the attempts, w max(post delay, window minimum), b the window maximum (0
+  without), p the page transition timeout (T without its own, 0 without a page transition), T
+  the arrival timeout (A for an application step), r the retry interval, and max(settle) the
+  largest `settle_ms` of a run of optional steps: the sums before it count every optional step
+  as shown, the longest path, and a run settles at most once, only when it is skipped. Above
+  1800000 it is clamped and the warning `task_timeout_clamped` added. The default covers the
+  usual path only; give `--timeout-ms` for more.
 - `provenance` (top level and per operation) records the recording, the generator, every step
   (record index, page, frame and sample sha256, frame size, marks with their mark-time result
   and margin, click, application, transition), the warnings, `arrival_by_time_window` and the
@@ -732,7 +739,9 @@ unpacked as a directory.
      undetermined; a page that does not match one of its own frames is
      `record_step_self_mismatch` (3) naming the frame.
    - **Arrival gate.** After the effect of step k the run first waits for its gate: the page
-     transition, or page k+1. When the gate matches on a live frame of step k, the run cannot
+     transition, or page k+1; without a page transition, the gate of a step followed by a run
+     of optional steps is the run's skip target N, and an optional step's gate is checked in
+     item 7. When the gate matches on a live frame of step k, the run cannot
      confirm that the effect took place: without a window transition this is the warning
      `arrival_unconfirmed` (`step`, `gate`, `frames`, `message`); with one, step k is listed in
      `arrival_by_time_window` (its arrival rests on the window's lower bound, which must be
@@ -751,6 +760,38 @@ unpacked as a directory.
    `entry_overlay{status:"not_applicable", reason:"application_entry"}`.
 6. **Stop.** The page after a `stop` step is the desktop or the launcher: the warning
    `application_stop_target_external`.
+7. **Optional steps** (Workflow #339). For every run, with the step k before it and its skip
+   target N, on live frames with the evaluator of item 4:
+   - a. An optional page must not pass on a screen a run may show when it is absent: the
+     frames of step k (of its page transition when k has one; nothing for an application
+     entry step), the frames of N, and the frames of another optional step of the run.
+     Otherwise `record_optional_step_ambiguous` (3, `details{step, page, against, frames}`,
+     `against`: `previous`, `skip_target` or `other_optional`): the run would click the pop-up
+     on that screen. Give the optional page a mark that does not hold there, such as the
+     pop-up's title template or a button.
+   - b. N must not pass on a frame of an optional step:
+     `record_optional_skip_target_insensitive` (3, `details{step, optional_step, frames}`).
+     Under the pop-up the run would take the screen for N, so a close click that did not
+     register, a changed pop-up or a pop-up never recorded would pass silently. Templates do
+     not see an overall darkening: add a `--color` or color digest mark on a bright area of N
+     that the pop-up darkens (or, for a small pop-up that does not darken, a mark in the area it
+     covers); the stored frames suffice.
+   - c. One pop-up recorded more than once: an optional page that passes on another optional
+     step's frames with exactly the same click rectangle is not refused. `optional_steps[]`
+     names the earlier copy in `same_as`, and each such pair adds one `arrival_unconfirmed`
+     warning (`same_as`, `gate`, `frames`) on the step whose old screen passes as the other's
+     page: after its click the same position may be clicked again. With a window transition
+     on that step it is listed in `arrival_by_time_window` instead.
+   - d. The arrival gate of step k is N (item 4); its `arrival_unconfirmed` message adds that a
+     run without the pop-up fails after the settle when the screen leaves step k's page, and
+     that a detour back to the same page after a confirmation needs a page-graph package or two
+     packages.
+   - e. An undetermined evaluation (OCR) is the warning `optional_ambiguity_not_evaluated`
+     (`check` names the refusal it stands for, with that refusal's details) and makes the
+     cross-check `partially_evaluated`; it does not refuse.
+   - f. Every pair of frames and page is evaluated once, and the gate of an optional step
+     without a page transition is the result of b (`distinct` or `not_evaluated`). Any refusal
+     comes before every warning.
 
 Warnings never refuse. The provenance and the output carry the same warnings.
 
@@ -793,7 +834,8 @@ equal value is accepted.
 {status, dry_run, session_already_stopped?, container, digest, package_id, task_id,
  path, lab_dir_path, lab_dir_status, lab_dir_created, written_files | would_write,
  sha256, byte_count, entries, steps, click_steps, application_steps[{step, op, action, source}],
- pages, transitions, timeouts{timeout_ms, step_timeout_ms, arrival_timeout_ms,
+ pages, transitions, optional_steps[{step, op, settle_ms, skip_to, same_as}],
+ timeouts{timeout_ms, step_timeout_ms, arrival_timeout_ms,
  application_arrival_timeout_ms}, warnings, arrival_by_time_window, marks_not_evaluated,
  steps_needing_review, cross_check, first_decision, entry_overlay,
  package_ref, requires, prerequisite_entry_example, binding_example, task_run_example,
@@ -812,19 +854,25 @@ equal value is accepted.
   another package names this one with `--requires`.
 - `catalog_on_failure_example` is `{"action":"pause","retry_limit":1,
   "retry_backoff_ms":60000,"escalation_threshold":2}`.
+- `optional_steps` lists every optional step: its package step number, operation id,
+  `settle_ms`, `skip_to` (the page of N) and `same_as` (the earlier step recorded for the same
+  pop-up, or `null`); `[]` without optional steps.
 - `binding_requires` lists what a binding also needs: the catalog task and its approval; the
   `prerequisite_packages` entry with `--requires`; without it, the return-home fallback (step
-  1 should be the return-home package's final screen); the recommended `on_failure`; and, with
+  1 should be the return-home package's final screen); the recommended `on_failure`; with
   application steps, that only an instance with an assigned application runs them and that an
   application entry package has no entry recognition (best configured as the instance's
-  `startup_package`, unpacked as a directory).
+  `startup_package`, unpacked as a directory); and, with optional steps, that they cover only
+  screens appearing after the click of the step before them (a pop-up later than its
+  `settle_ms`, shown more often than the copies recorded, or never recorded makes the package
+  fail loudly).
 
 ## Error codes
 
 | exit | codes |
 |---|---|
 | 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_step_self_mismatch`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict`, `record_stop_option_conflict` |
+| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict`, `record_stop_option_conflict` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
-| 6 | `record_stop_generation_not_implemented` (a build without the package generator, or a recording with optional steps, `details.reason: "optional_steps"`) |
+| 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

@@ -364,8 +364,13 @@ fn session_record_policy_payload(
                 "file_name": "<content-directory digest>.<zip|json>",
                 "dry_run": "every check runs, nothing is written, status validated",
                 "statuses": ["generated", "validated", "already_generated"],
-                "warnings": ["arrival_unconfirmed", "first_decision_not_evaluated", "task_timeout_clamped", "step_timeout_clamped", "requires_prefix_mismatch", "entry_overlay_insensitive", "application_stop_target_external"],
-                "optional_steps": "record_stop_generation_not_implemented"
+                "warnings": ["arrival_unconfirmed", "first_decision_not_evaluated", "task_timeout_clamped", "step_timeout_clamped", "requires_prefix_mismatch", "entry_overlay_insensitive", "application_stop_target_external", "optional_ambiguity_not_evaluated"],
+                "optional_steps": {
+                    "operation_field": "optional: {settle_ms}",
+                    "output": "lab.optional_steps[{step, op, settle_ms, skip_to, same_as}]",
+                    "default_timeout_adds": "the largest settle_ms of each run of optional steps",
+                    "refusals": ["record_optional_first_step", "record_optional_final_step", "record_optional_application", "record_optional_restart_segment_end", "record_optional_step_ambiguous", "record_optional_skip_target_insensitive"]
+                }
             },
             "recording_lock": {
                 "file": "<state>/record-<instance>.lock",

@@ -26,7 +26,7 @@ use actingcommand_pack_containment::{
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{RecognitionEvaluator, TargetEvaluation};
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 const ADMISSION_INSTANCE: &str = "lab.record.stop";
@@ -442,6 +442,9 @@ pub(crate) struct CrossCheck {
     pub(crate) arrival_by_time_window: Vec<u32>,
     pub(crate) cross_check: Value,
     pub(crate) entry_overlay: Value,
+    /// Workflow #339 section 4.7c: an optional step (index into `Plan::steps`) and the earlier
+    /// step of its run recorded for the same pop-up.
+    pub(crate) same_as: BTreeMap<usize, usize>,
 }
 
 const ARRIVAL_MESSAGE: &str = "Arrival unconfirmed: the screen the run waits for after this \
@@ -460,6 +463,20 @@ const ARRIVAL_NOT_EVALUATED_MESSAGE: &str = "Arrival not evaluated: the screen t
     evaluated in Lab), so whether the run can confirm the effect is unknown. Give the next step \
     a mark that is not OCR and does not hold on this step's frames, or declare a time window. \
     Check with record stop --dry-run before the final record stop.";
+const ARRIVAL_DETOUR_MESSAGE: &str = " A run of optional steps follows this step: after its \
+    click the run waits for the page after the run, which already passes on this step's frames. \
+    If the screen leaves this page after the click (into a battle, for example), a run on a day \
+    without the pop-up fails after the settle; a detour that returns to this page after a \
+    confirmation (restoring stamina, a purchase confirmation) needs a page-graph package or two \
+    packages.";
+const SAME_AS_MESSAGE: &str = "Arrival unconfirmed: these optional steps record the same pop-up \
+    with the same click (same_as). After the click of this step its old screen still passes as \
+    the other copy's page, so a run may click the same position again before the screen changes. \
+    Declare a time window transition on this step to wait before the next recognition.";
+const AMBIGUITY_NOT_EVALUATED_MESSAGE: &str = "Not evaluated: OCR is not evaluated in Lab, so \
+    whether this page passes on the other step's frames is unknown. Give the page a mark that is \
+    not OCR and does not hold on the screen a run may show instead (a pop-up's title template or \
+    button, or a --color mark on a bright area the pop-up darkens).";
 const OVERLAY_MESSAGE: &str = "Step 1 still passes on its frames darkened as a whole: while a \
     darkening pop-up (an event reminder, for example) covers the screen, the Runtime takes it \
     for step 1 and a prerequisite package does not run. Add a --color or color digest mark on a \
@@ -527,6 +544,273 @@ fn self_mismatch(
     )
 }
 
+/// The frames a page matches on and the frames it is undetermined on.
+fn page_on_frames(
+    evaluation: &Evaluation<'_>,
+    cache: &FrameCache,
+    required: &[String],
+    frames: &[&RecordedFrame],
+) -> LabResult<(Vec<String>, Vec<String>)> {
+    let mut matched = Vec::new();
+    let mut undetermined = Vec::new();
+    for frame in frames {
+        match evaluation
+            .page(&cached(cache, frame)?.scene, required)?
+            .verdict
+        {
+            PageVerdict::Match => matched.push(frame.frame_id.clone()),
+            PageVerdict::Undetermined => undetermined.push(frame.frame_id.clone()),
+            PageVerdict::NoMatch => {}
+        }
+    }
+    Ok((matched, undetermined))
+}
+
+/// What the optional-step checks leave when none refuses.
+#[derive(Default)]
+struct OptionalChecks {
+    warnings: Vec<Value>,
+    arrival_by_time_window: Vec<u32>,
+    same_as: BTreeMap<usize, usize>,
+    /// The skip target on each member's frames (`distinct` or `not_evaluated`), by step index.
+    member_gates: BTreeMap<usize, &'static str>,
+    partial: bool,
+}
+
+/// The screen a run may show when an optional page is absent (section 4.7a).
+#[derive(Clone, Copy)]
+enum Against {
+    Previous,
+    SkipTarget,
+    OtherOptional,
+}
+
+impl Against {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Previous => "previous",
+            Self::SkipTarget => "skip_target",
+            Self::OtherOptional => "other_optional",
+        }
+    }
+
+    const fn consequence(self) -> &'static str {
+        match self {
+            Self::Previous => {
+                "the screen left over after that step's click, or after a click that did not \
+                 register, would be taken for the pop-up and this step's click executed on it"
+            }
+            Self::SkipTarget => {
+                "on every run without the pop-up this step's click would be executed on that \
+                 page"
+            }
+            Self::OtherOptional => {
+                "when only that pop-up appears it would be taken for this one and this step's \
+                 different click executed on it"
+            }
+        }
+    }
+}
+
+fn optional_ambiguous(
+    step: &PlanStep,
+    page: &str,
+    against: Against,
+    other: &PlanStep,
+    frames: &[String],
+) -> LabError {
+    with_details(
+        blocked(
+            "record_optional_step_ambiguous",
+            format!(
+                "page {page} of optional step {} (recording step {}) passes on frames {} of step \
+                 {} ({}): {}. Give step {} a mark that does not hold on that screen, such as the \
+                 pop-up's title template or a button, and check with record stop --dry-run",
+                step.number,
+                step.step.index,
+                frames.join(", "),
+                other.number,
+                match against {
+                    Against::Previous => "the step before the run",
+                    Against::SkipTarget => "the page after the run",
+                    Against::OtherOptional => "another optional step of the run",
+                },
+                against.consequence(),
+                step.step.index
+            ),
+        ),
+        json!({
+            "step": step.number,
+            "page": page,
+            "against": against.as_str(),
+            "frames": frames
+        }),
+    )
+}
+
+fn skip_target_insensitive(
+    skip: &PlanStep,
+    page: &str,
+    optional: &PlanStep,
+    frames: &[String],
+) -> LabError {
+    with_details(
+        blocked(
+            "record_optional_skip_target_insensitive",
+            format!(
+                "page {page} of step {} (recording step {}), the page after a run of optional \
+                 steps, passes on frames {} of optional step {}: under the pop-up a run would \
+                 take the screen for {page}, so a close click that did not register, a changed \
+                 pop-up or a pop-up never recorded would end the wait as if no pop-up had \
+                 appeared instead of failing. Templates match with ccoeff_normed by default and \
+                 do not see an overall darkening: add a --color or color digest mark on a bright \
+                 area of step {} that the pop-up darkens, or, for a small pop-up that does not \
+                 darken the screen, a mark in the area it covers; the stored frames suffice, \
+                 check with record stop --dry-run",
+                skip.number,
+                skip.step.index,
+                frames.join(", "),
+                optional.number,
+                skip.step.index
+            ),
+        ),
+        json!({
+            "step": skip.number,
+            "optional_step": optional.number,
+            "frames": frames
+        }),
+    )
+}
+
+/// Workflow #339 section 4.7 a–f, per run of optional steps with the step before it and its
+/// skip target, on live frames only. An optional page must not pass on a screen a run may show
+/// when the page is absent (a), the skip target must not pass on an optional page (b), a page
+/// recorded twice with the same click is `same_as` with one `arrival_unconfirmed` (c), and an
+/// undetermined evaluation is a warning (e). Every pair of frames and page is evaluated once and
+/// any refusal comes before every warning (f); the step before a run (d) is the arrival gate.
+fn optional_checks(
+    evaluation: &Evaluation<'_>,
+    plan: &Plan,
+    cache: &FrameCache,
+) -> LabResult<OptionalChecks> {
+    let mut checks = OptionalChecks::default();
+    for run in &plan.runs {
+        let previous = &plan.steps[run.previous];
+        let skip = &plan.steps[run.skip];
+        let skip_page = skip.page_id()?;
+        // A page transition of the step before the run is the screen left after its click.
+        let previous_frames = if previous.transition_page.is_some() {
+            previous.transition_live_frames()
+        } else {
+            previous.live_frames()
+        };
+        // (frames step, page step) -> the frames of the first on which the second passes, for
+        // the members recorded with the same click.
+        let mut same_pages: BTreeMap<(usize, usize), Vec<String>> = BTreeMap::new();
+        let mut same_pairs = BTreeSet::new();
+        for &member in &run.members {
+            let step = &plan.steps[member];
+            let page = step.page_id()?;
+            let mut against = vec![
+                (Against::Previous, run.previous, previous_frames.clone()),
+                (Against::SkipTarget, run.skip, skip.live_frames()),
+            ];
+            for &other in run.members.iter().filter(|&&other| other != member) {
+                against.push((
+                    Against::OtherOptional,
+                    other,
+                    plan.steps[other].live_frames(),
+                ));
+            }
+            for (kind, other, frames) in against {
+                // An application entry step before the run has no frame of its own.
+                if frames.is_empty() {
+                    continue;
+                }
+                let (matched, undetermined) =
+                    page_on_frames(evaluation, cache, &step.required, &frames)?;
+                let other_step = &plan.steps[other];
+                if !matched.is_empty() {
+                    let same_click = matches!(kind, Against::OtherOptional)
+                        && step.step.click.as_ref().map(|click| click.rect)
+                            == other_step.step.click.as_ref().map(|click| click.rect);
+                    if !same_click {
+                        return Err(optional_ambiguous(step, page, kind, other_step, &matched));
+                    }
+                    same_pairs.insert((member.min(other), member.max(other)));
+                    same_pages.insert((other, member), matched);
+                } else if !undetermined.is_empty() {
+                    checks.partial = true;
+                    checks.warnings.push(json!({
+                        "code": "optional_ambiguity_not_evaluated",
+                        "check": "record_optional_step_ambiguous",
+                        "step": step.number,
+                        "page": page,
+                        "against": kind.as_str(),
+                        "frames": undetermined,
+                        "message": AMBIGUITY_NOT_EVALUATED_MESSAGE
+                    }));
+                }
+            }
+        }
+        for &member in &run.members {
+            let step = &plan.steps[member];
+            let (matched, undetermined) =
+                page_on_frames(evaluation, cache, &skip.required, &step.live_frames())?;
+            if !matched.is_empty() {
+                return Err(skip_target_insensitive(skip, skip_page, step, &matched));
+            }
+            let result = if undetermined.is_empty() {
+                "distinct"
+            } else {
+                checks.partial = true;
+                checks.warnings.push(json!({
+                    "code": "optional_ambiguity_not_evaluated",
+                    "check": "record_optional_skip_target_insensitive",
+                    "step": skip.number,
+                    "optional_step": step.number,
+                    "frames": undetermined,
+                    "message": AMBIGUITY_NOT_EVALUATED_MESSAGE
+                }));
+                "not_evaluated"
+            };
+            checks.member_gates.insert(member, result);
+        }
+        // c. One pop-up recorded more than once: no refusal, `same_as` names the earliest
+        // copy, and one arrival warning per pair on the step whose old screen passes as the
+        // other's page (a window transition lists it in `arrival_by_time_window` instead).
+        for &(first, second) in &same_pairs {
+            checks.same_as.entry(second).or_insert(first);
+            let (from, gate, frames) = match same_pages.get(&(first, second)) {
+                Some(frames) => (first, second, frames),
+                None => (
+                    second,
+                    first,
+                    same_pages.get(&(second, first)).ok_or_else(|| {
+                        invalid("validation_failed", "a same_as pair has no matching frames")
+                    })?,
+                ),
+            };
+            let step = &plan.steps[from];
+            if step.window().is_some() {
+                if !checks.arrival_by_time_window.contains(&step.number) {
+                    checks.arrival_by_time_window.push(step.number);
+                }
+            } else {
+                checks.warnings.push(json!({
+                    "code": "arrival_unconfirmed",
+                    "step": step.number,
+                    "gate": plan.steps[gate].page_id()?,
+                    "frames": frames,
+                    "same_as": [plan.steps[first].number, plan.steps[second].number],
+                    "message": SAME_AS_MESSAGE
+                }));
+            }
+        }
+    }
+    Ok(checks)
+}
+
 /// Section 4.6 item 4 (self and arrival gates) and a15 item 5 (entry overlay).
 pub(crate) fn cross_check(
     plan: &Plan,
@@ -587,6 +871,10 @@ pub(crate) fn cross_check(
         }
     }
 
+    // Workflow #339 section 4.7: the optional steps, refusals before any warning.
+    let optional = optional_checks(&evaluation, plan, cache)?;
+    partial |= optional.partial;
+
     // b. the arrival gate after every effect, on the frames of its own step
     let mut warnings = Vec::new();
     let mut arrival_by_time_window = Vec::new();
@@ -595,9 +883,33 @@ pub(crate) fn cross_check(
         if !step.has_effect() {
             continue;
         }
-        let (gate, required) = plan.gate(index)?;
+        // Workflow #339 section 4.7d: without a page transition, the gate of the step before a
+        // run of optional steps is the run's skip target; a member's gate was checked above.
+        let run_after = plan
+            .run_after(index)
+            .filter(|_| step.transition_page.is_none());
+        let member = plan
+            .run_of(index)
+            .filter(|_| step.transition_page.is_none());
+        let (gate, required) = match run_after.or(member) {
+            Some(run) => {
+                let skip = &plan.steps[run.skip];
+                (skip.page_id()?.to_string(), skip.required.clone())
+            }
+            None => plan.gate(index)?,
+        };
         if step.is_entry() {
             gates.push(json!({"step": step.number, "gate": gate, "result": "not_applicable"}));
+            continue;
+        }
+        if member.is_some() {
+            let result = optional.member_gates.get(&index).copied().ok_or_else(|| {
+                invalid(
+                    "validation_failed",
+                    format!("optional step {} has no skip target result", step.number),
+                )
+            })?;
+            gates.push(json!({"step": step.number, "gate": gate, "result": result}));
             continue;
         }
         let mut matched = Vec::new();
@@ -628,6 +940,9 @@ pub(crate) fn cross_check(
                 if step.step.application.is_some() {
                     message.push_str(ARRIVAL_APPLICATION_MESSAGE);
                 }
+                if run_after.is_some() {
+                    message.push_str(ARRIVAL_DETOUR_MESSAGE);
+                }
                 warnings.push(json!({
                     "code": "arrival_unconfirmed",
                     "step": step.number,
@@ -648,6 +963,13 @@ pub(crate) fn cross_check(
         }
         gates.push(json!({"step": step.number, "gate": gate, "result": result}));
     }
+    warnings.extend(optional.warnings);
+    for number in optional.arrival_by_time_window {
+        if !arrival_by_time_window.contains(&number) {
+            arrival_by_time_window.push(number);
+        }
+    }
+    arrival_by_time_window.sort_unstable();
 
     // a15 item 5: the first step under an overall darkening
     let first = plan
@@ -714,5 +1036,6 @@ pub(crate) fn cross_check(
         arrival_by_time_window,
         cross_check: Value::Object(cross_check),
         entry_overlay,
+        same_as: optional.same_as,
     })
 }
