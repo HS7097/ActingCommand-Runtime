@@ -716,7 +716,7 @@ fn target_terms(target: &ResourceTargetSpecV2, pool: &PoolSpec) -> Result<(u64, 
 pub(crate) struct ResolvedTarget<'a> {
     pub(crate) pool: &'a PoolSpec,
     pub(crate) fact_key: String,
-    pub(crate) per_task: Vec<(String, u64)>,
+    pub(crate) per_task: Vec<(String, u128)>,
 }
 
 /// Resolves `target` for `instance`: its pool, then each task, the first refusal winning.
@@ -769,13 +769,13 @@ pub(crate) fn resolve_target_pool<'a>(
 }
 
 /// The task half of [`resolve_target`]: one run's expected effective production of `pool`
-/// (`r_k >= 1`) by `task_id` on `instance`, or why the task cannot serve the target.
+/// in milli-units (`r_k > 0`) by `task_id` on `instance`, or why it cannot serve the target.
 pub(crate) fn resolve_target_task(
     catalog: &CompiledCatalog,
     pool: &PoolSpec,
     task_id: &str,
     instance: &InstanceSnapshot,
-) -> Result<u64, ResourceTargetsRejectionReason> {
+) -> Result<u128, ResourceTargetsRejectionReason> {
     let task = target_task(catalog, task_id, instance)?;
     let per_run = per_run_production(task, &pool.id);
     if per_run == 0 {
@@ -784,16 +784,24 @@ pub(crate) fn resolve_target_task(
     Ok(per_run)
 }
 
-/// One run's expected effective production of `pool_id` by `task`:
-/// `Σ ⌊amount · confidence_milli / 1000⌋` over its `produces` entries of that pool, saturating.
-fn per_run_production(task: &TaskSpec, pool_id: &str) -> u64 {
-    let produced = task
-        .produces
+/// One run's production in milli-units. Integer declarations retain their established
+/// `floor(amount * confidence / 1000)` contribution; explicit expectations are already
+/// probability/batch adjusted and are not multiplied by evidence confidence.
+fn per_run_production(task: &TaskSpec, pool_id: &str) -> u128 {
+    task.produces
         .iter()
         .filter(|effect| effect.pool_id == pool_id)
-        .map(|effect| u128::from(effect.amount) * u128::from(effect.confidence_milli) / 1_000)
-        .sum::<u128>();
-    u64::try_from(produced).unwrap_or(u64::MAX)
+        .map(|effect| match effect.expected_amount_milli {
+            Some(amount) => u128::from(amount),
+            None => {
+                u128::from(effect.amount.expect("compiled integer effect"))
+                    * u128::from(effect.confidence_milli)
+                    / 1_000
+                    * 1_000
+            }
+        })
+        // At most 128 effects, each a canonical integer times 1000: this fits u128.
+        .sum()
 }
 
 /// The catalog task `task_id` when it exists, its scope covers `instance` and no instance
@@ -1349,22 +1357,65 @@ pub(crate) fn decode_rows_v2(
 }
 
 /// T1 task target score `min(⌊g·I·u / (S·U)⌋, 1_000_000)` in exact integer arithmetic, and
-/// whether the cap applied; `None` when `S·U` is zero (never for a checked target with a gap).
+/// whether the cap applied; `None` for zero denominators or arithmetic overflow.
 pub(crate) fn task_target_milli(
     gap: u64,
     importance_milli: u64,
     scale: u64,
-    useful: u64,
-    best_useful: u64,
+    useful: u128,
+    best_useful: u128,
 ) -> Option<(u64, bool)> {
-    let numerator = u128::from(gap) * u128::from(importance_milli) * u128::from(useful);
-    let quotient = numerator.checked_div(u128::from(scale) * u128::from(best_useful))?;
+    if scale == 0 || best_useful == 0 {
+        return None;
+    }
+    let common = greatest_common_divisor(useful, best_useful);
+    let numerator =
+        (u128::from(gap) * u128::from(importance_milli)).checked_mul(useful / common)?;
+    let quotient = numerator.checked_div(u128::from(scale).checked_mul(best_useful / common)?)?;
     let cap = u128::from(MAX_RESOURCE_TARGET_MILLI);
     Some(if quotient > cap {
         (MAX_RESOURCE_TARGET_MILLI, true)
     } else {
         (u64::try_from(quotient).ok()?, false)
     })
+}
+
+fn greatest_common_divisor(mut left: u128, mut right: u128) -> u128 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
+}
+
+/// Add an exact score fraction. Reduction keeps ordinary catalog scales small; a
+/// fraction outside u128 is an explicit evaluation failure, never a rounded zero.
+fn add_score_fraction(
+    sum: &mut (u128, u128),
+    numerator: u128,
+    denominator: u128,
+) -> Result<(), &'static str> {
+    const OVERFLOW: &str = "expected production score fraction overflow";
+    if denominator == 0 {
+        return Err("resource valuation step is zero");
+    }
+    let common = greatest_common_divisor(numerator, denominator);
+    let (numerator, denominator) = (numerator / common, denominator / common);
+    let common = greatest_common_divisor(sum.1, denominator);
+    let left = sum.0.checked_mul(denominator / common).ok_or(OVERFLOW)?;
+    let right = numerator.checked_mul(sum.1 / common).ok_or(OVERFLOW)?;
+    let numerator = left.checked_add(right).ok_or(OVERFLOW)?;
+    let denominator = sum.1.checked_mul(denominator / common).ok_or(OVERFLOW)?;
+    let common = greatest_common_divisor(numerator, denominator);
+    *sum = (numerator / common, denominator / common);
+    Ok(())
+}
+
+fn quantity_units(milli: u128) -> String {
+    if milli.is_multiple_of(1_000) {
+        (milli / 1_000).to_string()
+    } else {
+        format!("{}.{:03}", milli / 1_000, milli % 1_000)
+    }
 }
 
 /// One instance's own stored policy as the evaluator reads it (Workflow #308 RT-S1b).
@@ -1609,7 +1660,7 @@ pub(crate) struct ResourceTerm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WeightItem {
     pool: String,
-    per_run: u64,
+    per_run: u128,
     step: u64,
     base_milli: u64,
     gap_weight_milli: u64,
@@ -1662,7 +1713,7 @@ impl ResourceTerm {
                     format!(
                         "{}:r={},per={},base={},gap={},effective={},term={}",
                         item.pool,
-                        item.per_run,
+                        quantity_units(item.per_run),
                         item.step,
                         item.base_milli,
                         item.gap_weight_milli,
@@ -1735,9 +1786,9 @@ pub(crate) struct AppliedTarget {
     scale: u64,
     importance_milli: u64,
     weight_milli: u64,
-    per_run: u64,
-    useful: u64,
-    best_useful: u64,
+    per_run: u128,
+    useful: u128,
+    best_useful: u128,
 }
 
 impl TargetEffect {
@@ -1817,9 +1868,9 @@ impl TargetEffect {
                     applied.scale,
                     applied.importance_milli,
                     applied.weight_milli,
-                    applied.per_run,
-                    applied.useful,
-                    applied.best_useful,
+                    quantity_units(applied.per_run),
+                    quantity_units(applied.useful),
+                    quantity_units(applied.best_useful),
                     applied.task_target_milli,
                     if applied.capped { " capped" } else { "" }
                 ),
@@ -1907,7 +1958,7 @@ enum TargetStatus {
 
 impl ResolvedTargetV2<'_> {
     /// Whether the target covers `task`, which produces `per_run` of its pool per run.
-    fn covers(&self, task: &str, per_run: u64) -> bool {
+    fn covers(&self, task: &str, per_run: u128) -> bool {
         match &self.named {
             Some(named) => named.contains(task),
             None => per_run >= 1,
@@ -2273,6 +2324,7 @@ fn resolve_v2(
             }
         }
         let mut total = 0_u128;
+        let mut fraction = (0_u128, 1_u128);
         for pool in &pools {
             let per_run = per_run_production(task, &pool.id);
             if per_run == 0 {
@@ -2292,10 +2344,23 @@ fn resolve_v2(
                 valuation.map_or(0, |valuation| u64::from(valuation.base_weight_milli));
             let gap_weight_milli = covering.map_or(0, ResolvedTargetV2::gap_weight_milli);
             let effective_milli = base_milli + gap_weight_milli;
-            let term_milli = (u128::from(per_run) * u128::from(effective_milli))
-                .checked_div(u128::from(step))
+            let numerator = per_run
+                .checked_mul(u128::from(effective_milli))
+                .ok_or("expected production weighted amount overflow")?;
+            let denominator = u128::from(step) * 1_000;
+            let term_milli = numerator
+                .checked_div(denominator)
                 .ok_or("resource valuation step is zero")?;
-            total = total.saturating_add(term_milli);
+            total = total
+                .checked_add(term_milli)
+                .ok_or("resource score sum overflow")?;
+            if task
+                .produces
+                .iter()
+                .any(|effect| effect.pool_id == pool.id && effect.expected_amount_milli.is_some())
+            {
+                add_score_fraction(&mut fraction, numerator % denominator, denominator)?;
+            }
             term.items.push(WeightItem {
                 pool: pool.id.clone(),
                 per_run,
@@ -2312,6 +2377,11 @@ fn resolve_v2(
                 .cmp(&left.term_milli)
                 .then_with(|| left.pool.cmp(&right.pool))
         });
+        // Integer declarations retain their per-resource floor. Explicit expected
+        // contributions carry their exact remainder to this final score boundary.
+        total = total
+            .checked_add(fraction.0 / fraction.1)
+            .ok_or("resource score sum overflow")?;
         let cap = u128::from(MAX_RESOURCE_TARGET_MILLI);
         term.capped = total > cap;
         term.term_milli =
@@ -2417,16 +2487,17 @@ fn target_effects(
         }
         return Ok(());
     }
-    const NO_BEST: &str = "resource target task score has no best useful contribution";
+    const NO_BEST: &str = "resource target task score has a zero divisor or arithmetic overflow";
+    let gap_milli = u128::from(gap) * 1_000;
     let best_useful = mapped
         .iter()
-        .map(|(_, per_run)| (*per_run).min(gap))
+        .map(|(_, per_run)| (*per_run).min(gap_milli))
         .max()
         .unwrap_or(0);
     let (weight_milli, _) =
         task_target_milli(gap, target.importance_milli, target.scale, 1, 1).ok_or(NO_BEST)?;
     for (task, per_run) in mapped {
-        let useful = per_run.min(gap);
+        let useful = per_run.min(gap_milli);
         let (task_target_milli, capped) = task_target_milli(
             gap,
             target.importance_milli,

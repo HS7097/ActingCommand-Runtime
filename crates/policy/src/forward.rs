@@ -458,6 +458,9 @@ fn apply_declared_effects(
             ForwardError::invalid(format!("projected task '{}' is missing", intent.task_id))
         })?;
         for effect in task.consumes.iter().chain(task.produces.iter()) {
+            let amount = effect.amount.ok_or_else(|| {
+                ForwardError::invalid("expected production cannot update projected inventory")
+            })?;
             let pool = pools.get_mut(&effect.pool_id).ok_or_else(|| {
                 ForwardError::invalid(format!(
                     "task '{}' references missing projected pool '{}'",
@@ -466,11 +469,8 @@ fn apply_declared_effects(
             })?;
             match effect.direction {
                 EffectDirection::Consume => {
-                    pool.snapshot.value = pool
-                        .snapshot
-                        .value
-                        .checked_sub(effect.amount)
-                        .ok_or_else(|| {
+                    pool.snapshot.value =
+                        pool.snapshot.value.checked_sub(amount).ok_or_else(|| {
                             ForwardError::invalid(format!(
                                 "task '{}' consumes more '{}' than projected",
                                 task.id, effect.pool_id
@@ -481,7 +481,7 @@ fn apply_declared_effects(
                     let raw = pool
                         .snapshot
                         .value
-                        .checked_add(effect.amount)
+                        .checked_add(amount)
                         .ok_or_else(|| ForwardError::overflow("task production overflowed"))?;
                     pool.cumulative_waste = pool
                         .cumulative_waste
@@ -515,7 +515,8 @@ fn uncertain_effect_gap(
             .iter()
             .chain(task.produces.iter())
             .any(|effect| {
-                effect.confidence_milli < 1_000
+                effect.expected_amount_milli.is_some()
+                    || effect.confidence_milli < 1_000
                     || effect.observation_source == ObservationSource::Inferred
             })
         {
@@ -1217,6 +1218,55 @@ mod tests {
                 .iter()
                 .any(|gap| gap.code == "effect_evidence_insufficient")
         );
+        // WF345 R4: an expected yield cannot become a definite inventory transition.
+        tasks_document["tasks"][0]["produces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("amount");
+        tasks_document["tasks"][0]["produces"][0]["expected_amount_milli"] = serde_json::json!(400);
+        tasks_document["tasks"][0]["produces"][0]["confidence_milli"] = serde_json::json!(1000);
+        uncertain_sources.tasks.bytes = serde_json::to_vec(&tasks_document).unwrap();
+        for source in [
+            &mut uncertain_sources.tasks,
+            &mut uncertain_sources.pools,
+            &mut uncertain_sources.activity,
+            &mut uncertain_sources.timeline,
+        ] {
+            let mut document: serde_json::Value = serde_json::from_slice(&source.bytes).unwrap();
+            document["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+            if let Some(events) = document
+                .get_mut("events")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for event in events {
+                    event["validity"] = serde_json::json!({"from_unix_ms":0,"until_unix_ms":null});
+                }
+            }
+            source.bytes = serde_json::to_vec(&document).unwrap();
+        }
+        let expected = compile_catalog(&uncertain_sources).unwrap();
+        let projection = project_forward(
+            &expected,
+            &facts(true),
+            &original_resources,
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
+            11,
+            config,
+        )
+        .unwrap();
+        assert_eq!(
+            projection.completeness,
+            ForwardProjectionCompleteness::EvidenceInsufficient
+        );
+        assert!(projection.steps.is_empty());
+        assert_eq!(
+            projection.evidence_gaps[0].code,
+            "effect_evidence_insufficient"
+        );
+        assert_eq!(original_resources, resources(119));
     }
 
     #[test]

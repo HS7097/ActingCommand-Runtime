@@ -683,6 +683,52 @@ mod tests {
             crate::SCHEDULING_SCHEMA_VERSION_V2
         );
         assert_ne!(compiled.catalog_hash(), original.catalog_hash());
+        // WF345 R4 specification: one bounded v2 production quantity; zero is known,
+        // absence is invalid, and the unchanged v1 catalog retains its canonical hash.
+        for (quantity, accepted) in [
+            (serde_json::json!({"expected_amount_milli": 0}), true),
+            (serde_json::json!({"expected_amount_milli": 400}), true),
+            (serde_json::json!({"expected_amount_milli": 120_000}), true),
+            (serde_json::json!({"expected_amount_milli": 120_001}), false),
+            (
+                serde_json::json!({"expected_amount_milli": 9_007_199_254_740_992_u64}),
+                false,
+            ),
+            (serde_json::json!({"expected_amount_milli": null}), false),
+            (serde_json::json!({"expected_amount_milli": 0.4}), false),
+            (serde_json::json!({"expected_amount_milli": -1}), false),
+            (
+                serde_json::json!({"amount": 1, "expected_amount_milli": 400}),
+                false,
+            ),
+            (serde_json::json!({}), false),
+        ] {
+            let mut sources = v2.clone();
+            let mut document = tasks.clone();
+            let effect = document["tasks"][0]["produces"][0].as_object_mut().unwrap();
+            effect.remove("amount");
+            effect.extend(quantity.as_object().unwrap().clone());
+            sources.tasks.bytes = serde_json::to_vec(&document).unwrap();
+            assert_eq!(compile_catalog(&sources).is_ok(), accepted, "{quantity}");
+        }
+        for (version, member, direction) in [
+            (crate::SCHEDULING_SCHEMA_VERSION, "produces", "produce"),
+            (crate::SCHEDULING_SCHEMA_VERSION_V2, "consumes", "consume"),
+        ] {
+            let mut sources = if version == crate::SCHEDULING_SCHEMA_VERSION {
+                v1.clone()
+            } else {
+                v2.clone()
+            };
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&sources.tasks.bytes).unwrap();
+            document["tasks"][0][member] = serde_json::json!([{
+                "pool_id": "fixture-pool-a", "direction": direction,
+                "expected_amount_milli": 400, "observation_source": "self_reported", "confidence_milli": 1000
+            }]);
+            sources.tasks.bytes = serde_json::to_vec(&document).unwrap();
+            assert!(compile_catalog(&sources).is_err(), "{version} {member}");
+        }
         for version in [
             crate::SCHEDULING_SCHEMA_VERSION,
             "actingcommand.scheduling.v3",

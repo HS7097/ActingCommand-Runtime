@@ -57,10 +57,16 @@ mismatches are refused with a line and column.
 | `importance_milli` | `1..=1_000_000` | `out_of_range` @ `/targets/i/importance_milli` |
 | `rule` | `shortfall_linear`, the only v1 rule | `invalid_type` |
 | `apply` | `mode` `adjust` or `override`; `weight` `score_stage`, the only v1 weight | `invalid_type` |
-| `tasks` | `1..=32` per target, at most 128 in the document, each task once in the document; the task exists, its scope covers the instance, no `instance_overrides` entry of the instance sets `enabled: false`, and one run produces the resource (`r >= 1`, below) | `out_of_range` @ `/targets/i/tasks` (or the 129th reference); `unknown_task` / `task_out_of_scope` / `task_disabled` / `unmapped_task` / `duplicate_task` @ `/targets/i/tasks/j` |
+| `tasks` | `1..=32` per target, at most 128 in the document, each task once in the document; the task exists, its scope covers the instance, no `instance_overrides` entry of the instance sets `enabled: false`, and one run produces the resource (`r > 0`, below) | `out_of_range` @ `/targets/i/tasks` (or the 129th reference); `unknown_task` / `task_out_of_scope` / `task_disabled` / `unmapped_task` / `duplicate_task` @ `/targets/i/tasks/j` |
 
-`r` of a task for a resource is `Σ ⌊amount · confidence_milli / 1000⌋` over the task's
-`produces` entries of that pool.
+`r` of a task for a resource is the sum of its `produces` entries of that pool.
+An integer `amount` contributes `floor(amount * confidence_milli / 1000)` real units.
+A scheduling.v2 `expected_amount_milli` contributes exactly that many thousandths of a
+real unit, without confidence discounting. Mapping and coverage require `r > 0`;
+positive subunit expectations therefore map in either resource-target document version.
+Both forms sum in milli-units using bounded u128 arithmetic; inventory and target values
+stay in real units. A valid zero yield is unmapped; an absent/invalid quantity fails catalog
+compilation. Expected quantities never become observed inventory facts.
 
 General reasons: `invalid_json` (not UTF-8, not JSON, trailing data: the path is empty or the
 scanner's), `duplicate_key`, `unknown_field`, `missing_field`, `invalid_type` (a float, a wrong
@@ -115,7 +121,7 @@ reason set is unchanged.
 | `rule` | optional, `shortfall_linear` only; absent takes the pool's `valuation.gap.rule`, and `shortfall_linear` without a gap block | `invalid_type` |
 | `apply.mode`, `apply.weight` | as v1 | as v1 |
 | `apply.manual_offset` | optional, `keep` or `supersede`, only in `override` mode; absent is `keep` | `invalid_value` @ `/targets/i/apply/manual_offset` in `adjust` mode; `invalid_type` for another value |
-| `tasks` | optional in `adjust` mode, required in `override` mode; when given, the v1 task checks; when absent, at least one task of the instance (scope covers it, not disabled) must produce the resource (`r >= 1`) | `missing_field` @ `/targets/i/tasks`; as v1 @ `/targets/i/tasks/j`; `unmapped_task` @ `/targets/i/resource` |
+| `tasks` | optional in `adjust` mode, required in `override` mode; when given, the v1 task checks; when absent, at least one task of the instance (scope covers it, not disabled) must produce the resource (`r > 0`) | `missing_field` @ `/targets/i/tasks`; as v1 @ `/targets/i/tasks/j`; `unmapped_task` @ `/targets/i/resource` |
 
 **Version probe.** The Runtime first reads the document as plain JSON: exactly when its
 top-level `schema_version` is the string `actingcommand.resource-targets.v2` it takes the v2
@@ -322,7 +328,7 @@ Score (`shortfall_linear`; exact integers with 128-bit intermediates, truncating
 ```text
 g   = max(T - c, 0)                          gap of the target (at_least T, inventory c)
 w   = min(floor(g*I / S), 1_000_000)         target weight (scale S, importance_milli I)
-r_k = sum of floor(amount * confidence_milli / 1000) over task k's produces of the pool
+r_k = sum of effective production in real units, retaining milli-unit fractions (defined above)
 u_k = min(r_k, g)                            useful contribution of one run
 U   = max u_j over the target's tasks that still map   (>= 1 while g >= 1)
 s_k = min(floor(g*I*u_k / (S*U)), 1_000_000) task target score, "capped" at the bound
@@ -405,27 +411,38 @@ with `tasks` whose pool no longer resolves shows `resource_target_unmapped:<id>`
 candidates, as v1.
 
 For an enabled instance `i` and a candidate `k` (a task that passed trigger, feedback stop,
-cooldown and placement), with exact integers, 128-bit intermediates and truncation:
+cooldown and placement), with milli-unit quantities and checked 128-bit intermediates:
 
 ```text
 for each pool p whose scope covers i:
-  r(k,p) = sum of floor(amount * confidence_milli / 1000) over k's produces of p
+  r(k,p) = sum of effective production in real units, retaining milli-unit fractions
   B_p    = p.valuation.base_weight_milli, 0 without a valuation
 target t (at most one per pool) of pool p:
-  scope(t) = t.tasks; without tasks every candidate of i with r(k,p) >= 1
+  scope(t) = t.tasks; without tasks every candidate of i with r(k,p) > 0
   with a known inventory c and g = max(T - c, 0) >= 1:
       Γ_t = min(floor(I * g / S), 1_000_000)          ("capped" at the bound)
   otherwise (satisfied, pending, unresolved): Γ_t = 0
 W(k,p) = B_p + (k in scope(t) ? Γ_t : 0)             effective resource weight, <= 2_000_000
 Q_p    = p.valuation.scale, else t.scale
 T(k,p) = floor(r(k,p) * W(k,p) / Q_p)
-R(k)   = min(sum of T(k,p), 1_000_000)               ("capped" at the bound)
+F(k,p) = fractional remainder of r(k,p) * W(k,p) / Q_p for pools with an explicit expected effect; 0 otherwise
+R(k)   = min(sum of T(k,p) + floor(sum of F(k,p)), 1_000_000) ("capped" at the bound)
 ```
 
-A pool takes part for `k` when `r(k,p) >= 1` and it declares a valuation or a target covering
+A pool takes part for `k` when `r(k,p) > 0` and it declares a valuation or a target covering
 `k` names it. `W` belongs to the resource; a target's scope only decides who gets the
 shortfall part. Only `produces` count: `consumes` still drives urgency alone. `Γ`, `W`, `T` and
 `R` never fall as the gap grows; at `g = 0` the base weight stays.
+
+Integer-only resources keep their established per-resource floor. Resources with explicit
+expected quantities aggregate all their effects before weighting and retain exact rational
+score remainders until the final task-score floor. For example, 400 + 400 milli-units of one
+resource and 400 of another, each weighted 1 per real unit, contribute floor(0.8 + 0.4) = 1.
+`resource_weights` reports each per-resource integer term and the final aggregate term;
+its `r` quantity is in real units with up to three decimal places. Rational intermediates
+are reduced before addition; an unrepresentable u128 fraction or target-score intermediate
+returns an explicit evaluation error, not zero, an unmapped task, or a saturated success.
+The existing final score cap remains 1,000,000.
 
 **Stage and score.** On an enabled instance a candidate with `R > 0`, or covered by an
 effective override (an `override` target naming it with `g >= 1`, step and importance

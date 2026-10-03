@@ -323,12 +323,13 @@ fn apply_declared_effects(
             .expect("effect pool exists");
         match effect.direction {
             EffectDirection::Consume => {
-                assert!(*value >= effect.amount);
-                *value -= effect.amount;
+                let amount = effect.amount.expect("fixture declares integer consumption");
+                assert!(*value >= amount);
+                *value -= amount;
             }
             EffectDirection::Produce => {
                 *value = value
-                    .checked_add(effect.amount)
+                    .checked_add(effect.amount.expect("fixture declares integer production"))
                     .expect("bounded resource addition")
                     .min(capacities[effect.pool_id.as_str()]);
             }

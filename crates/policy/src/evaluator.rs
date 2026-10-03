@@ -5489,6 +5489,110 @@ mod tests {
                 instance_b(&evaluate_at(current, None, Some(-300_000)))
             );
         }
+
+        // WF345 R4 specification: milli-yields map before rounding, sum within and
+        // across resources, and read the same fresh inventory facts for gap weights.
+        for (amounts, other, weight, base_score, gap_score) in [
+            (vec![400_u64], 0_u64, 1_000_u64, 400_u64, 800_u64),
+            (vec![400, 400], 400, 1, 1, 801),
+            (vec![0], 0, 1_000, 0, 0),
+        ] {
+            let mut docs = example_documents();
+            for document in [&mut docs.0, &mut docs.1, &mut docs.2, &mut docs.3] {
+                document["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+            }
+            for event in docs.3["events"].as_array_mut().unwrap() {
+                event["validity"] = serde_json::json!({"from_unix_ms":0,"until_unix_ms":null});
+            }
+            let mut second_pool = docs.1["pools"][0].clone();
+            second_pool["id"] = serde_json::json!("fixture-pool-b");
+            docs.1["pools"].as_array_mut().unwrap().push(second_pool);
+            for pool in docs.1["pools"].as_array_mut().unwrap() {
+                pool["valuation"] = serde_json::json!({"name":"Material","unit":"piece","scale":1,"base_weight_milli":weight});
+            }
+            docs.0["tasks"][0]["trigger"] = due_clock();
+            docs.0["tasks"][0]["feedback_stop"] = false_fact();
+            docs.0["tasks"][0]["priority"] = serde_json::json!(0);
+            docs.0["tasks"][0]["produces"] = serde_json::json!(amounts.iter().map(|amount|
+                serde_json::json!({"pool_id":"fixture-pool-a","direction":"produce","expected_amount_milli":amount,
+                    "observation_source":"self_reported","confidence_milli":400})).chain(std::iter::once(
+                serde_json::json!({"pool_id":"fixture-pool-b","direction":"produce","expected_amount_milli":other,
+                    "observation_source":"self_reported","confidence_milli":1000}))).collect::<Vec<_>>());
+            let expected = compile_documents(docs);
+            let document = serde_json::json!({
+                "schema_version": crate::RESOURCE_TARGETS_SCHEMA_VERSION_V2,
+                "instance":"fixture-instance-a", "valid_until_unix_ms":NOW+3_600_000,
+                "targets":[{"id":"material-floor","resource":"fixture-pool-a",
+                    "condition":{"kind":"at_least","amount":100},"scale":1,"importance_milli":1000,
+                    "apply":{"mode":"adjust","weight":"score_stage"}}]
+            });
+            let parsed =
+                crate::parse_resource_targets(&serde_json::to_vec(&document).unwrap()).unwrap();
+            let mut inputs = base_facts();
+            let checked = crate::check_resource_targets(&parsed, &expected, &inputs, time);
+            if amounts.iter().sum::<u64>() == 0 {
+                assert!(
+                    matches!(checked, Err(crate::ResourceTargetsError::Rejected(ref error))
+                    if error.reason == actingcommand_contract::ResourceTargetsRejectionReason::UnmappedTask)
+                );
+                continue;
+            }
+            let checked = checked.expect("positive fractional production maps without inventory");
+            inputs.facts.push(ObservedFact {
+                scope: instance_a(),
+                fact_key: actingcommand_contract::RESOURCE_TARGETS_FACT_KEY.to_owned(),
+                value: FactValue::RecordList(
+                    serde_json::from_value(serde_json::to_value(&checked.rows).unwrap()).unwrap(),
+                ),
+                observed_at_unix_ms: NOW,
+                expires_at_unix_ms: Some(NOW + 3_600_000),
+                confidence_milli: 1000,
+            });
+            let policies =
+                crate::resource_targets::instance_target_policies(&inputs, time).unwrap();
+            for (current, score) in [
+                (None, base_score),
+                (Some(100), base_score),
+                (Some(99), gap_score),
+            ] {
+                let mut observed = inputs.clone();
+                if let Some(current) = current {
+                    observed.facts.push(ObservedFact {
+                        scope: instance_a(),
+                        fact_key: "resource.primary".to_owned(),
+                        value: FactValue::Integer(current),
+                        observed_at_unix_ms: NOW,
+                        expires_at_unix_ms: Some(NOW + 60_000),
+                        confidence_milli: 1000,
+                    });
+                }
+                let resolved = crate::resource_targets::resolve_instance_targets(
+                    &expected,
+                    &observed,
+                    &observed.instances[0],
+                    &policies["fixture-instance-a"],
+                    time,
+                )
+                .unwrap();
+                assert_eq!(
+                    resolved
+                        .effect("fixture.observe")
+                        .resources()
+                        .unwrap()
+                        .term_milli,
+                    score
+                );
+                let result = evaluate(&expected, &observed, &base_resources(), time, 5).unwrap();
+                let decision = decision_for(&result, "fixture.observe", "fixture-instance-a");
+                assert!(
+                    decision
+                        .reasons
+                        .iter()
+                        .any(|reason| reason.code == "resource_weights"
+                            && reason.detail.contains(&format!(" term={score} items=")))
+                );
+            }
+        }
     }
 
     #[test]

@@ -330,9 +330,25 @@ pub enum FailureAction {
 pub struct ResourceEffectSpec {
     pub pool_id: String,
     pub direction: EffectDirection,
-    pub amount: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "effect_quantity"
+    )]
+    pub amount: Option<u64>,
+    /// Expected production per completed run, in thousandths of a real inventory unit.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "effect_quantity"
+    )]
+    pub expected_amount_milli: Option<u64>,
     pub observation_source: ObservationSource,
     pub confidence_milli: u16,
+}
+
+fn effect_quantity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
