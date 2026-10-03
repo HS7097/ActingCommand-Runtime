@@ -564,6 +564,15 @@ def ledger_reads(label, ledger, root):
 # ---------------------------------------------------------------------------------------------
 # The evidence.
 
+def guarded(name, function):
+    """Runs one evidence section; an exception is a failed check, the next section still runs."""
+    try:
+        function()
+    except Exception:  # noqa: BLE001 - every failure is reported, never swallowed
+        import traceback
+        check(f"{name}.completed", False, short(traceback.format_exc(), 3000))
+
+
 def run(work, new_tools, new_runtime, old_tools, catalog_dir):
     exe = os.path.join(new_tools, "actinglab.exe")
     new_ledger = os.path.join(new_tools, "actingledger.exe")
@@ -578,460 +587,511 @@ def run(work, new_tools, new_runtime, old_tools, catalog_dir):
     os.makedirs(os.path.join(out, "install", "packages"))
     os.makedirs(os.path.join(out, "fixture", "packages"))
 
-    # C0. Without Lab steps record stop behaves as before; --dry-run writes nothing; unknown flags.
-    say("C0", "old behaviour without Lab steps, dry run, unknown flag")
-    s = Session(exe, work, "c0", "plain")
-    code, value, _ = s.stop("stop --dry-run (no Lab steps)", ["--dry-run"])
-    check("C0.dry_run_without_steps", code == 0 and data_of(value).get("status") == "validated"
-          and data_of(value).get("lab") is None and s.status()[0] == "active", "")
-    code, value, error = s.stop("stop --lab_dir (unknown flag)", ["--lab_dir", out])
-    check("C0.unknown_flag_refused", code == 2 and (error or {}).get("code") == "validation_failed"
-          and "--lab_dir" in (error or {}).get("message", ""), "")
-    code, value, _ = s.stop("stop (no Lab steps)", [])
-    check("C0.old_stop", code == 0 and data_of(value).get("status") == "stopped" and data_of(value).get("lab") is None
-          and s.status() == ("stopped", "stopped"), json.dumps(s.status()))
+    def section_c0():
+        # C0. Without Lab steps record stop behaves as before; --dry-run writes nothing; unknown flags.
+        say("C0", "old behaviour without Lab steps, dry run, unknown flag")
+        s = Session(exe, work, "c0", "plain")
+        code, value, _ = s.stop("stop --dry-run (no Lab steps)", ["--dry-run"])
+        check("C0.dry_run_without_steps", code == 0 and data_of(value).get("status") == "validated"
+              and data_of(value).get("lab") is None and s.status()[0] == "active", "")
+        code, value, error = s.stop("stop --lab_dir (unknown flag)", ["--lab_dir", out])
+        check("C0.unknown_flag_refused", code == 2 and (error or {}).get("code") == "validation_failed"
+              and "--lab_dir" in (error or {}).get("message", ""), "")
+        code, value, _ = s.stop("stop (no Lab steps)", [])
+        check("C0.old_stop", code == 0 and data_of(value).get("status") == "stopped" and data_of(value).get("lab") is None
+              and s.status() == ("stopped", "stopped"), json.dumps(s.status()))
 
-    # E1. battle_auto, two steps with a 1-3 s window -> <D>.zip in packages\bluearchive\.
-    say("E1", "battle_auto two steps with a window -> ZIP in packages\\bluearchive\\ (created)")
-    s = Session(exe, work, "e1", "battle_auto")
-    s.mark("mark auto_off", ["--frame", f("off"), "--page", "auto_off", "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664),
-                             "--template", tpl("battle_cost_label.png", "ui/battle_cost", sizes, 778, 649),
-                             "--color", "state/auto_off=1173,680,1,1", "--click-from", "ui/auto_off"])
-    s.mark("window 1000-3000", ["--step", "1", "--transition", "window", "--min-ms", "1000", "--max-ms", "3000"])
-    s.mark("mark auto_on", ["--frame", f("on"), "--page", "auto_on", "--template", tpl("auto_on.png", "ui/auto_on", sizes, 1180, 664),
-                            "--color", "state/auto_on=1173,680,1,1"])
-    lab_dir = os.path.join(out, "install", "packages", "bluearchive")
-    before = s.sha()
-    code, value, _ = s.stop("stop --dry-run --lab-dir", ["--dry-run", "--lab-dir", lab_dir])
-    dry = lab_of(value)
-    show("E1 dry-run", dry, ["status", "would_write", "lab_dir_status", "lab_dir_to_create", "warnings", "timeouts"])
-    check("E1.dry_run_preview", code == 0 and data_of(value).get("status") == "validated" and dry.get("status") == "validated"
-          and dry.get("lab_dir_to_create") is True and len(dry.get("would_write") or []) == 2
-          and not os.path.exists(lab_dir) and s.sha() == before and s.status() == ("active", "active"), "")
-    code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", lab_dir])
-    e1 = lab_of(value)
-    show("E1", e1, ["status", "container", "digest", "package_id", "path", "lab_dir_path", "lab_dir_status", "lab_dir_created",
-                    "entries", "pages", "transitions", "timeouts", "warnings", "arrival_by_time_window", "first_decision",
-                    "cross_check", "entry_overlay", "package_ref", "binding_example", "task_run_example",
-                    "prerequisite_entry_example", "catalog_on_failure_example", "binding_requires"])
-    d1 = e1.get("digest")
-    zip_path = os.path.join(lab_dir, f"{d1}.zip")
-    check("E1.generated_zip", code == 0 and e1.get("status") == "generated" and e1.get("container") == "zip"
-          and e1.get("lab_dir_created") is True and e1.get("lab_dir_status") == "written" and os.path.isfile(zip_path)
-          and e1.get("dry_run") is False and dry.get("digest") == d1, json.dumps({"digest": d1}))
-    check("E1.both_states_stopped", s.status() == ("stopped", "stopped"), json.dumps(s.status()))
-    code, measured = package_digest(exe, zip_path, "E1 package digest --package <D>.zip")
-    check("E1.package_digest_equals_D", code == 0 and measured == d1, f"{measured}")
-    files, infos = read_zip(zip_path)
-    say("E1", "zip entries", json.dumps([(info.filename, info.date_time, info.compress_type, info.flag_bits) for info in infos]))
-    check("E1.zip_layout", [info.filename for info in infos] == sorted(files, key=lambda p: p.encode())
-          and all(info.date_time == (1980, 1, 1, 0, 0, 0) and info.compress_type == zipfile.ZIP_DEFLATED for info in infos)
-          and digest(files) == d1, "")
-    control = json.loads(files["control.json"])
-    task = task_of(files)
-    say("E1", "control.json", json.dumps(control))
-    say("E1", "task.json operations", json.dumps(task["operations"]))
-    say("E1", "task.json page_rules", json.dumps(task["page_rules"]))
-    check("E1.control_linear_steps", control.get("execution_mode") == "linear_steps" and control.get("timeout_ms") == 43000
-          and control.get("step_timeout_ms") == 15000 and control.get("max_steps") == 1, "")
-    check("E1.task_window_transition", task["operations"][0].get("transition") == {"kind": "window", "min_ms": 1000, "max_ms": 3000}
-          and task["operations"][0]["guard"]["target_id"] == "ui/auto_off" and task["entry_page"] == "step_01_auto_off"
-          and task["target_page"] == "step_02_auto_on", "")
-    first = e1.get("first_decision") or {}
-    check("E1.first_decision_would_click", first.get("status") == "would_click" and first.get("operation_label") == "step_01_click", json.dumps(first))
-    check("E1.binding_and_a20_items", (e1.get("binding_example") or {}).get("package_digest") == {"schema_version": SCHEMA_DIR, "sha256": d1}
-          and e1.get("catalog_on_failure_example") == {"action": "pause", "retry_limit": 1, "retry_backoff_ms": 60000, "escalation_threshold": 2}
-          and any("on_failure" in item for item in e1.get("binding_requires") or [])
-          and any("return_home_packages" in item for item in e1.get("binding_requires") or []), "")
+    guarded('C0', section_c0)
 
-    # E5. Writing: present (same content, other bytes), already_generated, a new directory.
-    say("E5", "writing: already_generated with present, written; conflict; missing parent")
-    code, value, _ = s.stop("stop --lab-dir again (stopped)", ["--lab-dir", lab_dir])
-    again = lab_of(value)
-    check("E5.already_generated_present", code == 0 and again.get("status") == "already_generated"
-          and again.get("lab_dir_status") == "present" and file_sha(zip_path) == e1.get("sha256"), json.dumps(again.get("lab_dir_status")))
-    other = os.path.join(out, "install2", "packages", "bluearchive")
-    os.makedirs(other)
-    rezipped = os.path.join(other, f"{d1}.zip")
-    with zipfile.ZipFile(rezipped, "w", zipfile.ZIP_STORED) as archive:
-        for path in sorted(files, reverse=True):
-            archive.writestr(path, files[path])
-    rezipped_sha = file_sha(rezipped)
-    code, value, _ = s.stop("stop --lab-dir (same content, other ZIP bytes)", ["--lab-dir", other])
-    present = lab_of(value)
-    check("E5.present_by_content", code == 0 and present.get("lab_dir_status") == "present" and file_sha(rezipped) == rezipped_sha
-          and rezipped_sha != e1.get("sha256"), "")
-    third = os.path.join(out, "install", "packages", "copy")
-    code, value, _ = s.stop("stop --lab-dir (new last level)", ["--lab-dir", third])
-    copied = lab_of(value)
-    check("E5.already_generated_written", code == 0 and copied.get("status") == "already_generated"
-          and copied.get("lab_dir_status") == "written" and copied.get("lab_dir_created") is True
-          and file_sha(os.path.join(third, f"{d1}.zip")) == e1.get("sha256"), "")
+    def section_e1_e5():
+        # E1. battle_auto, two steps with a 1-3 s window -> <D>.zip in packages\bluearchive\.
+        say("E1", "battle_auto two steps with a window -> ZIP in packages\\bluearchive\\ (created)")
+        s = Session(exe, work, "e1", "battle_auto")
+        s.mark("mark auto_off", ["--frame", f("off"), "--page", "auto_off", "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664),
+                                 "--template", tpl("battle_cost_label.png", "ui/battle_cost", sizes, 778, 649),
+                                 "--color", "state/auto_off=1173,680,1,1", "--click-from", "ui/auto_off"])
+        s.mark("window 1000-3000", ["--step", "1", "--transition", "window", "--min-ms", "1000", "--max-ms", "3000"])
+        s.mark("mark auto_on", ["--frame", f("on"), "--page", "auto_on", "--template", tpl("auto_on.png", "ui/auto_on", sizes, 1180, 664),
+                                "--color", "state/auto_on=1173,680,1,1"])
+        lab_dir = os.path.join(out, "install", "packages", "bluearchive")
+        before = s.sha()
+        code, value, _ = s.stop("stop --dry-run --lab-dir", ["--dry-run", "--lab-dir", lab_dir])
+        dry = lab_of(value)
+        show("E1 dry-run", dry, ["status", "would_write", "lab_dir_status", "lab_dir_to_create", "warnings", "timeouts"])
+        check("E1.dry_run_preview", code == 0 and data_of(value).get("status") == "validated" and dry.get("status") == "validated"
+              and dry.get("lab_dir_to_create") is True and len(dry.get("would_write") or []) == 2
+              and not os.path.exists(lab_dir) and s.sha() == before and s.status() == ("active", "active"), "")
+        code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", lab_dir])
+        e1 = lab_of(value)
+        show("E1", e1, ["status", "container", "digest", "package_id", "path", "lab_dir_path", "lab_dir_status", "lab_dir_created",
+                        "entries", "pages", "transitions", "timeouts", "warnings", "arrival_by_time_window", "first_decision",
+                        "cross_check", "entry_overlay", "package_ref", "binding_example", "task_run_example",
+                        "prerequisite_entry_example", "catalog_on_failure_example", "binding_requires"])
+        d1 = e1.get("digest")
+        zip_path = os.path.join(lab_dir, f"{d1}.zip")
+        check("E1.generated_zip", code == 0 and e1.get("status") == "generated" and e1.get("container") == "zip"
+              and e1.get("lab_dir_created") is True and e1.get("lab_dir_status") == "written" and os.path.isfile(zip_path)
+              and e1.get("dry_run") is False and dry.get("digest") == d1, json.dumps({"digest": d1}))
+        check("E1.both_states_stopped", s.status() == ("stopped", "stopped"), json.dumps(s.status()))
+        code, measured = package_digest(exe, zip_path, "E1 package digest --package <D>.zip")
+        check("E1.package_digest_equals_D", code == 0 and measured == d1, f"{measured}")
+        files, infos = read_zip(zip_path)
+        say("E1", "zip entries", json.dumps([(info.filename, info.date_time, info.compress_type, info.flag_bits) for info in infos]))
+        check("E1.zip_layout", [info.filename for info in infos] == sorted(files, key=lambda p: p.encode())
+              and all(info.date_time == (1980, 1, 1, 0, 0, 0) and info.compress_type == zipfile.ZIP_DEFLATED for info in infos)
+              and digest(files) == d1, "")
+        control = json.loads(files["control.json"])
+        task = task_of(files)
+        say("E1", "control.json", json.dumps(control))
+        say("E1", "task.json operations", json.dumps(task["operations"]))
+        say("E1", "task.json page_rules", json.dumps(task["page_rules"]))
+        check("E1.control_linear_steps", control.get("execution_mode") == "linear_steps" and control.get("timeout_ms") == 43000
+              and control.get("step_timeout_ms") == 15000 and control.get("max_steps") == 1, "")
+        check("E1.task_window_transition", task["operations"][0].get("transition") == {"kind": "window", "min_ms": 1000, "max_ms": 3000}
+              and task["operations"][0]["guard"]["target_id"] == "ui/auto_off" and task["entry_page"] == "step_01_auto_off"
+              and task["target_page"] == "step_02_auto_on", "")
+        first = e1.get("first_decision") or {}
+        check("E1.first_decision_would_click", first.get("status") == "would_click" and first.get("operation_label") == "step_01_click", json.dumps(first))
+        check("E1.binding_and_a20_items", (e1.get("binding_example") or {}).get("package_digest") == {"schema_version": SCHEMA_DIR, "sha256": d1}
+              and e1.get("catalog_on_failure_example") == {"action": "pause", "retry_limit": 1, "retry_backoff_ms": 60000, "escalation_threshold": 2}
+              and any("on_failure" in item for item in e1.get("binding_requires") or [])
+              and any("return_home_packages" in item for item in e1.get("binding_requires") or []), "")
 
-    s = Session(exe, work, "e5", "conflict_case")
-    s.mark("mark auto_off", ["--frame", f("off"), "--color", "state/a=1173,680,1,1", "--click", "600,300,80,40"])
-    s.mark("mark auto_on", ["--frame", f("on"), "--color", "state/b=1173,680,1,1"])
-    code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
-    d5, ext5 = lab_of(value).get("digest"), lab_of(value).get("container")
-    conflict_dir = os.path.join(out, "install3", "packages", "bluearchive")
-    os.makedirs(conflict_dir)
-    conflict_path = os.path.join(conflict_dir, f"{d5}.{ext5}")
-    with open(conflict_path, "w", encoding="utf-8") as handle:
-        json.dump({"schema_version": CONTENT_JSON, "files": {"control.json": "{}\n"}}, handle)
-    conflict_sha = file_sha(conflict_path)
-    code, value, error = s.stop("stop --lab-dir (name conflict)", ["--lab-dir", conflict_dir])
-    out_dir = os.path.join(os.path.dirname(recording_file(s.state)), "out")
-    check("E5.name_conflict", code == 3 and (error or {}).get("code") == "record_artifact_name_conflict"
-          and file_sha(conflict_path) == conflict_sha and not os.path.exists(out_dir) and s.status() == ("active", "active"), "")
-    code, value, error = s.stop("stop --lab-dir (missing parent)", ["--lab-dir", os.path.join(out, "nowhere", "packages", "bluearchive")])
-    check("E5.lab_dir_invalid", code == 2 and (error or {}).get("code") == "record_lab_dir_invalid", "")
-    code, value, _ = s.stop("stop (no --lab-dir)", [])
-    check("E5.stop_without_lab_dir", code == 0 and lab_of(value).get("status") == "generated" and lab_of(value).get("lab_dir_path") is None
-          and os.path.isfile(lab_of(value).get("path") or ""), "")
+        # E5. Writing: present (same content, other bytes), already_generated, a new directory.
+        say("E5", "writing: already_generated with present, written; conflict; missing parent")
+        code, value, _ = s.stop("stop --lab-dir again (stopped)", ["--lab-dir", lab_dir])
+        again = lab_of(value)
+        check("E5.already_generated_present", code == 0 and again.get("status") == "already_generated"
+              and again.get("lab_dir_status") == "present" and file_sha(zip_path) == e1.get("sha256"), json.dumps(again.get("lab_dir_status")))
+        other = os.path.join(out, "install2", "packages", "bluearchive")
+        os.makedirs(other)
+        rezipped = os.path.join(other, f"{d1}.zip")
+        with zipfile.ZipFile(rezipped, "w", zipfile.ZIP_STORED) as archive:
+            for path in sorted(files, reverse=True):
+                archive.writestr(path, files[path])
+        rezipped_sha = file_sha(rezipped)
+        code, value, _ = s.stop("stop --lab-dir (same content, other ZIP bytes)", ["--lab-dir", other])
+        present = lab_of(value)
+        check("E5.present_by_content", code == 0 and present.get("lab_dir_status") == "present" and file_sha(rezipped) == rezipped_sha
+              and rezipped_sha != e1.get("sha256"), "")
+        third = os.path.join(out, "install", "packages", "copy")
+        code, value, _ = s.stop("stop --lab-dir (new last level)", ["--lab-dir", third])
+        copied = lab_of(value)
+        check("E5.already_generated_written", code == 0 and copied.get("status") == "already_generated"
+              and copied.get("lab_dir_status") == "written" and copied.get("lab_dir_created") is True
+              and file_sha(os.path.join(third, f"{d1}.zip")) == e1.get("sha256"), "")
 
-    # E1b. Step 2 named transition and a page transition after step 1: both pages exist.
-    say("E1b", "page transition after step 1 and a step page named transition")
-    s = Session(exe, work, "e1b", "battle_auto")
-    s.mark("mark auto_off", ["--frame", f("off"), "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664),
-                             "--color", "state/auto_off=1173,680,1,1", "--click-from", "ui/auto_off"])
-    s.mark("mark loading", ["--frame", f("loading"), "--color", "load/bar=600,358,8,4"])
-    s.mark("to-transition 2", ["--to-transition", "2"])
-    s.mark("mark auto_on --page transition", ["--frame", f("on"), "--page", "transition",
-                                              "--template", tpl("auto_on.png", "ui/auto_on", sizes, 1180, 664),
-                                              "--color", "state/auto_on=1173,680,1,1"])
-    code, value, _ = s.stop("stop", ["--lab-dir", os.path.join(out, "install", "packages", "bluearchive")])
-    e1b = lab_of(value)
-    show("E1b", e1b, ["pages", "transitions", "cross_check", "warnings"])
-    files = read_container(e1b.get("path") or "")
-    task = task_of(files)
-    say("E1b", "operation", json.dumps(task["operations"][0]))
-    check("E1b.pages_coexist", code == 0 and e1b.get("pages") == ["step_01", "transition_01", "step_02_transition"]
-          and task["operations"][0].get("transition") == {"kind": "page", "page_id": "transition_01"}
-          and set(task["page_rules"]) == {"step_01", "transition_01", "step_02_transition"}, "")
+        s = Session(exe, work, "e5", "conflict_case")
+        s.mark("mark auto_off", ["--frame", f("off"), "--color", "state/a=1173,680,1,1", "--click", "600,300,80,40"])
+        s.mark("mark auto_on", ["--frame", f("on"), "--color", "state/b=1173,680,1,1"])
+        code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
+        d5, ext5 = lab_of(value).get("digest"), lab_of(value).get("container")
+        conflict_dir = os.path.join(out, "install3", "packages", "bluearchive")
+        os.makedirs(conflict_dir)
+        conflict_path = os.path.join(conflict_dir, f"{d5}.{ext5}")
+        with open(conflict_path, "w", encoding="utf-8") as handle:
+            json.dump({"schema_version": CONTENT_JSON, "files": {"control.json": "{}\n"}}, handle)
+        conflict_sha = file_sha(conflict_path)
+        code, value, error = s.stop("stop --lab-dir (name conflict)", ["--lab-dir", conflict_dir])
+        out_dir = os.path.join(os.path.dirname(recording_file(s.state)), "out")
+        check("E5.name_conflict", code == 3 and (error or {}).get("code") == "record_artifact_name_conflict"
+              and file_sha(conflict_path) == conflict_sha and not os.path.exists(out_dir) and s.status() == ("active", "active"), "")
+        code, value, error = s.stop("stop --lab-dir (missing parent)", ["--lab-dir", os.path.join(out, "nowhere", "packages", "bluearchive")])
+        check("E5.lab_dir_invalid", code == 2 and (error or {}).get("code") == "record_lab_dir_invalid", "")
+        code, value, _ = s.stop("stop (no --lab-dir)", [])
+        check("E5.stop_without_lab_dir", code == 0 and lab_of(value).get("status") == "generated" and lab_of(value).get("lab_dir_path") is None
+              and os.path.isfile(lab_of(value).get("path") or ""), "")
 
-    # E2. Only color marks (with a color digest) -> <D>.json; unpacked as a directory, same digest.
-    say("E2", "color and color digest only -> JSON; directory form; session file already stopped")
-    s = Session(exe, work, "e2", "color_steps")
-    s.request("mark color and digest", {"frame": f("off"), "page": "dim", "add": [
-        {"id": "state/dim", "family": "color", "region": {"x": 1173, "y": 680, "width": 1, "height": 1}},
-        {"id": "hud/strip", "family": "color_digest", "region": {"x": 0, "y": 640, "width": 1280, "height": 80},
-         "columns": 16, "rows": 2, "max_mean_milli": 1500}],
-        "click": {"region": {"x": 600, "y": 300, "width": 80, "height": 40}}})
-    s.mark("mark lit", ["--frame", f("on"), "--page", "lit", "--color", "state/lit=1173,680,1,1"])
-    # The session file stopped by an older ActingLab while the Lab recording stays active.
-    record_path = os.path.join(s.state, f"record-{INSTANCE}.json")
-    with open(record_path, encoding="utf-8") as handle:
-        record = json.load(handle)
-    record["status"] = "stopped"
-    with open(record_path, "w", encoding="utf-8") as handle:
-        json.dump(record, handle)
-    json_dir = os.path.join(out, "install", "packages", "bluearchive")
-    code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", json_dir])
-    e2 = lab_of(value)
-    show("E2", e2, ["status", "container", "digest", "entries", "session_already_stopped", "first_decision", "warnings"])
-    d2 = e2.get("digest")
-    json_path = os.path.join(json_dir, f"{d2}.json")
-    check("E2.generated_json", code == 0 and e2.get("container") == "json" and os.path.isfile(json_path)
-          and e2.get("session_already_stopped") is True, "")
-    code, measured = package_digest(exe, json_path, "E2 package digest --package <D>.json")
-    check("E2.package_digest_equals_D", code == 0 and measured == d2, f"{measured}")
-    files = read_container(json_path)
-    task = task_of(files)
-    say("E2", "color_probes", json.dumps(task.get("color_probes")))
-    check("E2.digest_probe", any("digest" in probe for probe in task.get("color_probes") or []), "")
-    expanded = os.path.join(out, "e2-expanded")
-    for path, data in files.items():
-        target = os.path.join(expanded, *path.split("/"))
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "wb") as handle:
-            handle.write(data)
-    code, measured = package_digest(exe, expanded, "E2 package digest --package <expanded directory>")
-    check("E2.directory_same_digest", code == 0 and measured == d2, f"{measured}")
+    guarded('E1_E5', section_e1_e5)
 
-    # E4. Arrival unconfirmed on a darkening pop-up; a bright-area color clears it; a window.
-    say("E4", "arrival unconfirmed: darkening pop-up, then a --color on a bright area; same screen with a window")
-    s = Session(exe, work, "e4", "popup_close")
-    s.mark("mark pop-up", ["--frame", f("popup"), "--page", "notice", "--template", tpl("battle_cost_label.png", "notice/close", sizes, 600, 480),
-                           "--color", "notice/panel=320,180,8,8", "--click-from", "notice/close"])
-    s.mark("mark home (template only)", ["--frame", f("on"), "--page", "home", "--template", tpl("auto_on.png", "ui/auto_on", sizes, 1180, 664)])
-    before = s.sha()
-    code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
-    e4 = lab_of(value)
-    show("E4 first dry-run", e4, ["warnings", "cross_check"])
-    arrival = [w for w in e4.get("warnings") or [] if w.get("code") == "arrival_unconfirmed"]
-    check("E4.arrival_unconfirmed", code == 0 and len(arrival) == 1 and arrival[0].get("step") == 1
-          and arrival[0].get("gate") == "step_02_home" and "darken" in arrival[0].get("message", "")
-          and "--color" in arrival[0].get("message", "") and s.sha() == before and s.status() == ("active", "active"), "")
-    s.mark("add --color on the bright area of step 2", ["--step", "2", "--color", "state/auto_on=1173,680,1,1"])
-    code, value, _ = s.stop("stop --dry-run after the color", ["--dry-run"])
-    check("E4.warning_gone", code == 0 and "arrival_unconfirmed" not in warning_codes(lab_of(value)), json.dumps(warning_codes(lab_of(value))))
-    code, value, _ = s.stop("stop", [])
-    check("E4.final_stop", code == 0 and lab_of(value).get("status") == "generated", "")
+    def section_e1b():
+        # E1b. Step 2 named transition and a page transition after step 1: both pages exist.
+        say("E1b", "page transition after step 1 and a step page named transition")
+        s = Session(exe, work, "e1b", "battle_auto")
+        s.mark("mark auto_off", ["--frame", f("off"), "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664),
+                                 "--color", "state/auto_off=1173,680,1,1", "--click-from", "ui/auto_off"])
+        s.mark("mark loading", ["--frame", f("loading"), "--color", "load/bar=600,358,8,4"])
+        s.mark("to-transition 2", ["--to-transition", "2"])
+        s.mark("mark auto_on --page transition", ["--frame", f("on"), "--page", "transition",
+                                                  "--template", tpl("auto_on.png", "ui/auto_on", sizes, 1180, 664),
+                                                  "--color", "state/auto_on=1173,680,1,1"])
+        code, value, _ = s.stop("stop", ["--lab-dir", os.path.join(out, "install", "packages", "bluearchive")])
+        e1b = lab_of(value)
+        show("E1b", e1b, ["pages", "transitions", "cross_check", "warnings"])
+        files = read_container(e1b.get("path") or "")
+        task = task_of(files)
+        say("E1b", "operation", json.dumps(task["operations"][0]))
+        check("E1b.pages_coexist", code == 0 and e1b.get("pages") == ["step_01", "transition_01", "step_02_transition"]
+              and task["operations"][0].get("transition") == {"kind": "page", "page_id": "transition_01"}
+              and set(task["page_rules"]) == {"step_01", "transition_01", "step_02_transition"}, "")
 
-    s = Session(exe, work, "e4w", "same_screen")
-    s.mark("mark screen a", ["--frame", f("off"), "--page", "a", "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664),
-                             "--click-from", "ui/auto_off"])
-    s.mark("window", ["--step", "1", "--transition", "window", "--min-ms", "1000", "--max-ms", "3000"])
-    s.mark("same screen b (other PNG bytes)", ["--frame", f("off_copy"), "--page", "b", "--reuse", "ui/auto_off"])
-    code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
-    e4w = lab_of(value)
-    show("E4w", e4w, ["warnings", "arrival_by_time_window", "cross_check"])
-    gates = (e4w.get("cross_check") or {}).get("gates") or []
-    check("E4w.arrival_by_time_window", code == 0 and e4w.get("arrival_by_time_window") == [1]
-          and "arrival_unconfirmed" not in warning_codes(e4w) and gates and gates[0].get("result") == "passes_on_previous", "")
+    guarded('E1b', section_e1b)
 
-    # E6. OCR: step 1 with OCR (not evaluated), an OCR-only step (trusted coordinate), a click
-    # source that is OCR (the guard falls to the next target).
-    say("E6", "OCR: first decision not evaluated, trusted coordinate, OCR click source")
-    s = Session(exe, work, "e6", "ocr_steps")
-    ocr = {"languages": ["ja"], "timeout_ms": 1000, "match_mode": "contains", "expected": ["AUTO"], "case_sensitive": False,
-           "minimum_confidence": 0.8, "model_ref": "model", "model_sha256": "0" * 64}
-    w, h = sizes["auto_off.png"]
-    s.request("mark step 1 (OCR + color, click from OCR)", {"frame": f("off"), "page": "start", "add": [
-        {"id": "text/start", "family": "ocr", "region": {"x": 1180, "y": 664, "width": w, "height": h}, **ocr},
-        {"id": "state/start", "family": "color", "region": {"x": 1173, "y": 680, "width": 1, "height": 1}}],
-        "click": {"from": "text/start"}})
-    s.request("mark step 2 (OCR only)", {"frame": f("loading"), "page": "ocr_only", "add": [
-        {"id": "text/only", "family": "ocr", "region": {"x": 200, "y": 300, "width": 200, "height": 40}, **ocr}],
-        "click": {"region": {"x": 600, "y": 300, "width": 80, "height": 40}}})
-    s.mark("mark step 3", ["--frame", f("on"), "--page", "done", "--color", "state/done=1173,680,1,1"])
-    code, value, _ = s.stop("stop", [])
-    e6 = lab_of(value)
-    show("E6", e6, ["first_decision", "warnings", "marks_not_evaluated", "cross_check"])
-    task = task_of(read_container(e6.get("path") or ""))
-    say("E6", "operations", json.dumps(task["operations"]))
-    ops = task["operations"]
-    check("E6.admitted_ocr_first_step", code == 0 and e6.get("status") == "generated"
-          and (e6.get("first_decision") or {}).get("status") == "not_evaluated"
-          and (e6.get("first_decision") or {}).get("reason") == "lab_ocr_provider_unverified"
-          and "first_decision_not_evaluated" in warning_codes(e6)
-          and "text/start" in (e6.get("marks_not_evaluated") or [])
-          and (e6.get("cross_check") or {}).get("status") == "partially_evaluated", "")
-    check("E6.ocr_click_source_guard", ops[0].get("guard", {}).get("target_id") == "state/start"
-          and ops[0].get("guard", {}).get("color_probe") == "state/start", json.dumps(ops[0].get("guard")))
-    check("E6.ocr_only_trusted", ops[1].get("unguarded_trusted_coordinate") is True and "guard" not in ops[1], "")
+    def section_e2():
+        # E2. Only color marks (with a color digest) -> <D>.json; unpacked as a directory, same digest.
+        say("E2", "color and color digest only -> JSON; directory form; session file already stopped")
+        s = Session(exe, work, "e2", "color_steps")
+        s.request("mark color and digest", {"frame": f("off"), "page": "dim", "add": [
+            {"id": "state/dim", "family": "color", "region": {"x": 1173, "y": 680, "width": 1, "height": 1}},
+            {"id": "hud/strip", "family": "color_digest", "region": {"x": 0, "y": 640, "width": 1280, "height": 80},
+             "columns": 16, "rows": 2, "max_mean_milli": 1500}],
+            "click": {"region": {"x": 600, "y": 300, "width": 80, "height": 40}}})
+        s.mark("mark lit", ["--frame", f("on"), "--page", "lit", "--color", "state/lit=1173,680,1,1"])
+        # The session file stopped by an older ActingLab while the Lab recording stays active.
+        record_path = os.path.join(s.state, f"record-{INSTANCE}.json")
+        with open(record_path, encoding="utf-8") as handle:
+            record = json.load(handle)
+        record["status"] = "stopped"
+        with open(record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        json_dir = os.path.join(out, "install", "packages", "bluearchive")
+        code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", json_dir])
+        e2 = lab_of(value)
+        show("E2", e2, ["status", "container", "digest", "entries", "session_already_stopped", "first_decision", "warnings"])
+        d2 = e2.get("digest")
+        json_path = os.path.join(json_dir, f"{d2}.json")
+        check("E2.generated_json", code == 0 and e2.get("container") == "json" and os.path.isfile(json_path)
+              and e2.get("session_already_stopped") is True, "")
+        code, measured = package_digest(exe, json_path, "E2 package digest --package <D>.json")
+        check("E2.package_digest_equals_D", code == 0 and measured == d2, f"{measured}")
+        files = read_container(json_path)
+        task = task_of(files)
+        say("E2", "color_probes", json.dumps(task.get("color_probes")))
+        check("E2.digest_probe", any("digest" in probe for probe in task.get("color_probes") or []), "")
+        expanded = os.path.join(out, "e2-expanded")
+        for path, data in files.items():
+            target = os.path.join(expanded, *path.split("/"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as handle:
+                handle.write(data)
+        code, measured = package_digest(exe, expanded, "E2 package digest --package <expanded directory>")
+        check("E2.directory_same_digest", code == 0 and measured == d2, f"{measured}")
 
-    # E7. Timeouts.
-    say("E7", "timeouts")
-    s = Session(exe, work, "e7", "timeouts")
-    s.mark("mark a", ["--frame", f("off"), "--color", "state/a=1173,680,1,1", "--click", "600,300,80,40"])
-    s.mark("mark b", ["--frame", f("on"), "--color", "state/b=1173,680,1,1"])
-    code, value, error = s.stop("stop --timeout-ms 1800001", ["--timeout-ms", "1800001"])
-    check("E7.timeout_out_of_range", code == 2 and (error or {}).get("code") == "validation_failed" and s.status() == ("active", "active"), "")
-    code, value, _ = s.stop("stop --dry-run --arrival-timeout-ms 90000", ["--dry-run", "--arrival-timeout-ms", "90000"])
-    e7 = lab_of(value)
-    check("E7.step_timeout_clamped", code == 0 and (e7.get("timeouts") or {}).get("step_timeout_ms") == 60000
-          and "step_timeout_clamped" in warning_codes(e7), json.dumps(e7.get("timeouts")))
+    guarded('E2', section_e2)
 
-    # E10. Entry overlay on the main screen HUD templates; a bright-area color clears it.
-    say("E10", "entry overlay: two HUD templates, then a --color on the bright area")
-    s = Session(exe, work, "e10", "home_entry")
-    s.mark("mark home (two HUD templates)", ["--frame", f("home"), "--page", "home",
-                                             "--template", tpl("home_cafe_label.png", "hud/cafe", sizes, 77, 680),
-                                             "--template", tpl("home_work_label.png", "hud/work", sizes, 1165, 667),
-                                             "--click", "600,300,80,40"])
-    s.mark("mark next", ["--frame", f("off"), "--page", "next", "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664)])
-    code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
-    e10 = lab_of(value)
-    show("E10", e10, ["entry_overlay", "warnings"])
-    check("E10.entry_overlay_insensitive", code == 0 and "entry_overlay_insensitive" in warning_codes(e10)
-          and (e10.get("entry_overlay") or {}).get("status") == "insensitive", "")
-    s.mark("add --color on the bright area of step 1", ["--step", "1", "--color", "hud/bright=570,25,4,4"])
-    code, value, _ = s.stop("stop --dry-run after the color", ["--dry-run"])
-    check("E10.warning_gone", code == 0 and "entry_overlay_insensitive" not in warning_codes(lab_of(value))
-          and (lab_of(value).get("entry_overlay") or {}).get("status") == "sensitive", json.dumps(lab_of(value).get("entry_overlay")))
+    def section_e4():
+        # E4. Arrival unconfirmed on a darkening pop-up; a bright-area color clears it; a window.
+        say("E4", "arrival unconfirmed: darkening pop-up, then a --color on a bright area; same screen with a window")
+        s = Session(exe, work, "e4", "popup_close")
+        s.mark("mark pop-up", ["--frame", f("popup"), "--page", "notice", "--template", tpl("battle_cost_label.png", "notice/close", sizes, 600, 480),
+                               "--color", "notice/panel=320,180,8,8", "--click-from", "notice/close"])
+        s.mark("mark home (template only)", ["--frame", f("on"), "--page", "home", "--template", tpl("auto_on.png", "ui/auto_on", sizes, 1180, 664)])
+        before = s.sha()
+        code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
+        e4 = lab_of(value)
+        show("E4 first dry-run", e4, ["warnings", "cross_check"])
+        arrival = [w for w in e4.get("warnings") or [] if w.get("code") == "arrival_unconfirmed"]
+        check("E4.arrival_unconfirmed", code == 0 and len(arrival) == 1 and arrival[0].get("step") == 1
+              and arrival[0].get("gate") == "step_02_home" and "darken" in arrival[0].get("message", "")
+              and "--color" in arrival[0].get("message", "") and s.sha() == before and s.status() == ("active", "active"), "")
+        s.mark("add --color on the bright area of step 2", ["--step", "2", "--color", "state/auto_on=1173,680,1,1"])
+        code, value, _ = s.stop("stop --dry-run after the color", ["--dry-run"])
+        check("E4.warning_gone", code == 0 and "arrival_unconfirmed" not in warning_codes(lab_of(value)), json.dumps(warning_codes(lab_of(value))))
+        code, value, _ = s.stop("stop", [])
+        check("E4.final_stop", code == 0 and lab_of(value).get("status") == "generated", "")
 
-    # R24 L4 items 1, 6, 7, 8: restart -> title -> home, declared offline.
-    say("R24-1", "restart -> title -> home (declared offline) -> ZIP")
-    s = Session(exe, work, "r1", "cold_start")
-    s.mark("declare restart (entry step)", ["--application", "restart"])
-    s.mark("mark title + click", ["--frame", f("off"), "--page", "title", "--template", tpl("auto_off.png", "ui/title", sizes, 1180, 664),
-                                  "--color", "state/title=1173,680,1,1", "--click-from", "ui/title"])
-    s.mark("mark home", ["--frame", f("on"), "--page", "home", "--template", tpl("auto_on.png", "ui/home", sizes, 1180, 664),
-                         "--color", "state/home=1173,680,1,1"])
-    code, value, error = s.stop("stop --dry-run --requires (application entry)", ["--dry-run", "--requires", "bluearchive.jp.return_home"])
-    check("R24-6.requires_on_application_entry", code == 2 and (error or {}).get("code") == "record_requires_invalid"
-          and ((error or {}).get("details") or {}).get("reason") == "application_entry", "")
-    code, value, error = s.stop("stop --application-arrival-timeout-ms 1800001", ["--application-arrival-timeout-ms", "1800001"])
-    check("R24-7.application_timeout_out_of_range", code == 2 and (error or {}).get("code") == "validation_failed", "")
-    r_dir = os.path.join(out, "install", "packages", "bluearchive")
-    code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", r_dir])
-    r1 = lab_of(value)
-    show("R24-1", r1, ["container", "digest", "pages", "application_steps", "timeouts", "first_decision", "warnings", "cross_check",
-                       "entry_overlay", "binding_requires"])
-    d_r1 = r1.get("digest")
-    files = read_container(os.path.join(r_dir, f"{d_r1}.zip"))
-    control, task = json.loads(files["control.json"]), task_of(files)
-    say("R24-1", "control.json", json.dumps(control))
-    say("R24-1", "task.json head", json.dumps({key: task.get(key) for key in ("entry_page", "target_page", "timeout_ms", "max_steps")}))
-    say("R24-1", "operations", json.dumps(task["operations"]))
-    say("R24-1", "provenance step 1", json.dumps(task["provenance"]["steps"][0]))
-    gates = (r1.get("cross_check") or {}).get("gates") or []
-    first = r1.get("first_decision") or {}
-    check("R24-1.generated", code == 0 and r1.get("container") == "zip" and task["entry_page"] == "any"
-          and task["operations"][0]["id"] == "step_01_app" and task["operations"][0]["from"] == "any"
-          and task["operations"][0]["application"] == {"action": "restart"}, "")
-    check("R24-1.first_decision_not_evaluated", first.get("status") == "not_evaluated" and first.get("refusal") == APPLICATION_REFUSAL
-          and first.get("reason") == "lab_application_effect_offline" and "first_decision_not_evaluated" not in warning_codes(r1), json.dumps(first))
-    check("R24-1.not_applicable", gates and gates[0].get("result") == "not_applicable"
-          and (r1.get("entry_overlay") or {}).get("status") == "not_applicable", "")
-    check("R24-1.provenance_entry_step", set(task["provenance"]["steps"][0]) == {"step", "record_index", "page", "application"}, "")
-    check("R24-1.binding_requires_application", any("startup_package" in item for item in r1.get("binding_requires") or [])
-          and any("application_id" in item for item in r1.get("binding_requires") or []), "")
-    check("R24-7.default_timeout_126200", task["timeout_ms"] == 126200 and control["timeout_ms"] == 126200
-          and (r1.get("timeouts") or {}).get("timeout_ms") == 126200, f"{task['timeout_ms']}")
-    check("R24-2.restart_title_home", task["max_steps"] == 2 and task["target_page"] == "step_03_home", "")
-    dir_form = os.path.join(out, "dir-form", d_r1)
-    for path, data in files.items():
-        target = os.path.join(dir_form, *path.split("/"))
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "wb") as handle:
-            handle.write(data)
-    code, measured = package_digest(exe, dir_form, "R24-8 package digest --package <D> directory")
-    check("R24-8.directory_form", code == 0 and measured == d_r1, f"{measured}")
+        s = Session(exe, work, "e4w", "same_screen")
+        s.mark("mark screen a", ["--frame", f("off"), "--page", "a", "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664),
+                                 "--click-from", "ui/auto_off"])
+        s.mark("window", ["--step", "1", "--transition", "window", "--min-ms", "1000", "--max-ms", "3000"])
+        s.mark("same screen b (other PNG bytes)", ["--frame", f("off_copy"), "--page", "b", "--reuse", "ui/auto_off"])
+        code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
+        e4w = lab_of(value)
+        show("E4w", e4w, ["warnings", "arrival_by_time_window", "cross_check"])
+        gates = (e4w.get("cross_check") or {}).get("gates") or []
+        check("E4w.arrival_by_time_window", code == 0 and e4w.get("arrival_by_time_window") == [1]
+              and "arrival_unconfirmed" not in warning_codes(e4w) and gates and gates[0].get("result") == "passes_on_previous", "")
 
-    # R24 item 2 (replaced, R25): restart -> splash (page transition) -> title -> home.
-    say("R24-2", "restart, splash as the transition of the entry step, title, home")
-    s = Session(exe, work, "r2", "cold_splash")
-    s.mark("declare restart", ["--application", "restart"])
-    s.mark("mark splash", ["--frame", f("loading"), "--color", "splash/bar=600,358,8,4"])
-    s.mark("splash to transition", ["--to-transition", "2"])
-    s.mark("mark title + click", ["--frame", f("off"), "--page", "title", "--color", "state/title=1173,680,1,1", "--click", "600,300,80,40"])
-    s.mark("mark home", ["--frame", f("on"), "--page", "home", "--color", "state/home=1173,680,1,1"])
-    code, value, _ = s.stop("stop", [])
-    r2 = lab_of(value)
-    show("R24-2", r2, ["pages", "transitions", "timeouts", "first_decision"])
-    task = task_of(read_container(r2.get("path") or ""))
-    check("R24-2.generated", code == 0 and r2.get("pages") == ["transition_01", "step_02_title", "step_03_home"]
-          and task["max_steps"] == 2 and task["target_page"] == "step_03_home"
-          and task["operations"][0].get("transition") == {"kind": "page", "page_id": "transition_01"}, "")
+    guarded('E4', section_e4)
 
-    # R25 refusal: a restart without a later main interface.
-    say("R25", "restart -> title only")
-    s = Session(exe, work, "r25", "cold_title")
-    s.mark("declare restart", ["--application", "restart"])
-    s.mark("mark title", ["--frame", f("off"), "--page", "title", "--color", "state/title=1173,680,1,1"])
-    for label, args in (("stop --dry-run", ["--dry-run"]), ("stop", [])):
-        code, value, error = s.stop(label, args)
-        check(f"R25.{label}", code == 3 and (error or {}).get("code") == "record_application_without_home"
-              and s.status() == ("active", "active"), "")
+    def section_e6():
+        # E6. OCR: step 1 with OCR (not evaluated), an OCR-only step (trusted coordinate), a click
+        # source that is OCR (the guard falls to the next target).
+        say("E6", "OCR: first decision not evaluated, trusted coordinate, OCR click source")
+        s = Session(exe, work, "e6", "ocr_steps")
+        ocr = {"languages": ["ja"], "timeout_ms": 1000, "match_mode": "contains", "expected": ["AUTO"], "case_sensitive": False,
+               "minimum_confidence": 0.8, "model_ref": "PP-OCRv6_medium", "model_sha256": "0" * 64}
+        w, h = sizes["auto_off.png"]
+        s.request("mark step 1 (OCR + color, click from OCR)", {"frame": f("off"), "page": "start", "add": [
+            {"id": "text/start", "family": "ocr", "region": {"x": 1180, "y": 664, "width": w, "height": h}, **ocr},
+            {"id": "state/start", "family": "color", "region": {"x": 1173, "y": 680, "width": 1, "height": 1}}],
+            "click": {"from": "text/start"}})
+        s.request("mark step 2 (OCR only)", {"frame": f("loading"), "page": "ocr_only", "add": [
+            {"id": "text/only", "family": "ocr", "region": {"x": 200, "y": 300, "width": 200, "height": 40}, **ocr}],
+            "click": {"region": {"x": 600, "y": 300, "width": 80, "height": 40}}})
+        s.mark("mark step 3", ["--frame", f("on"), "--page", "done", "--color", "state/done=1173,680,1,1"])
+        code, value, _ = s.stop("stop", [])
+        e6 = lab_of(value)
+        show("E6", e6, ["first_decision", "warnings", "marks_not_evaluated", "cross_check"])
+        task = task_of(read_container(e6.get("path") or ""))
+        say("E6", "operations", json.dumps(task["operations"]))
+        ops = task["operations"]
+        check("E6.admitted_ocr_first_step", code == 0 and e6.get("status") == "generated"
+              and (e6.get("first_decision") or {}).get("status") == "not_evaluated"
+              and (e6.get("first_decision") or {}).get("reason") == "lab_ocr_provider_unverified"
+              and "first_decision_not_evaluated" in warning_codes(e6)
+              and "text/start" in (e6.get("marks_not_evaluated") or [])
+              and (e6.get("cross_check") or {}).get("status") == "partially_evaluated", "")
+        check("E6.ocr_click_source_guard", ops[0].get("guard", {}).get("target_id") == "state/start"
+              and ops[0].get("guard", {}).get("color_probe") == "state/start", json.dumps(ops[0].get("guard")))
+        check("E6.ocr_only_trusted", ops[1].get("unguarded_trusted_coordinate") is True and "guard" not in ops[1], "")
 
-    # R24 item 4: a launch in the middle whose next page already passes.
-    say("R24-4", "launch in the middle, next page already on its frame")
-    s = Session(exe, work, "r4", "launch_mid")
-    s.mark("mark a + click", ["--frame", f("off"), "--page", "a", "--template", tpl("auto_off.png", "ui/a", sizes, 1180, 664),
-                              "--click-from", "ui/a"])
-    s.mark("mark b + launch", ["--frame", f("on"), "--page", "b", "--template", tpl("auto_on.png", "ui/b", sizes, 1180, 664),
-                               "--color", "state/b=1173,680,1,1", "--application", "launch"])
-    s.mark("mark home (same screen)", ["--frame", f("on_copy"), "--page", "home", "--reuse", "ui/b", "--reuse", "state/b"])
-    code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
-    r4 = lab_of(value)
-    show("R24-4", r4, ["warnings", "first_decision"])
-    arrival = [w for w in r4.get("warnings") or [] if w.get("code") == "arrival_unconfirmed"]
-    check("R24-4.arrival_and_application_hint", code == 0 and len(arrival) == 1 and arrival[0].get("step") == 2
-          and "application operation" in arrival[0].get("message", "") and "first_decision_not_evaluated" in warning_codes(r4), "")
+    guarded('E6', section_e6)
 
-    # R24 item 5: stop then a click is refused; stop then launch is generated with a warning.
-    say("R24-5", "stop then click; stop then launch")
-    s = Session(exe, work, "r5a", "stop_click")
-    s.mark("mark a + stop", ["--frame", f("off"), "--page", "a", "--color", "state/a=1173,680,1,1", "--application", "stop"])
-    s.mark("mark desktop + click", ["--frame", f("desktop"), "--page", "desk", "--color", "state/desk=20,20,4,4", "--click", "600,300,80,40"])
-    s.mark("mark c", ["--frame", f("on"), "--page", "c", "--color", "state/c=1173,680,1,1"])
-    code, value, error = s.stop("stop --dry-run", ["--dry-run"])
-    check("R24-5.click_after_stop", code == 3 and (error or {}).get("code") == "record_step_after_stop_invalid", "")
-    s = Session(exe, work, "r5b", "stop_launch")
-    s.mark("mark a + stop", ["--frame", f("off"), "--page", "a", "--color", "state/a=1173,680,1,1", "--application", "stop"])
-    s.mark("mark desktop + launch", ["--frame", f("desktop"), "--page", "desk", "--color", "state/desk=20,20,4,4", "--application", "launch"])
-    s.mark("mark home", ["--frame", f("on"), "--page", "home", "--color", "state/home=1173,680,1,1"])
-    code, value, _ = s.stop("stop", [])
-    r5 = lab_of(value)
-    show("R24-5", r5, ["warnings", "first_decision", "application_steps"])
-    check("R24-5.stop_then_launch", code == 0 and r5.get("status") == "generated"
-          and "application_stop_target_external" in warning_codes(r5), "")
+    def section_e7():
+        # E7. Timeouts.
+        say("E7", "timeouts")
+        s = Session(exe, work, "e7", "timeouts")
+        s.mark("mark a", ["--frame", f("off"), "--color", "state/a=1173,680,1,1", "--click", "600,300,80,40"])
+        s.mark("mark b", ["--frame", f("on"), "--color", "state/b=1173,680,1,1"])
+        code, value, error = s.stop("stop --timeout-ms 1800001", ["--timeout-ms", "1800001"])
+        check("E7.timeout_out_of_range", code == 2 and (error or {}).get("code") == "validation_failed" and s.status() == ("active", "active"), "")
+        code, value, _ = s.stop("stop --dry-run --arrival-timeout-ms 90000", ["--dry-run", "--arrival-timeout-ms", "90000"])
+        e7 = lab_of(value)
+        check("E7.step_timeout_clamped", code == 0 and (e7.get("timeouts") or {}).get("step_timeout_ms") == 60000
+              and "step_timeout_clamped" in warning_codes(e7), json.dumps(e7.get("timeouts")))
 
-    # Optional steps are refused until L4o.
-    say("OPT", "a recording with an optional step")
-    s = Session(exe, work, "opt", "with_optional")
-    s.mark("mark a + click", ["--frame", f("off"), "--color", "state/a=1173,680,1,1", "--click", "600,300,80,40"])
-    s.mark("mark pop-up optional", ["--frame", f("popup"), "--color", "notice/panel=320,180,8,8", "--click", "600,480,40,16", "--optional"])
-    s.mark("close the offline step", ["--close-step"])
-    s.mark("mark b", ["--frame", f("on"), "--color", "state/b=1173,680,1,1"])
-    before = s.sha()
-    for label, args in (("stop --dry-run", ["--dry-run"]), ("stop", [])):
-        code, value, error = s.stop(label, args)
-        check(f"OPT.{label}", code == 6 and (error or {}).get("code") == "record_stop_generation_not_implemented"
-              and ((error or {}).get("details") or {}).get("reason") == "optional_steps"
-              and s.sha() == before and s.status() == ("active", "active"), "")
+    guarded('E7', section_e7)
+
+    def section_e10():
+        # E10. Entry overlay on the main screen HUD templates; a bright-area color clears it.
+        say("E10", "entry overlay: two HUD templates, then a --color on the bright area")
+        s = Session(exe, work, "e10", "home_entry")
+        s.mark("mark home (two HUD templates)", ["--frame", f("home"), "--page", "home",
+                                                 "--template", tpl("home_cafe_label.png", "hud/cafe", sizes, 77, 680),
+                                                 "--template", tpl("home_work_label.png", "hud/work", sizes, 1165, 667),
+                                                 "--click", "600,300,80,40"])
+        s.mark("mark next", ["--frame", f("off"), "--page", "next", "--template", tpl("auto_off.png", "ui/auto_off", sizes, 1180, 664)])
+        code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
+        e10 = lab_of(value)
+        show("E10", e10, ["entry_overlay", "warnings"])
+        check("E10.entry_overlay_insensitive", code == 0 and "entry_overlay_insensitive" in warning_codes(e10)
+              and (e10.get("entry_overlay") or {}).get("status") == "insensitive", "")
+        s.mark("add --color on the bright area of step 1", ["--step", "1", "--color", "hud/bright=570,25,4,4"])
+        code, value, _ = s.stop("stop --dry-run after the color", ["--dry-run"])
+        check("E10.warning_gone", code == 0 and "entry_overlay_insensitive" not in warning_codes(lab_of(value))
+              and (lab_of(value).get("entry_overlay") or {}).get("status") == "sensitive", json.dumps(lab_of(value).get("entry_overlay")))
+
+    guarded('E10', section_e10)
+
+    def section_r24_1():
+        # R24 L4 items 1, 6, 7, 8: restart -> title -> home, declared offline.
+        say("R24-1", "restart -> title -> home (declared offline) -> ZIP")
+        s = Session(exe, work, "r1", "cold_start")
+        s.mark("declare restart (entry step)", ["--application", "restart"])
+        s.mark("mark title + click", ["--frame", f("off"), "--page", "title", "--template", tpl("auto_off.png", "ui/title", sizes, 1180, 664),
+                                      "--color", "state/title=1173,680,1,1", "--click-from", "ui/title"])
+        s.mark("mark home", ["--frame", f("on"), "--page", "home", "--template", tpl("auto_on.png", "ui/home", sizes, 1180, 664),
+                             "--color", "state/home=1173,680,1,1"])
+        code, value, error = s.stop("stop --dry-run --requires (application entry)", ["--dry-run", "--requires", "bluearchive.jp.return_home"])
+        check("R24-6.requires_on_application_entry", code == 2 and (error or {}).get("code") == "record_requires_invalid"
+              and ((error or {}).get("details") or {}).get("reason") == "application_entry", "")
+        code, value, error = s.stop("stop --application-arrival-timeout-ms 1800001", ["--application-arrival-timeout-ms", "1800001"])
+        check("R24-7.application_timeout_out_of_range", code == 2 and (error or {}).get("code") == "validation_failed", "")
+        r_dir = os.path.join(out, "install", "packages", "bluearchive")
+        code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", r_dir])
+        r1 = lab_of(value)
+        show("R24-1", r1, ["container", "digest", "pages", "application_steps", "timeouts", "first_decision", "warnings", "cross_check",
+                           "entry_overlay", "binding_requires"])
+        d_r1 = r1.get("digest")
+        files = read_container(os.path.join(r_dir, f"{d_r1}.zip"))
+        control, task = json.loads(files["control.json"]), task_of(files)
+        say("R24-1", "control.json", json.dumps(control))
+        say("R24-1", "task.json head", json.dumps({key: task.get(key) for key in ("entry_page", "target_page", "timeout_ms", "max_steps")}))
+        say("R24-1", "operations", json.dumps(task["operations"]))
+        say("R24-1", "provenance step 1", json.dumps(task["provenance"]["steps"][0]))
+        gates = (r1.get("cross_check") or {}).get("gates") or []
+        first = r1.get("first_decision") or {}
+        check("R24-1.generated", code == 0 and r1.get("container") == "zip" and task["entry_page"] == "any"
+              and task["operations"][0]["id"] == "step_01_app" and task["operations"][0]["from"] == "any"
+              and task["operations"][0]["application"] == {"action": "restart"}, "")
+        check("R24-1.first_decision_not_evaluated", first.get("status") == "not_evaluated" and first.get("refusal") == APPLICATION_REFUSAL
+              and first.get("reason") == "lab_application_effect_offline" and "first_decision_not_evaluated" not in warning_codes(r1), json.dumps(first))
+        check("R24-1.not_applicable", gates and gates[0].get("result") == "not_applicable"
+              and (r1.get("entry_overlay") or {}).get("status") == "not_applicable", "")
+        check("R24-1.provenance_entry_step", set(task["provenance"]["steps"][0]) == {"step", "record_index", "page", "application"}, "")
+        check("R24-1.binding_requires_application", any("startup_package" in item for item in r1.get("binding_requires") or [])
+              and any("application_id" in item for item in r1.get("binding_requires") or []), "")
+        check("R24-7.default_timeout_126200", task["timeout_ms"] == 126200 and control["timeout_ms"] == 126200
+              and (r1.get("timeouts") or {}).get("timeout_ms") == 126200, f"{task['timeout_ms']}")
+        check("R24-2.restart_title_home", task["max_steps"] == 2 and task["target_page"] == "step_03_home", "")
+        dir_form = os.path.join(out, "dir-form", d_r1)
+        for path, data in files.items():
+            target = os.path.join(dir_form, *path.split("/"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as handle:
+                handle.write(data)
+        code, measured = package_digest(exe, dir_form, "R24-8 package digest --package <D> directory")
+        check("R24-8.directory_form", code == 0 and measured == d_r1, f"{measured}")
+
+    guarded('R24_1', section_r24_1)
+
+    def section_r24_2():
+        # R24 item 2 (replaced, R25): restart -> splash (page transition) -> title -> home.
+        say("R24-2", "restart, splash as the transition of the entry step, title, home")
+        s = Session(exe, work, "r2", "cold_splash")
+        s.mark("declare restart", ["--application", "restart"])
+        s.mark("mark splash", ["--frame", f("loading"), "--color", "splash/bar=600,358,8,4"])
+        s.mark("splash to transition", ["--to-transition", "2"])
+        s.mark("mark title + click", ["--frame", f("off"), "--page", "title", "--color", "state/title=1173,680,1,1", "--click", "600,300,80,40"])
+        s.mark("mark home", ["--frame", f("on"), "--page", "home", "--color", "state/home=1173,680,1,1"])
+        code, value, _ = s.stop("stop", [])
+        r2 = lab_of(value)
+        show("R24-2", r2, ["pages", "transitions", "timeouts", "first_decision"])
+        task = task_of(read_container(r2.get("path") or ""))
+        check("R24-2.generated", code == 0 and r2.get("pages") == ["transition_01", "step_02_title", "step_03_home"]
+              and task["max_steps"] == 2 and task["target_page"] == "step_03_home"
+              and task["operations"][0].get("transition") == {"kind": "page", "page_id": "transition_01"}, "")
+
+    guarded('R24_2', section_r24_2)
+
+    def section_r25():
+        # R25 refusal: a restart without a later main interface.
+        say("R25", "restart -> title only")
+        s = Session(exe, work, "r25", "cold_title")
+        s.mark("declare restart", ["--application", "restart"])
+        s.mark("mark title", ["--frame", f("off"), "--page", "title", "--color", "state/title=1173,680,1,1"])
+        for label, args in (("stop --dry-run", ["--dry-run"]), ("stop", [])):
+            code, value, error = s.stop(label, args)
+            check(f"R25.{label}", code == 3 and (error or {}).get("code") == "record_application_without_home"
+                  and s.status() == ("active", "active"), "")
+
+    guarded('R25', section_r25)
+
+    def section_r24_4():
+        # R24 item 4: a launch in the middle whose next page already passes.
+        say("R24-4", "launch in the middle, next page already on its frame")
+        s = Session(exe, work, "r4", "launch_mid")
+        s.mark("mark a + click", ["--frame", f("off"), "--page", "a", "--template", tpl("auto_off.png", "ui/a", sizes, 1180, 664),
+                                  "--click-from", "ui/a"])
+        s.mark("mark b + launch", ["--frame", f("on"), "--page", "b", "--template", tpl("auto_on.png", "ui/b", sizes, 1180, 664),
+                                   "--color", "state/b=1173,680,1,1", "--application", "launch"])
+        s.mark("mark home (same screen)", ["--frame", f("on_copy"), "--page", "home", "--reuse", "ui/b", "--reuse", "state/b"])
+        code, value, _ = s.stop("stop --dry-run", ["--dry-run"])
+        r4 = lab_of(value)
+        show("R24-4", r4, ["warnings", "first_decision"])
+        arrival = [w for w in r4.get("warnings") or [] if w.get("code") == "arrival_unconfirmed"]
+        check("R24-4.arrival_and_application_hint", code == 0 and len(arrival) == 1 and arrival[0].get("step") == 2
+              and "application operation" in arrival[0].get("message", "") and "first_decision_not_evaluated" in warning_codes(r4), "")
+
+    guarded('R24_4', section_r24_4)
+
+    def section_r24_5():
+        # R24 item 5: stop then a click is refused; stop then launch is generated with a warning.
+        say("R24-5", "stop then click; stop then launch")
+        s = Session(exe, work, "r5a", "stop_click")
+        s.mark("mark a + stop", ["--frame", f("off"), "--page", "a", "--color", "state/a=1173,680,1,1", "--application", "stop"])
+        s.mark("mark desktop + click", ["--frame", f("desktop"), "--page", "desk", "--color", "state/desk=20,20,4,4", "--click", "600,300,80,40"])
+        s.mark("mark c", ["--frame", f("on"), "--page", "c", "--color", "state/c=1173,680,1,1"])
+        code, value, error = s.stop("stop --dry-run", ["--dry-run"])
+        check("R24-5.click_after_stop", code == 3 and (error or {}).get("code") == "record_step_after_stop_invalid", "")
+        s = Session(exe, work, "r5b", "stop_launch")
+        s.mark("mark a + stop", ["--frame", f("off"), "--page", "a", "--color", "state/a=1173,680,1,1", "--application", "stop"])
+        s.mark("mark desktop + launch", ["--frame", f("desktop"), "--page", "desk", "--color", "state/desk=20,20,4,4", "--application", "launch"])
+        s.mark("mark home", ["--frame", f("on"), "--page", "home", "--color", "state/home=1173,680,1,1"])
+        code, value, _ = s.stop("stop", [])
+        r5 = lab_of(value)
+        show("R24-5", r5, ["warnings", "first_decision", "application_steps"])
+        check("R24-5.stop_then_launch", code == 0 and r5.get("status") == "generated"
+              and "application_stop_target_external" in warning_codes(r5), "")
+
+    guarded('R24_5', section_r24_5)
+
+    def section_opt():
+        # Optional steps are refused until L4o.
+        say("OPT", "a recording with an optional step")
+        s = Session(exe, work, "opt", "with_optional")
+        s.mark("mark a + click", ["--frame", f("off"), "--color", "state/a=1173,680,1,1", "--click", "600,300,80,40"])
+        s.mark("mark pop-up optional", ["--frame", f("popup"), "--color", "notice/panel=320,180,8,8", "--click", "600,480,40,16", "--optional"])
+        s.mark("close the offline step", ["--close-step"])
+        s.mark("mark b", ["--frame", f("on"), "--color", "state/b=1173,680,1,1"])
+        before = s.sha()
+        for label, args in (("stop --dry-run", ["--dry-run"]), ("stop", [])):
+            code, value, error = s.stop(label, args)
+            check(f"OPT.{label}", code == 6 and (error or {}).get("code") == "record_stop_generation_not_implemented"
+                  and ((error or {}).get("details") or {}).get("reason") == "optional_steps"
+                  and s.sha() == before and s.status() == ("active", "active"), "")
+
+    guarded('OPT', section_opt)
 
     # E3, E8, E9, R24-3: small packages on the fixture backend (scheduled dispatch).
     fixture_dir = os.path.join(out, "fixture", "packages", GAME)
     produced = []
-    say("E3", "end to end: a small recording run on the fixture")
-    s = Session(exe, work, "e3", "e2e_small", game=GAME, server=SERVER, locale="en-US")
-    s.mark("mark home + click", ["--frame", sf("home"), "--page", "home", "--color", "state/home=10,10,1,1", "--click", "8,8,5,5"])
-    s.mark("mark a2", ["--frame", sf("a2"), "--page", "a2", "--color", "state/a2=10,10,1,1"])
-    code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", fixture_dir])
-    e3 = lab_of(value)
-    show("E3", e3, ["container", "digest", "package_id", "lab_dir_path", "first_decision", "warnings"])
-    root, rows, types, _ = fixture_case(work, "E3 fixture run", new_runtime, new_ledger, e3.get("lab_dir_path"),
-                                        e3.get("package_ref"), [sf("home"), sf("a2")], catalog_dir, None)
-    produced.append(("E3", root))
-    check("E3.fixture_success", ["package_admitted", e3.get("package_id"), e3.get("digest")] in rows
-          and ["terminal_committed", "success", 1, None] in rows, "")
+    def section_e3():
+        say("E3", "end to end: a small recording run on the fixture")
+        s = Session(exe, work, "e3", "e2e_small", game=GAME, server=SERVER, locale="en-US")
+        s.mark("mark home + click", ["--frame", sf("home"), "--page", "home", "--color", "state/home=10,10,1,1", "--click", "8,8,5,5"])
+        s.mark("mark a2", ["--frame", sf("a2"), "--page", "a2", "--color", "state/a2=10,10,1,1"])
+        code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", fixture_dir])
+        e3 = lab_of(value)
+        show("E3", e3, ["container", "digest", "package_id", "lab_dir_path", "first_decision", "warnings"])
+        root, rows, types, _ = fixture_case(work, "E3 fixture run", new_runtime, new_ledger, e3.get("lab_dir_path"),
+                                            e3.get("package_ref"), [sf("home"), sf("a2")], catalog_dir, None)
+        produced.append(("E3", root))
+        check("E3.fixture_success", ["package_admitted", e3.get("package_id"), e3.get("digest")] in rows
+              and ["terminal_committed", "success", 1, None] in rows, "")
 
-    say("E8", "--requires: a package with a prerequisite, its refusals")
-    h_root = os.path.join(out, "fixture", "h-package")
-    h_digest = h_package(h_root)
-    s = Session(exe, work, "e8", "pre_b", game=GAME, server=SERVER, locale="en-US")
-    s.mark("mark home + click", ["--frame", sf("home"), "--page", "home", "--color", "state/home=10,10,1,1", "--click", "8,8,5,5"])
-    s.mark("mark m", ["--frame", sf("m"), "--page", "m", "--color", "state/m=10,10,1,1"])
-    own_id = f"{GAME}.{SERVER}.pre_b"
-    code, value, error = s.stop("stop --dry-run --requires <own id>", ["--dry-run", "--requires", own_id])
-    check("E8.requires_self", code == 2 and (error or {}).get("code") == "record_requires_invalid"
-          and ((error or {}).get("details") or {}).get("reason") == "prerequisite_self", "")
-    code, value, _ = s.stop("stop --requires H --lab-dir", ["--requires", ID_H, "--lab-dir", fixture_dir])
-    e8 = lab_of(value)
-    show("E8", e8, ["digest", "requires", "warnings", "prerequisite_entry_example", "binding_requires"])
-    control = json.loads(read_container(e8.get("lab_dir_path") or "")["control.json"])
-    say("E8", "control.json", json.dumps(control))
-    check("E8.control_prerequisite", code == 0 and control.get("prerequisite_package_id") == ID_H
-          and "requires_prefix_mismatch" in warning_codes(e8) and e8.get("requires") == ID_H, "")
-    code, value, error = s.stop("stop --requires other (stopped)", ["--requires", "fixture.prereq.other", "--lab-dir", fixture_dir])
-    check("E8.requires_conflict", code == 3 and (error or {}).get("code") == "record_requires_conflict", "")
+    guarded('E3', section_e3)
 
-    say("E9", "a two-level Lab chain on the fixture: C -> B (Lab) -> H")
-    s = Session(exe, work, "e9", "pre_c", game=GAME, server=SERVER, locale="en-US")
-    s.mark("mark m + click", ["--frame", sf("m"), "--page", "m", "--color", "state/m=10,10,1,1", "--click", "8,8,5,5"])
-    s.mark("mark c2", ["--frame", sf("c2"), "--page", "c2", "--color", "state/c2=10,10,1,1"])
-    code, value, _ = s.stop("stop --requires B --lab-dir", ["--requires", own_id, "--lab-dir", fixture_dir])
-    e9 = lab_of(value)
-    show("E9", e9, ["digest", "requires", "warnings"])
-    mapping = [{"package_id": ID_H, "package_path": h_root, "package_digest": {"schema_version": SCHEMA_DIR, "sha256": h_digest}},
-               e8.get("prerequisite_entry_example")]
-    say("E9", "prerequisite_packages", json.dumps(mapping))
-    root, rows, types, _ = fixture_case(work, "E9 fixture chain from X", new_runtime, new_ledger, e9.get("lab_dir_path"),
-                                        e9.get("package_ref"),
-                                        [sf(name) for name in ("x", "x", "x", "home", "home", "home", "m", "m", "m", "c2")],
-                                        catalog_dir, mapping)
-    produced.append(("E9", root))
-    check("E9.chain_success", ["entry_recovery_package_admitted", e8.get("digest")] in rows
-          and ["entry_recovery_package_admitted", h_digest] in rows
-          and ["package_admitted", e9.get("package_id"), e9.get("digest")] in rows
-          and ["terminal_committed", "success", 3, None] in rows and types.count("task.requested") == 1, "")
+    def section_e8_e9():
+        say("E8", "--requires: a package with a prerequisite, its refusals")
+        h_root = os.path.join(out, "fixture", "h-package")
+        h_digest = h_package(h_root)
+        s = Session(exe, work, "e8", "pre_b", game=GAME, server=SERVER, locale="en-US")
+        s.mark("mark home + click", ["--frame", sf("home"), "--page", "home", "--color", "state/home=10,10,1,1", "--click", "8,8,5,5"])
+        s.mark("mark m", ["--frame", sf("m"), "--page", "m", "--color", "state/m=10,10,1,1"])
+        own_id = f"{GAME}.{SERVER}.pre_b"
+        code, value, error = s.stop("stop --dry-run --requires <own id>", ["--dry-run", "--requires", own_id])
+        check("E8.requires_self", code == 2 and (error or {}).get("code") == "record_requires_invalid"
+              and ((error or {}).get("details") or {}).get("reason") == "prerequisite_self", "")
+        code, value, _ = s.stop("stop --requires H --lab-dir", ["--requires", ID_H, "--lab-dir", fixture_dir])
+        e8 = lab_of(value)
+        show("E8", e8, ["digest", "requires", "warnings", "prerequisite_entry_example", "binding_requires"])
+        control = json.loads(read_container(e8.get("lab_dir_path") or "")["control.json"])
+        say("E8", "control.json", json.dumps(control))
+        check("E8.control_prerequisite", code == 0 and control.get("prerequisite_package_id") == ID_H
+              and "requires_prefix_mismatch" in warning_codes(e8) and e8.get("requires") == ID_H, "")
+        code, value, error = s.stop("stop --requires other (stopped)", ["--requires", "fixture.prereq.other", "--lab-dir", fixture_dir])
+        check("E8.requires_conflict", code == 3 and (error or {}).get("code") == "record_requires_conflict", "")
 
-    say("R24-3", "restart -> title -> home on the fixture: denied before any capture")
-    s = Session(exe, work, "r3", "cold_small", game=GAME, server=SERVER, locale="en-US")
-    s.mark("declare restart", ["--application", "restart"])
-    s.mark("mark title + click", ["--frame", sf("x"), "--page", "title", "--color", "state/title=10,10,1,1", "--click", "8,8,5,5"])
-    s.mark("mark home", ["--frame", sf("home"), "--page", "home", "--color", "state/home=10,10,1,1"])
-    code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", fixture_dir])
-    r3 = lab_of(value)
-    show("R24-3", r3, ["digest", "first_decision"])
-    root, rows, types, text = fixture_case(work, "R24-3 fixture run", new_runtime, new_ledger, r3.get("lab_dir_path"),
-                                           r3.get("package_ref"), [sf("x"), sf("home")], catalog_dir, None)
-    produced.append(("R24-3", root))
-    check("R24-3.denied_without_capture", APPLICATION_REFUSAL in text and "capture.completed" not in types
-          and not any(row[0] == "capture_completed" for row in rows), json.dumps(sorted(set(types))))
+        say("E9", "a two-level Lab chain on the fixture: C -> B (Lab) -> H")
+        s = Session(exe, work, "e9", "pre_c", game=GAME, server=SERVER, locale="en-US")
+        s.mark("mark m + click", ["--frame", sf("m"), "--page", "m", "--color", "state/m=10,10,1,1", "--click", "8,8,5,5"])
+        s.mark("mark c2", ["--frame", sf("c2"), "--page", "c2", "--color", "state/c2=10,10,1,1"])
+        code, value, _ = s.stop("stop --requires B --lab-dir", ["--requires", own_id, "--lab-dir", fixture_dir])
+        e9 = lab_of(value)
+        show("E9", e9, ["digest", "requires", "warnings"])
+        mapping = [{"package_id": ID_H, "package_path": h_root, "package_digest": {"schema_version": SCHEMA_DIR, "sha256": h_digest}},
+                   e8.get("prerequisite_entry_example")]
+        say("E9", "prerequisite_packages", json.dumps(mapping))
+        root, rows, types, _ = fixture_case(work, "E9 fixture chain from X", new_runtime, new_ledger, e9.get("lab_dir_path"),
+                                            e9.get("package_ref"),
+                                            [sf(name) for name in ("x", "x", "x", "home", "home", "home", "m", "m", "m", "c2")],
+                                            catalog_dir, mapping)
+        produced.append(("E9", root))
+        check("E9.chain_success", ["entry_recovery_package_admitted", e8.get("digest")] in rows
+              and ["entry_recovery_package_admitted", h_digest] in rows
+              and ["package_admitted", e9.get("package_id"), e9.get("digest")] in rows
+              and ["terminal_committed", "success", 3, None] in rows and types.count("task.requested") == 1, "")
+
+    guarded('E8_E9', section_e8_e9)
+
+    def section_r24_3():
+        say("R24-3", "restart -> title -> home on the fixture: denied before any capture")
+        s = Session(exe, work, "r3", "cold_small", game=GAME, server=SERVER, locale="en-US")
+        s.mark("declare restart", ["--application", "restart"])
+        s.mark("mark title + click", ["--frame", sf("x"), "--page", "title", "--color", "state/title=10,10,1,1", "--click", "8,8,5,5"])
+        s.mark("mark home", ["--frame", sf("home"), "--page", "home", "--color", "state/home=10,10,1,1"])
+        code, value, _ = s.stop("stop --lab-dir", ["--lab-dir", fixture_dir])
+        r3 = lab_of(value)
+        show("R24-3", r3, ["digest", "first_decision"])
+        root, rows, types, text = fixture_case(work, "R24-3 fixture run", new_runtime, new_ledger, r3.get("lab_dir_path"),
+                                               r3.get("package_ref"), [sf("x"), sf("home")], catalog_dir, None)
+        produced.append(("R24-3", root))
+        check("R24-3.denied_without_capture", APPLICATION_REFUSAL in text and "capture.completed" not in types
+              and not any(row[0] == "capture_completed" for row in rows), json.dumps(sorted(set(types))))
+
+    guarded('R24_3', section_r24_3)
 
     # The v0.9.0 actingledger reads every fixture ledger.
     for label, root in produced:
