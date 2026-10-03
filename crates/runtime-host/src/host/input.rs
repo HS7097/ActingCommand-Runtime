@@ -179,6 +179,20 @@ impl HostShared {
         let failure_links = links;
         let action_for_worker = prepared_action;
         let mut destructive_step = None;
+        // The outcome and its fact invalidations precede the next admission's intent freeze.
+        // Acquire only after the device action: its lifecycle writes take this gate too.
+        let outcome_fact_gate = RefCell::new(None);
+        let outcome_gate_error = RefCell::new(None);
+        let lock_outcome_facts = || match lock(&self.fact_write_gate, "commit_input_outcome") {
+            Ok(gate) => {
+                *outcome_fact_gate.borrow_mut() = Some(gate);
+                Ok(())
+            }
+            Err(error) => {
+                *outcome_gate_error.borrow_mut() = Some(error);
+                Err(actingcommand_contract::SanitizationError::fingerprinter_failure())
+            }
+        };
         let result = execute_critical(
             &self.ledger,
             self.events.fingerprinter(),
@@ -311,6 +325,7 @@ impl HostShared {
                 }
             },
             |(_, touch_response_us), effect| {
+                lock_outcome_facts()?;
                 self.events
                     .draft(
                         EventSeverity::Info,
@@ -328,6 +343,7 @@ impl HostShared {
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
             |error, effect| {
+                lock_outcome_facts()?;
                 let audit = execution_audit(execution_provenance, &endpoint);
                 let payload = InputPayloadDraft::failed_with_causes(
                     event_action,
@@ -349,6 +365,16 @@ impl HostShared {
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
         );
+        let outcome_fact_gate = outcome_fact_gate.into_inner();
+        if let Some(error) = outcome_gate_error.into_inner() {
+            return Err(RequestFailure::poison_without_terminal(error));
+        }
+        if matches!(&result, Ok(_) | Err(CriticalExecutionError::Action { .. })) {
+            self.synchronize_fact_store_under_gate()
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
+        // Cleanup and pipeline observation may append events and must run outside this gate.
+        drop(outcome_fact_gate);
         match result {
             Ok(receipt) => {
                 self.finish_destructive_input(destructive_step.take(), connection_id)?;

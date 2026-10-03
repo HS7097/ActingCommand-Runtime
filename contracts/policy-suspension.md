@@ -28,16 +28,42 @@ catalog change to be approved again.
 
 ## Immediate rerun (R22)
 
-A pair (catalog task, instance) whose latest failure carries a failure identity and is
-scheduled for a retry is treated by the evaluator as triggered and past its task cooldown
+A pair (catalog task, instance) whose latest failure carries a failure identity, is
+scheduled for a retry and has a live retry round is treated by the evaluator as triggered and past its task cooldown
 (reason `failure_retry_immediate`): it is rerun as soon as its retry backoff has passed, at the
 next evaluation, instead of at the next clock occurrence. `actingd` evaluates again right after
 a cycle in which a scheduled run failed, so that evaluation, not the wake computed before the
 run, sets the next wake (the end of the backoff). The feedback stop, placement, the
 loop and activity budgets and the activity windows still apply, and every rerun consumes the
 budgets like any dispatch. A page-graph task and a failure recorded with its original code
-keep waiting for their trigger and cooldown. Admission replay never reads triggers, so the
-replay of a ledger is unchanged.
+keep waiting for their trigger and cooldown.
+
+`PolicyControlState` owns the round. An admitted normal trigger opens it using the original
+`PolicyActivitySample` and budget receipt. An admission whose reason is
+`failure_retry_immediate` retains that origin; consecutive failures and new failure identities
+do not renew it. The round uses that profile's original half-open activity occurrence and
+budget limits. The shared `activity_window_at` calculation assigns an overnight occurrence to
+its opening day; midnight inside it does not reset its budgets. A full-day occurrence ends at
+the next local midnight, and an ordinary occurrence ends at its declared end. A different
+profile/window or expected duration cannot use the original round's immediate permission.
+
+Admission spends task/activity daily and window counts. Once any original count limit is
+reached the round ends. Runtime usage settles the reservation to actual duration at execution
+completion; if the remaining original task/activity runtime budget cannot reserve the next
+run's expected duration, the round ends then. Pending reservations still constrain admission.
+Shared activity consumption by another task of that instance uses the same counters and can
+end the round. A closed round stays closed when budgets become available again. Window expiry
+also ends immediate permission, including for an intent evaluated before the boundary and
+admitted after it (`policy_retry_round_ended`). The next legal normal trigger opens a new round;
+budget availability alone is not a trigger. A run already admitted finishes under its existing
+deadline and permission, with no additional stop at a date boundary.
+
+Success clears the round. Ending immediate permission does not clear failure history or
+change failure classification, backoff, sensitive/severe pauses or package-update lifting.
+Restart reconstructs rounds in ledger order from accepted dispatch reasons, original admission
+timestamps/receipts and execution settlements. It never substitutes restart time or reruns old
+triggers. Historical accepted receipts remain replayable; their recorded immediate admissions
+do not create a fresh origin after the original round ended.
 
 ## Failure identity
 
@@ -243,7 +269,7 @@ Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
   changed cells per thousand) is similar; if it appears at the same step twice, the task is
   paused, and a look at the frames resolves it.
 - A failure that does not accumulate never pauses: an outdated prerequisite or return-home
-  package shows only in `repeating`, and is rerun until the daily budget is spent.
+  package shows only in `repeating`, and is rerun within its original window and budget cycle.
 - The same cause can give a different `K` on days with and without an optional popup (the last
   `StepStarted` differs), which delays the pause by one more rerun.
 - The startup reconciliation records the original code, so the next failure starts a new
