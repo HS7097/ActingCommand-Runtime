@@ -286,8 +286,9 @@ recovery ladder for the instance, unless the
 instance's `stuck_recovery` is `false` (`contracts/actingd-check-config.md`). Fixture-simulated
 instances, startup package runs and the ladder's own rung runs never trigger one. The
 `contained_task_prerequisite_*` codes a `linear_steps` package's prerequisite gate reports
-itself never trigger one; a code a prerequisite package reports while it runs is judged by the
-rule above (`contracts/linear-steps.md`, "Prerequisite packages"). The ladder
+itself never trigger one, nor does `contained_task_return_home_entry_unmatched`; a code a
+prerequisite or return-home package reports while it runs is judged by the rule above
+(`contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallback"). The ladder
 never runs on the run's thread: a direct run's trigger waits until its connection wrote the
 failure receipt, a scheduled run's trigger (no client receipt) is admitted as the run returns
 its failure, and the accepted ladder is queued for the scheduling thread of the startup package hook

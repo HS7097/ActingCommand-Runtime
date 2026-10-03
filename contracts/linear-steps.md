@@ -317,8 +317,9 @@ above and normally passes at once. The host deadline still ends the run with `co
 cancelled, paused) from any capture of the gate.
 
 **Ledger.** Only the existing `TaskEntryPreflight` facts and effective configuration records
-are written; a run has at most six effective configuration records (initial, one per
-prerequisite package, capture, input). The facts are told apart by these rules, with no layer
+are written; a run has at most seven effective configuration records (initial, one per
+prerequisite package, the return-home package of "Return-home fallback" below included,
+capture, input). The facts are told apart by these rules, with no layer
 field:
 
 - A `TaskEntryPreflight` fact belongs to the innermost prerequisite package that was opened by
@@ -331,7 +332,7 @@ field:
   `EntryRecoveryCompleted.executed_steps`.
 
 A replayed direct request is answered from its ledger when its `EntryRecoveryPackageAdmitted`
-facts are at most three, all different, each the request's recovery binding or a package of the
+facts are at most four (three declared, one return-home), all different, each the request's recovery binding or a package of the
 `prerequisite_packages` map; otherwise it is `contained_task_request_recovery_reused`.
 
 **Failure codes of the gate.**
@@ -356,6 +357,60 @@ area. A linear chain end does not accept a start that is already on its target p
 page-graph chain end succeeds with no step on its target page, so it is the better end of a
 chain. A flow whose first page appears only sometimes stays a page-graph package.
 
+## Return-home fallback
+
+Workflow #336 R16. A `linear_steps` package that declares no `prerequisite_package_id` and
+whose first step is a page (no application entry) falls back to the return-home package that
+the `actingd` configuration's top-level `return_home_packages` names for its game and server
+(`actingd-check-config.md`, "Prerequisite packages"). That package id is a key of the
+`prerequisite_packages` map and is resolved through it as a declared one is.
+
+**Resolution.** The return-home package is one more layer at the end of the chain, below the
+dependent package when it declares nothing, or below the last declared prerequisite package when
+that is a `linear_steps` package that declares nothing. It is looked up by the game and server of
+that layer's control and passes the same checks as a declared layer (the table of "Prerequisite
+packages"); a refusal has the same code, with `source=return_home` at the end of its detail. The
+return-home layer is not one of the three declared layers, so a chain has at most four; it falls
+back no further, and there is none when the map has no entry for the game and server or its
+package is already in the chain. A page-graph package and an application entry
+(`from: "any"`) never fall back. The maximum steps of the whole chain, the return-home package
+included, still add up to at most 1000. Which layer came from the configuration is known only
+in memory: the ledger does not tell a return-home layer from a declared one, except by comparing
+its package reference with the configuration of the time.
+
+**Gate.** The return-home layer runs through the gate as a declared layer does: first check,
+`EntryRecoveryPackageAdmitted`, its run, recheck, close. The one difference: when the first
+step's page still does not pass within `step_timeout_ms` after the return-home package ran, the
+run fails with `contained_task_return_home_entry_unmatched`, detail `layer=<i>
+package_id=<X_i> required_page=<page> return_home=<return-home package id>`, with the timing of
+`contained_task_prerequisite_entry_unmatched`. A package with neither a declared prerequisite
+package nor a fallback starts directly, as before, and fails with
+`contained_task_linear_entry_unmatched` when the run does not start on its first step.
+
+So the first step of a package that relies on the fallback should be the page where the
+return-home package ends (the main interface). A package recorded from another screen declares
+a prerequisite package that leads to its first step; otherwise every run from elsewhere fails
+with `contained_task_return_home_entry_unmatched`.
+
+| Situation | `failure_code` | Starts the ladder |
+|---|---|---|
+| After the return-home package ran, the first step's page did not pass within `step_timeout_ms` | `contained_task_return_home_entry_unmatched` | no |
+| The return-home package failed | its own code (a page-graph package's `contained_task_page_unknown`, for example) | as that code does |
+| The return-home package is refused at preparation | the `contained_task_prerequisite_*` code of the refusal, detail ending in `source=return_home` | no |
+
+The code is kept apart from `contained_task_prerequisite_entry_unmatched` so that a stale
+return-home package, maintained with the program, is told from a prerequisite package the
+author declared; neither starts the stuck-recovery ladder. A request's recovery binding plays
+no part, and neither the stuck-recovery ladder nor the page-graph home entry uses the
+return-home package.
+
+**Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
+detail of its task failure is always the native detail of the run's runtime lifecycle failure
+record (at most 1024 bytes): for example `operation=<id> attempts=<n> after_page=<page>
+hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's details above, the failure
+of a prerequisite or return-home package it ran included. A page-graph package's failure is
+unchanged: only the two resource-reading codes carry their detail.
+
 ## Failure codes
 
 | Situation | `failure_code` | Timing (existing values) |
@@ -372,6 +427,7 @@ chain. A flow whose first page appears only sometimes stays a page-graph package
 | A frame of another size | `contained_task_frame_resolution_mismatch` | none |
 | A package outside the admission rules | `contained_task_linear_invalid` (admission) | none |
 | The prerequisite gate ("Prerequisite packages" above) | `contained_task_prerequisite_*` | `page_recognition` / `entry_recognition` for `contained_task_prerequisite_entry_unmatched` |
+| The return-home package ran and the first step's page did not pass ("Return-home fallback" above) | `contained_task_return_home_entry_unmatched` | `page_recognition` / `entry_recognition` |
 
 The new codes are strings; none of them starts the stuck-recovery ladder.
 
@@ -414,7 +470,8 @@ first refused by the resource declaration check (`resource_declaration_invalid`,
 `prerequisite_package_id` the same way (`resource_declaration_invalid`, `UnknownField` at
 `/prerequisite_package_id`), before `PackageAdmitted` and, for a direct run, before any lease;
 its `actingd` refuses a configuration with `prerequisite_packages` (`config_decode_failed`) and
-does not start.
+does not start. A build without the return-home fallback refuses a configuration with
+`return_home_packages` the same way (`config_decode_failed`).
 
 ## Tools
 
@@ -429,10 +486,12 @@ runs no prerequisite package; the offline simulation runs the package alone, wit
 ## What a linear task cannot express
 
 Branches, occasional popups and loops of variable length: only the declared path runs. A run
-of a package without a prerequisite package that does not start on the first step's page,
-including one already on the target page, fails with `contained_task_linear_entry_unmatched`,
-so a path whose first page does not always appear is not suited to a fixed-interval schedule;
-a package with a prerequisite package runs it first ("Prerequisite packages" above). An intermediate state that only sometimes
+of a package without a prerequisite package or return-home fallback that does not start on the
+first step's page, including one already on the target page, fails with
+`contained_task_linear_entry_unmatched`, so a path whose first page does not always appear is
+not suited to a fixed-interval schedule; a package with a prerequisite package runs it first
+("Prerequisite packages" above), and one without runs the configured return-home package first
+("Return-home fallback" above). An intermediate state that only sometimes
 appears is declared as a window, or not at all.
 
 An application step always runs: there is no conditional restart, and the package cannot name

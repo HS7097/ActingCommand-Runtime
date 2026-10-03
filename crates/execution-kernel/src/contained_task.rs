@@ -61,6 +61,7 @@ const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
 const MAX_PREREQUISITE_PACKAGE_ID_BYTES: usize = 256;
 const PREREQUISITE_ENTRY_UNMATCHED: &str = "contained_task_prerequisite_entry_unmatched";
+const RETURN_HOME_ENTRY_UNMATCHED: &str = "contained_task_return_home_entry_unmatched";
 const MAX_STABILITY_PIXEL_BYTES: usize = 4;
 const MAX_POST_ADMISSION_OCR_FRAMES: u32 = 256;
 const MAX_POST_ADMISSION_OCR_ITEMS: u32 = 4_096;
@@ -1762,7 +1763,8 @@ pub struct LinearEntryAwait {
     /// The wait's own timing context; the run's task timing is not started by the wait.
     pub timing: ContainedTaskTimingContext,
     /// `None` when the first step passed, otherwise the timed
-    /// `contained_task_prerequisite_entry_unmatched` failure of the spent budget.
+    /// `contained_task_prerequisite_entry_unmatched` (or, after a return-home package,
+    /// `contained_task_return_home_entry_unmatched`) failure of the spent budget.
     pub unmatched: Option<ContainedTaskError>,
 }
 
@@ -2185,12 +2187,15 @@ impl PreparedContainedTask {
     /// or `budget` is spent. The wait keeps its own timing context of `origin` (each capture at
     /// the `CapturePage` boundary, each sleep at `PageRecognitionWait`); the run's
     /// `observe_task_timing` is not called. `layer` names the gate layer in the failure detail.
+    /// `return_home` names the return-home package that ran (Workflow #336 L2c): the failure is
+    /// then `contained_task_return_home_entry_unmatched` and its detail names that package.
     pub fn await_linear_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         budget: Duration,
         origin: actingcommand_contract::TaskTimingBudgetOrigin,
         layer: usize,
+        return_home: Option<&str>,
     ) -> Result<LinearEntryAwait, ContainedTaskRunError<R::Error>> {
         let page = self
             .linear_entry_page()
@@ -2220,13 +2225,20 @@ impl PreparedContainedTask {
             }
             let elapsed = started.elapsed();
             if elapsed >= budget {
+                let (code, return_home) = match return_home {
+                    Some(package_id) => (
+                        RETURN_HOME_ENTRY_UNMATCHED,
+                        format!(" return_home={package_id}"),
+                    ),
+                    None => (PREREQUISITE_ENTRY_UNMATCHED, String::new()),
+                };
                 return Ok(LinearEntryAwait {
                     timing,
                     unmatched: Some(
                         ContainedTaskError::with_detail(
-                            PREREQUISITE_ENTRY_UNMATCHED,
+                            code,
                             format!(
-                                "layer={layer} package_id={} required_page={page}",
+                                "layer={layer} package_id={} required_page={page}{return_home}",
                                 self.package_label()
                             ),
                         )

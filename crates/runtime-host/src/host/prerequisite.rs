@@ -10,6 +10,10 @@
 //! or host-scheduled run, inside the held lease of a policy run). Every refusal there is denied
 //! with a `contained_task_prerequisite_*` code and writes no task record.
 //!
+//! A `linear_steps` package that declares no prerequisite package and has a first step page
+//! falls back to the host's return-home package of its game and server (Workflow #336 L2c,
+//! R16): one more layer at the end of the chain, outside the three declared ones.
+//!
 //! At run time the gate checks the first step on one frame; when it does not pass, the
 //! prerequisite package runs inside the same run (its own prerequisite first, layer by layer),
 //! and then the first step is awaited for its step timeout. Only the existing
@@ -21,7 +25,8 @@ use super::contained_task::{EntryRecoveryRuntime, prepare_contained_task};
 use super::*;
 use actingcommand_contract::{PackageRef, TaskTimingBudgetOrigin};
 
-/// At most three prerequisite packages besides the dependent package.
+/// At most three declared prerequisite packages besides the dependent package; a return-home
+/// layer (Workflow #336 L2c) is not counted.
 pub(super) const MAX_PREREQUISITE_DEPTH: usize = 3;
 /// The step indices of one gated run, prerequisite packages included.
 const MAX_GATED_STEPS: u64 = 1_000;
@@ -65,33 +70,67 @@ fn prerequisite_admission_failure(mut failure: RequestFailure, detail: String) -
 }
 
 impl HostShared {
+    /// The return-home package `layer` falls back to (Workflow #336 L2c, R16): only a
+    /// `linear_steps` package that declares no prerequisite package and has a first step page
+    /// (no application entry, R24), when the host maps its game and server to a package that is
+    /// not already in the chain.
+    fn return_home_fallback(
+        &self,
+        layer: &PreparedContainedTask,
+        visited: &BTreeSet<String>,
+    ) -> Option<String> {
+        if layer.prerequisite_package_id().is_some() || layer.linear_entry_page().is_none() {
+            return None;
+        }
+        self.return_home_packages
+            .get(&(layer.game().to_owned(), layer.server().to_owned()))
+            .filter(|package_id| !visited.contains(*package_id))
+            .cloned()
+    }
+
     /// Resolves and admits the prerequisite chain of `prepared` (§5.2.1): empty when it declares
-    /// no prerequisite package, otherwise the packages outermost first. `material_deadline` is
-    /// read only when there is a chain to admit.
+    /// no prerequisite package and has no return-home fallback, otherwise the packages outermost
+    /// first. `material_deadline` is read only when there is a chain to admit.
     pub(super) fn resolve_prerequisite_chain(
         &self,
         instance_alias: &str,
         prepared: &PreparedContainedTask,
         material_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
     ) -> Result<Vec<PreparedContainedTask>, RequestFailure> {
-        let Some(first) = prepared.prerequisite_package_id() else {
-            return Ok(Vec::new());
-        };
-        let deadline = material_deadline()?;
         let mut visited = BTreeSet::from([prepared.package_label().to_owned()]);
+        // The next package id and whether it is the return-home fallback.
+        let mut next = match prepared.prerequisite_package_id() {
+            Some(first) => Some((first.to_owned(), false)),
+            None => self
+                .return_home_fallback(prepared, &visited)
+                .map(|package_id| (package_id, true)),
+        };
+        if next.is_none() {
+            return Ok(Vec::new());
+        }
+        let deadline = material_deadline()?;
         let mut chain: Vec<PreparedContainedTask> = Vec::new();
-        let mut next = Some(first.to_owned());
-        while let Some(package_id) = next {
+        let mut declared = 0;
+        while let Some((package_id, return_home)) = next {
             let layer = chain.len() + 1;
-            let detail = |extra: &str| format!("layer={layer} package_id={package_id}{extra}");
+            let source = if return_home {
+                " source=return_home"
+            } else {
+                ""
+            };
+            let detail =
+                |extra: &str| format!("layer={layer} package_id={package_id}{extra}{source}");
             let Some(binding) = self.prerequisite_packages.get(&package_id) else {
                 return Err(prerequisite_refusal(UNBOUND, detail("")));
             };
             if !visited.insert(package_id.clone()) {
                 return Err(prerequisite_refusal(CYCLE, detail("")));
             }
-            if chain.len() >= MAX_PREREQUISITE_DEPTH {
-                return Err(prerequisite_refusal(DEPTH_EXCEEDED, detail("")));
+            if !return_home {
+                if declared >= MAX_PREREQUISITE_DEPTH {
+                    return Err(prerequisite_refusal(DEPTH_EXCEEDED, detail("")));
+                }
+                declared += 1;
             }
             let request = ContainedTaskRequest::new(
                 binding.package_path(),
@@ -133,8 +172,14 @@ impl HostShared {
                 ));
             }
             // Only a `linear_steps` package declares a prerequisite; a page-graph package ends
-            // the chain.
-            next = admitted.prerequisite_package_id().map(str::to_owned);
+            // the chain. The return-home layer falls back no further.
+            next = match admitted.prerequisite_package_id() {
+                Some(package_id) => Some((package_id.to_owned(), false)),
+                None if return_home => None,
+                None => self
+                    .return_home_fallback(&admitted, &visited)
+                    .map(|package_id| (package_id, true)),
+            };
             chain.push(admitted);
         }
         let steps = chain
@@ -295,8 +340,14 @@ fn gate_layer(
     } else {
         TaskTimingBudgetOrigin::EntryRecovery
     };
+    // Workflow #336 L2c: a layer without a declared prerequisite package has the return-home
+    // package as its next layer, and its recheck fails with its own code.
+    let return_home = package
+        .prerequisite_package_id()
+        .is_none()
+        .then(|| prerequisite.package_label());
     let waited = package
-        .await_linear_entry(runtime, budget, origin, layer)
+        .await_linear_entry(runtime, budget, origin, layer, return_home)
         .map_err(|error| fail_recognition(runtime, gate, false, error))?;
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {

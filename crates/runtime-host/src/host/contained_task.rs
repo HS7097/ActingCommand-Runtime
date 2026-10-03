@@ -1392,9 +1392,9 @@ impl RuntimeContainedTask<'_> {
         action_id: Option<ActionId>,
         source_sequence: Option<u64>,
     ) -> Result<(), RequestFailure> {
-        // Initial, at most one EntryRecovery per prerequisite package (three, Workflow #336
-        // L2b), Capture and Input.
-        if self.configuration_records >= 6 {
+        // Initial, at most one EntryRecovery per prerequisite package (three declared, Workflow
+        // #336 L2b, and one return-home, L2c), Capture and Input.
+        if self.configuration_records >= 7 {
             return Err(RequestFailure::poison_without_terminal(
                 artifact_store_error("effective_configuration_limit_exceeded"),
             ));
@@ -5580,6 +5580,12 @@ impl HostShared {
                 if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail())
                 {
                     task_error = task_error.with_native_detail(detail);
+                } else if prepared.execution_mode() == "linear_steps"
+                    && let Some(detail) = error.detail()
+                {
+                    // Workflow #336 L2c: a `linear_steps` package's failure always carries the
+                    // kernel's detail.
+                    task_error = task_error.with_native_detail(detail.to_owned());
                 }
                 let mut failure = RequestFailure::request(
                     task_error,
@@ -6031,9 +6037,10 @@ impl HostShared {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        // Workflow #336 L2b: a prerequisite gate opens at most three distinct packages, each the
-        // request's binding or one of the host's prerequisite packages.
-        if recovery_packages.len() > prerequisite::MAX_PREREQUISITE_DEPTH
+        // Workflow #336 L2b: a prerequisite gate opens at most four distinct packages (three
+        // declared and one return-home, L2c), each the request's binding or one of the host's
+        // prerequisite packages.
+        if recovery_packages.len() > prerequisite::MAX_PREREQUISITE_DEPTH + 1
             || recovery_packages
                 .iter()
                 .enumerate()

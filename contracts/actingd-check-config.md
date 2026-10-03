@@ -218,7 +218,8 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `scheduled_execution_instance_unknown`, `procedure_package_not_regular`,
 `procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
-`config_manifest_incomplete`, the `prerequisite_package*` codes of "Prerequisite packages"),
+`config_manifest_incomplete`, the `prerequisite_package*` and `return_home_package*` codes
+of "Prerequisite packages"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
 `invalid_governance_policy` and the other
@@ -302,6 +303,26 @@ map needs no `policy` section, so a manual `task-run` uses it too; it is not a
 configuration fact (neither the `config_manifest` nor the `config.*` runtime
 facts name it) and it is read once at startup, so a change needs a restart. A
 build that predates the field refuses it with `config_decode_failed`.
+
+Workflow #336 L2c adds the optional top-level `return_home_packages`, per game
+and server the return-home package a `linear_steps` package without a declared
+prerequisite package falls back to (`contracts/linear-steps.md`, "Return-home
+fallback"):
+
+```json
+"return_home_packages":[{"game":"neutral","server":"test","package_id":"neutral.test.return_home"}]
+```
+
+Each entry has exactly these three fields. `game` and `server` are not empty, at
+most 64 bytes and have no control character (`return_home_package_key_invalid`);
+`package_id` is a `package_id` of `prerequisite_packages`
+(`return_home_package_unbound`); no two entries share one game and server
+(`return_home_package_duplicate`); at most as many entries as a catalog has
+tasks (`return_home_packages_size_invalid`). All of them fail at stage
+`assemble`; no package is opened here (a run checks the package's game, server
+and resolution when it resolves its chain). Like `prerequisite_packages`, it is
+not a configuration fact, it is read once at startup and a build that predates
+the field refuses it with `config_decode_failed`.
 
 ## Performance and device paths
 

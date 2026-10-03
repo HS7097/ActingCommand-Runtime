@@ -119,6 +119,11 @@ pub(super) struct ActingdConfigFile {
     /// configuration fact; read at startup.
     #[serde(default)]
     prerequisite_packages: Option<Vec<PrerequisitePackageConfigFile>>,
+    /// Workflow #336 L2c: per (game, server), the `prerequisite_packages` id of the return-home
+    /// package a `linear_steps` package without a declared prerequisite package falls back to.
+    /// Not a configuration fact; read at startup.
+    #[serde(default)]
+    return_home_packages: Option<Vec<ReturnHomePackageConfigFile>>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -175,6 +180,49 @@ fn assemble_prerequisite_packages(
         .map_err(|_| "prerequisite_package_request_invalid")?;
         if packages.insert(entry.package_id, binding).is_some() {
             return Err("prerequisite_package_duplicate");
+        }
+    }
+    Ok(packages)
+}
+
+/// One `return_home_packages` entry (Workflow #336 L2c): a game and server and the package id
+/// of their return-home package, a key of `prerequisite_packages`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReturnHomePackageConfigFile {
+    game: String,
+    server: String,
+    package_id: String,
+}
+
+/// The return-home package ids by (game, server): at most `MAX_TASKS` entries
+/// (`return_home_packages_size_invalid`); game and server not empty, at most 64 bytes, with no
+/// control character (`return_home_package_key_invalid`); each package id a key of
+/// `prerequisite_packages` (`return_home_package_unbound`); one entry per (game, server)
+/// (`return_home_package_duplicate`).
+fn assemble_return_home_packages(
+    configured: Vec<ReturnHomePackageConfigFile>,
+    prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
+) -> Result<BTreeMap<(String, String), String>, &'static str> {
+    if configured.len() > MAX_TASKS {
+        return Err("return_home_packages_size_invalid");
+    }
+    let key_valid = |value: &str| {
+        !value.trim().is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
+    };
+    let mut packages = BTreeMap::new();
+    for entry in configured {
+        if !key_valid(entry.game.as_str()) || !key_valid(entry.server.as_str()) {
+            return Err("return_home_package_key_invalid");
+        }
+        if !prerequisite_packages.contains_key(&entry.package_id) {
+            return Err("return_home_package_unbound");
+        }
+        if packages
+            .insert((entry.game, entry.server), entry.package_id)
+            .is_some()
+        {
+            return Err("return_home_package_duplicate");
         }
     }
     Ok(packages)
@@ -807,6 +855,11 @@ impl ActingdConfigFile {
             .map(|configured| assemble_prerequisite_packages(configured, &self.source_root))
             .transpose()?
             .unwrap_or_default();
+        let return_home_packages = self
+            .return_home_packages
+            .map(|configured| assemble_return_home_packages(configured, &prerequisite_packages))
+            .transpose()?
+            .unwrap_or_default();
         if let Some(policy) = policy.as_ref() {
             policy.validate_registry_modes(&provider)?;
         }
@@ -836,7 +889,8 @@ impl ActingdConfigFile {
         host = host
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
-            .with_prerequisite_packages(prerequisite_packages);
+            .with_prerequisite_packages(prerequisite_packages)
+            .with_return_home_packages(return_home_packages);
         // Every effective value is read back from `host`; the file only says what it named.
         let manifest = manifest::build(&manifest::ManifestInputs {
             host: &host,

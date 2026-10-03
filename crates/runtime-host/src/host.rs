@@ -400,6 +400,10 @@ pub struct RuntimeHostConfig {
     /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
     /// run resolves it; not a configuration fact.
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
+    /// Workflow #336 L2c: per (game, server), the package id (a key of `prerequisite_packages`)
+    /// of the return-home package a `linear_steps` package without a declared prerequisite
+    /// package falls back to; not a configuration fact.
+    return_home_packages: BTreeMap<(String, String), String>,
 }
 
 impl RuntimeHostConfig {
@@ -428,6 +432,7 @@ impl RuntimeHostConfig {
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
             prerequisite_packages: BTreeMap::new(),
+            return_home_packages: BTreeMap::new(),
         }
     }
 
@@ -602,6 +607,16 @@ impl RuntimeHostConfig {
     /// The configured prerequisite packages, keyed by package id.
     pub const fn prerequisite_packages(&self) -> &BTreeMap<String, ContainedTaskRecoveryBinding> {
         &self.prerequisite_packages
+    }
+
+    /// Installs the return-home packages, package ids of `prerequisite_packages` keyed by
+    /// (game, server) (Workflow #336 L2c, R16).
+    pub fn with_return_home_packages(
+        mut self,
+        return_home_packages: BTreeMap<(String, String), String>,
+    ) -> Self {
+        self.return_home_packages = return_home_packages;
+        self
     }
 
     pub fn state_root(&self) -> &Path {
@@ -781,6 +796,10 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field(
                 "prerequisite_packages",
                 &(!self.prerequisite_packages.is_empty()).then_some("<runtime-owned>"),
+            )
+            .field(
+                "return_home_packages",
+                &(!self.return_home_packages.is_empty()).then_some("<runtime-owned>"),
             )
             .finish()
     }
@@ -1337,6 +1356,7 @@ impl RuntimeHost {
             recovery_ladders: Mutex::new(BTreeMap::new()),
             parked_recovery_ladders: Mutex::new(BTreeMap::new()),
             prerequisite_packages: config.prerequisite_packages,
+            return_home_packages: config.return_home_packages,
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -2946,6 +2966,8 @@ struct HostShared {
     parked_recovery_ladders: Mutex<BTreeMap<RequestId, recovery_ladder::PendingRecoveryLadder>>,
     // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
+    // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
+    return_home_packages: BTreeMap<(String, String), String>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
