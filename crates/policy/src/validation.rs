@@ -600,23 +600,34 @@ fn validate_effects(
                 descriptor,
             ));
         }
-        if effect.amount == 0 || effect.confidence_milli > 1000 {
+        let quantity_milli = match (effect.amount, effect.expected_amount_milli) {
+            (Some(amount), None) if amount > 0 => Some(u128::from(amount) * 1_000),
+            (None, Some(amount))
+                if map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2)
+                    && expected_direction == EffectDirection::Produce
+                    && u128::from(amount) <= MAX_CANONICAL_INTEGER as u128 =>
+            {
+                Some(u128::from(amount))
+            }
+            _ => None,
+        };
+        if quantity_milli.is_none() || effect.confidence_milli > 1000 {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 effect_path.clone(),
-                "effect amount and confidence are outside V1 bounds",
+                "effect requires exactly one positive amount or bounded v2 production expected_amount_milli; confidence must be in 0..=1000",
                 descriptor,
             ));
         }
         if let Some(pool) = pools.iter().find(|pool| pool.id == effect.pool_id)
-            && effect.amount > pool.capacity
+            && quantity_milli.is_some_and(|amount| amount > u128::from(pool.capacity) * 1_000)
         {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::EffectIncompatible,
-                format!("{effect_path}/amount"),
+                effect_path.clone(),
                 format!(
-                    "effect amount {} exceeds pool capacity {}",
-                    effect.amount, pool.capacity
+                    "effect quantity exceeds pool capacity {} real units",
+                    pool.capacity
                 ),
                 descriptor,
             ));

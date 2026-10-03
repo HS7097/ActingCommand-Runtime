@@ -874,6 +874,14 @@ fn catalog_production_rate(
         {
             continue;
         }
+        if task
+            .produces
+            .iter()
+            .any(|effect| effect.pool_id == *pool_id && effect.expected_amount_milli.is_some())
+        {
+            // This planner derives guaranteed integer inventory, not probabilistic yield.
+            return Ok(None);
+        }
         let duration_with_cooldown = task
             .expected_duration_ms
             .checked_add(task.cooldown_ms)
@@ -898,7 +906,10 @@ fn catalog_production_rate(
             .iter()
             .filter(|effect| effect.pool_id == *pool_id)
         {
-            let contribution = effect.amount.checked_mul(executions).ok_or_else(|| {
+            let amount = effect.amount.ok_or_else(|| {
+                StrategyError::invalid("integer production amount is unavailable")
+            })?;
+            let contribution = amount.checked_mul(executions).ok_or_else(|| {
                 StrategyError::overflow("catalog production contribution overflow")
             })?;
             total = total
@@ -2161,6 +2172,40 @@ mod tests {
         assert_eq!(
             catalog_production_rate(&no_producer, &metric, instance).expect("no-producer rate"),
             Some(0)
+        );
+
+        // WF345 R4: this integer planner reports insufficient evidence for expectations.
+        let mut expected_sources = catalog_sources();
+        for source in [
+            &mut expected_sources.tasks,
+            &mut expected_sources.pools,
+            &mut expected_sources.activity,
+            &mut expected_sources.timeline,
+        ] {
+            let mut document: serde_json::Value = serde_json::from_slice(&source.bytes).unwrap();
+            document["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+            if let Some(events) = document
+                .get_mut("events")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for event in events {
+                    event["validity"] = serde_json::json!({"from_unix_ms":0,"until_unix_ms":null});
+                }
+            }
+            if let Some(tasks) = document
+                .get_mut("tasks")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                let effect = tasks[0]["produces"][0].as_object_mut().unwrap();
+                effect.remove("amount");
+                effect.insert("expected_amount_milli".to_owned(), serde_json::json!(400));
+            }
+            source.bytes = serde_json::to_vec(&document).unwrap();
+        }
+        let expected = compile_catalog(&expected_sources).unwrap();
+        assert_eq!(
+            catalog_production_rate(&expected, &metric, instance).unwrap(),
+            None
         );
 
         let overflow_amount = 9_007_199_254_740_991_u64;

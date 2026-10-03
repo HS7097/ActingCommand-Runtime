@@ -428,15 +428,24 @@
     },
     "resourceEffect": {
       "type": "object",
-      "required": ["pool_id", "direction", "amount", "observation_source", "confidence_milli"],
+      "required": ["pool_id", "direction", "observation_source", "confidence_milli"],
       "properties": {
         "pool_id": { "$ref": "#/$defs/identifier" },
         "direction": { "enum": ["consume", "produce"] },
         "amount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "expected_amount_milli": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "observation_source": { "enum": ["self_reported", "scan_verified", "inferred"] },
         "confidence_milli": { "type": "integer", "minimum": 0, "maximum": 1000 }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["amount"], "not": { "required": ["expected_amount_milli"] } },
+        {
+          "required": ["expected_amount_milli"],
+          "not": { "required": ["amount"] },
+          "properties": { "direction": { "const": "produce" } }
+        }
+      ]
     },
     "metric": {
       "oneOf": [
