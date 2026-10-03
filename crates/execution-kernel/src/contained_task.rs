@@ -4293,6 +4293,16 @@ impl TaskProgram {
                     ),
                 ));
             }
+            if operation.optional.is_some() {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_operation_invalid",
+                    format!(
+                        "operation={} optional requires {}",
+                        operation.id,
+                        linear::LINEAR_STEPS
+                    ),
+                ));
+            }
             let destination_pages = operation.destination_pages()?;
             validate_page_references(&control.game, &destination_pages, detector)?;
             validate_page_set_overlap(
@@ -5597,6 +5607,10 @@ struct TaskOperation {
     /// only under `linear_steps`.
     #[serde(default)]
     transition: Option<linear::TaskTransition>,
+    /// Workflow #339: the operation's page may not appear, and the operation is then skipped;
+    /// admitted only under `linear_steps`.
+    #[serde(default)]
+    optional: Option<linear::TaskOptional>,
 }
 
 impl TaskOperation {

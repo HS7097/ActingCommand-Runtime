@@ -12,6 +12,12 @@ use crate::{
 };
 use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_lab::{
+    ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
+    MarkSpec, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
+    StepActionKind, TransitionSpec, record_instance_check, record_mark, record_start,
+    record_start_defaults, record_status, record_stop, record_stop_close,
+};
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
@@ -320,7 +326,7 @@ fn run_session_record_inner(
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
-            "session record requires start|status|stop|step|candidates|amend|build-task|promote",
+            "session record requires start|status|stop|mark|step|candidates|amend|build-task|promote",
         )
     })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -337,12 +343,15 @@ fn run_session_record_inner(
     })?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let record_path = session_record_path(&state_dir, &instance_id);
+    let record_lock = record_action_lock(action, &state_dir, &instance_id)?;
     match action {
         "start" => {
             let task_id = flags.required("--task-id")?;
             if task_id.trim().is_empty() {
                 return Err(CliError::usage("--task-id must not be empty"));
             }
+            let lab_options = record_start_lab_options(global, &config, &flags, &instance_id)?;
+            record_start_defaults(&lab_options)?;
             if record_path.exists()
                 && !flags.bool("--force")
                 && let Some(existing) = read_json_file::<SessionRecordContext>(&record_path)?
@@ -359,36 +368,52 @@ fn run_session_record_inner(
             }
             let record = new_session_record(&instance_id, &task_id, &flags);
             write_json_file_atomic(&record_path, &record)?;
+            let lab_recording = record_start(held_record_lock(&record_lock)?, &lab_options)?;
+            let (flag_state_dir, reachable) = record_flag_reachability(&state_dir)?;
             Ok(json!({
                 "status": "started",
                 "record": record,
                 "path": record_path.display().to_string(),
-                "auto_recording": false
+                "auto_recording": false,
+                "lab_recording": lab_recording,
+                "record_flag_state_dir": flag_state_dir,
+                "record_flag_reachable": reachable
             }))
         }
         "status" => Ok(json!({
             "status": if record_path.exists() { "available" } else { "not_started" },
             "instance": instance_id,
             "record": read_json_file::<SessionRecordContext>(&record_path)?,
-            "path": record_path.display().to_string()
+            "path": record_path.display().to_string(),
+            "lab": record_status_lab(&state_dir, &instance_id)?
         })),
         "stop" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Ok(json!({
                     "status": "not_started",
                     "instance": instance_id,
-                    "path": record_path.display().to_string()
+                    "path": record_path.display().to_string(),
+                    "lab": Value::Null
                 }));
             };
-            record.status = "stopped".to_string();
-            record.updated_at_unix_ms = current_unix_ms();
-            write_json_file_atomic(&record_path, &record)?;
+            let lock = held_record_lock(&record_lock)?;
+            let options = record_stop_options(global, &config, &flags, &instance_id)?;
+            let outcome = record_stop(lock, &options)?;
+            if !options.dry_run {
+                record.status = "stopped".to_string();
+                record.updated_at_unix_ms = current_unix_ms();
+                write_json_file_atomic(&record_path, &record)?;
+                record_stop_close(lock)?;
+            }
             Ok(json!({
-                "status": "stopped",
+                "status": if options.dry_run { "validated" } else { "stopped" },
+                "dry_run": options.dry_run,
                 "record": record,
-                "path": record_path.display().to_string()
+                "path": record_path.display().to_string(),
+                "lab": outcome.lab
             }))
         }
+        "mark" => run_record_mark(global, &flags, held_record_lock(&record_lock)?),
         "step" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Err(CliError::safety_blocked(
@@ -3211,4 +3236,500 @@ fn new_session_record(instance: &str, task_id: &str, flags: &FlagArgs) -> Sessio
         updated_at_unix_ms: now,
         steps: Vec::new(),
     }
+}
+
+/// R20: every state-writing record action holds the per-instance recording lock for the
+/// whole command; `status` and `candidates` only read.
+fn record_action_lock(
+    action: &str,
+    state_dir: &Path,
+    instance_id: &str,
+) -> CliOutcome<Option<RecordingLock>> {
+    if !matches!(
+        action,
+        "start" | "stop" | "mark" | "step" | "amend" | "build-task" | "promote" | "publish"
+    ) {
+        return Ok(None);
+    }
+    RecordingLock::acquire(state_dir, instance_id, &format!("record {action}")).map(Some)
+}
+
+fn held_record_lock(lock: &Option<RecordingLock>) -> CliOutcome<&RecordingLock> {
+    lock.as_ref()
+        .ok_or_else(|| CliError::usage("this record action runs without the recording lock"))
+}
+
+/// Lab recording options of `record start`, validated before the session file is written.
+fn record_start_lab_options(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    instance_id: &str,
+) -> CliOutcome<RecordStartOptions> {
+    let instance = config.instances.get(instance_id);
+    let game = flags
+        .optional("--game")
+        .filter(|value| value != "true")
+        .or_else(|| global.game.clone())
+        .or_else(|| instance.and_then(|instance| instance.game.clone()))
+        .map(|game| canonical_game(&game))
+        .transpose()?;
+    let server = flags
+        .optional("--server")
+        .filter(|value| value != "true")
+        .or_else(|| global.server.clone())
+        .or_else(|| instance.and_then(|instance| instance.server.clone()))
+        .map(|server| canonical_server(&server))
+        .transpose()?;
+    let locale = record_flag_value(flags, "--locale")?
+        .map(|locale| canonical_locale(&locale))
+        .transpose()?;
+    let template_threshold = record_flag_value(flags, "--template-threshold")?
+        .map(|value| {
+            value.parse::<f64>().map_err(|error| {
+                CliError::usage(format!("--template-threshold '{value}': {error}"))
+            })
+        })
+        .transpose()?;
+    Ok(RecordStartOptions {
+        game,
+        server,
+        locale,
+        match_metric: record_flag_value(flags, "--metric")?,
+        template_threshold,
+    })
+}
+
+const RECORD_STOP_FLAGS: &[&str] = &[
+    "--lab-dir",
+    "--package-id",
+    "--requires",
+    "--game",
+    "--server",
+    "--locale",
+    "--timeout-ms",
+    "--arrival-timeout-ms",
+    "--application-arrival-timeout-ms",
+    "--dry-run",
+    "--state-dir",
+    "--instance",
+];
+
+/// `record stop` options (Workflow #336 L4). Unknown flags and positional arguments are
+/// refused, so a mistyped `--lab-dir` cannot silently skip the package directory.
+fn record_stop_options(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    instance_id: &str,
+) -> CliOutcome<RecordStopOptions> {
+    if !flags.positionals.is_empty() {
+        return Err(CliError::usage(format!(
+            "record stop takes flags only; unexpected arguments: {}",
+            flags.positionals.join(" ")
+        )));
+    }
+    let unknown = flags
+        .flags
+        .keys()
+        .filter(|name| !RECORD_STOP_FLAGS.contains(&name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        return Err(CliError::usage(format!(
+            "record stop does not accept: {}",
+            unknown.join(", ")
+        )));
+    }
+    let millis = |name: &str| -> CliOutcome<Option<u64>> {
+        record_flag_value(flags, name)?
+            .map(|value| {
+                value.parse::<u64>().map_err(|error| {
+                    CliError::usage(format!("{name} '{value}' is not milliseconds: {error}"))
+                })
+            })
+            .transpose()
+    };
+    let instance = config.instances.get(instance_id);
+    let game = record_flag_value(flags, "--game")?
+        .or_else(|| global.game.clone())
+        .map(|game| canonical_game(&game))
+        .transpose()?;
+    let server = record_flag_value(flags, "--server")?
+        .or_else(|| global.server.clone())
+        .map(|server| canonical_server(&server))
+        .transpose()?;
+    let default_game = instance
+        .and_then(|instance| instance.game.clone())
+        .map(|game| canonical_game(&game))
+        .transpose()?;
+    let default_server = instance
+        .and_then(|instance| instance.server.clone())
+        .map(|server| canonical_server(&server))
+        .transpose()?;
+    Ok(RecordStopOptions {
+        lab_dir: record_flag_value(flags, "--lab-dir")?,
+        package_id: record_flag_value(flags, "--package-id")?,
+        requires: record_flag_value(flags, "--requires")?,
+        game,
+        server,
+        locale: record_flag_value(flags, "--locale")?
+            .map(|locale| canonical_locale(&locale))
+            .transpose()?,
+        default_game,
+        default_server,
+        timeout_ms: millis("--timeout-ms")?,
+        arrival_timeout_ms: millis("--arrival-timeout-ms")?,
+        application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
+        dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
+    })
+}
+
+/// A single-valued flag with a value: given twice or without a value is a usage error.
+fn record_flag_value(flags: &FlagArgs, name: &str) -> CliOutcome<Option<String>> {
+    let values = flags.values(name);
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] if value != "true" => Ok(Some(value.clone())),
+        [_] => Err(CliError::usage(format!("{name} needs a value"))),
+        _ => Err(CliError::usage(format!("{name} may be given once"))),
+    }
+}
+
+/// A switch flag: present without a value.
+fn record_flag_switch(flags: &FlagArgs, name: &str) -> CliOutcome<bool> {
+    let values = flags.values(name);
+    match values.as_slice() {
+        [] => Ok(false),
+        [value] if value == "true" => Ok(true),
+        [_] => Err(CliError::usage(format!("{name} takes no value"))),
+        _ => Err(CliError::usage(format!("{name} may be given once"))),
+    }
+}
+
+/// The state root `--record` commands use (environment or default, never `--state-dir`), and
+/// whether this command's state root is the same.
+fn record_flag_reachability(state_dir: &Path) -> CliOutcome<(String, bool)> {
+    let flag_root = session_state_dir_from_flags(&FlagArgs::default())?;
+    let reachable = match (fs::canonicalize(&flag_root), fs::canonicalize(state_dir)) {
+        (Ok(flag_root), Ok(state_dir)) => flag_root == state_dir,
+        _ => flag_root == state_dir,
+    };
+    Ok((flag_root.display().to_string(), reachable))
+}
+
+fn record_status_lab(state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
+    let mut lab = serde_json::to_value(record_status(state_dir, instance_id)?)
+        .map_err(|error| CliError::usage(format!("failed to encode the Lab status: {error}")))?;
+    if let Some(object) = lab.as_object_mut()
+        && object.contains_key("steps")
+    {
+        let (flag_state_dir, reachable) = record_flag_reachability(state_dir)?;
+        object.insert("record_flag_state_dir".to_string(), json!(flag_state_dir));
+        object.insert("record_flag_reachable".to_string(), json!(reachable));
+    }
+    Ok(lab)
+}
+
+const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
+    "--step",
+    "--frame",
+    "--sample",
+    "--page",
+    "--template",
+    "--color",
+    "--reuse",
+    "--remove",
+    "--click",
+    "--click-from",
+    "--click-guard",
+    "--click-retry",
+    "--replace-click",
+    "--transition",
+    "--transition-timeout-ms",
+    "--min-ms",
+    "--max-ms",
+    "--replace-transition",
+    "--drop-step",
+    "--reopen-step",
+    "--close-step",
+    "--to-transition",
+    "--application",
+    "--optional",
+    "--not-optional",
+    "--settle-ms",
+];
+
+/// `record mark`: flags or a `actingcommand.lab-record-mark.v1` request, applied by the Lab
+/// recording core under the recording lock.
+fn run_record_mark(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    lock: &RecordingLock,
+) -> CliOutcome<Value> {
+    if !flags.positionals.is_empty() {
+        return Err(CliError::usage(format!(
+            "record mark takes flags only; unexpected arguments: {}",
+            flags.positionals.join(" ")
+        )));
+    }
+    let unknown = flags
+        .flags
+        .keys()
+        .filter(|name| {
+            !RECORD_MARK_SHORTCUT_FLAGS.contains(&name.as_str())
+                && !matches!(
+                    name.as_str(),
+                    "--request" | "--request-json" | "--state-dir" | "--dry-run"
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        return Err(CliError::usage(format!(
+            "record mark does not accept: {}",
+            unknown.join(", ")
+        )));
+    }
+    let request_file = record_flag_value(flags, "--request")?;
+    let request_json = record_flag_value(flags, "--request-json")?;
+    let request = match (request_file, request_json) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::usage(
+                "record mark takes --request <file> or --request-json <json>, not both",
+            ));
+        }
+        (None, None) => record_mark_request_from_flags(flags)?,
+        (file, text) => {
+            if let Some(shortcut) = RECORD_MARK_SHORTCUT_FLAGS
+                .iter()
+                .find(|name| flags.flags.contains_key(**name))
+            {
+                return Err(CliError::usage(format!(
+                    "record mark --request cannot be combined with {shortcut}"
+                )));
+            }
+            let text = match (file, text) {
+                (Some(path), _) => fs::read_to_string(&path).map_err(|error| {
+                    CliError::usage(format!(
+                        "failed to read record mark request {path}: {error}"
+                    ))
+                })?,
+                (None, Some(text)) => text,
+                (None, None) => String::new(),
+            };
+            serde_json::from_str::<MarkRequest>(&text)
+                .map_err(|error| CliError::usage(format!("invalid record mark request: {error}")))?
+        }
+    };
+    let dry_run = global.dry_run || record_flag_switch(flags, "--dry-run")?;
+    let outcome = record_mark(lock, &request, dry_run)?;
+    serde_json::to_value(outcome)
+        .map_err(|error| CliError::usage(format!("failed to encode record mark output: {error}")))
+}
+
+fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
+    let number = |name: &str| -> CliOutcome<Option<u32>> {
+        record_flag_value(flags, name)?
+            .map(|value| {
+                value.parse::<u32>().map_err(|error| {
+                    CliError::usage(format!("{name} '{value}' is not a step number: {error}"))
+                })
+            })
+            .transpose()
+    };
+    let millis = |name: &str| -> CliOutcome<Option<u64>> {
+        record_flag_value(flags, name)?
+            .map(|value| {
+                value.parse::<u64>().map_err(|error| {
+                    CliError::usage(format!("{name} '{value}' is not milliseconds: {error}"))
+                })
+            })
+            .transpose()
+    };
+    let mut add = Vec::new();
+    for (name, family) in [
+        ("--template", MarkFamily::Template),
+        ("--color", MarkFamily::Color),
+    ] {
+        for value in flags.values(name) {
+            let (id, rect) = value.rsplit_once('=').ok_or_else(|| {
+                CliError::usage(format!("{name} must be <id>=x,y,w,h, got {value}"))
+            })?;
+            add.push(MarkSpec::region_only(
+                id.to_string(),
+                family,
+                parse_record_mark_rect(rect, name)?,
+            ));
+        }
+    }
+    let click_rect = record_flag_value(flags, "--click")?
+        .map(|value| parse_record_mark_rect(&value, "--click"))
+        .transpose()?;
+    let click_from = record_flag_value(flags, "--click-from")?;
+    let click = (click_rect.is_some() || click_from.is_some()).then_some(ClickSpec {
+        region: click_rect,
+        from: click_from,
+    });
+    let retry = number("--click-retry")?.map(|max_attempts| ClickRetry {
+        max_attempts,
+        interval_ms: 1000,
+    });
+    let optional = match (
+        record_flag_switch(flags, "--optional")?,
+        record_flag_switch(flags, "--not-optional")?,
+    ) {
+        (true, true) => {
+            return Err(CliError::usage("give one of --optional and --not-optional"));
+        }
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    };
+    let mut request = MarkRequest {
+        schema_version: LAB_RECORD_MARK_SCHEMA.to_string(),
+        step: number("--step")?,
+        frame: record_flag_value(flags, "--frame")?,
+        samples: flags.values("--sample"),
+        page: record_flag_value(flags, "--page")?,
+        add,
+        reuse: flags.values("--reuse"),
+        remove: flags.values("--remove"),
+        click,
+        click_guard: record_flag_value(flags, "--click-guard")?,
+        retry,
+        replace_click: record_flag_switch(flags, "--replace-click")?,
+        transition: None,
+        replace_transition: record_flag_switch(flags, "--replace-transition")?,
+        step_action: None,
+        application: record_flag_value(flags, "--application")?
+            .map(|action| ApplicationSpec { action }),
+        optional,
+        optional_settle_ms: millis("--settle-ms")?,
+    };
+    let timeout_ms = millis("--transition-timeout-ms")?;
+    let min_ms = millis("--min-ms")?;
+    let max_ms = millis("--max-ms")?;
+    match record_flag_value(flags, "--transition")?.as_deref() {
+        None => {
+            if timeout_ms.is_some() || min_ms.is_some() || max_ms.is_some() {
+                return Err(CliError::usage(
+                    "--transition-timeout-ms, --min-ms and --max-ms need --transition",
+                ));
+            }
+        }
+        Some("none") => {
+            if timeout_ms.is_some() || min_ms.is_some() || max_ms.is_some() {
+                return Err(CliError::usage(
+                    "--transition none takes no timeout or window",
+                ));
+            }
+            request.transition = Some(TransitionSpec::Clear);
+        }
+        Some("page") => {
+            if min_ms.is_some() || max_ms.is_some() {
+                return Err(CliError::usage(
+                    "--min-ms and --max-ms need --transition window",
+                ));
+            }
+            request.transition = Some(TransitionSpec::Page {
+                frame: request.frame.take(),
+                samples: std::mem::take(&mut request.samples),
+                add: std::mem::take(&mut request.add),
+                reuse: std::mem::take(&mut request.reuse),
+                timeout_ms,
+            });
+        }
+        Some("window") => {
+            if timeout_ms.is_some() {
+                return Err(CliError::usage(
+                    "--transition-timeout-ms needs --transition page",
+                ));
+            }
+            let (Some(min_ms), Some(max_ms)) = (min_ms, max_ms) else {
+                return Err(CliError::usage(
+                    "--transition window needs --min-ms <a> and --max-ms <b>",
+                ));
+            };
+            request.transition = Some(TransitionSpec::Window { min_ms, max_ms });
+        }
+        Some(other) => {
+            return Err(CliError::usage(format!(
+                "--transition must be none, page or window, got {other}"
+            )));
+        }
+    }
+    let mut actions = Vec::new();
+    for (name, kind) in [
+        ("--drop-step", StepActionKind::DropStep),
+        ("--reopen-step", StepActionKind::ReopenStep),
+        ("--to-transition", StepActionKind::ToTransition),
+    ] {
+        if let Some(step) = number(name)? {
+            actions.push(StepAction {
+                kind,
+                step: Some(step),
+            });
+        }
+    }
+    if record_flag_switch(flags, "--close-step")? {
+        actions.push(StepAction {
+            kind: StepActionKind::CloseStep,
+            step: None,
+        });
+    }
+    if actions.len() > 1 {
+        return Err(CliError::usage(
+            "give one of --drop-step, --reopen-step, --close-step and --to-transition",
+        ));
+    }
+    request.step_action = actions.pop();
+    Ok(request)
+}
+
+/// `x,y,w,h` with integer fields.
+pub(crate) fn parse_record_mark_rect(value: &str, label: &str) -> CliOutcome<RecordRect> {
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    let [x, y, width, height] = parts.as_slice() else {
+        return Err(CliError::usage(format!(
+            "{label} must be x,y,w,h, got {value}"
+        )));
+    };
+    let field = |text: &str, name: &str| {
+        text.parse::<i32>()
+            .map_err(|error| CliError::usage(format!("{label} {name} '{text}': {error}")))
+    };
+    Ok(RecordRect {
+        x: field(x, "x")?,
+        y: field(y, "y")?,
+        width: field(width, "width")?,
+        height: field(height, "height")?,
+    })
+}
+
+/// `--record` on `capture`, `observe --capture` and `do --capture`: the recording of the
+/// record instance in the `--record` state root, under its lock. The record instance and the
+/// command instance must agree before anything is captured or pressed.
+pub(crate) fn record_flag_begin(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command_instance: &str,
+    command: &str,
+) -> CliOutcome<RecordingLock> {
+    let config = read_user_config()?;
+    let record_instance = resolve_instance_id_for_flags(global, &config, flags)?;
+    record_instance_check(&record_instance, command_instance)?;
+    let state_dir = session_state_dir_from_flags(flags)?;
+    if !state_dir.is_dir() {
+        return Err(CliError::safety_blocked(
+            "record_session_not_active",
+            format!(
+                "no recording session exists under {}; run record start first",
+                state_dir.display()
+            ),
+            &["session_record"],
+        )
+        .with_details(json!({"state_root": state_dir.display().to_string()})));
+    }
+    RecordingLock::acquire(&state_dir, &record_instance, command)
 }

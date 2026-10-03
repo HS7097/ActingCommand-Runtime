@@ -120,8 +120,8 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 use session_management::{
-    monitor_policy_monitor_args, run_session_app, run_session_instance, run_session_monitor_policy,
-    run_session_status,
+    monitor_policy_monitor_args, run_session_app_or_recorded, run_session_instance,
+    run_session_monitor_policy, run_session_status,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -278,6 +278,7 @@ fn execute_invocation(
 }
 
 fn execute(invocation: &Invocation) -> CliOutcome<Value> {
+    record_flag_gate(invocation)?;
     match invocation.command.as_slice() {
         [cmd] if cmd == "help" => Ok(help_data()),
         [cmd] if cmd == "version" => Ok(version_data()),
@@ -355,6 +356,87 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
     }
 }
 
+/// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
+/// only on `capture`, `observe --capture`, `do --capture` and (R24) `session app` /
+/// `session instance app` with one of its four actions; `do` and `session app` refuse it
+/// with `--dry-run`. `--tap-rect` exists only with it. FlagArgs accepts unknown flags, so
+/// without this gate they would be silently ignored.
+fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
+    let args = &invocation.args;
+    if !args.iter().any(|arg| arg == "--record") {
+        if args.iter().any(|arg| arg == "--tap-rect") {
+            return Err(CliError::usage(
+                "--tap-rect is accepted only with do --capture --record",
+            ));
+        }
+        return Ok(());
+    }
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "--record" && !pair[1].starts_with("--"))
+    {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "record_flag_takes_no_value",
+            "--record takes no value",
+            &[],
+        ));
+    }
+    if args.iter().any(|arg| arg == "--state-dir") {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "record_state_dir_unsupported",
+            "--record uses ACTINGLAB_SESSION_STATE_DIR or the default state root; \
+             --state-dir is not accepted with it",
+            &[],
+        ));
+    }
+    let flags = FlagArgs::parse(args)?;
+    let dry_run = invocation.global.dry_run || flags.bool("--dry-run");
+    let capture = !flags.bool("--diagnose") && flags.positionals.is_empty();
+    // `session app --record` sends the operation; there is no dry run of it.
+    let application = |positionals: &[String]| {
+        !dry_run
+            && matches!(positionals, [verb]
+                if matches!(verb.as_str(), "launch" | "restart" | "stop" | "force-stop"))
+    };
+    let supported = match invocation.command.as_slice() {
+        [cmd] if cmd == "capture" => capture,
+        [group, sub] if group == "session" && sub == "capture" => capture,
+        [cmd] if cmd == "observe" => flags.bool("--capture") && flags.optional("--scene").is_none(),
+        [cmd] if cmd == "do" => {
+            flags.bool("--capture")
+                && !dry_run
+                && flags.optional("--scene").is_none()
+                && flags.optional("--swipe").is_none()
+                && flags.positionals.is_empty()
+        }
+        [group, sub] if group == "session" && sub == "app" => {
+            application(flags.positionals.as_slice())
+        }
+        [group, sub] if group == "session" && sub == "instance" => {
+            flags.positionals.first().is_some_and(|word| word == "app")
+                && application(&flags.positionals[1..])
+        }
+        _ => false,
+    };
+    if !supported {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "record_flag_unsupported",
+            format!(
+                "--record is accepted only on capture, observe --capture, do --capture with a \
+                 point or rectangle click, and session app|session instance app \
+                 <launch|restart|stop|force-stop>, never with --dry-run on do or session app; \
+                 not on {}",
+                invocation.command_name
+            ),
+            &[],
+        ));
+    }
+    Ok(())
+}
+
 use cli_result::human_summary;
 fn run_ledger(sub: &str, _global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let _ = FlagArgs::parse(args)?;
@@ -403,7 +485,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "request-state" => runtime_session_adapter::retired_authority(sub, args),
         "monitor-policy" => run_session_monitor_policy(global, args),
         "instance" => run_session_instance(global, args),
-        "app" => run_session_app(global, args),
+        "app" => run_session_app_or_recorded(global, args),
         "capture" => run_capture(global, args),
         "stream" => runtime_stream_adapter::run_stream(global, args),
         "recover" => run_session_recover(global, args),

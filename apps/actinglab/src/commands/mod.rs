@@ -61,5 +61,8 @@ pub(crate) use session_record::{
     materialize_anchor_artifact_from_source, parse_session_record_drift_diagnostics,
     session_record_build_draft,
 };
-pub(crate) use session_record::{SessionRecordRect, SessionRecordRegion, run_session_record};
+pub(crate) use session_record::{
+    SessionRecordRect, SessionRecordRegion, parse_record_mark_rect, record_flag_begin,
+    run_session_record,
+};
 pub(crate) use session_transport::run_session_transport;

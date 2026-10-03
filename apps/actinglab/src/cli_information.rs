@@ -54,7 +54,7 @@ pub(super) fn help_data() -> Value {
             "resource compile-maa": [
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
-            "package digest": ["--package <directory>"],
+            "package digest": ["--package <directory | .zip | .json container>"],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>"

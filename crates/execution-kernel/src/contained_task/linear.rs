@@ -10,13 +10,16 @@
 //! which nothing is evaluated before its lower bound. A declared retry only repeats an input
 //! the screen shows was swallowed. An operation's effect may instead be the application
 //! lifecycle action on the instance's assigned application (R24); the first operation may then
-//! start from any screen, with no recognition before it.
+//! start from any screen, with no recognition before it. An operation may be optional
+//! (Workflow #339): its page may not appear, and the run then skips it. The input before a run
+//! of optional operations awaits their pages together with the page after the run, and the
+//! page that passes decides which operation runs next.
 
 use super::{
     ApplicationEffectSupport, ContainedTaskBoundaryTiming, ContainedTaskError,
     ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS,
-    MAX_CAPTURE_INTERVAL_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageObservation,
+    MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageObservation,
     PostAdmissionOcrCollector, PreparedContainedTask, TaskControl, TaskOperation, TaskProgram,
     observe_instant_span, recognized_page_targets, resolve_page_reference, scene_from_frame,
 };
@@ -59,10 +62,21 @@ pub(super) enum TaskTransition {
     Window { min_ms: u64, max_ms: u64 },
 }
 
+/// An operation whose page may not appear, as the package writes it (Workflow #339): the whole
+/// operation is then skipped. After the run of optional operations it belongs to, the next
+/// page is watched for `settle_ms` for a late optional page.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TaskOptional {
+    settle_ms: u64,
+}
+
 /// The admitted path; every page is the detector page id admission resolved.
 pub(super) struct LinearPlan {
     target: String,
     steps: Vec<LinearStep>,
+    /// The runs of optional operations (Workflow #339), in path order.
+    runs: Vec<OptionalRun>,
 }
 
 /// One operation of the path: its own page, the next step's page, its effect and its
@@ -72,6 +86,83 @@ struct LinearStep {
     to: String,
     effect: LinearEffect,
     transition: Option<LinearTransition>,
+    /// Workflow #339: the settle of an optional operation; `None` for a required one.
+    optional: Option<Duration>,
+    /// Workflow #339: the run of optional operations that this step's input may reach, for the
+    /// operation before a run and for its members; `None` when the input reaches `to` only.
+    run: Option<usize>,
+}
+
+/// A maximal run of consecutive optional operations (Workflow #339 §3.1). The operation before
+/// it is required, since the first operation is.
+struct OptionalRun {
+    /// The run's operation indexes, in path order.
+    members: Vec<usize>,
+    /// The skip target: the destination of the run's last operation.
+    skip_page: String,
+    /// The operation after the run; `None` when the run ends the path.
+    next: Option<usize>,
+}
+
+/// The pages an input may reach (Workflow #339 §3.1), in evaluation order: the next step's
+/// page; or, for the operation before a run and its members, the run's optional pages not run
+/// yet in path order, then the run's skip target. An optional page that passes on the same frame
+/// as the skip target wins.
+struct LinearCandidates<'p> {
+    pages: Vec<&'p str>,
+    /// The largest settle of the optional pages among `pages`; zero without one.
+    settle: Duration,
+}
+
+impl LinearCandidates<'_> {
+    /// Whether `page` is the skip target of candidates that still watch for an optional page.
+    fn settles_on(&self, page: &str) -> bool {
+        self.pages.len() > 1 && !self.settle.is_zero() && self.pages.last() == Some(&page)
+    }
+
+    /// The detail an arrival failure appends (§3.6): the awaited pages, and whether the skip
+    /// target was seen. Nothing for one page, so the detail of a path without optional
+    /// operations is unchanged.
+    fn awaited(&self, skip_target_seen: bool) -> String {
+        if self.pages.len() < 2 {
+            return String::new();
+        }
+        format!(
+            " awaited={}{}",
+            self.pages.join(","),
+            if skip_target_seen {
+                " skip_target_seen=true"
+            } else {
+                ""
+            }
+        )
+    }
+}
+
+impl LinearPlan {
+    /// The candidates of operation `index` once the members `handled` of its run have run.
+    fn candidates(&self, index: usize, handled: &BTreeSet<usize>) -> LinearCandidates<'_> {
+        let step = &self.steps[index];
+        let Some(run) = step.run.map(|run| &self.runs[run]) else {
+            return LinearCandidates {
+                pages: vec![step.to.as_str()],
+                settle: Duration::ZERO,
+            };
+        };
+        let mut pages = Vec::with_capacity(run.members.len() + 1);
+        let mut settle = Duration::ZERO;
+        for member in run
+            .members
+            .iter()
+            .filter(|member| **member != index && !handled.contains(*member))
+        {
+            let member = &self.steps[*member];
+            pages.push(member.from.label());
+            settle = settle.max(member.optional.unwrap_or_default());
+        }
+        pages.push(run.skip_page.as_str());
+        LinearCandidates { pages, settle }
+    }
 }
 
 /// The page a step leaves: a detector page id, or the application entry (`from:"any"`), which
@@ -121,14 +212,6 @@ enum LinearTransition {
 }
 
 impl LinearStep {
-    /// The first page the runtime waits for after this step's input.
-    fn gate(&self) -> &str {
-        match &self.transition {
-            Some(LinearTransition::Page { page, .. }) => page,
-            _ => &self.to,
-        }
-    }
-
     fn transition_detail(&self) -> String {
         match &self.transition {
             None => "transition=none".to_owned(),
@@ -193,6 +276,9 @@ struct LinearMiss {
     kind: LinearMissKind,
     elapsed: Duration,
     limit: Duration,
+    /// Workflow #339: the skip target of a run passed during the wait; the input took effect,
+    /// so the attempt has no retry decision.
+    skip_target_seen: bool,
 }
 
 /// The budgets of the wait for the next step's page.
@@ -215,18 +301,20 @@ fn postcondition_timing(elapsed: Duration, limit: Duration) -> Option<TaskTiming
     })
 }
 
+/// `awaited` is the suffix of `LinearCandidates::awaited` (Workflow #339), empty for one page.
 fn page_confirmation_failed(
     operation: &TaskOperation,
     step: &LinearStep,
     attempt: u32,
     intermediate_seen: bool,
+    awaited: &str,
     elapsed: Duration,
     limit: Duration,
 ) -> ContainedTaskError {
     ContainedTaskError::with_detail(
         PAGE_CONFIRMATION_FAILED,
         format!(
-            "operation={} attempts={attempt} after_page={UNRECOGNIZED_PAGE} hit_error_page=false {}{}",
+            "operation={} attempts={attempt} after_page={UNRECOGNIZED_PAGE} hit_error_page=false {}{}{awaited}",
             operation.id,
             step.transition_detail(),
             if intermediate_seen {
@@ -245,11 +333,12 @@ fn application_unconfirmed(
     step: &LinearStep,
     action: ApplicationLifecycleAction,
     miss: &LinearMiss,
+    awaited: &str,
 ) -> ContainedTaskError {
     ContainedTaskError::with_detail(
         APPLICATION_UNCONFIRMED,
         format!(
-            "operation={} application={} attempts=1 {} intermediate_seen={}",
+            "operation={} application={} attempts=1 {} intermediate_seen={}{awaited}",
             operation.id,
             application_action_name(action),
             step.transition_detail(),
@@ -418,11 +507,28 @@ impl TaskProgram {
                     })
                 }
             };
+            // Workflow #339: the first step is the only page the entry gate checks, and an
+            // optional application step would be a conditional restart.
+            let optional = match &operation.optional {
+                None => None,
+                Some(_) if index == 0 => {
+                    return Err(invalid("optional_first_step", Some(operation)));
+                }
+                Some(_) if matches!(effect, LinearEffect::Application(_)) => {
+                    return Err(invalid("optional_application", Some(operation)));
+                }
+                Some(optional) if optional.settle_ms > MAX_STEP_TIMEOUT_MS => {
+                    return Err(invalid("optional_settle", Some(operation)));
+                }
+                Some(optional) => Some(Duration::from_millis(optional.settle_ms)),
+            };
             steps.push(LinearStep {
                 from,
                 to,
                 effect,
                 transition,
+                optional,
+                run: None,
             });
         }
         if steps[0].from != entry {
@@ -463,22 +569,40 @@ impl TaskProgram {
         }
         // Workflow #336 R25: a launch or restart is complete only on the main interface
         // (`linear_main_interface`); one such page must follow the last of them.
-        if let Some(start) = steps.iter().rposition(|step| {
+        let last_start = steps.iter().rposition(|step| {
             matches!(
                 step.effect,
                 LinearEffect::Application(
                     ApplicationLifecycleAction::Launch | ApplicationLifecycleAction::Restart
                 )
             )
-        }) && !steps[start..]
-            .iter()
-            .any(|step| linear_main_interface(&control.game, &step.to))
+        });
+        if let Some(start) = last_start
+            && !steps[start..]
+                .iter()
+                .any(|step| linear_main_interface(&control.game, &step.to))
         {
             return Err(invalid(
                 "application_without_home",
                 Some(&self.operations[start]),
             ));
         }
+        // Workflow #339: the first main interface after the last launch or restart is the page
+        // of a required operation, so every path through the runs reaches it.
+        if let Some(home) = last_start.and_then(|start| {
+            steps[start..]
+                .iter()
+                .position(|step| linear_main_interface(&control.game, &step.to))
+                .map(|offset| start + offset + 1)
+        }) && steps.get(home).is_some_and(|step| step.optional.is_some())
+        {
+            return Err(invalid(
+                "optional_restart_segment_end",
+                Some(&self.operations[home]),
+            ));
+        }
+        let runs = optional_runs(&mut steps)
+            .map_err(|(reason, index)| invalid(reason, Some(&self.operations[index])))?;
         if let Some(declaration) = &self.scheduling_outcome {
             declaration.validate().map_err(|_| {
                 ContainedTaskError::new("contained_task_outcome_declaration_invalid")
@@ -496,8 +620,66 @@ impl TaskProgram {
                 }
             }
         }
-        Ok(LinearPlan { target, steps })
+        Ok(LinearPlan {
+            target,
+            steps,
+            runs,
+        })
     }
+}
+
+/// Workflow #339 §3.2: the maximal runs of optional operations, the operation before each run
+/// and its members linked to it. A refusal is a `contained_task_linear_invalid` reason and the
+/// index of the operation at fault.
+fn optional_runs(steps: &mut [LinearStep]) -> Result<Vec<OptionalRun>, (&'static str, usize)> {
+    let mut runs = Vec::new();
+    let mut index = 0;
+    while index < steps.len() {
+        if steps[index].optional.is_none() {
+            index += 1;
+            continue;
+        }
+        // The first operation is never optional: `start - 1` is the required one before the run.
+        let start = index;
+        while steps.get(index).is_some_and(|step| step.optional.is_some()) {
+            index += 1;
+        }
+        let members = (start..index).collect::<Vec<_>>();
+        let skip_page = steps[index - 1].to.clone();
+        {
+            // The pages the run's inputs may reach, and the page of the operation before it,
+            // which its retry decision adds, are distinct: no candidate list repeats a page.
+            let mut reachable = BTreeSet::new();
+            for &member in &members {
+                if !reachable.insert(steps[member].from.label()) {
+                    return Err(("optional_candidates", member));
+                }
+            }
+            if !reachable.insert(skip_page.as_str()) {
+                return Err(("optional_candidates", index - 1));
+            }
+            if reachable.contains(steps[start - 1].from.label()) {
+                return Err(("optional_candidates", start - 1));
+            }
+            // An intermediate page differs from every page its operation's input may reach.
+            for (offset, step) in steps[start - 1..index].iter().enumerate() {
+                if let Some(LinearTransition::Page { page, .. }) = &step.transition
+                    && reachable.contains(page.as_str())
+                {
+                    return Err(("transition_page", start - 1 + offset));
+                }
+            }
+        }
+        for step in &mut steps[start - 1..index] {
+            step.run = Some(runs.len());
+        }
+        runs.push(OptionalRun {
+            members,
+            skip_page,
+            next: (index < steps.len()).then_some(index),
+        });
+    }
+    Ok(runs)
 }
 
 impl PreparedContainedTask {
@@ -540,33 +722,73 @@ impl PreparedContainedTask {
                 Some(observed)
             }
         };
-        for (index, (operation, step)) in
-            self.program.operations.iter().zip(&plan.steps).enumerate()
-        {
-            let step_index = u32::try_from(index)
-                .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
-            observation = Some(self.run_linear_step(
+        // Workflow #339 §3.3: a cursor over the operations. `dispatched` counts the operations
+        // run, as the page-graph path counts its steps, and is the next `step_index`; a skipped
+        // optional operation writes nothing. The next operation follows from the page that
+        // passed, never from a comparison with the target page. Without an optional operation
+        // every operation runs in order and `dispatched` is the operation index.
+        let state_invalid = || ContainedTaskError::new("contained_task_state_invalid");
+        let mut current = 0;
+        let mut dispatched = 0_u32;
+        let mut handled = BTreeSet::new();
+        loop {
+            let (operation, step) = self
+                .program
+                .operations
+                .get(current)
+                .zip(plan.steps.get(current))
+                .ok_or_else(state_invalid)?;
+            let candidates = plan.candidates(current, &handled);
+            let reached = self.run_linear_step(
                 runtime,
                 run,
-                step_index,
+                dispatched,
                 operation,
                 step,
+                &candidates,
                 observation,
-            )?);
+            )?;
+            dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
+            let next = match step.run.map(|run| &plan.runs[run]) {
+                None => Some(current + 1).filter(|next| *next < plan.steps.len()),
+                Some(optional_run) => {
+                    if step.optional.is_some() {
+                        handled.insert(current);
+                    }
+                    // An optional page passed: its operation runs next. The skip target passed:
+                    // the operations of the run not run are skipped.
+                    match optional_run.members.iter().copied().find(|member| {
+                        !handled.contains(member)
+                            && plan.steps[*member].from.label() == reached.page_label
+                    }) {
+                        Some(member) => Some(member),
+                        None if reached.page_label == optional_run.skip_page => {
+                            handled.clear();
+                            optional_run.next
+                        }
+                        None => return Err(state_invalid().into()),
+                    }
+                }
+            };
+            observation = Some(reached);
+            match next {
+                Some(next) => current = next,
+                None => break,
+            }
         }
-        let executed_steps = u32::try_from(plan.steps.len())
-            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         self.finish_success(
             runtime,
             ocr_collector,
             observation.as_ref(),
             Some(plan.target.clone()),
-            executed_steps,
+            dispatched,
         )
     }
 
     /// One operation (§5.3 a–h, §5.5), from the frame on which its own page passed (none for the
-    /// application entry) to the frame on which the next step's page passed.
+    /// application entry) to the frame on which one of its `candidates` passed (Workflow #339:
+    /// the next step's page, or a page of a run of optional operations).
+    #[allow(clippy::too_many_arguments)]
     fn run_linear_step<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -574,6 +796,7 @@ impl PreparedContainedTask {
         step_index: u32,
         operation: &TaskOperation,
         step: &LinearStep,
+        candidates: &LinearCandidates<'_>,
         mut observation: Option<PageObservation>,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
@@ -627,19 +850,32 @@ impl PreparedContainedTask {
                 }
             }
             self.linear_post_input_delay(runtime, run, arrival.post_input_delay)?;
-            let miss = match self.linear_after_input(runtime, run, step, arrival)? {
+            let miss = match self.linear_after_input(runtime, run, step, candidates, arrival)? {
                 Ok(reached) => {
-                    Self::linear_step_finished(runtime, step_index, operation, &step.to)?;
+                    Self::linear_step_finished(
+                        runtime,
+                        step_index,
+                        operation,
+                        &reached.page_label,
+                    )?;
                     return Ok(reached);
                 }
                 Err(miss) => miss,
             };
+            let awaited = candidates.awaited(miss.skip_target_seen);
             if let LinearEffect::Application(action) = step.effect {
                 // §5.3 h: an application step is never retried and has no retry decision.
                 Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
-                return Err(application_unconfirmed(operation, step, action, &miss).into());
+                return Err(
+                    application_unconfirmed(operation, step, action, &miss, &awaited).into(),
+                );
             }
-            if miss.kind == LinearMissKind::AfterIntermediate || attempt >= max_attempts {
+            // Workflow #339 §3.5: a seen skip target shows the input took effect; another input
+            // would not help, as after a seen intermediate page.
+            if miss.kind == LinearMissKind::AfterIntermediate
+                || miss.skip_target_seen
+                || attempt >= max_attempts
+            {
                 Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
                 return Err(match (miss.kind, &step.transition) {
                     (LinearMissKind::Intermediate, Some(LinearTransition::Page { page, .. })) => {
@@ -657,43 +893,73 @@ impl PreparedContainedTask {
                         step,
                         attempt,
                         kind == LinearMissKind::AfterIntermediate,
+                        &awaited,
                         miss.elapsed,
                         miss.limit,
                     ),
                 }
                 .into());
             }
-            // The retry decision (§5.5): the gate first, then this step's own page.
+            // The retry decision (§5.5): the gate first, then this step's own page. The gate is
+            // the intermediate page, or every candidate (Workflow #339 §3.5).
             let LinearFrom::Page(own_page) = &step.from else {
                 return Err(ContainedTaskError::new("contained_task_state_invalid").into());
             };
             self.linear_retry_delay(runtime, run, retry_interval)?;
             let decision_started = Instant::now();
+            let mut decision_pages = match &step.transition {
+                Some(LinearTransition::Page { page, .. }) => vec![page.as_str()],
+                _ => candidates.pages.clone(),
+            };
+            decision_pages.push(own_page.as_str());
             let decided = self.linear_wait(
                 runtime,
-                &[step.gate(), own_page.as_str()],
+                &decision_pages,
                 run.step_timeout,
                 run.capture_interval,
                 LinearWaitPurpose::RetryDecision,
                 run.timing,
             )?;
             match decided {
-                Some(frame) if frame.page_label == step.gate() => {
+                Some(frame) if frame.page_label != *own_page => {
                     // The input took effect late: this attempt goes on, without another input.
-                    if !matches!(step.transition, Some(LinearTransition::Page { .. })) {
-                        Self::linear_step_finished(runtime, step_index, operation, &step.to)?;
-                        return Ok(frame);
-                    }
-                    match self.linear_arrival(
-                        runtime,
-                        run,
-                        step,
-                        arrival.budget,
-                        arrival.interval,
-                        LinearMissKind::AfterIntermediate,
-                    )? {
+                    let continued = match &step.transition {
+                        Some(LinearTransition::Page { .. }) => self.linear_arrival(
+                            runtime,
+                            run,
+                            candidates,
+                            arrival.budget,
+                            arrival.interval,
+                            LinearMissKind::AfterIntermediate,
+                        )?,
+                        // Workflow #339: the skip target is watched from this frame on.
+                        _ if candidates.settles_on(&frame.page_label) => self.linear_wait_set(
+                            runtime,
+                            run,
+                            candidates,
+                            arrival.budget,
+                            arrival.interval,
+                            LinearMissKind::Arrival,
+                            Some(Instant::now()),
+                        )?,
+                        _ => {
+                            Self::linear_step_finished(
+                                runtime,
+                                step_index,
+                                operation,
+                                &frame.page_label,
+                            )?;
+                            return Ok(frame);
+                        }
+                    };
+                    match continued {
                         Ok(reached) => {
-                            Self::linear_step_finished(runtime, step_index, operation, &step.to)?;
+                            Self::linear_step_finished(
+                                runtime,
+                                step_index,
+                                operation,
+                                &reached.page_label,
+                            )?;
                             return Ok(reached);
                         }
                         Err(miss) => {
@@ -707,7 +973,8 @@ impl PreparedContainedTask {
                                 operation,
                                 step,
                                 attempt,
-                                true,
+                                miss.kind == LinearMissKind::AfterIntermediate,
+                                &candidates.awaited(miss.skip_target_seen),
                                 miss.elapsed,
                                 miss.limit,
                             )
@@ -728,6 +995,7 @@ impl PreparedContainedTask {
                         step,
                         attempt,
                         false,
+                        &candidates.awaited(false),
                         decision_started.elapsed(),
                         run.step_timeout,
                     )
@@ -878,19 +1146,20 @@ impl PreparedContainedTask {
     }
 
     /// One attempt after its post-input wait (§5.4): the intermediate state, then the next
-    /// step's page.
+    /// step's page, or the candidates of a run of optional operations (Workflow #339).
     fn linear_after_input<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         run: LinearRun,
         step: &LinearStep,
+        candidates: &LinearCandidates<'_>,
         arrival: LinearArrival,
     ) -> LinearAttemptResult<R::Error> {
         match &step.transition {
             None => self.linear_arrival(
                 runtime,
                 run,
-                step,
+                candidates,
                 arrival.budget,
                 arrival.interval,
                 LinearMissKind::Arrival,
@@ -913,7 +1182,7 @@ impl PreparedContainedTask {
                     Some(_) => self.linear_arrival(
                         runtime,
                         run,
-                        step,
+                        candidates,
                         arrival.budget,
                         arrival.interval,
                         LinearMissKind::AfterIntermediate,
@@ -922,13 +1191,14 @@ impl PreparedContainedTask {
                         kind: LinearMissKind::Intermediate,
                         elapsed: started.elapsed(),
                         limit: *timeout,
+                        skip_target_seen: false,
                     })),
                 }
             }
             Some(LinearTransition::Window { max, .. }) => self.linear_arrival(
                 runtime,
                 run,
-                step,
+                candidates,
                 max.saturating_sub(arrival.post_input_delay)
                     .saturating_add(arrival.budget),
                 arrival.interval,
@@ -937,21 +1207,25 @@ impl PreparedContainedTask {
         }
     }
 
-    /// The wait for the next step's page.
+    /// The wait for the next step's page; several candidates (Workflow #339) are awaited by
+    /// `linear_wait_set`.
     fn linear_arrival<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         run: LinearRun,
-        step: &LinearStep,
+        candidates: &LinearCandidates<'_>,
         budget: Duration,
         interval: Duration,
         miss: LinearMissKind,
     ) -> LinearAttemptResult<R::Error> {
+        let &[page] = candidates.pages.as_slice() else {
+            return self.linear_wait_set(runtime, run, candidates, budget, interval, miss, None);
+        };
         let started = Instant::now();
         Ok(self
             .linear_wait(
                 runtime,
-                &[step.to.as_str()],
+                &[page],
                 budget,
                 interval,
                 LinearWaitPurpose::AfterInput,
@@ -961,7 +1235,107 @@ impl PreparedContainedTask {
                 kind: miss,
                 elapsed: started.elapsed(),
                 limit: budget,
+                skip_target_seen: false,
             }))
+    }
+
+    /// Workflow #339 §3.4: the wait for several candidates, the optional pages of a run first
+    /// and its skip target last. An optional page that passes ends the wait. The skip target
+    /// ends it only on a frame captured at least the settle after the capture that first
+    /// showed it, so that an optional page arriving late still runs; frames on which nothing
+    /// passes are ignored. The wait gives up `budget` after it starts, or, once the skip target
+    /// was seen, the settle plus `budget` after that capture. `seen` is a capture that already
+    /// showed the skip target (the retry decision's frame).
+    #[allow(clippy::too_many_arguments)]
+    fn linear_wait_set<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        run: LinearRun,
+        candidates: &LinearCandidates<'_>,
+        budget: Duration,
+        interval: Duration,
+        miss: LinearMissKind,
+        mut seen: Option<Instant>,
+    ) -> LinearAttemptResult<R::Error> {
+        let purpose = LinearWaitPurpose::AfterInput;
+        let deadline = run.timing.deadline();
+        let skip_target = *candidates
+            .pages
+            .last()
+            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+        let settle = candidates.settle;
+        let started = Instant::now();
+        loop {
+            if Instant::now() >= deadline {
+                return Err(self
+                    .linear_task_timeout(
+                        purpose,
+                        deadline,
+                        TaskTimingCheckPosition::PostconditionBeforeCapture,
+                    )
+                    .into());
+            }
+            let captured = Instant::now();
+            let observation = self.linear_observe(runtime, &candidates.pages, run.timing)?;
+            if Instant::now() >= deadline {
+                return Err(self
+                    .linear_task_timeout(
+                        purpose,
+                        deadline,
+                        TaskTimingCheckPosition::PostconditionAfterCapture,
+                    )
+                    .into());
+            }
+            if let Some(observation) = observation {
+                if observation.page_label != skip_target || settle.is_zero() {
+                    return Ok(Ok(observation));
+                }
+                match seen {
+                    Some(first) if captured.saturating_duration_since(first) >= settle => {
+                        return Ok(Ok(observation));
+                    }
+                    Some(_) => {}
+                    None => seen = Some(captured),
+                }
+            }
+            let limit = seen.map_or(budget, |first| {
+                first
+                    .saturating_duration_since(started)
+                    .saturating_add(settle)
+                    .saturating_add(budget)
+            });
+            let elapsed = started.elapsed();
+            if elapsed >= limit {
+                return Ok(Err(LinearMiss {
+                    kind: miss,
+                    elapsed,
+                    limit,
+                    skip_target_seen: seen.is_some(),
+                }));
+            }
+            // The settle bounds the sleep only while it lasts; after it, captures keep the
+            // interval and never run back to back.
+            let settle_left = seen
+                .and_then(|first| first.checked_add(settle))
+                .and_then(|end| end.checked_duration_since(Instant::now()))
+                .filter(|left| !left.is_zero());
+            let sleep = interval
+                .min(limit.saturating_sub(elapsed))
+                .min(deadline.saturating_duration_since(Instant::now()));
+            let boundary = purpose.boundary();
+            let identity = runtime.task_boundary_identity(boundary);
+            let wait_started = Instant::now();
+            thread::sleep(settle_left.map_or(sleep, |left| sleep.min(left)));
+            let wait_ended = Instant::now();
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: run.timing,
+                started: wait_started,
+                ended: wait_ended,
+                succeeded: true,
+            });
+        }
     }
 
     fn linear_retry_delay<R: ContainedTaskRuntime>(
