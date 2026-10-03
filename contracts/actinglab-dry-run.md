@@ -101,7 +101,7 @@ The human-readable line of any response whose data has `dry_run: true` ends with
 
 ## Commands
 
-All 134 commands of `ratchet/actinglab_commands.json`. "Checks first" lists the local checks a
+Commands in the current inventory and capability declarations. "Checks first" lists the local checks a
 refused form runs before it refuses; every other check runs only on a real invocation.
 
 | Command | Mode | Code or marker | Checks first / notes |
@@ -137,7 +137,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `navigate` | preview | `executed_false` | |
 | `monitor` | no_effect | | retired |
 | `stream` | mixed | | `stream check`: no_effect; every other form, `--input-relay` included: preview, `capture_dry_run` |
-| `record` | mixed | | `start`, `stop`, `step`, `amend`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start, stop) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `build-task`, `promote`: preview, `dry_run` |
+| `record` | mixed | | `start`, `step`, `amend`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `stop`, `mark`, `build-task`, `promote`: preview, `dry_run` |
 | `explain` | no_effect | | |
 | `config get` | no_effect | | |
 | `config set` | preview | `dry_run` | `validated`, `persisted: false` |
@@ -161,6 +161,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `lab arbitrator` | no_effect | | retired |
 | `lab vendor-stdio-selftest` | no_effect | | registered transient log |
 | `package validate` | no_effect | | |
+| `package preflight` | no_effect | | shared contained-task preparation |
 | `package dry-run` | refused | `offline_device_scope_forbidden` | positional arguments, `--version` |
 | `package inspect` | no_effect | | |
 | `package run` | refused | `dry_run_unsupported` | flag parsing, legacy routing flags, `--zip`, package validation, instance selector; alternative `package dry-run` |
@@ -241,9 +242,12 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `run export` | refused | `dry_run_unsupported` | the run id, configuration read, `--out`; no alternative; `details.run_id`; no capability entry |
 | `report export` | refused | `dry_run_unsupported` | `--last-error`, `--out`; no alternative; no capability entry |
 
-`record stop` and `session record stop` stay refused until #336 L4 gives them the preview defined
-by #336 (status `validated`, no file written, the recording stays active); that change removes
-`stop` from the refused record actions and declares it `preview` / `dry_run`.
+`record stop` and `session record stop` run the L4 generator and self-checks in memory under
+`--dry-run`, return `dry_run: true` and status `validated`, and preserve the recording and output
+artifacts. A missing session returns `not_started` with the same dry-run marker. `record mark`
+and its session alias likewise preview the mark changes with `dry_run: true`.
+
+`resource catalog` is `no_effect`: it reads the authoring catalog and its validation results.
 
 With #336, a `--record` invocation that also carries `--dry-run` is refused first by the
 `--record` gate with `record_flag_unsupported` (exit 2).
@@ -259,6 +263,9 @@ to `preview` and `no_effect` alike:
   does not reach it;
 - the session state directory that every `record` / `session record` action, `status`,
   `candidates`, `build-task` and `promote` included, creates before it runs;
+- the existing per-instance recording lock and its holder metadata, used by `record stop`
+  and `record mark` previews to read one consistent recording; the operating-system lock
+  is released when the command exits;
 - the temporary ZIP of `package build-task` / `package build-pack` (written, then deleted) and the
   `--from-remote` clone under the system temporary directory;
 - the `lab vendor-stdio-selftest` log under the system temporary directory, deleted afterwards;

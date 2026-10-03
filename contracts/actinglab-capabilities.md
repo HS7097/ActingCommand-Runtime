@@ -7,6 +7,9 @@ fetch backend assets. The Lab recording entries (`record mark`, `capture --recor
 `session capture --record`, `observe --capture --record`, `do --capture --record`,
 `session app --record` and `session instance app --record`, Workflow #336) are
 declared like any other command; their behaviour is `lab-recording.md`.
+Both `record mark` aliases and the L4 `record stop` aliases declare a `dry_run` preview;
+`resource catalog` and `package preflight` declare `no_effect`. Their metadata is shared by
+capabilities, help and command listing.
 
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with

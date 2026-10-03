@@ -10,9 +10,8 @@ use serde_json::{Map, Value, json};
 
 pub(crate) const REFUSAL_CODE: &str = "dry_run_unsupported";
 
-/// `record` / `session record` actions refused under `--dry-run`. `stop` leaves this list when
-/// #336 L4 gives it a preview.
-pub(crate) const RECORD_REFUSED_ACTIONS: &[&str] = &["start", "stop", "step", "amend"];
+/// `record` / `session record` actions refused under `--dry-run`.
+pub(crate) const RECORD_REFUSED_ACTIONS: &[&str] = &["start", "step", "amend"];
 
 /// Fails with `dry_run_unsupported` (exit 2) when the global `--dry-run` flag is set; otherwise
 /// returns `Ok(())` and the command continues. `extra` (an object) is merged into the details.
@@ -112,7 +111,8 @@ const SESSION_INSTANCE_FORMS: &[(&str, Mode)] = &[
 ];
 const RECORD_FORMS: &[(&str, Mode)] = &[
     ("start", UNSUPPORTED),
-    ("stop", UNSUPPORTED),
+    ("stop", DRY_RUN),
+    ("mark", DRY_RUN),
     ("step", UNSUPPORTED),
     ("amend", UNSUPPORTED),
     ("status", Mode::NoEffect),
@@ -137,8 +137,12 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("detect", DRY_RUN),
     ("record build-task", DRY_RUN),
     ("record promote", DRY_RUN),
+    ("record stop", DRY_RUN),
+    ("record mark", DRY_RUN),
     ("session record build-task", DRY_RUN),
     ("session record promote", DRY_RUN),
+    ("session record stop", DRY_RUN),
+    ("session record mark", DRY_RUN),
     ("do", EXECUTED_FALSE),
     ("ensure", EXECUTED_FALSE),
     ("tap-target", EXECUTED_FALSE),
@@ -158,11 +162,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session instance app restart", UNSUPPORTED),
     ("touch-probe", UNSUPPORTED),
     ("record start", UNSUPPORTED),
-    ("record stop", UNSUPPORTED),
     ("record step", UNSUPPORTED),
     ("record amend", UNSUPPORTED),
     ("session record start", UNSUPPORTED),
-    ("session record stop", UNSUPPORTED),
     ("session record step", UNSUPPORTED),
     ("session record amend", UNSUPPORTED),
     ("lab signatures register", UNSUPPORTED),
@@ -200,10 +202,12 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("capabilities", Mode::NoEffect),
     ("status", Mode::NoEffect),
     ("resource validate", Mode::NoEffect),
+    ("resource catalog", Mode::NoEffect),
     ("resource compile-maa", Mode::NoEffect),
     ("resource check-release", Mode::NoEffect),
     ("wait", Mode::NoEffect),
     ("package validate", Mode::NoEffect),
+    ("package preflight", Mode::NoEffect),
     ("package inspect", Mode::NoEffect),
     ("package digest", Mode::NoEffect),
     ("operation validate", Mode::NoEffect),

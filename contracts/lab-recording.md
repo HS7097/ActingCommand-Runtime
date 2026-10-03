@@ -711,6 +711,14 @@ unpacked as a directory.
 
 ### Self-checks
 
+Preparation uses `PreparedContainedTask` and the same linear candidate-set and target-consensus
+budget rules as Runtime. First-decision simulation uses the same kernel observation and guard
+owners. The recorder emits no `target_consensus` declaration: its per-frame cross-checks and
+first-decision result describe the generated package only, and do not certify multi-frame
+consensus, live OCR/provider execution or prerequisite recovery. Author-supplied declarations
+are checked by `package preflight` through that same preparation owner; actual sample and
+guard execution still requires the corresponding frames, provider and Runtime evidence.
+
 1. **Container round trip.** The encoded bytes expand (`expand_content_container`) to exactly
    the generated files, whose digest is D.
 2. **Admission.** The kernel admits the files as actingd loads a content directory: the digest

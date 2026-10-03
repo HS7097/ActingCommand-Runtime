@@ -1951,7 +1951,11 @@ impl PreparedContainedTask {
             .step_timeout()
             .milliseconds
             .min(control.task_timeout().milliseconds);
-        if !evaluator.pack().target_consensus.is_empty()
+        if control.execution_mode == linear::LINEAR_STEPS {
+            program
+                .validate_linear(&control, &detector)?
+                .validate_sampling_budget(&program, &control, &evaluator, &detector)?;
+        } else if !evaluator.pack().target_consensus.is_empty()
             && selection::page_recognition_budget_ms(&evaluator, &detector, None)? > admission_limit
         {
             return Err(ContainedTaskError::new(
@@ -2175,7 +2179,7 @@ impl PreparedContainedTask {
                     None,
                     None,
                     timing,
-                    Some(page),
+                    Some(&[page]),
                     Some(timing.deadline()),
                 )
                 .map(|observation| observation.is_some_and(|value| value.page_label == page));
@@ -2236,9 +2240,8 @@ impl PreparedContainedTask {
         Ok(matched)
     }
 
-    /// Workflow #336 L2b: one frame, evaluated for the first step's page of a `linear_steps`
-    /// package only (diagnostic phase `home_preflight`, no task timing), as the home entry
-    /// preflight evaluates its home page.
+    /// Workflow #336 L2b: one observation of the first step's page. Declared target samples
+    /// use the shared capture transaction and a single bounded entry deadline.
     pub fn recognize_linear_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2246,7 +2249,19 @@ impl PreparedContainedTask {
         let page = self
             .linear_entry_page()
             .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
-        self.recognize_entry_frame(runtime, page)
+        let started = Instant::now();
+        let timing = ContainedTaskTimingContext::new(
+            started,
+            started
+                + Duration::from_millis(
+                    self.control
+                        .step_timeout()
+                        .milliseconds
+                        .min(self.control.task_timeout().milliseconds),
+                ),
+            actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
+        );
+        self.recognize_entry_frame(runtime, page, timing)
     }
 
     /// Workflow #336 L2b: after a prerequisite package ran, frames of the first step's page are
@@ -2274,16 +2289,18 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
             let capture_started = Instant::now();
-            let matched = self.recognize_entry_frame(runtime, page);
+            let matched = self.recognize_entry_frame(runtime, page, timing);
             let capture_ended = Instant::now();
-            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
-                boundary,
-                identity,
-                context: timing,
-                started: capture_started,
-                ended: capture_ended,
-                succeeded: matched.is_ok(),
-            });
+            if self.evaluator.pack().target_consensus.is_empty() {
+                runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                    boundary,
+                    identity,
+                    context: timing,
+                    started: capture_started,
+                    ended: capture_ended,
+                    succeeded: matched.is_ok(),
+                });
+            }
             if matched? {
                 return Ok(LinearEntryAwait {
                     timing,
@@ -2335,13 +2352,25 @@ impl PreparedContainedTask {
         }
     }
 
-    /// The single-frame evaluation of `page` shared by the linear entry checks; the body of
-    /// `recognize_required_home` for another page.
+    /// Entry checks retain one caller-owned deadline across all samples and wait iterations.
     fn recognize_entry_frame<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         page: &str,
+        timing: ContainedTaskTimingContext,
     ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+        if !self.evaluator.pack().target_consensus.is_empty() {
+            return self
+                .capture_frame(
+                    runtime,
+                    None,
+                    None,
+                    timing,
+                    Some(&[page]),
+                    Some(timing.deadline()),
+                )
+                .map(|observation| observation.is_some());
+        }
         let frame = runtime
             .capture()
             .map_err(ContainedTaskRunError::operation::<R>)?;
@@ -3559,17 +3588,18 @@ impl PreparedContainedTask {
         )
     }
 
-    /// One capture and its page recognition, recorded as every capture is, at the
+    /// One observation and its page recognition, recorded as every capture is, at the
     /// `CapturePage` timing boundary. Without `ocr_collector` it is a select step's
     /// confirmation frame (Workflow #308): it feeds neither the stability sampling nor the
-    /// post-admission OCR collector.
+    /// post-admission OCR collector. Explicit candidates retain their order and select the
+    /// first passing page; the global page graph requires a unique match.
     fn capture_frame<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         ocr_collector: Option<&mut PostAdmissionOcrCollector<'_>>,
         required_entry_page: Option<&str>,
         timing: ContainedTaskTimingContext,
-        only_page: Option<&str>,
+        candidates: Option<&[&str]>,
         sampling_deadline: Option<Instant>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let feeds_collectors = ocr_collector.is_some();
@@ -3600,7 +3630,7 @@ impl PreparedContainedTask {
                     || Duration::from_millis(selection::page_recognition_budget_ms(
                         &self.evaluator,
                         &self.detector,
-                        only_page,
+                        candidates,
                     )?) > sample_deadline.saturating_duration_since(Instant::now())
                 {
                     return Err(
@@ -3676,6 +3706,7 @@ impl PreparedContainedTask {
             if sampled && Instant::now() >= sample_deadline {
                 return Err(ContainedTaskError::new("recognition_sample_deadline_exceeded").into());
             }
+            let frame_started = Instant::now();
             let frame = runtime
                 .capture()
                 .map_err(ContainedTaskRunError::operation::<R>)?;
@@ -3706,12 +3737,14 @@ impl PreparedContainedTask {
             {
                 return Err(ContainedTaskError::new("recognition_sample_geometry_changed").into());
             }
-            let candidate_pages = self
-                .detector
-                .page_ids()
-                .filter(|page| only_page.is_none_or(|only| *page == only))
-                .map(str::to_string)
-                .collect::<Vec<_>>();
+            let candidate_pages = match candidates {
+                Some(pages) => pages.iter().map(|page| (*page).to_owned()).collect(),
+                None => self
+                    .detector
+                    .page_ids()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
+            };
             runtime
                 .record(ContainedTaskTrace::RecognitionStarted {
                     candidate_pages: candidate_pages.clone(),
@@ -3780,19 +3813,9 @@ impl PreparedContainedTask {
                     context = context.with_sample_deadline(sample_deadline);
                 }
                 let context = context.with_sample_recorder(&mut recorder);
-                if let Some(page) = only_page {
-                    Ok(self
-                        .detector
-                        .page_definitions()
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, definition)| definition.id == page)
-                        .map(|(index, definition)| PageOutcome {
-                            index,
-                            page_id: definition.id.clone(),
-                            result: self.detector.evaluate_page_in_context(&context, definition),
-                        })
-                        .collect())
+                if let Some(pages) = candidates {
+                    self.detector
+                        .evaluate_pages_outcomes_in_context(&context, pages)
                 } else {
                     self.detector.evaluate_all_outcomes_in_context(&context)
                 }
@@ -3838,12 +3861,23 @@ impl PreparedContainedTask {
                     )
                     .with_ppocr_diagnostics(error.ppocr_diagnostics())
                 })?;
+            if sampled
+                && (!runtime
+                    .candidate_sampling_checkpoint()
+                    .map_err(ContainedTaskRunError::operation::<R>)?
+                    || Instant::now() >= sample_deadline)
+            {
+                return Err(ContainedTaskError::new(
+                    "recognition_sample_deadline_or_permission_lost",
+                )
+                .into());
+            }
             let matched_pages = evaluations
                 .iter()
                 .filter(|evaluation| evaluation.matched)
                 .map(|evaluation| evaluation.page_id.clone())
                 .collect::<Vec<_>>();
-            if matched_pages.len() > 1 {
+            if candidates.is_none() && matched_pages.len() > 1 {
                 return Err(ContainedTaskError::with_detail(
                     "contained_task_recognition_conflict",
                     matched_pages.join(","),
@@ -3920,6 +3954,7 @@ impl PreparedContainedTask {
                 stability_sample,
                 input_context,
                 captured_at: frame.captured_at,
+                frame_started,
                 sample_scenes,
                 sampling: sampled.then_some((timing, sample_deadline)),
             }))
@@ -4034,6 +4069,8 @@ struct PageObservation {
     input_context: Option<InputFrameContext>,
     /// The device capture time of this observation's frame (in memory only).
     captured_at: SystemTime,
+    /// Monotonic start of the current capture, for the linear optional-page settle.
+    frame_started: Instant,
     sample_scenes: Vec<Scene>,
     sampling: Option<(ContainedTaskTimingContext, Instant)>,
 }
@@ -9802,6 +9839,7 @@ mod retry_wiring_tests {
             scene: scene_from_frame(&page_frame("home")).expect("scene"),
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
+            frame_started: Instant::now(),
         };
         let mut runtime = ScriptedRuntime::new("home");
         let (outcome, target) = task.program.operations[0]
@@ -9895,6 +9933,7 @@ mod retry_wiring_tests {
             scene: scene_from_frame(&page_frame("terminal")).expect("scene"),
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
+            frame_started: Instant::now(),
         };
         assert!(
             task.evaluator
@@ -9936,6 +9975,7 @@ mod retry_wiring_tests {
             scene: scene_from_frame(&page_frame("terminal")).expect("scene"),
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
+            frame_started: Instant::now(),
         };
         let mut runtime = ScriptedRuntime::new("terminal");
         let (outcome, target) = task.program.operations[0]
@@ -9973,6 +10013,7 @@ mod retry_wiring_tests {
             scene: scene_from_frame(&frame).expect("scene"),
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
+            frame_started: Instant::now(),
         };
         let mut runtime = ScriptedRuntime::new("home");
         let Err(ContainedTaskRunError::Task(error)) = task.program.operations[0].guard_outcome(

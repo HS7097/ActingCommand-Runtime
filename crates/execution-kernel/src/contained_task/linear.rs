@@ -17,18 +17,19 @@
 
 use super::{
     ApplicationEffectSupport, ContainedTaskBoundaryTiming, ContainedTaskError,
-    ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
-    ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS,
-    MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageObservation,
-    PostAdmissionOcrCollector, PreparedContainedTask, TaskControl, TaskOperation, TaskProgram,
-    observe_instant_span, recognized_page_targets, resolve_page_reference, scene_from_frame,
+    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
+    ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
+    MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageObservation, PostAdmissionOcrCollector,
+    PreparedContainedTask, TaskControl, TaskOperation, TaskProgram, resolve_page_reference,
+    selection,
 };
 use crate::RunOperationPolicy;
 use actingcommand_contract::{
     ApplicationLifecycleAction, PHASED_CONTROL_SCHEMA, TaskTimingBoundary, TaskTimingCheckPosition,
-    TaskTimingFailure, TaskTimingResult, TaskTimingScope, TaskTimingStage,
+    TaskTimingFailure, TaskTimingScope, TaskTimingStage,
 };
-use actingcommand_page_detector::{PageDetector, PageDetectorError, require_all_page_evaluations};
+use actingcommand_page_detector::PageDetector;
+use actingcommand_recognition_pack::RecognitionEvaluator;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::thread;
@@ -140,6 +141,88 @@ impl LinearCandidates<'_> {
 }
 
 impl LinearPlan {
+    /// Account for every page in each observation's largest legal candidate set. Guards
+    /// have the separate StepStarted budget checked by the shared preparation owner.
+    pub(super) fn validate_sampling_budget(
+        &self,
+        program: &TaskProgram,
+        control: &TaskControl,
+        evaluator: &RecognitionEvaluator,
+        detector: &PageDetector,
+    ) -> Result<(), ContainedTaskError> {
+        if evaluator.pack().target_consensus.is_empty() {
+            return Ok(());
+        }
+        let check = |pages: &[&str], limit_ms: u64, phase: &str| {
+            let required_ms =
+                selection::page_recognition_budget_ms(evaluator, detector, Some(pages))?;
+            let limit_ms = limit_ms.min(control.task_timeout().milliseconds);
+            if required_ms > limit_ms {
+                return Err(ContainedTaskError::with_detail(
+                    "recognition_sample_budget_insufficient",
+                    format!(
+                        "phase={phase} pages={} requires {required_ms}ms across page calls and waits; limit={limit_ms}ms",
+                        pages.join(",")
+                    ),
+                ));
+            }
+            Ok(())
+        };
+        let handled = BTreeSet::new();
+        for (index, (step, operation)) in self.steps.iter().zip(&program.operations).enumerate() {
+            if index == 0
+                && let LinearFrom::Page(page) = &step.from
+            {
+                check(
+                    &[page.as_str()],
+                    control.step_timeout().milliseconds,
+                    "entry",
+                )?;
+            }
+            let candidates = self.candidates(index, &handled);
+            let arrival_ms = operation.effective_timing(control).timeout.milliseconds;
+            let arrival_ms = match &step.transition {
+                Some(LinearTransition::Window { min, max }) => {
+                    let delay =
+                        Duration::from_millis(operation.post_delay_ms.unwrap_or(0)).max(*min);
+                    (max.saturating_sub(delay) + Duration::from_millis(arrival_ms)).as_millis()
+                        as u64
+                }
+                _ => arrival_ms,
+            };
+            check(&candidates.pages, arrival_ms, "arrival")?;
+            if let Some(LinearTransition::Page { page, timeout, .. }) = &step.transition {
+                check(&[page.as_str()], timeout.as_millis() as u64, "transition")?;
+            }
+            if let LinearFrom::Page(page) = &step.from
+                && matches!(step.effect, LinearEffect::Click)
+                && operation
+                    .retry_policy(
+                        program.defaults,
+                        control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
+                    )?
+                    .is_some_and(|policy| policy.max_attempts() > 1)
+            {
+                if candidates.pages.len() > 1
+                    && matches!(step.transition, Some(LinearTransition::Window { .. }))
+                {
+                    check(
+                        &candidates.pages,
+                        operation.effective_timing(control).timeout.milliseconds,
+                        "retry_arrival",
+                    )?;
+                }
+                let mut retry_pages = match &step.transition {
+                    Some(LinearTransition::Page { page, .. }) => vec![page.as_str()],
+                    _ => candidates.pages,
+                };
+                retry_pages.push(page.as_str());
+                check(&retry_pages, control.step_timeout().milliseconds, "retry")?;
+            }
+        }
+        Ok(())
+    }
+
     /// The candidates of operation `index` once the members `handled` of its run have run.
     fn candidates(&self, index: usize, handled: &BTreeSet<usize>) -> LinearCandidates<'_> {
         let step = &self.steps[index];
@@ -800,6 +883,7 @@ impl PreparedContainedTask {
         mut observation: Option<PageObservation>,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
+        let step_timing = run.timing.with_deadline(Instant::now() + run.step_timeout);
         // The dispatched logical step, as the page-graph path counts it; a retry adds none.
         runtime.update_run_progress(step_index.saturating_add(1));
         let policy = operation.retry_policy(
@@ -843,7 +927,7 @@ impl PreparedContainedTask {
                     let frame = observation
                         .as_ref()
                         .ok_or_else(|| ContainedTaskError::new("contained_task_page_unknown"))?;
-                    self.linear_input(runtime, run, step_index, operation, frame)?;
+                    self.linear_input(runtime, run, step_index, operation, frame, step_timing)?;
                 }
                 LinearEffect::Application(action) => {
                     self.linear_application(runtime, run, step_index, operation, action)?;
@@ -940,7 +1024,11 @@ impl PreparedContainedTask {
                             arrival.budget,
                             arrival.interval,
                             LinearMissKind::Arrival,
-                            Some(Instant::now()),
+                            Some(if frame.sampling.is_some() {
+                                frame.frame_started
+                            } else {
+                                Instant::now()
+                            }),
                         )?,
                         _ => {
                             Self::linear_step_finished(
@@ -1014,10 +1102,16 @@ impl PreparedContainedTask {
         step_index: u32,
         operation: &TaskOperation,
         observation: &PageObservation,
+        step_timing: ContainedTaskTimingContext,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
-        let (guard, target) =
-            operation.guard_outcome(&self.control, observation, &self.evaluator, runtime)?;
+        let (guard, target) = operation.guard_outcome(
+            &self.control,
+            observation,
+            &self.evaluator,
+            runtime,
+            Some(step_timing),
+        )?;
         let action_seed = runtime
             .action_seed(step_index, &operation.id)
             .map_err(ContainedTaskRunError::operation::<R>)?;
@@ -1036,6 +1130,9 @@ impl PreparedContainedTask {
                 guard,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        if observation.sampling.is_some() && Instant::now() >= step_timing.deadline() {
+            return Err(ContainedTaskError::new("recognition_sample_deadline_exceeded").into());
+        }
         if Instant::now() >= deadline {
             return Err(self
                 .task_timeout_error(TaskTimingStage::BeforeInput, deadline, None)
@@ -1275,8 +1372,15 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
+            let observation_deadline =
+                seen.map_or(started + budget, |first| first + settle + budget);
+            let timing = if self.evaluator.pack().target_consensus.is_empty() {
+                run.timing
+            } else {
+                run.timing.with_deadline(observation_deadline)
+            };
             let captured = Instant::now();
-            let observation = self.linear_observe(runtime, &candidates.pages, run.timing)?;
+            let observation = self.linear_observe(runtime, &candidates.pages, timing)?;
             if Instant::now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
@@ -1287,6 +1391,11 @@ impl PreparedContainedTask {
                     .into());
             }
             if let Some(observation) = observation {
+                let captured = if observation.sampling.is_some() {
+                    observation.frame_started
+                } else {
+                    captured
+                };
                 if observation.page_label != skip_target || settle.is_zero() {
                     return Ok(Ok(observation));
                 }
@@ -1298,12 +1407,9 @@ impl PreparedContainedTask {
                     None => seen = Some(captured),
                 }
             }
-            let limit = seen.map_or(budget, |first| {
-                first
-                    .saturating_duration_since(started)
-                    .saturating_add(settle)
-                    .saturating_add(budget)
-            });
+            let limit = seen
+                .map_or(started + budget, |first| first + settle + budget)
+                .saturating_duration_since(started);
             let elapsed = started.elapsed();
             if elapsed >= limit {
                 return Ok(Err(LinearMiss {
@@ -1398,6 +1504,11 @@ impl PreparedContainedTask {
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let deadline = timing.deadline();
         let started = Instant::now();
+        let timing = if self.evaluator.pack().target_consensus.is_empty() {
+            timing
+        } else {
+            timing.with_deadline(started + budget)
+        };
         loop {
             if Instant::now() >= deadline {
                 return Err(self
@@ -1466,105 +1577,6 @@ impl PreparedContainedTask {
         candidates: &[&str],
         timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        let boundary = TaskTimingBoundary::CapturePage;
-        let identity = runtime.task_boundary_identity(boundary);
-        let capture_started = Instant::now();
-        let result = (|| {
-            let frame = runtime
-                .capture()
-                .map_err(ContainedTaskRunError::operation::<R>)?;
-            self.control.resolution.validate_frame(&frame)?;
-            runtime
-                .record(ContainedTaskTrace::CaptureCompleted {
-                    width: frame.width,
-                    height: frame.height,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            let scene = scene_from_frame(&frame)?;
-            let input_context = match frame.input_reference {
-                Some(reference) => runtime
-                    .committed_input_frame(reference)
-                    .map_err(ContainedTaskRunError::Boundary)?,
-                None => None,
-            };
-            let context = self.evaluator.scene_context(&scene);
-            let candidate_pages = candidates
-                .iter()
-                .map(|page| (*page).to_owned())
-                .collect::<Vec<_>>();
-            runtime
-                .record(ContainedTaskTrace::RecognitionStarted {
-                    candidate_pages: candidate_pages.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            let evaluation_started = Instant::now();
-            let budget_before = timing.budget_at(evaluation_started);
-            let results = self
-                .detector
-                .evaluate_pages_outcomes_in_context(&context, candidates);
-            let evaluation_timing = ContainedTaskEvaluationTiming {
-                elapsed_us: observe_instant_span(evaluation_started, Instant::now()),
-                budget_before,
-                result: if results.is_ok() {
-                    TaskTimingResult::Ok
-                } else {
-                    TaskTimingResult::Err
-                },
-            };
-            runtime
-                .record_page_evaluations("page", &results, Some(evaluation_timing))
-                .map_err(ContainedTaskRunError::Boundary)?;
-            let evaluations = results
-                .map_err(|error| {
-                    PageDetectorError::fatal(error.to_string())
-                        .with_ppocr_diagnostics(error.ppocr_diagnostics())
-                })
-                .and_then(require_all_page_evaluations)
-                .map_err(|error| {
-                    ContainedTaskError::with_detail(
-                        "contained_task_recognition_failed",
-                        error.to_string(),
-                    )
-                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
-                })?;
-            let page = evaluations
-                .iter()
-                .find(|evaluation| evaluation.matched)
-                .map(|evaluation| evaluation.page_id.clone());
-            let targets = recognized_page_targets(
-                &self.evaluator,
-                &evaluations,
-                page.as_deref(),
-                &candidate_pages,
-            )?;
-            runtime
-                .record(ContainedTaskTrace::RecognitionCompleted {
-                    candidate_pages,
-                    page_label: page.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                    targets,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            Ok(page.map(|page_label| PageObservation {
-                page_label,
-                scene,
-                stability_sample: None,
-                input_context,
-                captured_at: frame.captured_at,
-            }))
-        })();
-        let capture_ended = Instant::now();
-        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
-            boundary,
-            identity,
-            context: timing,
-            started: capture_started,
-            ended: capture_ended,
-            succeeded: result.is_ok(),
-        });
-        result
+        self.capture_frame(runtime, None, None, timing, Some(candidates), None)
     }
 }

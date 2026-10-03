@@ -108,6 +108,26 @@ An evaluation error is `contained_task_recognition_failed`. A wait captures, ret
 passing candidate, gives up once its budget is spent, and otherwise sleeps the smaller of its
 interval and its remaining budget; the task deadline inside a wait is `contained_task_timeout`.
 
+**Target consensus.** A `target_consensus` declaration uses the target semantics and sample
+evidence of [business-identity-consensus.md](business-identity-consensus.md). The kernel's
+shared observation transaction captures the required distinct frames (at most five), keeps
+their geometry consistent, and supplies them to the same recognition-pack aggregation owner
+for current pages, optional candidates, transition pages, terminal pages and input guards.
+Candidate order still chooses the first passing page. A guard reuses the observation's sample
+frames; its click rectangle and input reference come from the current frame.
+
+Preparation sums the worst provider calls and declared sample waits for each legal candidate
+set against its applicable entry, transition, arrival or retry budget, capped by the task budget.
+Each guard's provider calls are checked against its step/task budget, as on the page-graph path.
+Preparation refuses `recognition_sample_budget_insufficient` before
+execution when they do not fit. Each wait establishes its absolute deadline once and passes it
+through every observation, sample and backend call. Optional settling retains its declared
+extension from the first skip-target observation. Guard evaluation uses the deadline fixed at
+the dispatched step's start. Captures, backend evaluations and sample waits consume these
+budgets and retain their typed records and timing. Sample exhaustion, expired budgets,
+cancellation, changed geometry or lost permission end the observation before any following
+input. Undeclared paths retain their single-frame behavior.
+
 **Steps.** The first step waits for its page for `step_timeout_ms` at the control capture
 interval; when it does not pass, the task fails with `contained_task_linear_entry_unmatched`.
 An application entry waits for nothing ("Application steps" below). Then, for each click
@@ -377,8 +397,12 @@ map is read when `actingd` starts; a change needs a restart.
 directly; a package whose prerequisite chain is empty starts as above. Layer `i` is a package `X_i`
 (`X_0` the dependent package) and its prerequisite package `X_(i+1)`:
 
-1. **First check, one frame.** One capture is evaluated for `X_i`'s first step's page only
-   (diagnostic phase `home_preflight`, no task timing). `EntryRecognition { Initial }` names that
+1. **First check, one observation.** `X_i`'s first step's page alone is evaluated. Declared
+   consensus uses the shared observation transaction with a deadline fixed at check start,
+   bounded by the smaller of `step_timeout_ms` and task timeout (origin `entry_recovery`).
+   Its samples and page evaluation carry the same typed evidence and timing as in-task
+   recognition. A check without consensus retains its one-frame `home_preflight` evaluation.
+   `EntryRecognition { Initial }` names that
    page, followed by `EntryRecoveryDecision`. When the page passes, the layer is done and
    `X_(i+1)` does not run.
 2. **Prerequisite package.** `EntryRecoveryPackageAdmitted { X_(i+1) }`; when `X_(i+1)` has a
@@ -390,11 +414,14 @@ directly; a package whose prerequisite chain is empty starts as above. Layer `i`
    package's `contained_task_page_unknown` still starts the ladder). It ends with
    `EntryRecoveryCompleted { X_(i+1), final page, its own executed steps }`; its final page is not
    compared with `X_i`'s pages, since page ids of different packages are not comparable.
-3. **Recheck, bounded wait.** `X_i`'s first step's page is evaluated on one frame at a time,
+3. **Recheck, bounded wait.** `X_i`'s first step's page is evaluated one observation at a time,
    every capture interval of `X_i`, for at most `X_i`'s `step_timeout_ms`, since its markers may
    still be fading in when the prerequisite package reached its own end. Each capture is a
    `CapturePage` boundary and each sleep a `PageRecognitionWait` boundary of the gate's own
-   budget (origin `task` for `X_0`, `entry_recovery` above), in the preflight phase.
+   budget (origin `task` for `X_0`, `entry_recovery` above). Declared consensus receives this
+   original absolute deadline; no sample or repeated observation starts another budget.
+   This applies after every prerequisite/return-home layer. Unsampled evaluation keeps the
+   `home_preflight` phase; sampled evaluation uses the shared page/sample records.
    `EntryRecognition { PostRecovery }` follows; when the page did not pass, the run fails with
    `contained_task_prerequisite_entry_unmatched`, detail `layer=<i> package_id=<X_i>
    required_page=<page>`, timing `page_recognition` / `entry_recognition` with `limit_ms` the

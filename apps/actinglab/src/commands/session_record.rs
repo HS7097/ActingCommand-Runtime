@@ -320,7 +320,7 @@ pub(crate) fn run_session_record(global: &GlobalOptions, args: &[String]) -> Cli
         .first()
         .filter(|action| crate::dry_run_gate::RECORD_REFUSED_ACTIONS.contains(&action.as_str()))
     {
-        let alternative = if action == "start" || action == "stop" {
+        let alternative = if action == "start" {
             "record status"
         } else {
             "record candidates"
@@ -404,16 +404,17 @@ fn run_session_record_inner(
             "lab": record_status_lab(&state_dir, &instance_id)?
         })),
         "stop" => {
+            let options = record_stop_options(global, &config, &flags, &instance_id)?;
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Ok(json!({
                     "status": "not_started",
+                    "dry_run": options.dry_run,
                     "instance": instance_id,
                     "path": record_path.display().to_string(),
                     "lab": Value::Null
                 }));
             };
             let lock = held_record_lock(&record_lock)?;
-            let options = record_stop_options(global, &config, &flags, &instance_id)?;
             let outcome = record_stop(lock, &options)?;
             if !options.dry_run {
                 record.status = "stopped".to_string();
