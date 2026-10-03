@@ -306,11 +306,14 @@ Each prerequisite package runs at most once per run. On any failure every prereq
 opened and not yet closed gets one `EntryRecoveryFailed` with the failure code, innermost first,
 and the gate one `EntryTargetDisposition { FailClosed }`; a recognition failure, an unknown page
 or an input backend failure is recorded so even when the run spent its last execution budget,
-as the home entry recovery does. When every layer passed, `EntryTargetDisposition { Started }`
-is written, then the dependent package's `PackageAdmitted`, and the package runs with its step
-indices after the prerequisite packages' steps; on success `executed_steps` adds the
-prerequisite packages' steps. Its own first step is awaited again as above and normally passes
-at once. The host deadline still ends the run with `contained_task_deadline_exceeded` (or
+as the home entry recovery does. The one exception is a capture or recognition error of the
+outermost first check, before the gate wrote any fact: it is returned directly, as the existing
+home entry preflight returns its first check's error; every later failure, the outermost recheck
+included, ends with the one `FailClosed`. When every layer passed,
+`EntryTargetDisposition { Started }` is written, then the dependent package's `PackageAdmitted`,
+and the package runs with its step indices after the prerequisite packages' steps; on success
+`executed_steps` adds the prerequisite packages' steps. Its own first step is awaited again as
+above and normally passes at once. The host deadline still ends the run with `contained_task_deadline_exceeded` (or
 cancelled, paused) from any capture of the gate.
 
 **Ledger.** Only the existing `TaskEntryPreflight` facts and effective configuration records

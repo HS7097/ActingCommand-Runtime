@@ -205,7 +205,7 @@ fn gate_layer(
         .ok_or_else(|| ContainedTaskRunError::task("contained_task_state_invalid"))?;
     let initial = package
         .recognize_linear_entry(runtime)
-        .map_err(|error| fail_recognition(runtime, gate, error))?;
+        .map_err(|error| fail_recognition(runtime, gate, layer == 0, error))?;
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::Initial,
@@ -297,7 +297,7 @@ fn gate_layer(
     };
     let waited = package
         .await_linear_entry(runtime, budget, origin, layer)
-        .map_err(|error| fail_recognition(runtime, gate, error))?;
+        .map_err(|error| fail_recognition(runtime, gate, false, error))?;
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::PostRecovery,
@@ -313,14 +313,17 @@ fn gate_layer(
     Ok(())
 }
 
-/// A failure of the gate's own recognition: returned unchanged while no prerequisite package is
-/// open, as the home entry preflight does; otherwise the open packages are closed.
+/// A failure of the gate's own recognition. Only the outermost first check, before any fact of
+/// the gate and before any prerequisite package ran, returns it unchanged, as the home entry
+/// preflight does; every later one, the outermost recheck included, closes the open packages
+/// and the gate once.
 fn fail_recognition(
     runtime: &RuntimeContainedTask<'_>,
     gate: &Gate,
+    outermost_first_check: bool,
     error: ContainedTaskRunError<RequestFailure>,
 ) -> ContainedTaskRunError<RequestFailure> {
-    if gate.open.is_empty() {
+    if outermost_first_check {
         error
     } else {
         close_open(runtime, &gate.open, error, true)
