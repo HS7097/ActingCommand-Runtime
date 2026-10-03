@@ -853,11 +853,10 @@ equal value is accepted.
 - `prerequisite_entry_example` is the entry for the actingd `prerequisite_packages` when
   another package names this one with `--requires`.
 - `catalog_on_failure_example` is `{"action":"pause","retry_limit":1,
-  "retry_backoff_ms":60000,"escalation_threshold":2}`. The immediate rerun (R22) came after it:
-  a failed linear task is rerun at the first evaluation after `retry_backoff_ms`, not at the
-  next trigger as the `binding_requires` item about `on_failure` still says, and
-  `policy-suspension.md` ("Catalog") recommends `retry_backoff_ms` 0. How failures are rerun,
-  pause the task and are lifted is described there.
+  "retry_backoff_ms":0,"escalation_threshold":2}`, the `on_failure` that
+  `policy-suspension.md` ("Catalog") recommends; the `binding_requires` item about it says that
+  the rerun happens immediately (R22). How failures are rerun, pause the task and are lifted is
+  described there.
 - `optional_steps` lists every optional step: its package step number, operation id,
   `settle_ms`, `skip_to` (the page of N) and `same_as` (the earlier step recorded for the same
   pop-up, or `null`); `[]` without optional steps.

@@ -507,7 +507,7 @@ fn absolute_display(path: &Path) -> String {
 }
 
 /// `package_ref`, `binding_example`, `task_run_example`, `prerequisite_entry_example` and
-/// `catalog_on_failure_example` (section 4.8 with a15 and a20).
+/// `catalog_on_failure_example` (section 4.8 with a15, a20 and R22).
 fn insert_binding(
     lab: &mut Map<String, Value>,
     digest: &str,
@@ -548,7 +548,7 @@ fn insert_binding(
         json!({
             "action": "pause",
             "retry_limit": 1,
-            "retry_backoff_ms": 60000,
+            "retry_backoff_ms": 0,
             "escalation_threshold": 2
         }),
     );
@@ -590,9 +590,9 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
     items.push(
         "The on_failure of the catalog task is best catalog_on_failure_example: a failure of \
          this package's own steps is run once more, and the same problem again suspends the \
-         task (R17). The rerun happens at the next trigger (the next period of a clock trigger) \
-         and not before retry_backoff_ms and cooldown_ms. Changing on_failure changes the \
-         catalog, which needs a new approval."
+         task (R17). The rerun happens immediately (R22): at the first policy evaluation after \
+         retry_backoff_ms (0 in the example), without waiting for the next trigger or for \
+         cooldown_ms. Changing on_failure changes the catalog, which needs a new approval."
             .to_string(),
     );
     if plan.has_application_step() {
