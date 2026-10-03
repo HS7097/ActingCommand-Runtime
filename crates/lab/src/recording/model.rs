@@ -82,18 +82,54 @@ pub struct LabRecording {
     pub artifact: Option<RecordingArtifact>,
 }
 
-/// Written by `record stop` (#336 L4); L3 only carries it.
+/// Written by `record stop` (#336 L4): the package generated from the recording.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordingArtifact {
+    /// `zip` or `json`.
     pub container: String,
+    /// The `content-directory.v1` digest of the package content.
     pub digest: String,
+    /// The copy inside the recording, `lab/out/<digest>.<container>`.
     pub path: String,
     pub lab_dir_path: Option<String>,
+    /// The sha256 of the container file bytes.
     pub sha256: String,
     pub byte_count: u64,
     pub package_id: String,
+    /// The prerequisite package id written into control.json (`--requires`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
     pub generated_at_unix_ms: u64,
+}
+
+/// `record stop` options (Workflow #336 L4). Game, server and locale are canonical; the
+/// explicit ones win over the recording's, which win over the `default_*` ones (the
+/// instance configuration).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecordStopOptions {
+    pub lab_dir: Option<String>,
+    pub package_id: Option<String>,
+    pub requires: Option<String>,
+    pub game: Option<String>,
+    pub server: Option<String>,
+    pub locale: Option<String>,
+    pub default_game: Option<String>,
+    pub default_server: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub arrival_timeout_ms: Option<u64>,
+    pub application_arrival_timeout_ms: Option<u64>,
+    pub dry_run: bool,
+}
+
+/// The Lab part of `record stop`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordStopOutcome {
+    /// `generated`, `validated` or `already_generated`; `None` when the session has no Lab
+    /// steps and `record stop` behaves as before.
+    pub lab_status: Option<String>,
+    /// The `lab` output field; `None` prints `null`.
+    pub lab: Option<OpaqueJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

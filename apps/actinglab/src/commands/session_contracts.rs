@@ -357,6 +357,16 @@ fn session_record_policy_payload(
                 "to_transition_refusal_reason": "optional",
                 "offline_insertion": "record mark --frame <png> ... --click ... --optional, then record mark --close-step, then capture --record"
             },
+            "stop": {
+                "command": "record stop [--lab-dir <dir>] [--package-id <id>] [--requires <package_id>] [--dry-run]",
+                "execution_mode": "linear_steps",
+                "containers": ["zip", "json"],
+                "file_name": "<content-directory digest>.<zip|json>",
+                "dry_run": "every check runs, nothing is written, status validated",
+                "statuses": ["generated", "validated", "already_generated"],
+                "warnings": ["arrival_unconfirmed", "first_decision_not_evaluated", "task_timeout_clamped", "step_timeout_clamped", "requires_prefix_mismatch", "entry_overlay_insensitive", "application_stop_target_external"],
+                "optional_steps": "record_stop_generation_not_implemented"
+            },
             "recording_lock": {
                 "file": "<state>/record-<instance>.lock",
                 "busy": "record_busy",

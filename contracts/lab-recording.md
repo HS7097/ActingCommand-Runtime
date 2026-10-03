@@ -2,12 +2,11 @@
 
 A Lab recording turns a sequence of real screens into a linear-steps task package: each
 step is one screen with its recognition marks and at most one effect, a click rectangle or
-an application operation (R24), and the last step only recognizes. This document is the
-first half of the contract (Workflow #336): the recording state, the commands that build
-it, the five mark families with their mark-time self-test, steps and transitions,
-remediation, application steps, optional steps, `--record` on the device commands and the
-recording lock.
-Package generation by `record stop` is described in the second half.
+an application operation (R24), and the last step only recognizes. This contract
+(Workflow #336) covers the recording state, the commands that build it, the five mark
+families with their mark-time self-test, steps and transitions, remediation, application
+steps, optional steps, `--record` on the device commands and the recording lock, and then
+the package `record stop` generates, checks and writes ("Package generation").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -22,6 +21,7 @@ Runtime and recorded there as any `do --capture` or `session app` is.
 <state>/record-artifacts/<record_id>/lab/recording.json      actingcommand.lab-recording.v1
 <state>/record-artifacts/<record_id>/lab/frames/<sha256>.png frames, content-addressed
 <state>/record-artifacts/<record_id>/lab/crops/<sha256>.png  template crops, content-addressed
+<state>/record-artifacts/<record_id>/lab/out/<D>.<zip|json>  the package record stop generated
 ```
 
 `<instance>` and `<record_id>` use the file-stem rule of the `record` command: ASCII
@@ -224,9 +224,9 @@ outcomes moved aside by `--reopen-step`.
 ### record stop
 
 Without Lab steps `record stop` behaves as before and adds `lab: null`; an empty active Lab
-recording is stopped with the session. With Lab steps it generates the package (second
-half of this contract); a build without the generator refuses with
-`record_stop_generation_not_implemented` (exit 6) and leaves both states active.
+recording is stopped with the session. With Lab steps it generates, checks and writes the
+package: see "Package generation". A build without the generator (#336 L3, L3b, L3c) refuses
+with `record_stop_generation_not_implemented` (exit 6) and leaves both states active.
 
 ## Marks and the mark-time self-test
 
@@ -430,8 +430,8 @@ the field is `"application": null | {"action": "restart"}`.
   `any → restart → title → home`.
 - R25: a package with a `launch` or `restart` step must reach the main interface later, a
   step marked `--page home` (its page id is `step_<nn>_home`, which counts as the main
-  interface). `record stop` (package generation, second half of this contract) refuses a
-  recording without it; `record mark` and `session app --record` do not check it. Screens a
+  interface). `record stop` ("Package generation") refuses a recording without it
+  (`record_application_without_home`); `record mark` and `session app --record` do not check it. Screens a
   cold start shows only sometimes (a daily notice, an update prompt) are recorded as optional
   steps between the title and the main interface (`any → restart → title → [notice?] →
   home`, see "Optional steps"); the main interface step itself cannot be optional. A failure
@@ -479,7 +479,7 @@ prompt) is marked optional (Workflow #339). The package skips an optional step w
 does not appear: its page is not recognized, its effect is not executed and nothing is
 recorded for it. After the page that follows a run of optional steps is first seen, the
 package keeps watching for a late optional page for `settle_ms`. The generated operation
-carries `"optional":{"settle_ms":S}` (package generation, second half of this contract).
+carries `"optional":{"settle_ms":S}` once `record stop` generates optional steps.
 
 ```
 record mark [--step <k>] [--frame <png>] [marks…] [--click … | --click-from <id>] [--click-retry <n>]
@@ -510,7 +510,9 @@ record mark [--step <k>] --not-optional
   an optional step are refused with `record_optional_application` (3) while the step is
   planned, before any Runtime request; nothing is sent and the recording is unchanged.
 - Whether an optional step is the last step, or the main interface after a restart, is
-  checked by `record stop` (second half of this contract), not by `record mark`.
+  checked by `record stop` when it generates optional steps, not by `record mark`; this build
+  refuses a recording with an optional step at `record stop` (`record_stop_generation_not_implemented`,
+  `details.reason: "optional_steps"`).
 - `recording.json`: the step carries `"optional":{"settle_ms":2000,"marked_at_unix_ms":…}`;
   `marked_at_unix_ms` is set when the step becomes optional or its settle changes. A step
   without it has no `optional` key, so a recording without optional steps is byte-identical
@@ -567,12 +569,254 @@ not lock.
   stale lock; there is no unlock command. The lock files are never deleted.
 - v0.9.0 ActingLab does not know the lock; do not mix versions during a recording.
 
+## Package generation (`record stop`)
+
+```
+record stop [--lab-dir <dir>] [--package-id <id>] [--requires <package_id>]
+            [--game <g>] [--server <s>] [--locale <l>]
+            [--timeout-ms <ms>] [--arrival-timeout-ms <ms>] [--application-arrival-timeout-ms <ms>]
+            [--dry-run] [--state-dir <dir>]
+```
+
+`record stop` turns a recording with steps into one `linear_steps` package
+(`linear-steps.md`) in a content container (`package-reference.md`, "Containers"), checks it
+the way actingd will load it, writes it, and closes both states. Other flags and positional
+arguments are refused (`validation_failed`, exit 2), so a mistyped `--lab-dir` never skips
+the package directory.
+
+| state | `record stop` |
+|---|---|
+| no Lab recording, or one without steps | as before: the session file is stopped, `lab: null` (an empty Lab recording is stopped too) |
+| an active Lab recording with steps | the package is generated, checked and written (below); `lab.status: "generated"` |
+| a stopped Lab recording with a package | nothing is generated; with `--lab-dir` the package is copied there again (steps 2 and 4 of "Writing"); `lab.status: "already_generated"` |
+| the session file was already stopped (for example by v0.9.0) but the Lab recording is active | generated as above; `lab.session_already_stopped: true` |
+
+**`--dry-run`** (also the global `--dry-run`) runs everything: the pre-checks, generation,
+admission, the first decision, the cross-check and the `--lab-dir` checks. It writes nothing,
+both states stay active, and the output has `status: "validated"`, `lab.status: "validated"`,
+`lab.would_write[]`, `lab.lab_dir_status: "to_write" | "present"` and `lab.lab_dir_to_create`.
+Its `lab.warnings` are those the final stop prints: run it first, mark what it asks for, then
+run `record stop`. The final stop closes the recording; afterwards `record mark` only answers
+`record_session_not_active` and a missing mark means recording again.
+
+Any refusal leaves the recording and the session active and writes nothing; fix the recording
+and run `record stop` again.
+
+**Optional steps.** A recording with an effective optional step is refused with
+`record_stop_generation_not_implemented` (exit 6, `details.reason: "optional_steps"`) before
+anything else, `--dry-run` included: this build does not generate optional operations.
+
+### Pre-checks
+
+Only the effective steps count, numbered 1..n by serial number (`artifact_step`).
+
+| check | code (exit) |
+|---|---|
+| at least two steps | `record_no_steps` (3) |
+| an application entry step is step 1 only | `record_application_entry_not_first` (3) |
+| steps 1..n−1 each have one effect (a click or an application operation) | `record_step_click_missing` (3) |
+| step n only recognizes | `record_final_step_has_click` (3) |
+| every step but the application entry step has a mark; every page transition has a mark | `record_step_without_recognition` (3) |
+| at most 1000 steps with an effect | `record_too_many_steps` (3) |
+| game, server and locale are known: the stop options, else the recording (`record start`), else (game and server) the instance configuration | `record_locale_missing` (2) |
+| `--package-id` (default `<game>.<server>.<task_id>`) is not empty, at most 256 bytes, without control characters | `validation_failed` (2) |
+| `--requires`: not empty, at most 256 bytes, without control characters, not this package's id, and not on a package whose step 1 is an application entry (`details.reason`: `prerequisite_id_invalid`, `prerequisite_self`, `application_entry`) | `record_requires_invalid` (2) |
+| after a `stop` step the next effect is a `launch` or `restart` | `record_step_after_stop_invalid` (3) |
+| R25: after the last `launch` or `restart` a later step is the main interface (the kernel predicate `linear_main_interface`: page anchor `home`, or `step_<nn>_home` from `record mark --page home`) | `record_application_without_home` (3) |
+| `--timeout-ms`, `--arrival-timeout-ms` and `--application-arrival-timeout-ms` given explicitly lie in 1..=1800000 | `validation_failed` (2) |
+| every live frame and template crop still has its recorded sha256 and the recording's size | `record_frame_hash_mismatch`, `record_frame_size_mismatch` (3) |
+
+A `--requires` that does not start with `<game>.<server>.` adds the warning
+`requires_prefix_mismatch`. Steps whose click or application operation is marked
+`needs_review` are not refused; they are listed in `lab.steps_needing_review`.
+
+### Pages and documents
+
+Numbers in page and operation ids have one width: two digits, or the digits of n above 99.
+
+- Step i's page is `step_ii`, or `step_ii_<name>` with `--page <name>`; the application entry
+  step has no page and its operation starts `from: "any"` (`entry_page: "any"`). A page
+  transition after step k is the page `transition_kk`. Each page's rule is
+  `{"required": [...]}`: the step's (or transition's) own marks and reused marks, without the
+  members of its `any_of` checks. No `forbidden`, no anchors.
+- Every own mark of an effective step and of its page transition is one target:
+  `verify_templates[]` (`template: "assets/<name>.png"`, `region` the search area,
+  `threshold` when declared), `color_probes[]` (`expected` and `max_distance` when declared, or
+  the `color_digest.v1` digest), `ocr_targets[]`, `checks[]`. Templates and color probes carry
+  a `provenance` object.
+- `control.json`: `Lab-1y.control.v2`, `execution_mode: "linear_steps"`, the package id, game,
+  server, resolution (the recording's frame size), `entry_task_id` (the task id),
+  `prerequisite_package_id` with `--requires`, `timeout_ms`, `step_timeout_ms` and `max_steps`
+  (the number of steps with an effect). `resources/operations/resources.json` is
+  `{"schema_version":"1.0","resources":[],"resource_count":0}`.
+- `task.json` (schema `0.9`): `server_scope: [server]`, the locale, the recording defaults,
+  `timeout_ms` and `max_steps` equal to the control's, `target_page` the last page, and one
+  `scheduling_outcome` mapping `{"outcome_key": "<task_id>_done", "effect":
+  "no_designated_effect", "terminal_pages": [<last page>]}`.
+- A click step's operation is `step_ii_click`: `from` its page, `to` and `expect_after.page_id`
+  the next page, `click: {"kind": "rect", …}` with the recorded rectangle,
+  `expect_after.timeout_ms` the arrival timeout T (`--arrival-timeout-ms`, default 15000),
+  `interval_ms` 500, `post_delay_ms` 200, and `retryable`, `max_attempts`,
+  `retry_interval_ms` only when the step declares a retry. Its guard target comes from the
+  page's required marks only: the click guard, the click source unless it is OCR, the first
+  template, the first color or color digest, the first check. The guard's `expected_rect` is
+  the template's search area, the color or digest region, or the bounding box of the check's
+  members. A page with only OCR marks gives no guard and `unguarded_trusted_coordinate: true`.
+- An application step's operation is `step_ii_app`: `application: {"action"}`,
+  `expect_after.timeout_ms` the application arrival timeout A
+  (`--application-arrival-timeout-ms`, default 90000), `post_delay_ms` 1000, no guard and no
+  retry.
+- A transition is `{"kind": "page", "page_id": "transition_kk"}` (with `timeout_ms` when
+  declared) or `{"kind": "window", "min_ms", "max_ms"}`.
+- `control.step_timeout_ms` is min(T, 60000); a larger T adds the warning
+  `step_timeout_clamped`. Without `--timeout-ms` the task timeout is
+  `S·[step 1 is no application entry] + Σ a·(w + (b − w)⁺ + p + T) + Σ_app 10000 +
+  Σ (a − 1)·(r + S) + 10000` over the steps with an effect, where S is the step timeout, a the
+  attempts, w max(post delay, window minimum), b the window maximum (0 without), p the page
+  transition timeout (T without its own, 0 without a page transition), T the arrival timeout
+  (A for an application step), r the retry interval. Above 1800000 it is clamped and the
+  warning `task_timeout_clamped` added. The default covers the usual path only; give
+  `--timeout-ms` for more.
+- `provenance` (top level and per operation) records the recording, the generator, every step
+  (record index, page, frame and sample sha256, frame size, marks with their mark-time result
+  and margin, click, application, transition), the warnings, `arrival_by_time_window` and the
+  cross-check. `generated_at_unix_ms` is the recording's `updated_at_unix_ms`, so the same
+  recording generates the same bytes again.
+
+### Container and digest
+
+With a template mark the package is a ZIP of the content-directory layout, otherwise one
+`actingcommand.package.content-json.v1` document; both hold the same files:
+
+```
+control.json
+resources/operations/resources.json
+resources/operations/<task_id>/task.json
+resources/operations/<task_id>/assets/<name>.png      (ZIP only)
+```
+
+JSON documents are pretty-printed with a final newline. The ZIP has no directory entries,
+`/`-separated ASCII names in byte order, deflate and the timestamp 1980-01-01; the JSON
+container lists the files in path order. D is the `content-directory.v1` digest of these
+files (`package-reference.md`); the same content has the same D in either container and
+unpacked as a directory.
+
+### Self-checks
+
+1. **Container round trip.** The encoded bytes expand (`expand_content_container`) to exactly
+   the generated files, whose digest is D.
+2. **Admission.** The kernel admits the files as actingd loads a content directory: the digest
+   comparison, source compilation, declarations and the `linear_steps` rules, without a vision
+   provider. A refusal is `record_artifact_admission_failed` (3) with
+   `details{stage, loader_code, detail, declaration{file, pointer, reason}}`.
+3. **First decision.** The offline simulation of the package on recorded frames:
+   - a package with an application step, on its first live frame, must be refused with
+     `application_effect_requires_assigned_application` before any capture:
+     `first_decision{status:"not_evaluated", reason:"lab_application_effect_offline",
+     refusal}`; when step 1 is a click, the warning `first_decision_not_evaluated` says its
+     click was not simulated;
+   - a step 1 that involves OCR (an OCR mark or a check with an OCR member among its required
+     marks, which includes a trusted-coordinate step) is not simulated:
+     `first_decision{status:"not_evaluated", reason:"lab_ocr_provider_unverified"}` and the
+     warning `first_decision_not_evaluated`;
+   - otherwise step 1's primary frame must give `would_click` of `step_01_click` with the
+     point inside its rectangle.
+
+   Anything else is `record_artifact_admission_failed` with the decision.
+4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator; OCR is
+   not called and counts as undetermined, a check is derived from its members. A page matches
+   when every required target passes, does not when one fails, and is undetermined otherwise.
+   - **Self.** Every page on every live frame of its step (the primary frame and the samples,
+     never a superseded frame; a page transition on its own frames) matches or is
+     undetermined; a page that does not match one of its own frames is
+     `record_step_self_mismatch` (3) naming the frame.
+   - **Arrival gate.** After the effect of step k the run first waits for its gate: the page
+     transition, or page k+1. When the gate matches on a live frame of step k, the run cannot
+     confirm that the effect took place: without a window transition this is the warning
+     `arrival_unconfirmed` (`step`, `gate`, `frames`, `message`); with one, step k is listed in
+     `arrival_by_time_window` (its arrival rests on the window's lower bound, which must be
+     long enough). An undetermined gate is the same warning with `reason: "not_evaluated"`
+     (or the same listing with a window). Templates match with `ccoeff_normed` by default and
+     do not see an overall darkening: when a pop-up darkens the background, mark a darkened
+     bright area with `--color` or a color digest, or declare a window. The gate of the
+     application entry step is `not_applicable`.
+   - The result is `cross_check{status: "passed" | "partially_evaluated", self, gates,
+     margins, single_sample_steps}`, also in the package provenance.
+5. **Entry overlay.** Step 1's page is evaluated on its live frames with every channel times
+   0.45, rounded down. When it still matches, the warning `entry_overlay_insensitive` asks for
+   a `--color` or color digest mark on a fixed bright area: a darkening pop-up over step 1
+   would be taken for step 1 and a prerequisite package would not run. Undetermined gives the
+   same warning with `reason: "not_evaluated"`. For an application entry step it is
+   `entry_overlay{status:"not_applicable", reason:"application_entry"}`.
+6. **Stop.** The page after a `stop` step is the desktop or the launcher: the warning
+   `application_stop_target_external`.
+
+Warnings never refuse. The provenance and the output carry the same warnings.
+
+### Writing
+
+Everything above is computed in memory first. Then:
+
+1. **`--lab-dir`** (usually `<install root>\packages\<game>\`; never guessed) is checked before
+   anything is written: a missing directory needs an existing parent and only it is created
+   (`lab_dir_created: true`), otherwise `record_lab_dir_invalid` (2). An existing
+   `<lab-dir>/<D>.<ext>` holding the content D is `lab_dir_status: "present"` and is not
+   written; holding anything else, or unreadable, it is `record_artifact_name_conflict` (3)
+   and stays untouched.
+2. The copy inside the recording, `lab/out/<D>.<ext>`, is written (an existing copy with the
+   same bytes is reused; other bytes are `record_artifact_name_conflict`).
+3. `<lab-dir>/<D>.<ext>.part-<unix_ms>` is written (create new) and renamed to
+   `<D>.<ext>` (`lab_dir_status: "written"`); a target that appeared meanwhile is
+   `record_artifact_name_conflict` and the `.part` file stays.
+4. `recording.json` becomes `stopped` with its `artifact` (`container`, `digest`, `path`,
+   `lab_dir_path`, `sha256` of the container bytes, `byte_count`, `package_id`, `requires`,
+   `generated_at_unix_ms`); then the session file is stopped.
+
+A failure in steps 2–4 leaves both states active and names the files already written
+(`details.written_files`, `.part` files included); nothing is deleted. A stopped recording
+given `--lab-dir` again checks its copy's sha256 and repeats steps 1 and 3; a different
+`--requires` is `record_requires_conflict` (3).
+
+### Output
+
+`{status: "stopped" | "validated", dry_run, record, path, lab}` where `lab` is `null` or:
+
+```
+{status, dry_run, session_already_stopped?, container, digest, package_id, task_id,
+ path, lab_dir_path, lab_dir_status, lab_dir_created, written_files | would_write,
+ sha256, byte_count, entries, steps, click_steps, application_steps[{step, op, action, source}],
+ pages, transitions, timeouts{timeout_ms, step_timeout_ms, arrival_timeout_ms,
+ application_arrival_timeout_ms}, warnings, arrival_by_time_window, marks_not_evaluated,
+ steps_needing_review, cross_check, first_decision, entry_overlay,
+ package_ref, requires, prerequisite_entry_example, binding_example, task_run_example,
+ catalog_on_failure_example, binding_requires}
+```
+
+- `package_ref` is `{"schema_version":"actingcommand.package.content-directory.v1",
+  "sha256":"<D>"}`; the package is an ordinary content-directory package and loads as
+  `--package <D>.<ext> --package-ref '<package_ref>'`.
+- `binding_example` is a complete `policy.procedure_manifest[]` entry: `procedure_ref` (the
+  package id), `package_digest`, `operation_id: "operation.contained_task"`, `yield_points:
+  []` and `scheduled_execution{mode: "device_registry", package_path}` with the absolute path
+  (a configuration in the install root may use `packages/<game>/<D>.<ext>`). Whether it is
+  scheduled still depends on the catalog task and its approval.
+- `prerequisite_entry_example` is the entry for the actingd `prerequisite_packages` when
+  another package names this one with `--requires`.
+- `catalog_on_failure_example` is `{"action":"pause","retry_limit":1,
+  "retry_backoff_ms":60000,"escalation_threshold":2}`.
+- `binding_requires` lists what a binding also needs: the catalog task and its approval; the
+  `prerequisite_packages` entry with `--requires`; without it, the return-home fallback (step
+  1 should be the return-home package's final screen); the recommended `on_failure`; and, with
+  application steps, that only an instance with an assigned application runs them and that an
+  application entry package has no entry recognition (best configured as the instance's
+  `startup_package`, unpacked as a directory).
+
 ## Error codes
 
 | exit | codes |
 |---|---|
-| 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application` |
+| 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
+| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_step_self_mismatch`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
-| 6 | `record_stop_generation_not_implemented` (a build without the package generator) |
+| 6 | `record_stop_generation_not_implemented` (a build without the package generator, or a recording with optional steps, `details.reason: "optional_steps"`) |

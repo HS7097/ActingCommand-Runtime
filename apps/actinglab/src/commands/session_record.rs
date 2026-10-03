@@ -14,9 +14,9 @@ use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
-    MarkSpec, RecordRect, RecordStartOptions, RecordingLock, StepAction, StepActionKind,
-    TransitionSpec, record_instance_check, record_mark, record_start, record_start_defaults,
-    record_status, record_stop_close, record_stop_precheck,
+    MarkSpec, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
+    StepActionKind, TransitionSpec, record_instance_check, record_mark, record_start,
+    record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -397,16 +397,20 @@ fn run_session_record_inner(
                 }));
             };
             let lock = held_record_lock(&record_lock)?;
-            record_stop_precheck(lock)?;
-            record.status = "stopped".to_string();
-            record.updated_at_unix_ms = current_unix_ms();
-            write_json_file_atomic(&record_path, &record)?;
-            record_stop_close(lock)?;
+            let options = record_stop_options(global, &config, &flags, &instance_id)?;
+            let outcome = record_stop(lock, &options)?;
+            if !options.dry_run {
+                record.status = "stopped".to_string();
+                record.updated_at_unix_ms = current_unix_ms();
+                write_json_file_atomic(&record_path, &record)?;
+                record_stop_close(lock)?;
+            }
             Ok(json!({
-                "status": "stopped",
+                "status": if options.dry_run { "validated" } else { "stopped" },
+                "dry_run": options.dry_run,
                 "record": record,
                 "path": record_path.display().to_string(),
-                "lab": Value::Null
+                "lab": outcome.lab
             }))
         }
         "mark" => run_record_mark(global, &flags, held_record_lock(&record_lock)?),
@@ -3293,6 +3297,91 @@ fn record_start_lab_options(
         locale,
         match_metric: record_flag_value(flags, "--metric")?,
         template_threshold,
+    })
+}
+
+const RECORD_STOP_FLAGS: &[&str] = &[
+    "--lab-dir",
+    "--package-id",
+    "--requires",
+    "--game",
+    "--server",
+    "--locale",
+    "--timeout-ms",
+    "--arrival-timeout-ms",
+    "--application-arrival-timeout-ms",
+    "--dry-run",
+    "--state-dir",
+    "--instance",
+];
+
+/// `record stop` options (Workflow #336 L4). Unknown flags and positional arguments are
+/// refused, so a mistyped `--lab-dir` cannot silently skip the package directory.
+fn record_stop_options(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    instance_id: &str,
+) -> CliOutcome<RecordStopOptions> {
+    if !flags.positionals.is_empty() {
+        return Err(CliError::usage(format!(
+            "record stop takes flags only; unexpected arguments: {}",
+            flags.positionals.join(" ")
+        )));
+    }
+    let unknown = flags
+        .flags
+        .keys()
+        .filter(|name| !RECORD_STOP_FLAGS.contains(&name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        return Err(CliError::usage(format!(
+            "record stop does not accept: {}",
+            unknown.join(", ")
+        )));
+    }
+    let millis = |name: &str| -> CliOutcome<Option<u64>> {
+        record_flag_value(flags, name)?
+            .map(|value| {
+                value.parse::<u64>().map_err(|error| {
+                    CliError::usage(format!("{name} '{value}' is not milliseconds: {error}"))
+                })
+            })
+            .transpose()
+    };
+    let instance = config.instances.get(instance_id);
+    let game = record_flag_value(flags, "--game")?
+        .or_else(|| global.game.clone())
+        .map(|game| canonical_game(&game))
+        .transpose()?;
+    let server = record_flag_value(flags, "--server")?
+        .or_else(|| global.server.clone())
+        .map(|server| canonical_server(&server))
+        .transpose()?;
+    let default_game = instance
+        .and_then(|instance| instance.game.clone())
+        .map(|game| canonical_game(&game))
+        .transpose()?;
+    let default_server = instance
+        .and_then(|instance| instance.server.clone())
+        .map(|server| canonical_server(&server))
+        .transpose()?;
+    Ok(RecordStopOptions {
+        lab_dir: record_flag_value(flags, "--lab-dir")?,
+        package_id: record_flag_value(flags, "--package-id")?,
+        requires: record_flag_value(flags, "--requires")?,
+        game,
+        server,
+        locale: record_flag_value(flags, "--locale")?
+            .map(|locale| canonical_locale(&locale))
+            .transpose()?,
+        default_game,
+        default_server,
+        timeout_ms: millis("--timeout-ms")?,
+        arrival_timeout_ms: millis("--arrival-timeout-ms")?,
+        application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
+        dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
     })
 }
 

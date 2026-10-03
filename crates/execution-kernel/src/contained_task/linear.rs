@@ -352,7 +352,7 @@ fn application_unconfirmed(
 /// package. Its canonical anchor is `home`, or `step_<digits>_home`, the page Lab records for
 /// `--page home`. Only linear packages use this predicate; the page-graph home entry stays the
 /// literal `home`.
-pub(crate) fn linear_main_interface(game: &str, page: &str) -> bool {
+pub fn linear_main_interface(game: &str, page: &str) -> bool {
     let anchor = crate::canonical_page_anchor(game, page);
     anchor == "home"
         || anchor

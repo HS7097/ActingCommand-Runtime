@@ -333,7 +333,7 @@ A violation is `contained_task_control_invalid` with detail `reason=prerequisite
 `reason=prerequisite_self` or `reason=prerequisite_requires_linear_steps`; an application entry
 that declares one is `contained_task_linear_invalid`, `reason=prerequisite_with_application_entry`
 (the entry recognizes nothing before its effect, so there is no first step to lead to). Only a
-hand-written `control.json` (or a later `record stop` option) carries the field: `package build`
+hand-written `control.json` or `record stop --requires` (`lab-recording.md`) carries the field: `package build`
 writes a fixed set of control fields, and `lab run` ignores the field and never runs a
 prerequisite package.
 
