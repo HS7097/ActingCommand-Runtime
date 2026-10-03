@@ -85,11 +85,18 @@ const DRY_RUN: Mode = Mode::Preview("dry_run");
 const EXECUTED_FALSE: Mode = Mode::Preview("executed_false");
 const UNSUPPORTED: Mode = Mode::Refused(REFUSAL_CODE);
 
-const CAPTURE_FORMS: &[(&str, Mode)] =
-    &[("--out <path>", UNSUPPORTED), ("diagnose", Mode::NoEffect)];
+const CAPTURE_FORMS: &[(&str, Mode)] = &[
+    ("--out <path>", UNSUPPORTED),
+    ("--record", UNSUPPORTED),
+    ("diagnose", Mode::NoEffect),
+];
 const OBSERVE_FORMS: &[(&str, Mode)] = &[
+    (
+        "--capture --record",
+        Mode::Refused("record_flag_unsupported"),
+    ),
     ("--with-frame <path>", UNSUPPORTED),
-    ("without --with-frame <path>", Mode::NoEffect),
+    ("without --with-frame <path> or --record", Mode::NoEffect),
 ];
 const STREAM_FORMS: &[(&str, Mode)] = &[
     ("check", Mode::NoEffect),
@@ -150,6 +157,24 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session recover", EXECUTED_FALSE),
     ("session stream", Mode::Preview("capture_dry_run")),
     // refused
+    ("capture --record", UNSUPPORTED),
+    ("session capture --record", UNSUPPORTED),
+    (
+        "session app --record",
+        Mode::Refused("record_flag_unsupported"),
+    ),
+    (
+        "session instance app --record",
+        Mode::Refused("record_flag_unsupported"),
+    ),
+    (
+        "observe --capture --record",
+        Mode::Refused("record_flag_unsupported"),
+    ),
+    (
+        "do --capture --record",
+        Mode::Refused("record_flag_unsupported"),
+    ),
     ("session app", UNSUPPORTED),
     ("session app launch", UNSUPPORTED),
     ("session app stop", UNSUPPORTED),

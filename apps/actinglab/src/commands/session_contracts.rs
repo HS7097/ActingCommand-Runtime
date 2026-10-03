@@ -314,8 +314,8 @@ fn session_record_policy_payload(
             "daemon_record_policy_query": "session request record-policy"
         },
         "record_flag": {
-            "commands": ["capture --record", "observe --capture --record", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"],
-            "dry_run_refused": ["do --capture --record", "session app --record", "session instance app --record"],
+            "commands": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"],
+            "dry_run_refused": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app --record", "session instance app --record"],
             "unflagged_commands_recorded": false,
             "unsupported_with_flag": "record_flag_unsupported",
             "flag_with_value": "record_flag_takes_no_value",

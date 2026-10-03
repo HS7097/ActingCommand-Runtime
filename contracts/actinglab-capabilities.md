@@ -10,6 +10,9 @@ declared like any other command; their behaviour is `lab-recording.md`.
 Both `record mark` aliases and the L4 `record stop` aliases declare a `dry_run` preview;
 `resource catalog` and `package preflight` declare `no_effect`. Their metadata is shared by
 capabilities, help and command listing.
+The six device `--record` forms declare `refused`. Capture and its session alias use
+`dry_run_unsupported`; observe/do with `--capture --record` and both session application
+recording forms use `record_flag_unsupported`, before recording locks or Runtime access.
 
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with

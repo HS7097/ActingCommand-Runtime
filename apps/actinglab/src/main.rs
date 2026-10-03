@@ -359,7 +359,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
 
 /// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
 /// only on `capture`, `observe --capture`, `do --capture` and (R24) `session app` /
-/// `session instance app` with one of its four actions; `do` and `session app` refuse it
+/// `session instance app` with one of its four actions; `observe`, `do` and `session app` refuse it
 /// with `--dry-run`. `--tap-rect` exists only with it. FlagArgs accepts unknown flags, so
 /// without this gate they would be silently ignored.
 fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
@@ -404,7 +404,9 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let supported = match invocation.command.as_slice() {
         [cmd] if cmd == "capture" => capture,
         [group, sub] if group == "session" && sub == "capture" => capture,
-        [cmd] if cmd == "observe" => flags.bool("--capture") && flags.optional("--scene").is_none(),
+        [cmd] if cmd == "observe" => {
+            flags.bool("--capture") && !dry_run && flags.optional("--scene").is_none()
+        }
         [cmd] if cmd == "do" => {
             flags.bool("--capture")
                 && !dry_run
@@ -428,7 +430,7 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
             format!(
                 "--record is accepted only on capture, observe --capture, do --capture with a \
                  point or rectangle click, and session app|session instance app \
-                 <launch|restart|stop|force-stop>, never with --dry-run on do or session app; \
+                 <launch|restart|stop|force-stop>, never with --dry-run on observe, do or session app; \
                  not on {}",
                 invocation.command_name
             ),

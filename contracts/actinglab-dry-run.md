@@ -51,7 +51,7 @@ An entry the declaration table does not list is `no_effect` when its status is `
 | `explicit_offline_entry_required` | 3 | `lab run` | none; identified by this table and `dry_run_refusal_code` |
 | `offline_device_scope_forbidden` | 2 | `package dry-run` | none |
 | `validation_failed` | 2 | `scheduling compile`, `scheduling timeline` | none |
-| `record_flag_unsupported` | 2 | `--record` combined with `--dry-run` (#336) | none |
+| `record_flag_unsupported` | 2 | `observe --capture --record`, `do --capture --record`, `session app --record`, `session instance app --record` | none |
 
 The `dry_run_unsupported` envelope:
 
@@ -126,7 +126,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `detect-page` | no_effect | | |
 | `recognize` | no_effect | | |
 | `recognize-artifact` | no_effect | | |
-| `observe` | mixed | | `--with-frame <path>` (offline and `--capture`): refused, `dry_run_unsupported`, flag parsing only, alternative `observe` without `--with-frame`; a bare `--with-frame` and every other form: no_effect |
+| `observe` | mixed | | `--capture --record`: refused, `record_flag_unsupported`; `--with-frame <path>` (offline and `--capture`, without `--record`): refused, `dry_run_unsupported`, flag parsing only, alternative `observe` without `--with-frame`; a bare `--with-frame` and other forms without `--record`: no_effect |
 | `do` | preview | `executed_false` | `--capture --dry-run` writes the registered debug audit events |
 | `ensure` | preview | `executed_false` | as `do` |
 | `wait` | no_effect | | |
@@ -249,8 +249,17 @@ and its session alias likewise preview the mark changes with `dry_run: true`.
 
 `resource catalog` is `no_effect`: it reads the authoring catalog and its validation results.
 
-With #336, a `--record` invocation that also carries `--dry-run` is refused first by the
-`--record` gate with `record_flag_unsupported` (exit 2).
+All six device recording forms declare `refused` and stop before recording locks, Runtime
+access or saved recording changes. `--dry-run` is recognized at every argv position.
+
+| Form | `dry_run_refusal_code` | Refusal owner |
+|---|---|---|
+| `capture --record` | `dry_run_unsupported` | capture entry, before configuration/recording access |
+| `session capture --record` | `dry_run_unsupported` | the same capture entry |
+| `observe --capture --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `do --capture --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `session app --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `session instance app --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
 
 ## Bootstrap and transient writes
 

@@ -322,7 +322,8 @@ before it runs:
 
 | code (exit 2) | when |
 |---|---|
-| `record_flag_unsupported` | offline commands, `capture diagnose`, element or swipe clicks, `do --dry-run`, `session app --dry-run` (global or after the command), `session app` without one of its four actions, `tap`/`swipe`/`long-tap` and every other command |
+| `record_flag_unsupported` | offline commands, `capture diagnose`, element or swipe clicks, `observe --capture --dry-run`, `do --dry-run`, `session app --dry-run` (global or after the command, including the instance alias), `session app` without one of its four actions, `tap`/`swipe`/`long-tap` and every other command |
+| `dry_run_unsupported` | `capture --record --dry-run` and its `session capture` alias, global or after the command |
 | `record_flag_takes_no_value` | `--record <value>` |
 | `record_state_dir_unsupported` | `--record` with `--state-dir`; `--record` uses `ACTINGLAB_SESSION_STATE_DIR` or the default state root |
 | `validation_failed` | `--tap-rect` without `--record` |
@@ -330,6 +331,8 @@ before it runs:
 The record instance (`--instance` or the instance configuration) and the command instance
 must be the same (`record_instance_mismatch`, exit 3); a missing or inactive session is
 `record_session_not_active`. Every check runs before anything is captured or pressed.
+All six device recording forms refuse `--dry-run` before recording locks, Runtime access,
+frame attachment or recording persistence. The global parser handles the flag at any position.
 
 - `capture --record` takes the frame through the Runtime as `capture` does; `--out` becomes
   optional. Output adds `record{status:"frame_recorded", record_id, step, step_opened,
