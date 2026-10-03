@@ -338,41 +338,57 @@ def ledger_summary(label, ledger, root):
         return []
     types = collections.Counter(event.get("event_type") for event in events)
     say(label, "ledger events", len(events), "types", json.dumps(dict(sorted(types.items()))))
+    for event in events:
+        source, actor = origin_of(event)
+        say(label, "event", event.get("sequence"), event.get("event_type"), f"source={source} actor={actor}",
+            "request", request_of(event), "client" if is_client(event) else "runtime")
     return events
 
 
 # ---------------------------------------------------------------- E1 positive control (v0.9.1)
 
 def e1(old_runtime, old_lab, old_ledger, work):
-    say("E1", "v0.9.1 actinglab ignores --dry-run: session app restart and tap reach the fixture actingd")
+    say("E1", "v0.9.1 actinglab ignores --dry-run against a fixture actingd (positive control of the E2/E3 filter)")
     root = os.path.join(work, "e1")
     fixture = build_fixture(root)
+    out = fixture["out"]
+    os.makedirs(out)
     daemon = Daemon(old_runtime, os.path.join(root, "daemon"), "E1")
     if not daemon.start():
         return
-    lab(old_lab, ["--dry-run", "session", "app", "restart"], "E1 v0.9.1 --dry-run session app restart", fixture, daemon.runtime_root)
-    lab(old_lab, ["--dry-run", "tap", "10", "20"], "E1 v0.9.1 --dry-run tap 10 20", fixture, daemon.runtime_root)
+    rt = daemon.runtime_root
+    package = ["--zip", fixture["semantic"], "--expected-sha256", fixture["semantic_sha"]]
+    for label, args in (("session app restart", ["--dry-run", "session", "app", "restart"]),
+                        ("tap 10 20", ["--dry-run", "tap", "10", "20"])):
+        code, value, _ = lab(old_lab, args, "E1 v0.9.1 --dry-run " + label, fixture, rt)
+        message = error_of(value).get("message") or ""
+        check("E1.v0.9.1 " + label + " reached actingd", "runtime_request_rejected" in message and "fixture_execution_scope_forbidden" in message,
+              short(message, 300))
+    lab(old_lab, ["--dry-run", "capture", "--out", os.path.join(out, "capture.png")], "E1 v0.9.1 --dry-run capture --out", fixture, rt)
+    say("E1", "v0.9.1 capture --out wrote the file", os.path.exists(os.path.join(out, "capture.png")))
+    lab(old_lab, ["--dry-run", "--instance", FIXTURE_ALIAS, "observe", "--capture", "--with-frame", os.path.join(out, "observe.png"), *package],
+        "E1 v0.9.1 --dry-run observe --capture --with-frame", fixture, rt)
+    say("E1", "v0.9.1 observe --with-frame wrote the file", os.path.exists(os.path.join(out, "observe.png")))
+    lab(old_lab, ["--dry-run", "--instance", FIXTURE_ALIAS, "session", "monitor-policy", "set", "--scene", fixture["red"]],
+        "E1 v0.9.1 --dry-run session monitor-policy set", fixture, rt)
     daemon.stop()
-    events = ledger_summary("E1", old_ledger, daemon.runtime_root)
-    before, _ = split_at_shutdown("E1", events)
+    events = ledger_summary("E1", old_ledger, rt)
+    before, shutdown = split_at_shutdown("E1", events)
     hits = [event for event in before if is_client(event)]
-    for event in hits:
-        source, actor = origin_of(event)
-        say("E1", "client event", event["sequence"], event.get("event_type"), f"source={source} actor={actor}",
-            "request", request_of(event), short(json.dumps(event.get("payload"), ensure_ascii=False), 400))
-    requests = {request_of(event) for event in hits if request_of(event) and "cli" in origin_of(event)}
-    application = [event for event in hits if "application" in json.dumps(event.get("payload")).lower()
-                   or str(event.get("event_type", "")).startswith("application.")]
-    inputs = [event for event in hits if str(event.get("event_type", "")).startswith(("input.", "lease."))]
-    say("E1", "client requests before shutdown", len(requests), "application-related events", len(application),
-        "input/lease events", len(inputs))
-    check("E1.positive_control_cli_requests_reached_runtime", len(requests) >= 2 and bool(hits), json.dumps(sorted(requests)))
+    requests = sorted({request_of(event) for event in events if is_client(event) and request_of(event) and request_of(event) != shutdown})
+    say("E1", "client events before the shutdown request", len(hits), "client requests other than the shutdown", len(requests))
+    check("E1.filter_sees_v0.9.1_client_requests", bool(hits) and bool(requests),
+          json.dumps(sorted(collections.Counter(event.get("event_type") for event in hits).items())))
 
 
 # ---------------------------------------------------------------- E2 refusals and E3 previews (new build, one session)
 
+REFUSALS = []
+
+
 def refusal(new_lab, fixture, runtime_root, label, args, alternative, extra=None, forbidden=()):
     code, value, _ = lab(new_lab, args, "E2 " + label, fixture, runtime_root)
+    REFUSALS.append((label, args, code, value))
     error = error_of(value)
     details = error.get("details") or {}
     ok = (code == 2 and error.get("code") == "dry_run_unsupported" and error.get("blocked_by") == []
@@ -489,6 +505,14 @@ def e2_e3(new_runtime, new_lab, new_ledger, work):
           json.dumps({"exit": code, "status": data.get("status"), "persisted": data.get("persisted"), "next": data.get("next")}, ensure_ascii=False))
     previews["detect"] = value
     daemon.stop()
+    say("E2", "replay of every refusal after the fixture actingd stopped and with no Runtime state root")
+    identical = 0
+    for label, args, code, value in REFUSALS:
+        replay_code, replay, _ = lab(new_lab, args, "E2 replay " + label, fixture, None, quiet=True)
+        same = replay_code == code and canonical(replay) == canonical(value)
+        identical += 1 if same else 0
+        check("E2.replay_identical " + label, same, f"exit {code}/{replay_code}")
+    say("E2", "refusals", len(REFUSALS), "identical without a reachable Runtime", identical)
 
     after_files, after_dirs = snapshot(root, watched_skip)
     salt = os.path.join("local", "ActingCommand", "actinglab", "env-detection", ".local_salt")
@@ -518,7 +542,10 @@ def e2_e3(new_runtime, new_lab, new_ledger, work):
     say("E3", "detect copy without --dry-run: same result after volatile fields")
     copy_root = os.path.join(work, "e3-detect-copy")
     copy_fixture = build_fixture(copy_root)
-    code, stored, _ = lab(new_lab, detect, "E3 detect without --dry-run (copy)", copy_fixture, limit=2500)
+    shutil.copytree(fixture["local"], copy_fixture["local"])
+    copy_detect = ["--resource-root", copy_fixture["resources"], "--game", "arknights", "--server", "cn", "--instance", "fixture:5555",
+                   "detect", "--task", "detect_resolution", "--scene", copy_fixture["red"]]
+    code, stored, _ = lab(new_lab, copy_detect, "E3 detect without --dry-run (copy with the same salt)", copy_fixture, limit=2500)
 
     def stable(result):
         if isinstance(result, dict):
@@ -632,7 +659,7 @@ def e4(old_lab, new_lab, new_runtime, work, contract):
         ("package dry-run (refused)", "package dry-run", lambda f, s: ["--dry-run", "package", "dry-run"], None, False),
         ("scheduling compile (refused)", "scheduling compile", lambda f, s: ["--dry-run", "scheduling", "compile"], None, False),
         ("scheduling timeline (refused)", "scheduling timeline", lambda f, s: ["--dry-run", "scheduling", "timeline"], None, False),
-        ("do --capture on the fixture actingd", "do", lambda f, s: ["--instance", FIXTURE_ALIAS, "--dry-run", "do", "--capture", "home_button", *semantic(f)], None, True),
+        ("do --capture on the fixture actingd", "do", lambda f, s: ["--instance", FIXTURE_ALIAS, "--dry-run", "do", "home_button", "--capture", *semantic(f)], None, True),
     ]
     marker_of = {entry["command"]: entry for entry in contract}
     equal = 0
