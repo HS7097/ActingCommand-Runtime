@@ -509,6 +509,72 @@ impl PageDetector {
         })
     }
 
+    /// Workflow #336 (`linear_steps`): evaluates only the listed page ids, in list order, with
+    /// the per-page outcomes of [`Self::evaluate_all_outcomes_in_context`]. Each outcome's
+    /// `index` is the page's index in the page set. An id outside the page set fails the batch
+    /// before any page is evaluated.
+    pub fn evaluate_pages_outcomes_in_context(
+        &self,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+        page_ids: &[&str],
+    ) -> PageBatchResult {
+        let mut pages = Vec::with_capacity(page_ids.len());
+        for page_id in page_ids {
+            let Some(index) = self.page_indexes.get(*page_id).copied() else {
+                return Err(BatchLevelError {
+                    cause: Box::new(PageDetectorError::fatal(format!(
+                        "page id not found: {page_id}"
+                    ))),
+                    completed: Vec::new(),
+                    unexecuted: Vec::new(),
+                });
+            };
+            pages.push((index, &self.page_set.pages[index]));
+        }
+        if let Err(cause) = validate_batch_request(context.evaluator(), context.scene()) {
+            return Err(BatchLevelError {
+                cause: Box::new(cause),
+                completed: Vec::new(),
+                unexecuted: unexecuted_pages(&pages, PageUnexecutedReason::BatchValidationFailed),
+            });
+        }
+        let mut completed = Vec::with_capacity(pages.len());
+        for (position, &(index, page)) in pages.iter().enumerate() {
+            match self.evaluate_page_in_context(context, page) {
+                Ok(evaluation) if evaluation.page_id == page.id => completed.push(PageOutcome {
+                    index,
+                    page_id: page.id.clone(),
+                    result: Ok(evaluation),
+                }),
+                Ok(evaluation) => {
+                    let cause = PageDetectorError::fatal(format!(
+                        "page evaluation invariant failed at index {index}: expected page_id '{}', got '{}'",
+                        page.id, evaluation.page_id
+                    )).with_ppocr_diagnostics(evaluation.ppocr_diagnostics());
+                    completed.push(PageOutcome {
+                        index,
+                        page_id: page.id.clone(),
+                        result: Err(cause.clone()),
+                    });
+                    return Err(BatchLevelError {
+                        cause: Box::new(cause),
+                        completed,
+                        unexecuted: unexecuted_pages(
+                            &pages[position + 1..],
+                            PageUnexecutedReason::BatchTerminated,
+                        ),
+                    });
+                }
+                Err(error) => completed.push(PageOutcome {
+                    index,
+                    page_id: page.id.clone(),
+                    result: Err(error),
+                }),
+            }
+        }
+        Ok(completed)
+    }
+
     fn evaluate_all_outcomes_with(
         &self,
         evaluator: &RecognitionEvaluator,
@@ -669,6 +735,20 @@ impl PageDetector {
             message,
         })
     }
+}
+
+fn unexecuted_pages(
+    pages: &[(usize, &PageDefinition)],
+    reason: PageUnexecutedReason,
+) -> Vec<UnexecutedPage> {
+    pages
+        .iter()
+        .map(|(index, page)| UnexecutedPage {
+            index: *index,
+            page_id: page.id.clone(),
+            reason,
+        })
+        .collect()
 }
 
 fn validate_batch_request(

@@ -114,6 +114,20 @@ impl HostShared {
         links: EventLinksDraft,
         entered_event_id: Option<EventId>,
     ) -> RuntimeHostResult<()> {
+        self.append_lifecycle_failure_with_severity(stage, failure, links, entered_event_id, None)
+    }
+
+    /// `append_lifecycle_failure` whose primary record of a non-fatal failure takes
+    /// `primary_severity` instead of `Error`; a cause record and a fatal record keep theirs
+    /// (Workflow #336 L2c: a `linear_steps` task failure's record takes its terminal's severity).
+    pub(super) fn append_lifecycle_failure_with_severity(
+        &self,
+        stage: RuntimeLifecycleFailureStage,
+        failure: RuntimeLifecycleFailure<'_>,
+        links: EventLinksDraft,
+        entered_event_id: Option<EventId>,
+        primary_severity: Option<EventSeverity>,
+    ) -> RuntimeHostResult<()> {
         let decision_id = match &failure {
             RuntimeLifecycleFailure::PolicyAdmission { decision_id, .. } => Some(*decision_id),
             _ => None,
@@ -277,7 +291,9 @@ impl HostShared {
                     if cause_fatal {
                         EventSeverity::Fatal
                     } else {
-                        EventSeverity::Error
+                        primary_severity
+                            .filter(|_| cause.is_none())
+                            .unwrap_or(EventSeverity::Error)
                     },
                     EventSource::Runtime,
                     OriginModule::Runtime,
@@ -454,6 +470,19 @@ impl HostShared {
         outcome: &PersistedEvent,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
+        self.record_required_failure_with_severity(error, outcome, links, None)
+    }
+
+    /// `record_required_failure` whose lifecycle record, when one is written for a non-fatal
+    /// error, takes `severity` instead of `Error` (Workflow #336 L2c: a `linear_steps` task
+    /// failure's record takes the severity of the task terminal it names).
+    pub(super) fn record_required_failure_with_severity(
+        &self,
+        error: &RuntimeHostError,
+        outcome: &PersistedEvent,
+        links: EventLinksDraft,
+        severity: Option<EventSeverity>,
+    ) -> RuntimeHostResult<()> {
         // These original failure builders copy this error's primary and cleanup
         // details into their outcome. Extra native details still need lifecycle facts.
         let (primary_detail_recorded, cleanup_cause_recorded) = match outcome.payload() {
@@ -480,11 +509,12 @@ impl HostShared {
                 .recorded_event()
                 .set(*outcome.event_id());
         }
-        self.append_lifecycle_failure(
+        self.append_lifecycle_failure_with_severity(
             RuntimeLifecycleFailureStage::OperationCleanup,
             RuntimeLifecycleFailure::Host(error),
             links,
             Some(*outcome.event_id()),
+            severity,
         )
     }
 

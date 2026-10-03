@@ -6,7 +6,10 @@ use crate::{
 };
 use actingcommand_contract::{EventActor, EventSource, InputAction, RuntimeReceipt};
 use actingcommand_device::{CaptureBackendChoice, Frame, combine_operation_and_close};
-use actingcommand_lab::{LabInputPort, UserConfig};
+use actingcommand_lab::{
+    AttachFrameRequest, LabInputPort, OpaqueJson, UserConfig, record_attach_frame,
+    record_frame_preflight,
+};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -52,8 +55,27 @@ pub(crate) fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome
         return run_capture_diagnose(global, &flags);
     }
     reject_legacy_session_routing(&flags)?;
-    let out = flags.required_path("--out")?;
+    let record = flags.bool("--record");
+    let out = if record {
+        flags.optional_path("--out")
+    } else {
+        Some(flags.required_path("--out")?)
+    };
     let config = read_user_config()?;
+    // `capture --record`: the recording must accept a device frame before anything is captured.
+    let record_lock = if record {
+        let instance = resolve_instance_id(global, &config)?;
+        let lock = super::session_record::record_flag_begin(
+            global,
+            &flags,
+            &instance,
+            "capture --record",
+        )?;
+        record_frame_preflight(&lock)?;
+        Some(lock)
+    } else {
+        None
+    };
     let device_config = device_config(global, &config)?;
     let requested = device_config.capture_backend;
     let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
@@ -64,7 +86,7 @@ pub(crate) fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome
         fresh_delay,
     )?;
     let frame = captured.frame;
-    if let Some(parent) = out.parent()
+    if let Some(parent) = out.as_ref().and_then(|out| out.parent())
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent).map_err(|err| {
@@ -74,9 +96,11 @@ pub(crate) fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let png = frame
         .png_for_artifact()
         .map_err(|err| CliError::device(err.to_string()))?;
-    fs::write(&out, &png)
-        .map_err(|err| CliError::device(format!("failed to write {}: {err}", out.display())))?;
-    Ok(json!({
+    if let Some(out) = &out {
+        fs::write(out, &png)
+            .map_err(|err| CliError::device(format!("failed to write {}: {err}", out.display())))?;
+    }
+    let mut data = json!({
         "width": frame.width,
         "height": frame.height,
         "capture_backend_used": frame.backend_name.as_str(),
@@ -84,8 +108,23 @@ pub(crate) fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "adb_warning": device_config.adb_warning,
         "capture_backend_attempts": captured.attempts,
         "freshness": captured.freshness,
-        "out": out.display().to_string()
-    }))
+        "out": out.as_ref().map(|out| out.display().to_string())
+    });
+    if let Some(lock) = &record_lock {
+        let attached = record_attach_frame(
+            lock,
+            AttachFrameRequest {
+                png,
+                source: "lab_capture".to_string(),
+                runtime_artifact: None,
+                capture_backend: Some(frame.backend_name.as_str().to_string()),
+                freshness: Some(OpaqueJson::from_serializable(&captured.freshness)?),
+            },
+        )?;
+        data["record"] = serde_json::to_value(attached)
+            .map_err(|error| CliError::usage(format!("failed to encode the record: {error}")))?;
+    }
+    Ok(data)
 }
 
 fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {

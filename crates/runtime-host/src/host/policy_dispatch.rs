@@ -404,6 +404,8 @@ impl HostShared {
         // deferred exactly as admission would refuse it.
         let scheduling_pause =
             lock(&self.scheduling_pause, "read_policy_scheduling_pause")?.clone();
+        // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration.
+        let suspension_lift = self.suspension_lift_view(&procedure_manifest);
         let (mut cycle, eligibility_unknown_pairs) = {
             let mut policy = lock(&self.policy, "evaluate_policy_cycle")?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
@@ -417,6 +419,7 @@ impl HostShared {
                     trigger,
                     sampled_at_monotonic_ms: observed_monotonic_ms,
                     scheduling_pause: &|instance_alias| scheduling_pause.deferral(instance_alias),
+                    suspension_lift: &suspension_lift,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -1141,15 +1144,17 @@ impl HostShared {
                     "admit_policy_dispatch",
                 ));
             }
-            lock(&self.procedure_manifest, "validate_procedure_manifest")?
-                .as_ref()
+            let procedure_manifest = lock(&self.procedure_manifest, "validate_procedure_manifest")?
+                .clone()
                 .ok_or_else(|| {
                     policy_admission_request(
                         "procedure_manifest_unconfigured",
                         "admit_policy_dispatch",
                     )
-                })?
-                .validate_intent(intent, "admit_policy_dispatch")?;
+                })?;
+            procedure_manifest.validate_intent(intent, "admit_policy_dispatch")?;
+            // Workflow #336 L6 (§12.7): the evaluation's lift rule, under the admission lock.
+            let suspension_lift = self.suspension_lift_view(&procedure_manifest);
             let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
             let success_links = links.clone();
             let failure_links = links;
@@ -1213,9 +1218,11 @@ impl HostShared {
                             };
                         }
                     };
-                    let admission_record = match policy
-                        .preview_admission(intent, context.now_unix_ms)
-                    {
+                    let admission_record = match policy.preview_admission(
+                        intent,
+                        context.now_unix_ms,
+                        &suspension_lift,
+                    ) {
                         Ok(record) => record,
                         Err(error) => {
                             let failure = if error.is_fatal() {

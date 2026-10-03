@@ -4889,6 +4889,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("emulator_instance", &["HostShared"]),
     host_module("evidence_export", &["HostShared"]),
     host_module("facts", &["HostShared"]),
+    host_module("failure_settlement", &["HostShared"]),
     host_module("foreground_gate", &["HostShared"]),
     host_module("frame_retention", &["HostShared"]),
     host_module("governance", &["HostShared"]),
@@ -4969,6 +4970,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("policy_dispatch", &["HostShared"]),
     host_module("policy_outcome", &["HostShared"]),
     host_module("ppocr_diagnostic", &["HostShared", "RuntimeContainedTask"]),
+    host_module("prerequisite", &["HostShared"]),
     HostModule {
         module: "read_events",
         owners: &["HostShared"],

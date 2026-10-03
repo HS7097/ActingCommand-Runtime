@@ -56,7 +56,7 @@ pub(super) fn help_data() -> Value {
             "resource compile-maa": [
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
-            "package digest": ["--package <directory>"],
+            "package digest": ["--package <directory | .zip | .json container>"],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>"
@@ -205,7 +205,7 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "schema_version": "Lab-1y.control.v1",
             "domain": "control",
             "supported_schema_versions": crate::commands::capabilities::schema_capabilities()["control"]["supported"],
-            "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
+            "execution_modes": ["navigable_route", "recognize_only", "in_page_guard", "linear_steps"],
             "capture_backend": ["auto", "auto-fastest", "adb", "droidcast_raw", "nemu_ipc"],
             "touch_backend": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
             "frame_store": {

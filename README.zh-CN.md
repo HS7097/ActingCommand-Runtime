@@ -157,7 +157,7 @@ Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、安�
 
 `apps/actinglab` 的 `build.rs` 会读取 Git 元数据确定 HEAD。当 Git 元数据可用时，若同时设置了 `ACTINGCOMMAND_RUNTIME_HEAD`，它必须是 40 位十六进制且与仓库 HEAD 一致，否则构建 panic；当 Git 元数据不可用（例如无 `.git` 的源码树）时，该变量为必填。
 
-`actingd` 的正常调用只接受 `--config <path>` 两个参数；第一个参数也可以改为 `ledger-maintenance`、`check-config` 或 `unlock-owner` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems` / `config.parameters`，可用 `actingctl facts --program` 读取，`check-config` 也会打印。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
+`actingd` 的正常调用只接受 `--config <path>` 两个参数；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems` / `config.parameters`，可用 `actingctl facts --program` 读取，`check-config` 也会打印。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
 
 ```bash
 # 本地构建与门禁；fmt 与 clippy 与 CI 相同，CI 的测试则按上文四组分开执行（CI 的发布构建另带 --locked 与显式 MSVC 目标）
@@ -186,6 +186,7 @@ actingctl pause --state-root <state-root> [--instance <alias>] [--reason <code>]
 actingctl resume --state-root <state-root> [--instance <alias>]     # 解除该暂停；status 显示全局与各实例的暂停态
 actingctl selfcheck <alias> --state-root <state-root>     # 立即重连并自检一个物理实例（在专用准备租约下打开 Nemu / ADB，不发输入、不留帧）；按 resume 回执的形状打印自检结果；自检通过前该实例对策略不可用（contracts/runtime-fact-store.md）
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>     # 可选：--recovery-package <pkg.zip> --recovery-expected-sha256 <hex>
+actingctl task-run --state-root <state-root> --instance <alias> --package <dir | D.zip | D.json> --package-ref '<reference>'     # 内容目录或内容外壳文件，配内容目录引用，例如 Lab 包（contracts/package-reference.md，"Containers"）
 actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # 手动优先级偏移（±1000000 milli），写成 session.task.<task_id>.priority_offset 事实；不带 --instance 时为任务级，作用于唯一配置的游戏（否则 task_offset_scope_ambiguous）
 actingctl request-shutdown --state-root <state-root>
 actingctl request-shutdown --state-root <state-root> --wait 60     # 随后等待（1..=3600 秒）直到 owner 记录关闭且进程退出；只读
@@ -204,6 +205,20 @@ actingledger --state-root <state-root> material --request <json>
 actingledger --state-root <state-root> facts --at <sequence>
 actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
 
+# Lab 录制成 linear_steps 包（contracts/lab-recording.md）；actinglab 经 ACTINGCOMMAND_RUNTIME_STATE_ROOT 找到守护进程
+actingctl pause --state-root <state-root> --instance <alias>     # 先暂停：两条录制命令之间不能有调度任务操作该实例
+actinglab --json --instance <alias> record start --task-id <task_id>
+actinglab --json --instance <alias> capture --record     # 下一步的画面；也可用 observe --capture --record，或离线 record mark --frame <png>
+actinglab --json --instance <alias> record mark --page <name> --template <id>=x,y,w,h --color <id>=x,y,w,h --click x,y,w,h
+actinglab --json --instance <alias> do --capture --record --package <载体包> --package-ref '<reference>'     # 在本步点击矩形内按下
+actinglab --json --instance <alias> session app restart --record     # 以应用操作代替点击：launch | restart | stop | force-stop
+actinglab --json --instance <alias> record mark --step <n> --transition window --min-ms <ms> --max-ms <ms>     # 或 --transition page --frame <png> 加标记，或 --to-transition <n>
+actinglab --json --instance <alias> record mark --optional --settle-ms <ms>     # 不一定出现的画面（Workflow #339）
+actinglab --json --instance <alias> record status
+actinglab --json --instance <alias> record stop --dry-run     # 全部检查都跑、什么都不写；按 lab.warnings 补标
+actinglab --json --instance <alias> record stop --lab-dir <install-root>/packages/<game>     # 写出 <D>.zip 或 <D>.json，并打印 binding_example
+actingctl resume --state-root <state-root> --instance <alias>
+
 # 离线账本维护（不装配提供者、IPC 与设备）
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
@@ -213,6 +228,9 @@ actingcommand-actingd ledger-maintenance restore --config runtime.json --backup 
 
 # 无副作用的配置检查（与启动相同的加载/装配/校验；不触碰 state_root 下任何内容）
 actingcommand-actingd check-config --config runtime.json
+
+# 只读列出被挂起、已解除、反复失败的定时按步任务（与启动相同的配置装配；不取 owner 锁只读账本，可与运行中的守护进程并行；contracts/policy-suspension.md）
+actingcommand-actingd suspended --config runtime.json
 
 # 启动因 owner_resource_unconfirmed 被拒后的离线解锁（只向 owner.lock 追加、从不删除；下次启动自动接管）
 actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confirm-resources-released

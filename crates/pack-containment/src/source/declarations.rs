@@ -68,6 +68,7 @@ impl Declaration<'_> {
                 "max_steps",
                 "stop_on_confirmation",
                 "stability_termination",
+                "prerequisite_package_id",
             ],
         )?;
         if object.contains_key("phases")
@@ -95,8 +96,13 @@ impl Declaration<'_> {
                 {
                     self.unsigned(value, &pointer)?
                 }
-                "schema_version" | "package_id" | "execution_mode" | "game" | "server"
-                | "entry_task_id" => self.string(value, &pointer)?,
+                "schema_version"
+                | "package_id"
+                | "execution_mode"
+                | "game"
+                | "server"
+                | "entry_task_id"
+                | "prerequisite_package_id" => self.string(value, &pointer)?,
                 "resource_root" if !value.is_null() => self.string(value, &pointer)?,
                 _ => {}
             }
@@ -385,6 +391,8 @@ impl Declaration<'_> {
                 "rect_move",
                 "maa_task",
                 "maa_task_id",
+                "transition",
+                "optional",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -505,7 +513,63 @@ impl Declaration<'_> {
                     return Err(self.error(&pointer, ResourceDeclarationReason::UnconsumedField));
                 }
                 "rect_move" => self.rect_move(value, &pointer)?,
+                "transition" if !value.is_null() => self.transition(value, &pointer)?,
+                "optional" if !value.is_null() => self.optional(value, &pointer)?,
                 _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// An optional operation (Workflow #339, `linear_steps` only): `{"settle_ms"}`, nothing
+    /// else. Runtime admission checks the value.
+    fn optional(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["settle_ms"])?;
+        self.unsigned(
+            self.required(object, pointer, "settle_ms")?,
+            &child(pointer, "settle_ms"),
+        )
+    }
+
+    /// An operation's intermediate state (Workflow #336, `linear_steps` only):
+    /// `{"kind":"page","page_id","timeout_ms"?,"interval_ms"?}` or
+    /// `{"kind":"window","min_ms","max_ms"}`. Runtime admission checks the values.
+    fn transition(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| self.error(pointer, ResourceDeclarationReason::InvalidType))?;
+        let kind_pointer = child(pointer, "kind");
+        match self.required(object, pointer, "kind")?.as_str() {
+            Some("page") => {
+                let object = self.object(
+                    value,
+                    pointer,
+                    &["kind", "page_id", "timeout_ms", "interval_ms"],
+                )?;
+                self.string(
+                    self.required(object, pointer, "page_id")?,
+                    &child(pointer, "page_id"),
+                )?;
+                for field in ["timeout_ms", "interval_ms"] {
+                    if let Some(value) = object.get(field).filter(|value| !value.is_null()) {
+                        self.unsigned(value, &child(pointer, field))?;
+                    }
+                }
+            }
+            Some("window") => {
+                let object = self.object(value, pointer, &["kind", "min_ms", "max_ms"])?;
+                for field in ["min_ms", "max_ms"] {
+                    self.unsigned(
+                        self.required(object, pointer, field)?,
+                        &child(pointer, field),
+                    )?;
+                }
+            }
+            Some(_) => {
+                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            None => {
+                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidType));
             }
         }
         Ok(())

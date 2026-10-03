@@ -28,8 +28,15 @@ Policy sections are assembled as at startup: catalog documents are read and
 resource packages are stat'ed or canonicalized from disk. Relative directory
 package paths (`GitSourceTree` or `ContentDirectory`) resolve against the process
 working directory, exactly as startup does, so run the check from the directory the
-daemon will be started in. An empty `instances` array passes, as at startup, and describes a
-control-plane-only daemon.
+daemon will be started in. A procedure binding's `scheduled_execution.package_path` must
+name a regular file for a ZIP digest, a directory for a Git source-tree reference, and a
+directory or a content container file (`.zip` or `.json`, ASCII case-insensitive; see
+"Containers" in `contracts/package-reference.md`, Workflow #336) for a content-directory
+reference. A content-directory binding to any other file fails
+`procedure_package_container_unsupported`; a path that is not of its reference's kind fails
+`procedure_package_not_regular`, as before. Procedure packages are not read here: their
+content is admitted when the task runs. An empty `instances` array passes, as at startup,
+and describes a control-plane-only daemon.
 
 ## Result
 
@@ -208,9 +215,11 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `duplicate_instance_id`, `stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
 `device_path_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
-`scheduled_execution_instance_unknown`, `governance_capability_retired`,
+`scheduled_execution_instance_unknown`, `procedure_package_not_regular`,
+`procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
-`config_manifest_incomplete`),
+`config_manifest_incomplete`, the `prerequisite_package*` and `return_home_package*` codes
+of "Prerequisite packages"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
 `invalid_governance_policy` and the other
@@ -266,6 +275,67 @@ The admitted `{ path, kind }` (`kind` is `file` or `directory`) is echoed here
 and reported by the instance status entry (`RuntimeInstanceStatus`,
 `ProjectInstanceView`) as `resource_package`, omitted when none is configured.
 Nothing else consumes it yet.
+
+## Prerequisite packages
+
+Workflow #336 L2b adds the optional top-level `prerequisite_packages`, the
+packages a `linear_steps` package may name as its `prerequisite_package_id`
+(`contracts/linear-steps.md`, "Prerequisite packages"):
+
+```json
+"prerequisite_packages":[{"package_id":"neutral.test.stage_page","package_path":"packages/neutral/<D>.zip","package_digest":{"schema_version":"actingcommand.package.content-directory.v1","sha256":"<D>"}}]
+```
+
+Each entry has exactly these three fields. `package_id` is not empty, at most
+256 bytes and has no control character (`prerequisite_package_id_invalid`); no
+two entries share one (`prerequisite_package_duplicate`); at most as many
+entries as a catalog has tasks (`prerequisite_packages_size_invalid`).
+`package_digest` takes the forms of a procedure binding's `package_digest`, and
+`package_path` is checked as a procedure binding's
+`scheduled_execution.package_path` is (a relative path resolves against the
+configuration file's directory), under its own codes:
+`prerequisite_package_unavailable`, `prerequisite_package_not_regular`,
+`prerequisite_package_container_unsupported`,
+`prerequisite_package_digest_invalid`, `prerequisite_package_request_invalid`.
+All of them fail at stage `assemble`. No package is opened or hashed here: a
+run admits each package against its reference when it resolves its chain. The
+map needs no `policy` section, so a manual `task-run` uses it too; it is not a
+configuration fact (neither the `config_manifest` nor the `config.*` runtime
+facts name it) and it is read once at startup, so a change needs a restart. A
+build that predates the field refuses it with `config_decode_failed`. A Lab
+recording's `record stop` prints the entry of the package it wrote as
+`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output").
+
+Workflow #336 L2c adds the optional top-level `return_home_packages`, per game
+and server the return-home package a `linear_steps` package without a declared
+prerequisite package falls back to (`contracts/linear-steps.md`, "Return-home
+fallback"); since L2d the stuck-recovery ladder and the page-graph home entry of a
+run whose request binds no recovery package use it too:
+
+```json
+"return_home_packages":[{"game":"neutral","server":"test","package_id":"neutral.test.return_home"}]
+```
+
+Each entry has exactly these three fields. `game` and `server` are not empty, at
+most 64 bytes and have no control character (`return_home_package_key_invalid`);
+`package_id` is a `package_id` of `prerequisite_packages`
+(`return_home_package_unbound`); no two entries share one game and server
+(`return_home_package_duplicate`); at most as many entries as a catalog has
+tasks (`return_home_packages_size_invalid`). All of them fail at stage
+`assemble`; no package is opened here (a run checks the package's game, server
+and resolution when it resolves its chain). Like `prerequisite_packages`, it is
+not a configuration fact, it is read once at startup and a build that predates
+the field refuses it with `config_decode_failed`.
+
+A scheduled task paused by a failure is lifted once the daemon has restarted
+with a configuration in which its procedure binding's `package_digest` changed
+or, for a `linear_steps` task, a `prerequisite_packages` entry its paused run
+went through maps another digest, or its game and server's
+`return_home_packages` entry names another package or that package maps another
+digest. `actingd suspended --config <path>` loads and assembles the
+configuration exactly as this command does and lists the paused, lifted and
+repeating tasks (`contracts/policy-suspension.md`, "Lifting (R19)" and
+"`actingd suspended`").
 
 ## Performance and device paths
 

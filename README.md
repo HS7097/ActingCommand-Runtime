@@ -155,7 +155,7 @@ The Windows exact-SHA Runtime artifact carries the two Runtime executables, a co
 
 The `build.rs` of `apps/actinglab` reads Git metadata to determine HEAD. When Git metadata is available and `ACTINGCOMMAND_RUNTIME_HEAD` is also set, it must be 40 hexadecimal characters and must match the repository HEAD, or the build panics; when Git metadata is unavailable (a source tree with no `.git`, for example), that variable is required.
 
-A normal `actingd` invocation accepts only the two arguments `--config <path>`; the first argument may instead select the `ledger-maintenance`, `check-config` or `unlock-owner` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. At startup `actingd` records its in-memory runtime configuration manifest (the subsystems it runs and every effective parameter with its source; the salt only as a byte length) as the program facts `config.subsystems` / `config.parameters`, readable with `actingctl facts --program` and printed by `check-config`. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
+A normal `actingd` invocation accepts only the two arguments `--config <path>`; the first argument may instead select the `ledger-maintenance`, `check-config`, `unlock-owner` or `suspended` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. At startup `actingd` records its in-memory runtime configuration manifest (the subsystems it runs and every effective parameter with its source; the salt only as a byte length) as the program facts `config.subsystems` / `config.parameters`, readable with `actingctl facts --program` and printed by `check-config`. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
 
 ```bash
 # Local build and gates; fmt and clippy are identical to CI, while CI splits the test run into the four groups described above (CI's release build additionally uses --locked and an explicit MSVC target)
@@ -184,6 +184,7 @@ actingctl pause --state-root <state-root> [--instance <alias>] [--reason <code>]
 actingctl resume --state-root <state-root> [--instance <alias>]     # lift that pause; status shows the global and per-instance pause states
 actingctl selfcheck <alias> --state-root <state-root>     # reconnect and self-check one physical instance now (Nemu / ADB opens under a dedicated preparation lease, no input, no frame kept); prints the self-check in the resume receipt's shape; the instance stays unavailable to the policy until a self-check passes (contracts/runtime-fact-store.md)
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>     # optional: --recovery-package <pkg.zip> --recovery-expected-sha256 <hex>
+actingctl task-run --state-root <state-root> --instance <alias> --package <dir | D.zip | D.json> --package-ref '<reference>'     # a content directory or content container with its content-directory reference, such as a Lab package (contracts/package-reference.md, "Containers")
 actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # manual priority offset (±1000000 milli) as a session.task.<task_id>.priority_offset fact; without --instance it is task-level for the one configured game (task_offset_scope_ambiguous otherwise)
 actingctl request-shutdown --state-root <state-root>
 actingctl request-shutdown --state-root <state-root> --wait 60     # then wait (1..=3600 s) until the owner record is closed and the process has exited; read-only
@@ -202,6 +203,20 @@ actingledger --state-root <state-root> material --request <json>
 actingledger --state-root <state-root> facts --at <sequence>
 actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
 
+# Lab recording into a linear_steps package (contracts/lab-recording.md); actinglab finds the daemon through ACTINGCOMMAND_RUNTIME_STATE_ROOT
+actingctl pause --state-root <state-root> --instance <alias>     # first: no scheduled task may act on the instance between two recording commands
+actinglab --json --instance <alias> record start --task-id <task_id>
+actinglab --json --instance <alias> capture --record     # the next step's screen; also observe --capture --record, or record mark --frame <png> offline
+actinglab --json --instance <alias> record mark --page <name> --template <id>=x,y,w,h --color <id>=x,y,w,h --click x,y,w,h
+actinglab --json --instance <alias> do --capture --record --package <carrier package> --package-ref '<reference>'     # presses inside the step's click rectangle
+actinglab --json --instance <alias> session app restart --record     # an application step instead of a click: launch | restart | stop | force-stop
+actinglab --json --instance <alias> record mark --step <n> --transition window --min-ms <ms> --max-ms <ms>     # or --transition page --frame <png> with marks, or --to-transition <n>
+actinglab --json --instance <alias> record mark --optional --settle-ms <ms>     # a screen that does not always appear (Workflow #339)
+actinglab --json --instance <alias> record status
+actinglab --json --instance <alias> record stop --dry-run     # runs every check and writes nothing; mark what lab.warnings asks for
+actinglab --json --instance <alias> record stop --lab-dir <install-root>/packages/<game>     # writes <D>.zip or <D>.json and prints binding_example
+actingctl resume --state-root <state-root> --instance <alias>
+
 # Offline ledger maintenance (assembles no providers, IPC or devices)
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
@@ -211,6 +226,9 @@ actingcommand-actingd ledger-maintenance restore --config runtime.json --backup 
 
 # Side-effect-free configuration check (same load/assemble/validate as startup; touches nothing under state_root)
 actingcommand-actingd check-config --config runtime.json
+
+# Read-only report of paused, lifted and repeating scheduled linear tasks (same configuration assembly; reads the ledger without the owner lock, beside a running daemon; contracts/policy-suspension.md)
+actingcommand-actingd suspended --config runtime.json
 
 # Offline owner unlock after startup refused owner_resource_unconfirmed (appends to owner.lock, never deletes it; the next start takes over)
 actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confirm-resources-released

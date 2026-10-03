@@ -47,22 +47,29 @@ source-tree reference with `source_tree_loader_retired`.
 
 ## Content-directory admission
 
-The locator names a local directory, typically named by its own digest. The directory
-itself is canonicalized first (links above it are resolved); every entry inside it is
-read without following links. Admission runs in this order under one deadline:
+The locator names a local directory, typically named by its own digest, or a content
+container file (`<digest>.zip` or `<digest>.json`, see "Containers"). The locator itself is
+canonicalized first (links above it are resolved); every entry inside a directory is read
+without following links, and a container file is opened without following a link.
+Admission runs in this order under one deadline:
 
 1. The reference is validated and the locator must be absolute.
 2. If the last segment of the locator, or of its canonical form, has the digest form
-   (64 lowercase hex digits) and differs from the reference,
-   `content_directory_name_mismatch` is returned before any file is read. A directory
-   with any other name is verified only against the explicit reference.
-3. Every regular file at any depth is read into memory exactly once. Empty directories
-   do not contribute. Links, junctions and every other reparse point, including cloud
-   placeholders, fail with `content_directory_link_or_type`. A relative path must be
-   UTF-8 (`content_directory_path_encoding`), safe as defined for `bundle_path`, and
-   must not contain a `.git` segment (`content_directory_path_invalid`). Paths that
-   differ only by ASCII case fail with `content_directory_case_collision`; executable or
-   script extensions are rejected as for ZIP entries. A file that starts with
+   (64 lowercase hex digits), or is a digest-form stem followed by `.zip` or `.json` (ASCII
+   case-insensitive), and that digest differs from the reference,
+   `content_directory_name_mismatch` is returned before any file is read. A locator with
+   any other name is verified only against the explicit reference.
+3. The content is read into memory exactly once, as a table of `/`-separated relative paths
+   and their bytes. A directory contributes every regular file at any depth; empty
+   directories do not contribute. A regular file is a content container, read whole and
+   expanded by the extension of the locator ("Containers"). Anything else fails
+   `content_directory_not_directory`. Links, junctions and every other reparse point,
+   including cloud placeholders, fail with `content_directory_link_or_type`. A relative
+   path in a directory must be UTF-8 (`content_directory_path_encoding`). Every entry, from
+   any container, passes the same rules with the same codes: the path is safe as defined
+   for `bundle_path` and contains no `.git` segment (`content_directory_path_invalid`);
+   paths that differ only by ASCII case fail with `content_directory_case_collision`;
+   executable or script extensions are rejected as for ZIP entries. A file that starts with
    `version https://git-lfs.github.com/spec/v1` fails with
    `content_directory_lfs_pointer`. The existing file count, per-file, total and
    resident limits apply, and nesting is limited to 64 segments.
@@ -85,6 +92,124 @@ same value can be recomputed with coreutils (Git Bash or Linux):
 ```sh
 cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n'; find . -type f -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -b | sed 's/ \*/  /'; } | sha256sum -b | cut -c1-64
 ```
+
+## Containers
+
+Workflow #336: the same content can be held by three containers. All three use the one
+content-directory reference above and the one digest; the container is chosen by the
+locator alone (a directory, or a regular file by its extension, ASCII case-insensitive) and
+is recorded nowhere: references, requests and ledger records are unchanged. A Lab recording's
+`record stop` writes its package as `<D>.zip` or `<D>.json` in these containers
+(`lab-recording.md`, "Container and digest").
+
+| Container | Locator | Table entries |
+|---|---|---|
+| Directory | a directory | one per regular file, its raw bytes |
+| ZIP | a regular file named `*.zip` | one per file entry, its decompressed bytes; directory entries (names ending in `/`) are ignored |
+| Single JSON | a regular file named `*.json`, schema below | one per key of `files`, the UTF-8 encoding of its string value |
+
+A regular file with another extension fails `content_container_unsupported`, and a container
+file larger than the compressed-package limit (512 MiB) fails
+`content_container_size_limit`. Every expanded entry then passes the entry rules of
+"Content-directory admission" with the directory's codes; a path repeated inside one ZIP
+fails `content_directory_case_collision` like two paths that differ only by case.
+
+ZIP rules:
+
+- An entry name is its raw bytes read as UTF-8, whether or not the entry sets the UTF-8 flag
+  (never the CP437 reading of an unflagged name); bytes that are not UTF-8 fail
+  `content_zip_entry_invalid`.
+- A name must already be a `/`-separated relative path: no `\`, no `:`, no `..` segment and
+  no leading `/` (`content_zip_entry_invalid`, the rule of ZIP package entries).
+- Entry names are paths from the archive root (`control.json`, not `<D>/control.json`): zip
+  the directory's contents, not the directory itself. Windows Explorer "Send to > Compressed
+  (zipped) folder" and `Compress-Archive -Path <D>` add a top-level `<D>/` and fail with
+  `content_directory_digest_mismatch`; `Compress-Archive -Path <D>\* -DestinationPath <D>.zip`
+  or Python `shutil.make_archive(<out>, "zip", root_dir=<D>)` put the entries at the root.
+- A symbolic link or any other non-regular entry fails `content_zip_entry_invalid`.
+- An archive that cannot be read, an encrypted entry, an unsupported compression method or
+  damaged entry data fails `content_zip_invalid`.
+
+The single JSON container, `actingcommand.package.content-json.v1`:
+
+```json
+{"schema_version":"actingcommand.package.content-json.v1",
+ "files":{
+   "control.json":"{\n  \"schema_version\": \"Lab-1y.control.v2\",\n  ...\n}\n",
+   "resources/operations/resources.json":"{\n  \"schema_version\": \"1.0\",\n  \"resources\": [],\n  \"resource_count\": 0\n}\n",
+   "resources/operations/<task>/task.json":"{\n  \"schema_version\": \"0.9\",\n  ...\n}\n"}}
+```
+
+- The document is UTF-8 JSON without a byte-order mark, with exactly the two keys
+  `schema_version` (exactly the value above) and `files`, an object with at least one key;
+  anything else fails `content_json_invalid`.
+- Every value of `files` is a string (`content_json_file_not_string`). A path that appears
+  twice fails `content_json_duplicate_path`; it is never resolved by keeping either value.
+- Any all-text content directory fits, with any number of tasks and files; a file that is not
+  UTF-8 text (an image, for example) needs a directory or a ZIP.
+
+Why one content has one digest in every container: the digest depends only on the table of
+paths and bytes, sorted by path, so ZIP compression, timestamps and entry order, and JSON key
+order, whitespace and escaping (`"\u00e9"` or `"é"`) take no part. A JSON string decodes to
+exactly one sequence of code points (unpaired surrogate escapes and non-UTF-8 input are
+refused) and has exactly one UTF-8 encoding. Nothing is normalized: line endings, byte-order
+marks inside a file and key order stay as they are. Extracting a ZIP, or writing every JSON
+string to its path as a file, gives a directory with the same digest; zipping a directory's
+contents with `/`-separated UTF-8 names, or storing each file of an all-text directory as its
+string, gives a container with the same digest. Files stay strings rather than inline JSON
+objects so that the bytes, and the digest, never depend on how a serializer writes JSON.
+
+`actingcommand_pack_containment::expand_content_container` expands container bytes in
+memory under these rules; `Containment::load_content_entries` (and its
+`ExternallyVerifiedBundle` and `PreparedContainedTask` wrappers) admits such a table as
+admission of a read locator does from step 3 on, entry rules and digest comparison included,
+so a container can be checked before it is written. An instance's `resource_package` and
+`startup_package` (`contracts/actingd-check-config.md`) do not take containers: a file there
+is still a ZIP package identified by the SHA-256 of the file itself, so a container file
+there is refused as an invalid package.
+
+A Runtime from before Workflow #336 refuses a container file with
+`content_directory_not_directory`, and its configuration check refuses a procedure binding
+that points at one with `procedure_package_not_regular` (see
+`contracts/actingd-check-config.md`), in both cases before any package is admitted.
+
+To expand a JSON container into a directory (Python 3, standard library only; the target
+directory must not exist):
+
+```python
+import json, os, sys
+
+SCHEMA = "actingcommand.package.content-json.v1"
+
+def unique(pairs):
+    found = {}
+    for key, value in pairs:
+        if key in found:
+            sys.exit(f"content_json_duplicate_path: {key}")
+        found[key] = value
+    return found
+
+source, target = sys.argv[1], sys.argv[2]
+with open(source, "rb") as handle:
+    document = json.loads(handle.read().decode("utf-8"), object_pairs_hook=unique)
+if not isinstance(document, dict) or set(document) != {"schema_version", "files"} \
+        or document["schema_version"] != SCHEMA \
+        or not isinstance(document["files"], dict) or not document["files"]:
+    sys.exit("content_json_invalid")
+os.mkdir(target)
+for path, text in document["files"].items():
+    if not isinstance(text, str):
+        sys.exit(f"content_json_file_not_string: {path}")
+    parts = path.split("/")
+    if "\\" in path or ":" in path or any(part in ("", ".", "..") for part in parts):
+        sys.exit(f"content_directory_path_invalid: {path}")
+    destination = os.path.join(target, *parts)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    with open(destination, "xb") as handle:
+        handle.write(text.encode("utf-8"))
+```
+
+The coreutils formula above, run in the resulting directory, gives the container's digest.
 
 ## Git source-tree references
 
@@ -129,9 +254,12 @@ are parsed together; references to missing resources fail before any input.
 snapshot (the rules of "Content-directory admission" without the name comparison), computes
 its content-directory reference and then admits the directory in full against that
 reference, so a digest-form name that differs from the content fails
-`content_directory_name_mismatch`. It prints `reference` (the object above), the
+`content_directory_name_mismatch`. `--package` may equally name a content container file
+(`.zip` or `.json`, "Containers"): the same content prints the same reference whichever
+container holds it. It prints `reference` (the object above), the
 `package_id`, `server` and `entry_task_id` stated by `control.json`, `file_count` and
-`byte_count`. An author directory with any other name is used with that reference through
+`byte_count` (of the expanded table). An author directory or container file with any other
+name is used with that reference through
 the explicit `--package-ref` flags; no command derives a reference from a path by itself.
 A refusal is `package_invalid` with the loader's code, plus the computed digest once the
 snapshot was read.
@@ -185,7 +313,10 @@ shape; its readers are unchanged.
 reference; a Git source-tree reference is refused with `source_tree_loader_retired`. The existing ZIP/hash
 flags remain accepted. Package-consuming Lab commands (debug/run, observe, do and
 resource restore) accept `--package <directory> --package-ref <JSON>` instead of their
-ZIP/hash flags. Evidence replay continues to use its independent evidence ZIP hash.
+ZIP/hash flags. Wherever a content-directory reference is given, the locator may be a
+content container file instead of a directory ("Containers"), including a procedure
+binding's `scheduled_execution.package_path`. Evidence replay continues to use its
+independent evidence ZIP hash.
 
 Runtime requests, prepared observations, effective configuration, task/recovery facts,
 Lab results and `EvidencePackage` carry the complete reference. `scheduled_execution`

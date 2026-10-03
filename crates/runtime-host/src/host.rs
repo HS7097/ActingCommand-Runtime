@@ -49,18 +49,18 @@ use actingcommand_contract::{
     CapturePayload, CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft,
     CatalogPromotionAuthorization, CatalogProposal, CatalogTransitionEventData, ClientActionRecord,
     ClientPayload, ClientPayloadDraft, CommandPayloadDraft, ContainedTaskCancellationReason,
-    ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRequest,
-    CorrelationId, DiagnosticCode, DiagnosticDetailDraft, EFFECTIVE_CONFIGURATION_SCHEMA,
-    EffectDisposition, EffectiveCaptureSelection, EffectiveConfigurationFacts,
-    EffectiveConfigurationRecord, EffectiveInputSelection, EffectiveMumuInstallation, EventAction,
-    EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
-    EventSource, EventType, FactContent, FactPayloadDraft, FactRecord, FactScalar, FactScope,
-    FactValue as ContractFactValue, FencedWrite, FrameId, InputAction, InputExecutionPlanEvent,
-    InputExecutionPlanRecord, InputPayload, InputPayloadDraft, InstanceBindingSource,
-    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
-    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
-    IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_RUNTIME_FACTS, MonitorPayloadDraft,
+    ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRecoveryBinding,
+    ContainedTaskRequest, CorrelationId, DiagnosticCode, DiagnosticDetailDraft,
+    EFFECTIVE_CONFIGURATION_SCHEMA, EffectDisposition, EffectiveCaptureSelection,
+    EffectiveConfigurationFacts, EffectiveConfigurationRecord, EffectiveInputSelection,
+    EffectiveMumuInstallation, EventAction, EventActor, EventDraft, EventId, EventLinksDraft,
+    EventPayload, EventQuery, EventSeverity, EventSource, EventType, FactContent, FactPayloadDraft,
+    FactRecord, FactScalar, FactScope, FactValue as ContractFactValue, FencedWrite, FrameId,
+    InputAction, InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayload,
+    InputPayloadDraft, InstanceBindingSource, InstanceFactContext, InstanceFactSnapshot,
+    InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
+    IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
+    LeaseToken, MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_RUNTIME_FACTS, MonitorPayloadDraft,
     MonitorRecoveryCoordinationReason, ObservedMicroseconds, OriginModule,
     OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary,
     PerformanceContext, PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData,
@@ -159,6 +159,7 @@ mod device_diagnostic;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
+mod failure_settlement;
 mod foreground_gate;
 mod frame_retention;
 mod governance;
@@ -179,6 +180,7 @@ mod policy_catalog;
 mod policy_dispatch;
 mod policy_outcome;
 mod ppocr_diagnostic;
+mod prerequisite;
 mod read_events;
 mod recovery_ladder;
 mod requests;
@@ -395,6 +397,14 @@ pub struct RuntimeHostConfig {
     /// Per instance alias: the stuck-recovery ladder settings (slice #316-B4); an instance
     /// without an entry uses the defaults (enabled, 600 s cool-down).
     stuck_recovery: BTreeMap<String, actingcommand_contract::InstanceStuckRecovery>,
+    /// Workflow #336 L2b: per package id, the locator and content reference of a package a
+    /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
+    /// run resolves it; not a configuration fact.
+    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
+    /// Workflow #336 L2c: per (game, server), the package id (a key of `prerequisite_packages`)
+    /// of the return-home package a `linear_steps` package without a declared prerequisite
+    /// package falls back to; not a configuration fact.
+    return_home_packages: BTreeMap<(String, String), String>,
 }
 
 impl RuntimeHostConfig {
@@ -422,6 +432,8 @@ impl RuntimeHostConfig {
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
+            prerequisite_packages: BTreeMap::new(),
+            return_home_packages: BTreeMap::new(),
         }
     }
 
@@ -580,6 +592,42 @@ impl RuntimeHostConfig {
         &self,
     ) -> &BTreeMap<String, actingcommand_contract::InstanceStuckRecovery> {
         &self.stuck_recovery
+    }
+
+    /// Installs the prerequisite packages, keyed by package id (Workflow #336 L2b). A
+    /// `linear_steps` package that declares a `prerequisite_package_id` is resolved against
+    /// them at preparation; each package is admitted against its content reference only then.
+    pub fn with_prerequisite_packages(
+        mut self,
+        prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
+    ) -> Self {
+        self.prerequisite_packages = prerequisite_packages;
+        self
+    }
+
+    /// The configured prerequisite packages, keyed by package id.
+    pub const fn prerequisite_packages(&self) -> &BTreeMap<String, ContainedTaskRecoveryBinding> {
+        &self.prerequisite_packages
+    }
+
+    /// Installs the return-home packages, package ids of `prerequisite_packages` keyed by
+    /// (game, server) (Workflow #336 L2c, R16).
+    pub fn with_return_home_packages(
+        mut self,
+        return_home_packages: BTreeMap<(String, String), String>,
+    ) -> Self {
+        self.return_home_packages = return_home_packages;
+        self
+    }
+
+    /// The configured return-home package ids, keyed by (game, server).
+    pub const fn return_home_packages(&self) -> &BTreeMap<(String, String), String> {
+        &self.return_home_packages
+    }
+
+    /// The installed procedure bindings, if any.
+    pub const fn procedure_manifest(&self) -> Option<&ProcedureManifest> {
+        self.procedure_manifest.as_ref()
     }
 
     pub fn state_root(&self) -> &Path {
@@ -756,6 +804,14 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &self.resource_packages.keys().collect::<Vec<_>>(),
             )
             .field("stuck_recovery", &self.stuck_recovery)
+            .field(
+                "prerequisite_packages",
+                &(!self.prerequisite_packages.is_empty()).then_some("<runtime-owned>"),
+            )
+            .field(
+                "return_home_packages",
+                &(!self.return_home_packages.is_empty()).then_some("<runtime-owned>"),
+            )
             .finish()
     }
 }
@@ -1310,6 +1366,9 @@ impl RuntimeHost {
             stuck_recovery,
             recovery_ladders: Mutex::new(BTreeMap::new()),
             parked_recovery_ladders: Mutex::new(BTreeMap::new()),
+            prerequisite_packages: config.prerequisite_packages,
+            return_home_packages: config.return_home_packages,
+            scheduled_resolutions: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -2917,6 +2976,13 @@ struct HostShared {
     stuck_recovery: BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>,
     recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
     parked_recovery_ladders: Mutex<BTreeMap<RequestId, recovery_ladder::PendingRecoveryLadder>>,
+    // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
+    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
+    // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
+    return_home_packages: BTreeMap<(String, String), String>,
+    // Workflow #336 L6: what each scheduled run's preparation resolved, by decision id, until
+    // its execution record is written (memory only).
+    scheduled_resolutions: Mutex<BTreeMap<String, failure_settlement::ScheduledResolution>>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]

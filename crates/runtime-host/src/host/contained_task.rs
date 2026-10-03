@@ -237,6 +237,28 @@ pub(super) struct ContainedRunControl {
     cancellation_reason: AtomicU8,
     /// The committed `task.failed` terminal of this run (slice #316-B4 trigger input).
     failed_terminal: Mutex<Option<FailedTaskTerminal>>,
+    /// Workflow #336 L2d: the prepared package's identity, set once the run executes; the
+    /// stuck-recovery ladder takes the return-home package configured for its game and server.
+    package: std::sync::OnceLock<PackageIdentity>,
+}
+
+/// Workflow #336 L2d: a prepared package's `control.json` game, server and resolution, which a
+/// return-home package from `return_home_packages` must share to stand in for it.
+#[derive(Clone)]
+pub(super) struct PackageIdentity {
+    pub(super) game: String,
+    pub(super) server: String,
+    pub(super) resolution: (u32, u32),
+}
+
+impl PackageIdentity {
+    pub(super) fn of(package: &PreparedContainedTask) -> Self {
+        Self {
+            game: package.game().to_owned(),
+            server: package.server().to_owned(),
+            resolution: package.resolution(),
+        }
+    }
 }
 
 /// A committed `task.failed` terminal: the run it ended and its failure code.
@@ -261,12 +283,29 @@ impl ContainedRunControl {
             deadline_monotonic_ms: AtomicU64::new(0),
             cancellation_reason: AtomicU8::new(Self::NONE),
             failed_terminal: Mutex::new(None),
+            package: std::sync::OnceLock::new(),
         }
     }
 
     /// The run's committed `task.failed` terminal, taken once.
     pub(super) fn take_failed_terminal(&self) -> RuntimeHostResult<Option<FailedTaskTerminal>> {
         Ok(lock(&self.failed_terminal, "take_failed_task_terminal")?.take())
+    }
+
+    /// Workflow #336 L2d: notes the prepared package's identity, once per run.
+    fn note_package(&self, package: &PreparedContainedTask) -> RuntimeHostResult<()> {
+        self.package.set(PackageIdentity::of(package)).map_err(|_| {
+            RuntimeHostError::fatal(
+                "contained_task_package_state_invalid",
+                "note_contained_task_package",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })
+    }
+
+    /// Workflow #336 L2d: the prepared package's identity, once the run executed.
+    pub(super) fn package(&self) -> Option<&PackageIdentity> {
+        self.package.get()
     }
 
     fn set_deadline(&self, deadline_monotonic_ms: u64) -> RuntimeHostResult<()> {
@@ -648,14 +687,14 @@ pub(super) struct RuntimeContainedTask<'a> {
     post_admission_ocr_comparison_recorded: bool,
     pub(super) current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
-    step_index_offset: u32,
+    pub(super) step_index_offset: u32,
     pub(super) executed_steps: Option<u32>,
     entry_preflight_recorded: bool,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
     capture_evidence: CaptureEvidenceAccumulator,
-    configuration_records: u8,
+    pub(super) configuration_records: u8,
     configuration_capture_recorded: bool,
     configuration_input_recorded: bool,
     pub(super) diagnostic_stream: Option<actingcommand_artifact_store::ArtifactStream>,
@@ -670,8 +709,8 @@ pub(super) struct RuntimeContainedTask<'a> {
     unwritten_selection_record: Option<(bool, Option<RuntimeHostError>)>,
 }
 
-struct EntryRecoveryRuntime<'a, 'host> {
-    inner: &'a mut RuntimeContainedTask<'host>,
+pub(super) struct EntryRecoveryRuntime<'a, 'host> {
+    pub(super) inner: &'a mut RuntimeContainedTask<'host>,
 }
 
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
@@ -1328,6 +1367,46 @@ impl RuntimeContainedTask<'_> {
         Ok(())
     }
 
+    /// Workflow #336 L2b: the same facts for a prerequisite gate, one `EntryRecoveryFailed` per
+    /// open prerequisite package (innermost first) and one `FailClosed`, written even when the
+    /// operation consumed its last remaining execution budget.
+    pub(super) fn record_geometry_triggered_prerequisite_failure(
+        &self,
+        open_packages: &[actingcommand_contract::PackageRef],
+        primary: &RuntimeHostError,
+    ) -> Result<(), RequestFailure> {
+        let code = primary.code().to_owned();
+        for fact in open_packages
+            .iter()
+            .rev()
+            .map(|package_sha256| TaskSemanticFact::EntryRecoveryFailed {
+                package_sha256: package_sha256.clone(),
+                failure_code: code.clone(),
+            })
+            .chain([TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::FailClosed,
+                failure_code: Some(code.clone()),
+            }])
+        {
+            self.append_task(
+                EventSeverity::Warning,
+                self.links(),
+                TaskPayloadDraft::semantic(fact, AuditInput::new()),
+            )
+            .map_err(|mut failure| {
+                failure.error = Box::new(
+                    failure
+                        .error
+                        .as_ref()
+                        .clone()
+                        .with_related_failure("prior_task", primary),
+                );
+                failure
+            })?;
+        }
+        Ok(())
+    }
+
     fn record_initial_configuration(
         &mut self,
         request: &ContainedTaskRequest,
@@ -1364,14 +1443,16 @@ impl RuntimeContainedTask<'_> {
         )
     }
 
-    fn record_configuration(
+    pub(super) fn record_configuration(
         &mut self,
         facts: EffectiveConfigurationFacts,
         frame_id: Option<IssuedFrameId>,
         action_id: Option<ActionId>,
         source_sequence: Option<u64>,
     ) -> Result<(), RequestFailure> {
-        if self.configuration_records >= 4 {
+        // Initial, at most one EntryRecovery per prerequisite package (three declared, Workflow
+        // #336 L2b, and one return-home, L2c), Capture and Input.
+        if self.configuration_records >= 7 {
             return Err(RequestFailure::poison_without_terminal(
                 artifact_store_error("effective_configuration_limit_exceeded"),
             ));
@@ -1753,7 +1834,7 @@ impl RuntimeContainedTask<'_> {
             .map(|_| ())
     }
 
-    fn record_entry_fact(&self, fact: TaskSemanticFact) -> Result<(), RequestFailure> {
+    pub(super) fn record_entry_fact(&self, fact: TaskSemanticFact) -> Result<(), RequestFailure> {
         self.ensure_active()?;
         let severity = if matches!(
             &fact,
@@ -3818,7 +3899,7 @@ impl ArtifactEventSink for RuntimeArtifactEventSink<'_> {
     }
 }
 
-fn prepare_contained_task(
+pub(super) fn prepare_contained_task(
     instance_alias: &str,
     request: &ContainedTaskRequest,
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
@@ -4474,6 +4555,9 @@ impl HostShared {
             self.execution.vision_provider(),
             self.package_material_deadline(active_run.control.deadline())?,
         )?;
+        let prerequisites = self.resolve_prerequisite_chain(instance_alias, &prepared, || {
+            self.package_material_deadline(active_run.control.deadline())
+        })?;
         self.append_request_lifecycle(
             original,
             request,
@@ -4526,6 +4610,7 @@ impl HostShared {
             instance_alias,
             connection_id,
             prepared,
+            prerequisites,
             task_request,
             token,
             task_id,
@@ -4769,6 +4854,17 @@ impl HostShared {
             }
             startup_package::HostPackageRun::ReturnHome => failure,
         })?;
+        // Workflow #336 L2d: a configured return-home package on the ladder's first rung passes
+        // the checks of a return-home chain layer against the failed package and declares no
+        // prerequisite package, before its chain and any lease.
+        if let Some(failed) = &pending.configured_return_home
+            && let Some(detail) =
+                prerequisite::configured_return_home_incompatibility(&prepared, failed)
+        {
+            return Err(prerequisite::configured_return_home_refusal(detail));
+        }
+        let prerequisites =
+            self.resolve_prerequisite_chain(instance_alias, &prepared, || Ok(material_deadline))?;
         // Workflow #335 S5b: a startup or return-home package writes no instance facts; one
         // that declares resource readings is refused before any lease and any input.
         if prepared.has_resource_readings() {
@@ -4831,6 +4927,7 @@ impl HostShared {
             instance_alias,
             connection_id,
             prepared,
+            prerequisites,
             task_request,
             token,
             task_id,
@@ -4847,6 +4944,8 @@ impl HostShared {
         context: &PolicyRunContext,
         task_request: &ContainedTaskRequest,
     ) -> Result<(RuntimeRequest, OperationSuccess), RequestFailure> {
+        // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item).
+        self.register_scheduled_resolution(context.decision_id())?;
         lock(&self.policy, "validate_policy_run_context")?
             .validate_run_context(context)
             .map_err(|error| {
@@ -4957,12 +5056,20 @@ impl HostShared {
             .map(|deadline| self.package_material_deadline(deadline))
             .transpose()?
             .unwrap_or_else(Instant::now);
+        // Workflow #336 L2b: a prerequisite package's admission deadline is the run's own, not
+        // `material_deadline`, which is the present instant for a main package that is no
+        // directory source.
+        let prerequisite_deadline = || {
+            self.contained_task_deadline(task_request, token)
+                .and_then(|deadline| self.package_material_deadline(deadline))
+        };
         let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
-            Some(prepare_contained_task(
+            Some(self.prepare_scheduled_package(
+                context.decision_id(),
                 instance_alias,
                 task_request,
-                self.execution.vision_provider(),
                 material_deadline,
+                prerequisite_deadline,
             )?)
         } else {
             None
@@ -5007,13 +5114,14 @@ impl HostShared {
                 .set_deadline(deadline)
                 .map_err(RequestFailure::poison_without_terminal)?;
         }
-        let prepared = match prepared {
+        let (prepared, prerequisites) = match prepared {
             Some(prepared) => prepared,
-            None => prepare_contained_task(
+            None => self.prepare_scheduled_package(
+                context.decision_id(),
                 instance_alias,
                 task_request,
-                self.execution.vision_provider(),
                 material_deadline,
+                prerequisite_deadline,
             )?,
         };
         let expected_outcome_keys = lock(&self.policy, "validate_policy_outcome_declaration")?
@@ -5072,6 +5180,7 @@ impl HostShared {
             instance_alias,
             connection_id,
             prepared,
+            prerequisites,
             task_request,
             token.clone(),
             context.issued_task_id(),
@@ -5102,6 +5211,7 @@ impl HostShared {
         instance_alias: &str,
         connection_id: ConnectionId,
         prepared: PreparedContainedTask,
+        prerequisites: Vec<PreparedContainedTask>,
         task_request: &ContainedTaskRequest,
         token: LeaseToken,
         task_id: IssuedTaskId,
@@ -5125,6 +5235,9 @@ impl HostShared {
             contained_task_sampling_seed(&("xorshift64_uniform_rect_v1/run", run_id.transport()))
                 .map_err(RequestFailure::poison_without_terminal)?,
         );
+        control
+            .note_package(&prepared)
+            .map_err(RequestFailure::poison_without_terminal)?;
         let mut runtime = RuntimeContainedTask {
             host: self,
             request,
@@ -5184,6 +5297,10 @@ impl HostShared {
             .and_then(|()| runtime.record_initial_configuration(task_request, &prepared))
         {
             Err(ContainedTaskRunError::Boundary(failure))
+        } else if !prerequisites.is_empty() {
+            // Workflow #336 L2b: only a `linear_steps` package has prerequisite packages, and
+            // it has no required home entry page.
+            prerequisite::run_linear_gated(&prepared, &prerequisites, &mut runtime)
         } else if prepared.required_home_entry_page().is_some()
             && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
         {
@@ -5541,9 +5658,17 @@ impl HostShared {
                         RuntimeErrorCode::BackendOperationFailed
                     },
                 );
+                // Workflow #336 L2d: the page-graph home entry's refusal of a configured
+                // return-home package carries its detail as a linear failure does.
+                let detailed = prepared.execution_mode() == "linear_steps"
+                    || error.code() == prerequisite::INCOMPATIBLE;
                 if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail())
                 {
                     task_error = task_error.with_native_detail(detail);
+                } else if detailed && let Some(detail) = error.detail() {
+                    // Workflow #336 L2c: a `linear_steps` package's failure always carries the
+                    // kernel's detail.
+                    task_error = task_error.with_native_detail(detail.to_owned());
                 }
                 let mut failure = RequestFailure::request(
                     task_error,
@@ -5558,16 +5683,42 @@ impl HostShared {
                     code: error.code(),
                     severity,
                 });
-                let _ = failure
-                    .error
-                    .diagnostics()
-                    .recorded_event()
-                    .set(*event.event_id());
+                // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime
+                // lifecycle failure record, which carries the detail and names the terminal, as
+                // an outcome with an extra native detail does, at the terminal's severity;
+                // otherwise the terminal alone records the failure.
+                let recorded = if detailed {
+                    self.record_required_failure_with_severity(
+                        &failure.error,
+                        &event,
+                        self.events
+                            .request_links(
+                                request,
+                                Some(token.instance_id()),
+                                Some(token.lease_id()),
+                                None,
+                            )
+                            .with_task_id(task_id)
+                            .with_run_id(run_id),
+                        Some(event.severity()),
+                    )
+                } else {
+                    let _ = failure
+                        .error
+                        .diagnostics()
+                        .recorded_event()
+                        .set(*event.event_id());
+                    Ok(())
+                };
                 let failure = match post_admission_ocr_failure_diagnostic {
                     Ok(()) => failure,
                     Err(diagnostic_failure) => {
                         failure.replace_with_poison(*diagnostic_failure.error)
                     }
+                };
+                let failure = match recorded {
+                    Ok(()) => failure,
+                    Err(record_error) => failure.replace_with_poison(record_error),
                 };
                 return Err(self.cleanup_composite_failure_with_run_links(
                     request,
@@ -5699,11 +5850,23 @@ impl HostShared {
             return prepared.run(runtime);
         }
 
-        let Some(binding) = task_request.recovery() else {
-            return fail_contained_task_entry(
-                runtime,
-                "contained_task_home_recovery_binding_missing",
-            );
+        // Workflow #336 L2d (R23): a request that binds no recovery package takes the
+        // return-home package actingd configures for the package's game and server.
+        let (binding, configured) = match task_request.recovery() {
+            Some(binding) => (binding, false),
+            None => match self
+                .configured_return_home(prepared.game(), prepared.server())
+                .map_err(RequestFailure::poison_without_terminal)
+                .map_err(ContainedTaskRunError::Boundary)?
+            {
+                Some(binding) => (binding, true),
+                None => {
+                    return fail_contained_task_entry(
+                        runtime,
+                        "contained_task_home_recovery_binding_missing",
+                    );
+                }
+            },
         };
         let recovery_request =
             ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256()).map_err(
@@ -5757,7 +5920,28 @@ impl HostShared {
                 return fail_contained_task_entry(runtime, code);
             }
         };
-        if !recovery.is_entry_recovery_compatible() {
+        if configured {
+            // A configured package passes the checks of a return-home chain layer (its
+            // `scheduling_outcome` without a designated operation allowed and ignored) and
+            // declares no prerequisite package; a refusal, like the chain's, starts no ladder.
+            if let Some(detail) = prerequisite::configured_return_home_incompatibility(
+                &recovery,
+                &PackageIdentity::of(prepared),
+            ) {
+                runtime
+                    .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                        disposition: TaskEntryTargetDisposition::FailClosed,
+                        failure_code: Some(prerequisite::INCOMPATIBLE.to_owned()),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                return Err(ContainedTaskRunError::Task(
+                    actingcommand_execution_kernel::ContainedTaskError::with_detail(
+                        prerequisite::INCOMPATIBLE,
+                        detail,
+                    ),
+                ));
+            }
+        } else if !recovery.is_entry_recovery_compatible() {
             return fail_contained_task_entry(
                 runtime,
                 "contained_task_home_recovery_package_incompatible",
@@ -5785,7 +5969,11 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
             }
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
-            recovery.run_entry_recovery(&mut recovery_runtime)
+            if configured {
+                recovery.run_as_prerequisite(&mut recovery_runtime)
+            } else {
+                recovery.run_entry_recovery(&mut recovery_runtime)
+            }
         };
         if let Err(ContainedTaskRunError::Task(error)) = &recovery_execution {
             runtime
@@ -5875,7 +6063,10 @@ impl HostShared {
                 executed_steps: recovery_outcome.executed_steps,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        if !prepared.terminal_matches_required_home(&final_page) {
+        // Workflow #336 L2d (R24): a configured `linear_steps` package ends on a Lab page id
+        // (`<game>/step_<n>_home`), never the literal home; only the recheck below decides.
+        let configured_linear = configured && recovery.execution_mode() == "linear_steps";
+        if !configured_linear && !prepared.terminal_matches_required_home(&final_page) {
             return fail_contained_task_entry(
                 runtime,
                 "contained_task_home_recovery_terminal_non_home",
@@ -5995,12 +6186,23 @@ impl HostShared {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if recovery_packages.len() > 1
-            || recovery_packages.first().is_some_and(|recorded| {
+        // Workflow #336 L2b: a prerequisite gate opens at most four distinct packages (three
+        // declared and one return-home, L2c), each the request's binding or one of the host's
+        // prerequisite packages.
+        if recovery_packages.len() > prerequisite::MAX_PREREQUISITE_DEPTH + 1
+            || recovery_packages
+                .iter()
+                .enumerate()
+                .any(|(index, recorded)| recovery_packages[..index].contains(recorded))
+            || recovery_packages.iter().any(|recorded| {
                 task_request
                     .recovery()
                     .map(|binding| binding.expected_sha256())
                     != Some(*recorded)
+                    && !self
+                        .prerequisite_packages
+                        .values()
+                        .any(|binding| binding.expected_sha256() == *recorded)
             })
         {
             return Err(contained_task_replay_denied(

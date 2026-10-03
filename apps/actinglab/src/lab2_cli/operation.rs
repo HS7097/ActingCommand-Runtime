@@ -4,10 +4,29 @@ use super::*;
 use actingcommand_contract::{
     ContainedLabOperationRequest, LabArrivalCondition, LabOperationSelection, LabProjectionHint,
 };
+use actingcommand_lab::{
+    ClickEffect, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest, RecordPoint,
+    RecordingLock, record_commit_click, record_plan_click,
+};
 
 pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "do")?;
-    let selection = selection(flags)?;
+    // `do --capture --record`: the lock is held across the device click; the point comes from
+    // the open step's rectangle, planned before anything is pressed.
+    let recording = if flags.bool("--record") {
+        Some(begin_record_click(global, flags)?)
+    } else {
+        None
+    };
+    let selection = match &recording {
+        Some((_, plan)) => LabOperationSelection::Coordinates {
+            action: InputAction::Tap {
+                x: plan.point.x,
+                y: plan.point.y,
+            },
+        },
+        None => selection(flags)?,
+    };
     let after = flags
         .optional("--after-page")
         .map(|page_id| {
@@ -122,6 +141,18 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         }
         let projected = project_record(&payload, &projection_request)
             .map_err(|error| CliError::device(error.to_string()))?;
+        if let Some((lock, plan)) = &recording {
+            if !matches!(record.effect, EffectDisposition::NotPerformed) {
+                return commit_record_click(lock, plan, record, &payload, projected);
+            }
+            if record.failure.is_none() {
+                return Err(CliError::device(
+                    "do --capture --record: the Runtime reported the click as not performed \
+                     without a failure; nothing was recorded",
+                )
+                .with_details(projected));
+            }
+        }
         if let Some(failure) = &record.failure {
             let error = if failure.code == "lab_element_unavailable" {
                 CliError::safety_blocked(
@@ -187,4 +218,108 @@ fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {
         }
     };
     Ok(LabOperationSelection::Coordinates { action })
+}
+
+/// Plans the recorded click: the instance check, the recording lock and the point inside
+/// the open step's rectangle (`--tap-rect` declares it, `--tap` picks the point).
+fn begin_record_click(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+) -> CliOutcome<(RecordingLock, ClickPlan)> {
+    let instance = lab2_instance(global, flags);
+    let tap_rect = match flags.values("--tap-rect").as_slice() {
+        [] => None,
+        [value] => Some(crate::commands::parse_record_mark_rect(
+            value,
+            "--tap-rect",
+        )?),
+        _ => return Err(CliError::usage("--tap-rect may be given once")),
+    };
+    let tap = match flags.values("--tap").as_slice() {
+        [] => None,
+        [value] => {
+            let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+            let [x, y] = parts.as_slice() else {
+                return Err(CliError::usage(format!("--tap must be x,y, got {value}")));
+            };
+            let coordinate = |text: &str| {
+                text.parse::<i32>()
+                    .map_err(|_| CliError::usage("Lab coordinates must be i32 integers"))
+            };
+            Some(RecordPoint {
+                x: coordinate(x)?,
+                y: coordinate(y)?,
+            })
+        }
+        _ => return Err(CliError::usage("--tap may be given once")),
+    };
+    let lock =
+        crate::commands::record_flag_begin(global, flags, &instance, "do --capture --record")?;
+    let plan = record_plan_click(&lock, &PlanClickRequest { tap, tap_rect })?;
+    Ok((lock, plan))
+}
+
+/// Records the Runtime outcome of the planned click on its step; the operation summary
+/// stays in the output and in any error.
+fn commit_record_click(
+    lock: &RecordingLock,
+    plan: &ClickPlan,
+    record: &actingcommand_contract::LabOperationRecord,
+    payload: &Value,
+    mut projected: Value,
+) -> CliOutcome<Value> {
+    let opaque = |value: Option<Value>| -> CliOutcome<Option<OpaqueJson>> {
+        value
+            .filter(|value| !value.is_null())
+            .map(|value| OpaqueJson::from_serializable(&value))
+            .transpose()
+    };
+    let informational = |field: &str| -> Option<Value> {
+        payload.get(field).cloned().map(|mut value| {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("informational".to_string(), Value::Bool(true));
+            }
+            value
+        })
+    };
+    let prepared = &record.prepared;
+    let carrier = json!({
+        "package_ref": prepared.expected_package_sha256,
+        "actual": prepared.actual_package_sha256
+    });
+    let request = CommitClickRequest {
+        effect: if matches!(record.effect, EffectDisposition::Performed) {
+            ClickEffect::Performed
+        } else {
+            ClickEffect::Indeterminate
+        },
+        has_failure: record.failure.is_some(),
+        carrier_package: Some(OpaqueJson::from_serializable(&carrier)?),
+        req_id: opaque(payload.get("req_id").cloned())?,
+        correlation_id: opaque(payload.get("correlation_id").cloned())?,
+        action_id: opaque(payload.get("action_id").cloned())?,
+        lease_id: opaque(payload.get("lease_id").cloned())?,
+        failure: record
+            .failure
+            .as_ref()
+            .map(OpaqueJson::from_serializable)
+            .transpose()?,
+        before: opaque(informational("before"))?,
+        after: opaque(informational("after"))?,
+    };
+    match record_commit_click(lock, plan, &request) {
+        Ok(outcome) => {
+            projected["record"] = serde_json::to_value(outcome).map_err(|error| {
+                CliError::usage(format!("failed to encode the record: {error}"))
+            })?;
+            Ok(projected)
+        }
+        Err(mut error) => {
+            let mut details = error.details.take().unwrap_or_else(|| json!({}));
+            if let Some(object) = details.as_object_mut() {
+                object.insert("operation".to_string(), projected);
+            }
+            Err(error.with_details(details))
+        }
+    }
 }

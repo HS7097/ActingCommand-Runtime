@@ -568,7 +568,7 @@ transaction state.
 
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
 
-Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same error code and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution.
+Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same error code and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. The `error_code` of a scheduled `linear_steps` task's failure is its failure identity, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution.
 
 ## Task Execution Fields
 
