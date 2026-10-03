@@ -114,7 +114,7 @@ impl ContainedTaskError {
         }
     }
 
-    fn with_detail(code: &'static str, detail: impl Into<String>) -> Self {
+    pub fn with_detail(code: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
             detail: Some(detail.into()),

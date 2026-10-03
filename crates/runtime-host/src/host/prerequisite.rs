@@ -21,7 +21,7 @@
 //! opened (`EntryRecoveryPackageAdmitted`) and not yet closed (`EntryRecoveryCompleted` /
 //! `EntryRecoveryFailed`), or to the dependent package when none is open.
 
-use super::contained_task::{EntryRecoveryRuntime, prepare_contained_task};
+use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, prepare_contained_task};
 use super::failure_settlement::ResolvedLayer;
 use super::*;
 use actingcommand_contract::{PackageRef, TaskTimingBudgetOrigin};
@@ -37,7 +37,7 @@ const CYCLE: &str = "contained_task_prerequisite_cycle";
 const DEPTH_EXCEEDED: &str = "contained_task_prerequisite_depth_exceeded";
 const ADMISSION_FAILED: &str = "contained_task_prerequisite_admission_failed";
 const MISMATCH: &str = "contained_task_prerequisite_mismatch";
-const INCOMPATIBLE: &str = "contained_task_prerequisite_incompatible";
+pub(super) const INCOMPATIBLE: &str = "contained_task_prerequisite_incompatible";
 const STEP_LIMIT: &str = "contained_task_prerequisite_step_limit";
 const FINAL_PAGE_MISSING: &str = "contained_task_prerequisite_final_page_missing";
 const RESOLVE_OPERATION: &str = "resolve_prerequisite_chain";
@@ -70,6 +70,38 @@ fn prerequisite_admission_failure(mut failure: RequestFailure, detail: String) -
     failure
 }
 
+/// Workflow #336 L2d: why a return-home package from `return_home_packages` cannot stand in for
+/// `dependent` on the stuck-recovery ladder's first rung or in the page-graph home entry, as the
+/// detail of a `contained_task_prerequisite_incompatible` refusal: the checks the chain applies to
+/// a return-home layer, then a prerequisite package of its own, which neither path runs.
+pub(super) fn configured_return_home_incompatibility(
+    package: &PreparedContainedTask,
+    dependent: &PackageIdentity,
+) -> Option<String> {
+    let reason = package.prerequisite_incompatibility().or_else(|| {
+        if package.game() != dependent.game {
+            Some("game")
+        } else if package.server() != dependent.server {
+            Some("server")
+        } else if package.resolution() != dependent.resolution {
+            Some("resolution")
+        } else if package.prerequisite_package_id().is_some() {
+            Some("return_home_declares_prerequisite")
+        } else {
+            None
+        }
+    })?;
+    Some(format!(
+        "package_id={} reason={reason} source=return_home",
+        package.package_label()
+    ))
+}
+
+/// Workflow #336 L2d: the ladder's refusal of a configured return-home package, before any lease.
+pub(super) fn configured_return_home_refusal(detail: String) -> RequestFailure {
+    prerequisite_refusal(INCOMPATIBLE, detail)
+}
+
 impl HostShared {
     /// The return-home package `layer` falls back to (Workflow #336 L2c, R16): only a
     /// `linear_steps` package that declares no prerequisite package and has a first step page
@@ -87,6 +119,34 @@ impl HostShared {
             .get(&(layer.game().to_owned(), layer.server().to_owned()))
             .filter(|package_id| !visited.contains(*package_id))
             .cloned()
+    }
+
+    /// The binding of the return-home package `return_home_packages` names for `game` and
+    /// `server` (Workflow #336 L2d, R23), for the stuck-recovery ladder and the page-graph home
+    /// entry of a run whose request binds no recovery package. actingd binds every configured
+    /// package id at startup (`return_home_package_unbound`); a host configured otherwise fails.
+    pub(super) fn configured_return_home(
+        &self,
+        game: &str,
+        server: &str,
+    ) -> RuntimeHostResult<Option<&ContainedTaskRecoveryBinding>> {
+        let Some(package_id) = self
+            .return_home_packages
+            .get(&(game.to_owned(), server.to_owned()))
+        else {
+            return Ok(None);
+        };
+        self.prerequisite_packages
+            .get(package_id)
+            .map(Some)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "return_home_package_unbound",
+                    "resolve_return_home_package",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+                .with_native_detail(format!("package_id={package_id}"))
+            })
     }
 
     /// Resolves and admits the prerequisite chain of `prepared` (§5.2.1): empty when it declares

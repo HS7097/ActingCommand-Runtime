@@ -237,6 +237,28 @@ pub(super) struct ContainedRunControl {
     cancellation_reason: AtomicU8,
     /// The committed `task.failed` terminal of this run (slice #316-B4 trigger input).
     failed_terminal: Mutex<Option<FailedTaskTerminal>>,
+    /// Workflow #336 L2d: the prepared package's identity, set once the run executes; the
+    /// stuck-recovery ladder takes the return-home package configured for its game and server.
+    package: std::sync::OnceLock<PackageIdentity>,
+}
+
+/// Workflow #336 L2d: a prepared package's `control.json` game, server and resolution, which a
+/// return-home package from `return_home_packages` must share to stand in for it.
+#[derive(Clone)]
+pub(super) struct PackageIdentity {
+    pub(super) game: String,
+    pub(super) server: String,
+    pub(super) resolution: (u32, u32),
+}
+
+impl PackageIdentity {
+    pub(super) fn of(package: &PreparedContainedTask) -> Self {
+        Self {
+            game: package.game().to_owned(),
+            server: package.server().to_owned(),
+            resolution: package.resolution(),
+        }
+    }
 }
 
 /// A committed `task.failed` terminal: the run it ended and its failure code.
@@ -261,12 +283,29 @@ impl ContainedRunControl {
             deadline_monotonic_ms: AtomicU64::new(0),
             cancellation_reason: AtomicU8::new(Self::NONE),
             failed_terminal: Mutex::new(None),
+            package: std::sync::OnceLock::new(),
         }
     }
 
     /// The run's committed `task.failed` terminal, taken once.
     pub(super) fn take_failed_terminal(&self) -> RuntimeHostResult<Option<FailedTaskTerminal>> {
         Ok(lock(&self.failed_terminal, "take_failed_task_terminal")?.take())
+    }
+
+    /// Workflow #336 L2d: notes the prepared package's identity, once per run.
+    fn note_package(&self, package: &PreparedContainedTask) -> RuntimeHostResult<()> {
+        self.package.set(PackageIdentity::of(package)).map_err(|_| {
+            RuntimeHostError::fatal(
+                "contained_task_package_state_invalid",
+                "note_contained_task_package",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })
+    }
+
+    /// Workflow #336 L2d: the prepared package's identity, once the run executed.
+    pub(super) fn package(&self) -> Option<&PackageIdentity> {
+        self.package.get()
     }
 
     fn set_deadline(&self, deadline_monotonic_ms: u64) -> RuntimeHostResult<()> {
@@ -4778,6 +4817,15 @@ impl HostShared {
             }
             startup_package::HostPackageRun::ReturnHome => failure,
         })?;
+        // Workflow #336 L2d: a configured return-home package on the ladder's first rung passes
+        // the checks of a return-home chain layer against the failed package and declares no
+        // prerequisite package, before its chain and any lease.
+        if let Some(failed) = &pending.configured_return_home
+            && let Some(detail) =
+                prerequisite::configured_return_home_incompatibility(&prepared, failed)
+        {
+            return Err(prerequisite::configured_return_home_refusal(detail));
+        }
         let prerequisites =
             self.resolve_prerequisite_chain(instance_alias, &prepared, || Ok(material_deadline))?;
         // Workflow #335 S5b: a startup or return-home package writes no instance facts; one
@@ -5150,6 +5198,9 @@ impl HostShared {
             contained_task_sampling_seed(&("xorshift64_uniform_rect_v1/run", run_id.transport()))
                 .map_err(RequestFailure::poison_without_terminal)?,
         );
+        control
+            .note_package(&prepared)
+            .map_err(RequestFailure::poison_without_terminal)?;
         let mut runtime = RuntimeContainedTask {
             host: self,
             request,
@@ -5570,11 +5621,14 @@ impl HostShared {
                         RuntimeErrorCode::BackendOperationFailed
                     },
                 );
-                let linear = prepared.execution_mode() == "linear_steps";
+                // Workflow #336 L2d: the page-graph home entry's refusal of a configured
+                // return-home package carries its detail as a linear failure does.
+                let detailed = prepared.execution_mode() == "linear_steps"
+                    || error.code() == prerequisite::INCOMPATIBLE;
                 if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail())
                 {
                     task_error = task_error.with_native_detail(detail);
-                } else if linear && let Some(detail) = error.detail() {
+                } else if detailed && let Some(detail) = error.detail() {
                     // Workflow #336 L2c: a `linear_steps` package's failure always carries the
                     // kernel's detail.
                     task_error = task_error.with_native_detail(detail.to_owned());
@@ -5596,7 +5650,7 @@ impl HostShared {
                 // lifecycle failure record, which carries the detail and names the terminal, as
                 // an outcome with an extra native detail does, at the terminal's severity;
                 // otherwise the terminal alone records the failure.
-                let recorded = if linear {
+                let recorded = if detailed {
                     self.record_required_failure_with_severity(
                         &failure.error,
                         &event,
@@ -5759,11 +5813,23 @@ impl HostShared {
             return prepared.run(runtime);
         }
 
-        let Some(binding) = task_request.recovery() else {
-            return fail_contained_task_entry(
-                runtime,
-                "contained_task_home_recovery_binding_missing",
-            );
+        // Workflow #336 L2d (R23): a request that binds no recovery package takes the
+        // return-home package actingd configures for the package's game and server.
+        let (binding, configured) = match task_request.recovery() {
+            Some(binding) => (binding, false),
+            None => match self
+                .configured_return_home(prepared.game(), prepared.server())
+                .map_err(RequestFailure::poison_without_terminal)
+                .map_err(ContainedTaskRunError::Boundary)?
+            {
+                Some(binding) => (binding, true),
+                None => {
+                    return fail_contained_task_entry(
+                        runtime,
+                        "contained_task_home_recovery_binding_missing",
+                    );
+                }
+            },
         };
         let recovery_request =
             ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256()).map_err(
@@ -5817,7 +5883,28 @@ impl HostShared {
                 return fail_contained_task_entry(runtime, code);
             }
         };
-        if !recovery.is_entry_recovery_compatible() {
+        if configured {
+            // A configured package passes the checks of a return-home chain layer (its
+            // `scheduling_outcome` without a designated operation allowed and ignored) and
+            // declares no prerequisite package; a refusal, like the chain's, starts no ladder.
+            if let Some(detail) = prerequisite::configured_return_home_incompatibility(
+                &recovery,
+                &PackageIdentity::of(prepared),
+            ) {
+                runtime
+                    .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                        disposition: TaskEntryTargetDisposition::FailClosed,
+                        failure_code: Some(prerequisite::INCOMPATIBLE.to_owned()),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                return Err(ContainedTaskRunError::Task(
+                    actingcommand_execution_kernel::ContainedTaskError::with_detail(
+                        prerequisite::INCOMPATIBLE,
+                        detail,
+                    ),
+                ));
+            }
+        } else if !recovery.is_entry_recovery_compatible() {
             return fail_contained_task_entry(
                 runtime,
                 "contained_task_home_recovery_package_incompatible",
@@ -5845,7 +5932,11 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
             }
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
-            recovery.run_entry_recovery(&mut recovery_runtime)
+            if configured {
+                recovery.run_as_prerequisite(&mut recovery_runtime)
+            } else {
+                recovery.run_entry_recovery(&mut recovery_runtime)
+            }
         };
         if let Err(ContainedTaskRunError::Task(error)) = &recovery_execution {
             runtime
@@ -5935,7 +6026,10 @@ impl HostShared {
                 executed_steps: recovery_outcome.executed_steps,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        if !prepared.terminal_matches_required_home(&final_page) {
+        // Workflow #336 L2d (R24): a configured `linear_steps` package ends on a Lab page id
+        // (`<game>/step_<n>_home`), never the literal home; only the recheck below decides.
+        let configured_linear = configured && recovery.execution_mode() == "linear_steps";
+        if !configured_linear && !prepared.terminal_matches_required_home(&final_page) {
             return fail_contained_task_entry(
                 runtime,
                 "contained_task_home_recovery_terminal_non_home",

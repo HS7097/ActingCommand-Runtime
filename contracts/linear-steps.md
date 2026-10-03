@@ -401,9 +401,32 @@ with `contained_task_return_home_entry_unmatched`.
 The code is kept apart from `contained_task_prerequisite_entry_unmatched` so that a stale
 return-home package, maintained with the program, is told from a prerequisite package the
 author declared; neither starts the stuck-recovery ladder. A request's recovery binding plays
-no part in the resolution, and the page-graph home entry does not use the return-home package.
-The ladder's return-home rung still takes the request binding; if that package is a linear
-package, it falls back like any linear run, and so does a linear startup package.
+no part in the resolution. A linear package run by the ladder's return-home rung falls back like
+any linear run, and so does a linear startup package.
+
+**Ladder and page-graph home entry (Workflow #336 L2d, R23).** A run whose request binds no
+recovery package uses the return-home package of its package's game and server in two more
+places. The stuck-recovery ladder's `return_home` rung runs it, with the maximum response
+deadline (`contracts/emulator-control.md`, "Stuck-recovery ladder"). The page-graph home entry
+admits it where it reported `contained_task_home_recovery_binding_missing` before: only after
+the first check did not pass, with the existing failure handling and facts, and it runs as a
+prerequisite package does (its `scheduling_outcome` without a designated operation allowed and
+ignored). On both paths the package passes, once admitted, the checks a return-home chain layer
+passes (the table of "Prerequisite packages": no `recognize_only`, stability termination,
+post-admission OCR, OCR fields, resource readings or designated operation; the game, server and
+resolution of the failed or entering package), and it declares no `prerequisite_package_id` of
+its own, which neither path runs. Otherwise it is refused before it runs with
+`contained_task_prerequisite_incompatible`, detail `package_id=<id> reason=<reason>
+source=return_home` (the reasons of that table, or `return_home_declares_prerequisite`), which
+starts no ladder: on the rung before any lease, recorded as the rung's failure (`runtime.failed`,
+category `recovery_ladder`, the detail as native detail); in the home entry with no
+`EntryRecoveryPackageAdmitted`, as `EntryTargetDisposition { FailClosed }` and the
+task terminal, the detail on a runtime lifecycle failure record after the terminal as under
+"Failure detail" below. In the home entry, a page-graph package's final page must still be the
+home page, while a `linear_steps` package's final page (a Lab page id such as
+`<game>/step_03_home`) is not compared, and only the recheck decides. With a request binding both
+places behave exactly as before; with neither, the rung is skipped (`no_recovery_package`) and
+the home entry fails with `contained_task_home_recovery_binding_missing`.
 
 **Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
 detail of its task failure is always the native detail of a runtime lifecycle failure record
