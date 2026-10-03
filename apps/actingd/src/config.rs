@@ -4,16 +4,18 @@ use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
 use actingcommand_contract::{
-    ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion, InstanceId,
-    InstanceResourcePackage, InstanceResourcePackageKind, PackageRef, RuntimeConfigManifest,
-    digest_named,
+    ContainedTaskRecoveryBinding, ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion,
+    InstanceId, InstanceResourcePackage, InstanceResourcePackageKind, PackageRef,
+    RuntimeConfigManifest, digest_named,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
     EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig,
 };
-use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
+use actingcommand_execution_kernel::{
+    ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
+};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
@@ -112,9 +114,70 @@ pub(super) struct ActingdConfigFile {
     /// ignored and named as `env_override_ignored:<VAR>`, never silently used.
     #[serde(default)]
     allow_env_overrides: Option<bool>,
+    /// Workflow #336 L2b: the packages a `linear_steps` package may name as its
+    /// `prerequisite_package_id`, each with its locator and content reference. Not a
+    /// configuration fact; read at startup.
+    #[serde(default)]
+    prerequisite_packages: Option<Vec<PrerequisitePackageConfigFile>>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
+}
+
+/// One `prerequisite_packages` entry (Workflow #336 L2b): the package id a `linear_steps`
+/// package names, the package locator (a relative path resolves against the configuration
+/// file's directory) and its content reference, in the form of a procedure binding's
+/// `package_digest`. Nothing is opened or hashed at assembly; a run admits the package against
+/// the reference when it resolves its prerequisite chain.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrerequisitePackageConfigFile {
+    package_id: String,
+    package_path: PathBuf,
+    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
+    package_digest: PackageRef,
+}
+
+/// The prerequisite package map by package id: at most `MAX_TASKS` entries
+/// (`prerequisite_packages_size_invalid`), each id valid (`prerequisite_package_id_invalid`)
+/// and unique (`prerequisite_package_duplicate`), each locator checked as a procedure
+/// binding's `package_path` is, under the `prerequisite_package_*` codes.
+fn assemble_prerequisite_packages(
+    configured: Vec<PrerequisitePackageConfigFile>,
+    source_root: &Path,
+) -> Result<BTreeMap<String, ContainedTaskRecoveryBinding>, &'static str> {
+    if configured.len() > MAX_TASKS {
+        return Err("prerequisite_packages_size_invalid");
+    }
+    let mut packages = BTreeMap::new();
+    for entry in configured {
+        if !prerequisite_package_id_valid(&entry.package_id) {
+            return Err("prerequisite_package_id_invalid");
+        }
+        let request =
+            contained_task_request(source_root, &entry.package_digest, Some(entry.package_path))
+                .map_err(|code| match code {
+                    "procedure_package_unavailable" => "prerequisite_package_unavailable",
+                    "procedure_package_not_regular" => "prerequisite_package_not_regular",
+                    "procedure_package_container_unsupported" => {
+                        "prerequisite_package_container_unsupported"
+                    }
+                    "procedure_package_digest_invalid" => "prerequisite_package_digest_invalid",
+                    "procedure_task_request_invalid" | "procedure_package_path_missing" => {
+                        "prerequisite_package_request_invalid"
+                    }
+                    other => other,
+                })?;
+        let binding = ContainedTaskRecoveryBinding::new(
+            request.package_path(),
+            request.expected_sha256().clone(),
+        )
+        .map_err(|_| "prerequisite_package_request_invalid")?;
+        if packages.insert(entry.package_id, binding).is_some() {
+            return Err("prerequisite_package_duplicate");
+        }
+    }
+    Ok(packages)
 }
 
 /// `PerformanceMonitorConfig` pressure streaks (`1..=30`, default 3 each).
@@ -739,6 +802,11 @@ impl ActingdConfigFile {
             .policy
             .map(|policy| policy.assemble(&self.source_root))
             .transpose()?;
+        let prerequisite_packages = self
+            .prerequisite_packages
+            .map(|configured| assemble_prerequisite_packages(configured, &self.source_root))
+            .transpose()?
+            .unwrap_or_default();
         if let Some(policy) = policy.as_ref() {
             policy.validate_registry_modes(&provider)?;
         }
@@ -767,7 +835,8 @@ impl ActingdConfigFile {
         let instances_startup_package_count = startup_packages.len();
         host = host
             .with_startup_packages(startup_packages)
-            .with_stuck_recovery(stuck_recovery);
+            .with_stuck_recovery(stuck_recovery)
+            .with_prerequisite_packages(prerequisite_packages);
         // Every effective value is read back from `host`; the file only says what it named.
         let manifest = manifest::build(&manifest::ManifestInputs {
             host: &host,

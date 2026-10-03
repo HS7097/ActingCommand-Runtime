@@ -33,6 +33,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `owner-journal.md` — the `owner.lock` owner journal: records, the reader's derived state, the in-epoch checkpoint fold, its side-file crash recovery and error codes.
 - `emulator-control.md` — explicit emulator instance start/stop/restart: origin gate, per-instance fence, close-before-stop, tool timeouts and wait criteria, event shape, the `device.connected` program fact and `actingctl emulator`.
 - `scheduling-pause.md` — operator scheduling pause / resume: origin gate, the dispatch gate and its `Deferred` presentation, the instance drain with `contained_task_paused`, status fields, no persistence or expiry, and `actingctl pause` / `resume`.
+- `linear-steps.md` — the `linear_steps` execution mode: its control declaration and the operation `transition` and `optional` fields, admission rules, step-by-step execution with intermediate states, optional steps with their settle and retries for a swallowed input, failure codes and the mapping onto existing ledger records.
 - `application-lifecycle.md` — the `application` effect of task packages (launch / restart / stop of the instance's assigned application), the foreground gate before every pointer input with the `application.foreground` program fact, and the startup package the host schedules after emulator `start` / `restart`.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
 
@@ -208,6 +209,17 @@ the actual effect and does not restart a phase or submit another task. Ordinary
 declarations without phases retain their page-driven semantics. Consumers that
 cannot interpret 0.9/control.v2 reject them explicitly; Lab deep validation uses
 Runtime admission for this contract.
+
+A `Lab-1y.control.v2` control may instead declare `execution_mode` `linear_steps`
+([Linear steps](linear-steps.md)): the task's operations form one chain from its
+entry page to its target page, run step by step without phases, without page-graph
+operation selection and without global page recognition. Each wait evaluates only
+the page it waits for; an operation may declare a `transition` (a recognizable
+intermediate page or a time window), and an operation after the first may be
+`optional` (Workflow #339): its page may not appear, and the run then skips it, with
+a settle that watches the next page for a late one. The run writes only existing
+ledger records; builds without the mode refuse such packages before
+`PackageAdmitted`, and builds without optional steps refuse an `optional` field.
 
 The Rust mainline contract crate lives in:
 

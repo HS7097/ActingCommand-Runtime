@@ -761,6 +761,20 @@ impl OperationParser {
                     ),
                     Err(error) => errors.push(error.message),
                 }
+                if let Some(page) = operation_transition_page_id(operation) {
+                    validate_declared_page_set(
+                        &bundle.task_json_path(),
+                        &format!(
+                            "operation {:?} transition",
+                            operation.get("id").and_then(Value::as_str)
+                        ),
+                        &[page.to_owned()],
+                        &self.game,
+                        &declared_anchor_ids,
+                        &page_rule_ids,
+                        &mut errors,
+                    );
+                }
                 validate_click_shape(bundle, operation, &mut errors);
                 if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
                     if is_env_template_ref(template) {
@@ -1065,6 +1079,16 @@ impl OperationParser {
                     add_page(
                         &self.game,
                         &anchor_id,
+                        &declared_anchor_ids,
+                        &page_rule_ids,
+                        &mut pages,
+                        &mut order,
+                    );
+                }
+                if let Some(anchor_id) = operation_transition_page_id(operation) {
+                    add_page(
+                        &self.game,
+                        anchor_id,
                         &declared_anchor_ids,
                         &page_rule_ids,
                         &mut pages,
@@ -3904,9 +3928,23 @@ fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTr
             for page in operation_destination_page_ids(bundle, operation)? {
                 insert_selected_page_id(game, &page, &mut pages);
             }
+            if let Some(page) = operation_transition_page_id(operation) {
+                insert_selected_page_id(game, page, &mut pages);
+            }
         }
     }
     Ok(pages)
+}
+
+/// Workflow #336 (`linear_steps`): the page of an operation's recognizable intermediate state,
+/// which no other operation field names.
+fn operation_transition_page_id(operation: &Value) -> Option<&str> {
+    let transition = operation.get("transition")?;
+    if transition.get("kind").and_then(Value::as_str) == Some("page") {
+        transition.get("page_id").and_then(Value::as_str)
+    } else {
+        None
+    }
 }
 
 fn insert_selected_page_id(game: &str, page: &str, pages: &mut BTreeSet<String>) {

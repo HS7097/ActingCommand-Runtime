@@ -97,6 +97,19 @@ Known pages and already recognized terminal pages keep their original selection/
 rules. Coordinate inputs still require a recognized page. No desktop recognition template
 is required solely to start the assigned application.
 
+In `linear_steps` packages ([Linear steps](linear-steps.md), Workflow #336 R24/R25) any
+operation may carry this effect instead of a click. Only the first may be `from: "any"`, with
+`entry_page` `"any"`, and that application entry captures and recognizes nothing before its
+effect. The step records `task.step_started`, `application.intent`, then
+`application.completed` followed by `task.effect_completed`; an `application.failed` ends the
+step and the task with no `task.effect_completed` (no guard, no foreground gate, no
+`task.effect_intent`). Its arrival is the next step's recognition, and it is never retried.
+The capability check above runs for linear packages too, before any capture. A `stop` may be
+followed only by a `launch` or `restart`, and the main interface must follow the last
+`launch` or `restart` of the package: a page whose canonical anchor is `home`, or
+`step_<digits>_home` exactly (the page Lab records for `--page home`). Only `linear_steps`
+packages accept the second form; page-graph packages keep the literal `home`.
+
 ## The foreground gate
 
 Before any pointer input (`tap`, `long_tap`, `swipe`, `single_touch_drag_with_vertical_brake_v1`)
@@ -209,7 +222,7 @@ runtime.lifecycle_observed                      startup_package_scheduled, causa
 --- scheduling thread, every event below carries causation C ---
 command.received / command.validated            runtime.task_run (scheduler / runtime)
 lease.requested / lease.granted
-task.requested / task.started ... task.effect_intent
+task.requested / task.started ... task.step_started
 application.intent / application.completed      application.restart
 task.effect_completed ... task.step_finished
 runtime.fact_recorded                           application.foreground = <assigned package>

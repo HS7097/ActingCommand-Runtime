@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+mod linear;
 mod selection;
 mod timing;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
@@ -58,6 +59,8 @@ const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIME
 const MAX_STEP_TIMEOUT_MS: u64 = 60_000;
 const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
+const MAX_PREREQUISITE_PACKAGE_ID_BYTES: usize = 256;
+const PREREQUISITE_ENTRY_UNMATCHED: &str = "contained_task_prerequisite_entry_unmatched";
 const MAX_STABILITY_PIXEL_BYTES: usize = 4;
 const MAX_POST_ADMISSION_OCR_FRAMES: u32 = 256;
 const MAX_POST_ADMISSION_OCR_ITEMS: u32 = 4_096;
@@ -1752,6 +1755,17 @@ pub struct ContainedTaskOutcome {
     pub selected_scheduling_outcome: Option<String>,
 }
 
+/// Workflow #336 L2b: the bounded wait for a `linear_steps` package's first step after its
+/// prerequisite package ran (`PreparedContainedTask::await_linear_entry`).
+#[derive(Debug)]
+pub struct LinearEntryAwait {
+    /// The wait's own timing context; the run's task timing is not started by the wait.
+    pub timing: ContainedTaskTimingContext,
+    /// `None` when the first step passed, otherwise the timed
+    /// `contained_task_prerequisite_entry_unmatched` failure of the spent budget.
+    pub unmatched: Option<ContainedTaskError>,
+}
+
 pub struct PreparedContainedTask {
     control: TaskControl,
     program: TaskProgram,
@@ -1993,11 +2007,77 @@ impl PreparedContainedTask {
             .is_some_and(|required| crate::page_anchor_matches(&self.control.game, page, required))
     }
 
+    /// A package that declares a prerequisite package is never an entry recovery package: the
+    /// home entry recovery path would ignore the declaration (Workflow #336 L2b).
     pub const fn is_entry_recovery_compatible(&self) -> bool {
         self.scheduling_outcome.is_none()
             && self.control.stability_termination.is_none()
             && self.post_admission_ocr.is_none()
             && self.post_admission_fields.is_none()
+            && self.control.prerequisite_package_id.is_none()
+    }
+
+    /// Workflow #336 L2b: the `prerequisite_package_id` of a `linear_steps` package.
+    pub fn prerequisite_package_id(&self) -> Option<&str> {
+        self.control.prerequisite_package_id.as_deref()
+    }
+
+    /// The control resolution, `(width, height)`.
+    pub const fn resolution(&self) -> (u32, u32) {
+        (
+            self.control.resolution.width,
+            self.control.resolution.height,
+        )
+    }
+
+    /// Workflow #336 L2b: the detector page id of a `linear_steps` package's first step, as
+    /// admission resolved it; `None` for an application entry (`from: "any"`, R24) and for
+    /// every other execution mode.
+    pub fn linear_entry_page(&self) -> Option<&str> {
+        if self.control.execution_mode != linear::LINEAR_STEPS {
+            return None;
+        }
+        let entry = self
+            .program
+            .entry_page
+            .as_deref()
+            .filter(|page| *page != linear::ANY_PAGE)?;
+        let mut pages = self
+            .detector
+            .page_ids()
+            .filter(|page| crate::page_anchor_matches(&self.control.game, page, entry));
+        let page = pages.next()?;
+        pages.next().is_none().then_some(page)
+    }
+
+    /// Workflow #336 L2b: whether the package may run as a prerequisite package. Its
+    /// `scheduling_outcome`, when declared without a designated operation, is ignored there.
+    pub fn is_prerequisite_compatible(&self) -> bool {
+        self.prerequisite_incompatibility().is_none()
+    }
+
+    /// Workflow #336 L2b: the first declaration that keeps the package from running as a
+    /// prerequisite package, or `None`.
+    pub fn prerequisite_incompatibility(&self) -> Option<&'static str> {
+        if self.control.execution_mode == "recognize_only" {
+            Some("recognize_only")
+        } else if self.control.stability_termination.is_some()
+            || self.program.stability_termination.is_some()
+        {
+            Some("stability_termination")
+        } else if self.post_admission_ocr.is_some() || self.post_admission_fields.is_some() {
+            Some("post_admission_ocr")
+        } else if self.program.resource_readings.is_some() {
+            Some("resource_readings")
+        } else if self
+            .scheduling_outcome
+            .as_ref()
+            .is_some_and(|declaration| declaration.designated_operation().is_some())
+        {
+            Some("designated_operation")
+        } else {
+            None
+        }
     }
 
     pub fn maximum_executed_steps(&self) -> u32 {
@@ -2031,6 +2111,158 @@ impl PreparedContainedTask {
         let page = self
             .required_home_entry_page()
             .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_required"))?;
+        let frame = runtime
+            .capture()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        self.control.resolution.validate_frame(&frame)?;
+        runtime
+            .record(ContainedTaskTrace::CaptureCompleted {
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let candidate_pages = vec![page.to_owned()];
+        runtime
+            .record(ContainedTaskTrace::RecognitionStarted {
+                candidate_pages: candidate_pages.clone(),
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let result = self
+            .detector
+            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page);
+        let results = Ok(vec![PageOutcome {
+            index: 0,
+            page_id: page.to_owned(),
+            result,
+        }]);
+        runtime
+            .record_page_evaluations("home_preflight", &results, None)
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let evaluation = results
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("single page")
+            .result
+            .map_err(|error| {
+                ContainedTaskError::with_detail(
+                    "contained_task_recognition_failed",
+                    error.to_string(),
+                )
+                .with_ppocr_diagnostics(error.ppocr_diagnostics())
+            })?;
+        let matched = evaluation.matched;
+        let targets = recognized_targets(&self.evaluator, &evaluation)?;
+        runtime
+            .record(ContainedTaskTrace::RecognitionCompleted {
+                candidate_pages,
+                page_label: matched.then(|| page.to_owned()),
+                width: frame.width,
+                height: frame.height,
+                targets,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(matched)
+    }
+
+    /// Workflow #336 L2b: one frame, evaluated for the first step's page of a `linear_steps`
+    /// package only (diagnostic phase `home_preflight`, no task timing), as the home entry
+    /// preflight evaluates its home page.
+    pub fn recognize_linear_entry<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+        let page = self
+            .linear_entry_page()
+            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+        self.recognize_entry_frame(runtime, page)
+    }
+
+    /// Workflow #336 L2b: after a prerequisite package ran, frames of the first step's page are
+    /// recognized one at a time, every capture interval of this package, until the page passes
+    /// or `budget` is spent. The wait keeps its own timing context of `origin` (each capture at
+    /// the `CapturePage` boundary, each sleep at `PageRecognitionWait`); the run's
+    /// `observe_task_timing` is not called. `layer` names the gate layer in the failure detail.
+    pub fn await_linear_entry<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        budget: Duration,
+        origin: actingcommand_contract::TaskTimingBudgetOrigin,
+        layer: usize,
+    ) -> Result<LinearEntryAwait, ContainedTaskRunError<R::Error>> {
+        let page = self
+            .linear_entry_page()
+            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+        let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
+        let started = Instant::now();
+        let timing = ContainedTaskTimingContext::new(started, started + budget, origin);
+        loop {
+            let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
+            let identity = runtime.task_boundary_identity(boundary);
+            let capture_started = Instant::now();
+            let matched = self.recognize_entry_frame(runtime, page);
+            let capture_ended = Instant::now();
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started: capture_started,
+                ended: capture_ended,
+                succeeded: matched.is_ok(),
+            });
+            if matched? {
+                return Ok(LinearEntryAwait {
+                    timing,
+                    unmatched: None,
+                });
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= budget {
+                return Ok(LinearEntryAwait {
+                    timing,
+                    unmatched: Some(
+                        ContainedTaskError::with_detail(
+                            PREREQUISITE_ENTRY_UNMATCHED,
+                            format!(
+                                "layer={layer} package_id={} required_page={page}",
+                                self.package_label()
+                            ),
+                        )
+                        .with_timing(Some(TaskTimingFailure {
+                            scope: TaskTimingScope::PageRecognition,
+                            stage: TaskTimingStage::EntryRecognition,
+                            elapsed_ms: elapsed.as_millis() as u64,
+                            limit_ms: budget.as_millis() as u64,
+                            required_delay_ms: None,
+                        })),
+                    ),
+                });
+            }
+            let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
+            let identity = runtime.task_boundary_identity(boundary);
+            let wait_started = Instant::now();
+            thread::sleep(interval.min(budget.saturating_sub(elapsed)));
+            let wait_ended = Instant::now();
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started: wait_started,
+                ended: wait_ended,
+                succeeded: true,
+            });
+        }
+    }
+
+    /// The single-frame evaluation of `page` shared by the linear entry checks; the body of
+    /// `recognize_required_home` for another page.
+    fn recognize_entry_frame<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        page: &str,
+    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
         let frame = runtime
             .capture()
             .map_err(ContainedTaskRunError::operation::<R>)?;
@@ -2180,6 +2412,25 @@ impl PreparedContainedTask {
         )
     }
 
+    /// Workflow #336 L2b: executes an already admitted prerequisite package of a `linear_steps`
+    /// package, entered as a bound recovery package is (`EntryRecovery` budget origin, no home
+    /// entry check, no resource readings).
+    pub fn run_as_prerequisite<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        if !self.is_prerequisite_compatible() {
+            return Err(ContainedTaskError::new("contained_task_prerequisite_incompatible").into());
+        }
+        self.run_with_options(
+            runtime,
+            ContainedTaskRunOptions {
+                entry: ContainedTaskEntry::BoundRecovery,
+                ..ContainedTaskRunOptions::default()
+            },
+        )
+    }
+
     fn run_with_collector<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2216,6 +2467,22 @@ impl PreparedContainedTask {
                 "application_effect_requires_assigned_application",
             )
             .into());
+        }
+        if self.control.execution_mode == linear::LINEAR_STEPS {
+            // Workflow #336: the admitted step plan, resolved again from the admitted program.
+            let plan = self
+                .program
+                .validate_linear(&self.control, &self.detector)?;
+            return self.run_linear_steps(
+                runtime,
+                ocr_collector,
+                &plan,
+                linear::LinearRun {
+                    step_timeout,
+                    capture_interval,
+                    timing: observation_timing,
+                },
+            );
         }
         let initial_application = self.program.operations.first().filter(|operation| {
             operation.from == "any"
@@ -3701,6 +3968,18 @@ struct TaskControl {
     stop_on_confirmation: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
+    /// Workflow #336 L2b: the package a `linear_steps` package runs first when its first step
+    /// does not pass, by package id (`contracts/linear-steps.md`, "Prerequisite packages").
+    #[serde(default)]
+    prerequisite_package_id: Option<String>,
+}
+
+/// Workflow #336 L2b: a `prerequisite_package_id`, and a key of the host's prerequisite package
+/// map, is not empty, at most 256 bytes and has no control character.
+pub fn prerequisite_package_id_valid(package_id: &str) -> bool {
+    !package_id.trim().is_empty()
+        && package_id.len() <= MAX_PREREQUISITE_PACKAGE_ID_BYTES
+        && !package_id.chars().any(char::is_control)
 }
 
 impl TaskControl {
@@ -3750,7 +4029,7 @@ impl TaskControl {
             || self.entry_task_id.trim().is_empty()
             || !matches!(
                 self.execution_mode.as_str(),
-                "recognize_only" | "navigable_route" | "in_page_guard"
+                "recognize_only" | "navigable_route" | "in_page_guard" | "linear_steps"
             )
         {
             return Err(ContainedTaskError::new("contained_task_control_invalid"));
@@ -3776,6 +4055,23 @@ impl TaskControl {
                 return Err(ContainedTaskError::new("contained_task_control_invalid"));
             }
             (_, None) => {}
+        }
+        if let Some(prerequisite) = self.prerequisite_package_id.as_deref() {
+            let invalid = |reason: &str| {
+                ContainedTaskError::with_detail(
+                    "contained_task_control_invalid",
+                    format!("reason={reason}"),
+                )
+            };
+            if self.execution_mode != linear::LINEAR_STEPS {
+                return Err(invalid("prerequisite_requires_linear_steps"));
+            }
+            if !prerequisite_package_id_valid(prerequisite) {
+                return Err(invalid("prerequisite_id_invalid"));
+            }
+            if prerequisite == self.package_id {
+                return Err(invalid("prerequisite_self"));
+            }
         }
         Ok(())
     }
@@ -3912,6 +4208,10 @@ impl TaskProgram {
         {
             return Err(ContainedTaskError::new("contained_task_phases_invalid"));
         }
+        // Workflow #336: a step plan replaces the page-graph checks below.
+        if control.execution_mode == linear::LINEAR_STEPS {
+            return self.validate_linear(control, detector).map(|_| ());
+        }
         validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
         if self.operations.is_empty() {
@@ -3970,6 +4270,26 @@ impl TaskProgram {
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
             operation.validate(control, self.defaults, &self.schema_version)?;
+            if operation.transition.is_some() {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_operation_invalid",
+                    format!(
+                        "operation={} transition requires {}",
+                        operation.id,
+                        linear::LINEAR_STEPS
+                    ),
+                ));
+            }
+            if operation.optional.is_some() {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_operation_invalid",
+                    format!(
+                        "operation={} optional requires {}",
+                        operation.id,
+                        linear::LINEAR_STEPS
+                    ),
+                ));
+            }
             let destination_pages = operation.destination_pages()?;
             validate_page_references(&control.game, &destination_pages, detector)?;
             validate_page_set_overlap(
@@ -4087,6 +4407,10 @@ impl TaskProgram {
         control: &TaskControl,
         detector: &PageDetector,
     ) -> Result<Option<String>, ContainedTaskError> {
+        // Workflow #336: a step plan waits for its first step itself; no host entry preflight.
+        if control.execution_mode == linear::LINEAR_STEPS {
+            return Ok(None);
+        }
         Ok(self
             .entry_page
             .as_deref()
@@ -5266,6 +5590,14 @@ struct TaskOperation {
     guard: Option<OperationGuard>,
     #[serde(default)]
     unguarded_trusted_coordinate: bool,
+    /// Workflow #336: the declared intermediate state after this operation's input; admitted
+    /// only under `linear_steps`.
+    #[serde(default)]
+    transition: Option<linear::TaskTransition>,
+    /// Workflow #339: the operation's page may not appear, and the operation is then skipped;
+    /// admitted only under `linear_steps`.
+    #[serde(default)]
+    optional: Option<linear::TaskOptional>,
 }
 
 impl TaskOperation {
