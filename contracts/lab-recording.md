@@ -5,7 +5,8 @@ step is one screen with its recognition marks and at most one effect, a click re
 an application operation (R24), and the last step only recognizes. This document is the
 first half of the contract (Workflow #336): the recording state, the commands that build
 it, the five mark families with their mark-time self-test, steps and transitions,
-remediation, application steps, `--record` on the device commands and the recording lock.
+remediation, application steps, optional steps, `--record` on the device commands and the
+recording lock.
 Package generation by `record stop` is described in the second half.
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
@@ -68,7 +69,8 @@ command deletes nothing and names the files it already wrote.
 - All frames of a recording have one size; it becomes the package coordinate space and
   resolution (`record_frame_size_mismatch`).
 - Fields added later use `serde(default, skip_serializing_if)`: `application` (see
-  "Application steps") is absent on steps without one.
+  "Application steps") and `optional` (see "Optional steps") are absent on steps without
+  one.
 
 ## Commands
 
@@ -106,7 +108,8 @@ not, frames can only be added with `record mark --frame`).
 record mark [--step <n>] [--frame <png>] [--sample <png>]… [--page <name>]
             [--template <id>=x,y,w,h]… [--color <id>=x,y,w,h]… [--reuse <id>]…
             [--click x,y,w,h | --click-from <id>] [--click-guard <id>] [--click-retry <n>]
-            [--replace-click] [--remove <id>]… [--dry-run] [--state-dir <dir>]
+            [--replace-click] [--remove <id>]… [--optional [--settle-ms <0..60000>] | --not-optional]
+            [--dry-run] [--state-dir <dir>]
 record mark [--step <n>] [--frame <png>] [--template …]… [--color …]… [--reuse <id>]…
             --application <launch|restart|stop|force-stop> [--replace-click]
 record mark --step <k> --transition none|page|window [--frame <png>] [--sample <png>]…
@@ -132,7 +135,8 @@ the color digest, OCR and check families:
         {"id":"check/ready","family":"check","all_of":["ui/start","state/start"]}],
  "reuse":[],"remove":[],
  "click":{"from":"ui/start"},"click_guard":null,"retry":null,"replace_click":false,
- "transition":null,"replace_transition":false,"step_action":null,"application":null}
+ "transition":null,"replace_transition":false,"step_action":null,"application":null,
+ "optional":null,"optional_settle_ms":null}
 ```
 
 A page transition after the click of step 3, a window transition, clearing it, and one step
@@ -189,9 +193,10 @@ Rules:
   interval_ms 1000}`; the request form takes any `interval_ms` in 1..5000.
 
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
-click, application, transition, step_state{marks, frames, effect, transition, closed},
-closed_step, dry_run}`. `step_state.effect` is `none`, `click_declared`, `click_executed`,
-`click_indeterminate`, `application_declared` or `application_executed`.
+click, application, transition, step_state{marks, frames, effect, transition, closed,
+optional}, closed_step, dry_run}`. `step_state.effect` is `none`, `click_declared`,
+`click_executed`, `click_indeterminate`, `application_declared` or `application_executed`;
+`step_state.optional` is `null` or `{settle_ms}`.
 
 ### record status
 
@@ -206,6 +211,7 @@ reason}`, or
          entry: "any" | "page",
          click{rect, source, executed, outcome, attempts, needs_review}|null,
          application{action, cli_verb, source, executed, attempts[], needs_review}|null,
+         optional: null | {settle_ms},
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
          closed, closed_by}],
  artifact|null, record_flag_state_dir, record_flag_reachable}
@@ -271,9 +277,9 @@ arrival: `record mark --frame` without `--step` then targets that open step exac
     the step again; the click can be executed again or replaced.
   - `--close-step` closes the open step that has a declared click (not executed, or with an
     indeterminate outcome) as `closed_by:"author"`.
-  - `--to-transition n` turns step n (the last effective step: no click, at least one mark)
-    into the page transition of the previous effective step m (which has a click and no
-    transition yet). Its frames (roles `transition`/`transition_sample`), marks and reused
+  - `--to-transition n` turns step n (the last effective step: no click, not optional, at
+    least one mark) into the page transition of the previous effective step m (which has a
+    click and no transition yet). Its frames (roles `transition`/`transition_sample`), marks and reused
     ids move into `steps[m].transition` with `source:"converted_from_step"`,
     `converted_step:n`; step n stays in the file with `converted_to_transition:true`. The
     next frame opens a new step. Any unmet condition is `record_to_transition_invalid`.
@@ -426,8 +432,10 @@ the field is `"application": null | {"action": "restart"}`.
   step marked `--page home` (its page id is `step_<nn>_home`, which counts as the main
   interface). `record stop` (package generation, second half of this contract) refuses a
   recording without it; `record mark` and `session app --record` do not check it. Screens a
-  cold start shows only sometimes (a daily notice, an update prompt) cannot branch in a
-  linear-steps package; a failure there, before the main interface, is only run again.
+  cold start shows only sometimes (a daily notice, an update prompt) are recorded as optional
+  steps between the title and the main interface (`any → restart → title → [notice?] →
+  home`, see "Optional steps"); the main interface step itself cannot be optional. A failure
+  before the main interface is only run again.
 
 ### `session app … --record`
 
@@ -464,6 +472,78 @@ the field is `"application": null | {"action": "restart"}`.
   recording it: do not use it during a recording. A build without application steps refuses
   the flag with `record_flag_unsupported` before any request.
 
+## Optional steps
+
+A step whose screen a run does not always show (a daily notice, a reward pop-up, an update
+prompt) is marked optional (Workflow #339). The package skips an optional step whose page
+does not appear: its page is not recognized, its effect is not executed and nothing is
+recorded for it. After the page that follows a run of optional steps is first seen, the
+package keeps watching for a late optional page for `settle_ms`. The generated operation
+carries `"optional":{"settle_ms":S}` (package generation, second half of this contract).
+
+```
+record mark [--step <k>] [--frame <png>] [marks…] [--click … | --click-from <id>] [--click-retry <n>]
+            --optional [--settle-ms <0..60000>]
+record mark [--step <k>] --not-optional
+```
+
+- `--optional` applies to the step the command targets, as marks do: `--step k`, the step a
+  new `--frame` opens, or the open step. Without `--settle-ms`, a step that is not optional
+  yet takes 2000 ms and an optional step keeps its value. `--not-optional` clears it;
+  clearing a step that is not optional changes nothing.
+- They go in one command with the step's marks, samples, page and click. Combined with
+  `--transition` or a step operation (`--drop-step`, `--reopen-step`, `--close-step`,
+  `--to-transition`) they are `validation_failed` (2), as are `--optional` with
+  `--not-optional` and `--settle-ms` without `--optional`.
+- Request form: `"optional": null | true | false` and `"optional_settle_ms": null | n`;
+  `optional_settle_ms` needs `"optional": true` (`validation_failed`, 2).
+- The step is checked after its effect is applied, and a refusal writes nothing:
+
+| code | exit | when |
+|---|---|---|
+| `record_optional_settle_invalid` | 2 | `--settle-ms` above 60000 (`details{settle_ms, max_settle_ms}`) |
+| `record_optional_first_step` | 3 | the step is the first effective step: the package starts from its page; start the recording one screen earlier |
+| `record_optional_application` | 3 | the step has an application operation, also one declared in the same command or added to an optional step: there is no conditional restart |
+| `record_to_transition_invalid`, reason `optional` | 3 | `--to-transition n` on an optional step: a transition must be seen |
+
+- Whether an optional step is the last step, or the main interface after a restart, is
+  checked by `record stop` (second half of this contract), not by `record mark`.
+- `recording.json`: the step carries `"optional":{"settle_ms":2000,"marked_at_unix_ms":…}`;
+  `marked_at_unix_ms` is set when the step becomes optional or its settle changes. A step
+  without it has no `optional` key, so a recording without optional steps is byte-identical
+  to one written by a build without them, and older recordings are read unchanged.
+  `step_state` and the steps of `record status` show `optional: null | {settle_ms}`; the
+  success status stays `marks_recorded`.
+- Builds without optional steps (#336 L3 and L3b) refuse the flags (`record mark does not
+  accept: --optional`) and a request with `optional` (unknown field), both exit 2 with the
+  recording unchanged, and cannot read a recording that has an optional step (unknown
+  field). Do not mix builds during a recording.
+
+### Inserting an optional step offline
+
+A pop-up that did not appear while recording is inserted from a whole frame of it with the
+recording's size, taken from:
+
+- `capture --out <png>` on a day the pop-up appears, or
+- the frame of a failed run kept in the actingd evidence store (a PNG such as
+  `artifacts/<nn>/artifact_<id>.png`).
+
+Right after the effect of the step before it was executed:
+
+1. `record mark --frame <popup.png> --template … --click … --optional [--settle-ms n]`: the
+   previous step has its effect, so the offline frame opens a new step.
+2. `record mark --close-step`: the offline step declares a click that was not executed, and
+   `capture --record` would refuse it (`record_step_click_not_executed`).
+3. `capture --record` of the next screen.
+4. A second copy of the same pop-up from the same PNG also needs `--close-step` first: an
+   offline frame byte-identical to the open step's primary frame does not open a new step
+   (it targets that step). The copy takes the first copy's marks with `--reuse <id>` and
+   the same click rectangle.
+
+Steps are only appended with new serial numbers, and a stopped recording cannot be marked:
+a pop-up found missing after the recording means recording again, which can be assembled
+offline from frames kept with the earlier recording.
+
 ## Recording lock
 
 Every state-writing command (`record start`, `mark`, `stop` including `--dry-run`, the old
@@ -488,8 +568,8 @@ not lock.
 
 | exit | codes |
 |---|---|
-| 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists` |
+| 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid` |
+| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator) |

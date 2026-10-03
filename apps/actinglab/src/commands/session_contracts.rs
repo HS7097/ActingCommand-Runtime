@@ -347,6 +347,16 @@ fn session_record_policy_payload(
                 "recorded": "application_recorded",
                 "indeterminate": "record_application_indeterminate"
             },
+            "optional_steps": {
+                "mark_flags": ["--optional", "--settle-ms <0..60000>", "--not-optional"],
+                "request_fields": ["optional", "optional_settle_ms"],
+                "default_settle_ms": 2000,
+                "batched_with": ["marks", "click"],
+                "not_batched_with": ["--transition", "--drop-step", "--reopen-step", "--close-step", "--to-transition"],
+                "refusals": ["record_optional_settle_invalid", "record_optional_first_step", "record_optional_application"],
+                "to_transition_refusal_reason": "optional",
+                "offline_insertion": "record mark --frame <png> ... --click ... --optional, then record mark --close-step, then capture --record"
+            },
             "recording_lock": {
                 "file": "<state>/record-<instance>.lock",
                 "busy": "record_busy",

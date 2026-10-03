@@ -597,7 +597,7 @@ pub(crate) fn session_layer_capability_contract() -> Value {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
                 "recovery_policy_defers_without_matching_lease": true,
-                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "session record build-task", "session record promote", "record mark --frame <png>", "record mark --request <file>", "capture --record", "observe --capture --record"]
+                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "session record build-task", "session record promote", "record mark --frame <png>", "record mark --request <file>", "record mark --step <k> --optional [--settle-ms <ms>]", "record mark --step <k> --not-optional", "capture --record", "observe --capture --record"]
             },
             "control": {
                 "requires_lease": true,

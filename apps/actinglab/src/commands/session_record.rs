@@ -3366,6 +3366,9 @@ const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--close-step",
     "--to-transition",
     "--application",
+    "--optional",
+    "--not-optional",
+    "--settle-ms",
 ];
 
 /// `record mark`: flags or a `actingcommand.lab-record-mark.v1` request, applied by the Lab
@@ -3483,6 +3486,17 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         max_attempts,
         interval_ms: 1000,
     });
+    let optional = match (
+        record_flag_switch(flags, "--optional")?,
+        record_flag_switch(flags, "--not-optional")?,
+    ) {
+        (true, true) => {
+            return Err(CliError::usage("give one of --optional and --not-optional"));
+        }
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    };
     let mut request = MarkRequest {
         schema_version: LAB_RECORD_MARK_SCHEMA.to_string(),
         step: number("--step")?,
@@ -3501,6 +3515,8 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         step_action: None,
         application: record_flag_value(flags, "--application")?
             .map(|action| ApplicationSpec { action }),
+        optional,
+        optional_settle_ms: millis("--settle-ms")?,
     };
     let timeout_ms = millis("--transition-timeout-ms")?;
     let min_ms = millis("--min-ms")?;

@@ -12,6 +12,10 @@ pub const LAB_RECORD_MARK_SCHEMA: &str = "actingcommand.lab-record-mark.v1";
 pub const LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD: f64 = 0.95;
 pub const LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE: u32 = 20;
 pub const LAB_RECORDING_DEFAULT_MATCH_METRIC: &str = "ccoeff_normed";
+/// The settle of `record mark --optional` without `--settle-ms` on a step not optional yet.
+pub const LAB_RECORDING_DEFAULT_SETTLE_MS: u64 = 2_000;
+/// The largest settle of an optional step (the package's largest step timeout).
+pub const LAB_RECORDING_MAX_SETTLE_MS: u64 = 60_000;
 
 /// Opaque JSON carried through the recording as recorded (Runtime references, freshness,
 /// operation evidence). The recording never interprets it.
@@ -107,9 +111,21 @@ pub struct RecordingStep {
     /// The application operation of the step (R24); a step has a click or this, not both.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application: Option<StepApplication>,
+    /// The step's page may not appear; the package then skips the step (Workflow #339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<StepOptional>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
+}
+
+/// An optional step (Workflow #339): after the page that follows its run of optional steps
+/// is first seen, the package keeps watching for a late optional page for `settle_ms`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepOptional {
+    pub settle_ms: u64,
+    pub marked_at_unix_ms: u64,
 }
 
 impl RecordingStep {
@@ -444,6 +460,12 @@ pub struct MarkRequest {
     /// operation (R24).
     #[serde(default)]
     pub application: Option<ApplicationSpec>,
+    /// `true` marks the step optional, `false` clears it (Workflow #339).
+    #[serde(default)]
+    pub optional: Option<bool>,
+    /// The settle of `optional: true` (0..=60000); only with it.
+    #[serde(default)]
+    pub optional_settle_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -604,6 +626,13 @@ pub struct StepStateView {
     pub effect: String,
     pub transition: Option<String>,
     pub closed: bool,
+    pub optional: Option<StepOptionalView>,
+}
+
+/// `optional` of `step_state` and `record status` steps: `null` or `{settle_ms}`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StepOptionalView {
+    pub settle_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -689,6 +718,7 @@ pub struct StepView {
     pub reused: Vec<String>,
     pub click: Option<ClickView>,
     pub application: Option<StepApplication>,
+    pub optional: Option<StepOptionalView>,
     pub transition: Option<TransitionView>,
     pub closed: bool,
     pub closed_by: Option<String>,

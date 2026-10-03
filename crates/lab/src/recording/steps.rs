@@ -13,10 +13,10 @@ use super::marks::{
 };
 use super::model::{
     ApplicationAttempt, ClickExecution, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
-    LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD,
-    LAB_RECORDING_SCHEMA, LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect,
-    RecordedFrame, RecordedMark, RecordingDefaults, RecordingStep, StepApplication, StepClick,
-    StepTransition,
+    LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
+    LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_SCHEMA, LabRecording, MarkFamily,
+    MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordedFrame, RecordedMark, RecordingDefaults,
+    RecordingStep, StepApplication, StepClick, StepOptional, StepTransition,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -493,6 +493,7 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         click: None,
         click_guard: None,
         application: None,
+        optional: None,
         transition: None,
         closed: false,
         closed_by: None,
@@ -1002,7 +1003,7 @@ pub(crate) fn apply_marks(
             || request.click.is_some()
             || request.click_guard.is_some()
             || request.retry.is_some()
-            || request.application.is_none();
+            || (request.application.is_none() && request.optional.is_none());
         if needs_frame {
             return Err(with_details(
                 blocked(
@@ -1016,6 +1017,7 @@ pub(crate) fn apply_marks(
             ));
         }
         apply_application(session, request, target, None)?;
+        apply_optional(&mut session.recording, request, target)?;
         return Ok(MarkApplied {
             step: target,
             opened,
@@ -1130,6 +1132,7 @@ pub(crate) fn apply_marks(
     } else {
         apply_click(session, request, target, &batch)?;
     }
+    apply_optional(&mut session.recording, request, target)?;
 
     // self-test
     let total = batch.own.len() + batch.reused.len();
@@ -1492,6 +1495,67 @@ fn apply_application(
     Ok(())
 }
 
+/// `record mark --optional [--settle-ms n]` / `--not-optional` (Workflow #339), after the
+/// step's effect. Without a settle a step that becomes optional takes the default and an
+/// optional step keeps its value. The first effective step and an application step cannot be
+/// optional; the last step and the main interface after a restart are checked by
+/// `record stop`.
+pub(crate) fn apply_optional(
+    recording: &mut LabRecording,
+    request: &super::model::MarkRequest,
+    target: u32,
+) -> LabResult<()> {
+    let first = effective_indices(recording).first() == Some(&target);
+    let step = step_mut(recording, target)?;
+    match request.optional {
+        None => {}
+        Some(false) => step.optional = None,
+        Some(true) => {
+            let current = step.optional.as_ref().map(|optional| optional.settle_ms);
+            let settle_ms = request
+                .optional_settle_ms
+                .or(current)
+                .unwrap_or(LAB_RECORDING_DEFAULT_SETTLE_MS);
+            if current != Some(settle_ms) {
+                step.optional = Some(StepOptional {
+                    settle_ms,
+                    marked_at_unix_ms: now_unix_ms(),
+                });
+            }
+        }
+    }
+    if step.optional.is_none() {
+        return Ok(());
+    }
+    if first {
+        return Err(with_details(
+            blocked(
+                "record_optional_first_step",
+                format!(
+                    "step {target} is the first step of the recording and cannot be optional: the \
+                     package starts from its page; start the recording one screen earlier"
+                ),
+            ),
+            json!({"step": target}),
+        ));
+    }
+    if let Some(application) = &step.application {
+        return Err(with_details(
+            blocked(
+                "record_optional_application",
+                format!(
+                    "step {target} has the application operation {}; an application step cannot \
+                     be optional (there is no conditional restart): mark the screens after it \
+                     optional, or clear the step with --not-optional",
+                    application.action
+                ),
+            ),
+            json!({"step": target, "application": application.action}),
+        ));
+    }
+    Ok(())
+}
+
 /// `record mark --step k --transition none|page|window`.
 pub(crate) struct TransitionApplied {
     pub(crate) step: u32,
@@ -1787,6 +1851,10 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
     let step = effective_step(recording, index)?;
     if step.click.is_some() || step.application.is_some() {
         return Err(to_transition_invalid(index, "step_has_effect"));
+    }
+    // A transition must be seen; an optional step may not appear (Workflow #339).
+    if step.optional.is_some() {
+        return Err(to_transition_invalid(index, "optional"));
     }
     if !has_marks(step) {
         return Err(to_transition_invalid(index, "step_has_no_marks"));

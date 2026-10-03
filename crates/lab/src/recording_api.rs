@@ -8,10 +8,11 @@ use crate::recording::marks::match_metric;
 use crate::recording::model::{
     ApplicationPlan, AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView,
     CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome, CommitClickRequest,
-    FrameView, LAB_RECORD_MARK_SCHEMA, LabRecordingStart, LabStatus, LabStatusView, MarkOutcome,
-    MarkRequest, MarkStatusView, MarkView, PlanApplicationRequest, PlanClickRequest,
-    RecordStartOptions, RecordedFrame, RecordingDefaults, RecordingStep, StepClick, StepStateView,
-    StepTransition, StepView, TransitionSpec, TransitionView,
+    FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_SETTLE_MS, LabRecordingStart, LabStatus,
+    LabStatusView, MarkOutcome, MarkRequest, MarkStatusView, MarkView, PlanApplicationRequest,
+    PlanClickRequest, RecordStartOptions, RecordedFrame, RecordingDefaults, RecordingStep,
+    StepClick, StepOptionalView, StepStateView, StepTransition, StepView, TransitionSpec,
+    TransitionView,
 };
 use crate::recording::steps::{
     ArrivalMode, FrameMeta, application_action, application_with_click, apply_marks,
@@ -189,6 +190,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             format!("--page '{page}' must match ^[a-z0-9][a-z0-9_]{{0,47}}$"),
         ));
     }
+    validate_optional(request)?;
     let marks_or_click = request.frame.is_some()
         || !request.samples.is_empty()
         || request.page.is_some()
@@ -259,6 +261,39 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         if request.click.is_some() || request.click_guard.is_some() || request.retry.is_some() {
             return Err(application_with_click(request.step));
         }
+    }
+    Ok(())
+}
+
+/// `optional` / `optional_settle_ms` (Workflow #339): batched with the marks and the effect
+/// of the step, never with a transition or a step operation; a settle needs `optional: true`.
+fn validate_optional(request: &MarkRequest) -> LabResult<()> {
+    if request.optional.is_none() && request.optional_settle_ms.is_none() {
+        return Ok(());
+    }
+    if request.transition.is_some() || request.step_action.is_some() {
+        return Err(invalid(
+            "validation_failed",
+            "--optional, --not-optional and --settle-ms cannot be combined with --transition or \
+             a step operation",
+        ));
+    }
+    let Some(settle_ms) = request.optional_settle_ms else {
+        return Ok(());
+    };
+    if request.optional != Some(true) {
+        return Err(invalid("validation_failed", "--settle-ms needs --optional"));
+    }
+    if settle_ms > LAB_RECORDING_MAX_SETTLE_MS {
+        return Err(with_details(
+            invalid(
+                "record_optional_settle_invalid",
+                format!(
+                    "--settle-ms must be in 0..={LAB_RECORDING_MAX_SETTLE_MS}, got {settle_ms}"
+                ),
+            ),
+            json!({"settle_ms": settle_ms, "max_settle_ms": LAB_RECORDING_MAX_SETTLE_MS}),
+        ));
     }
     Ok(())
 }
@@ -630,7 +665,14 @@ fn step_state(step: &RecordingStep) -> StepStateView {
             .as_ref()
             .map(|transition| transition.kind().to_string()),
         closed: step.closed,
+        optional: optional_view(step),
     }
+}
+
+fn optional_view(step: &RecordingStep) -> Option<StepOptionalView> {
+    step.optional.as_ref().map(|optional| StepOptionalView {
+        settle_ms: optional.settle_ms,
+    })
 }
 
 fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
@@ -673,6 +715,7 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
             needs_review: click.needs_review,
         }),
         application: step.application.clone(),
+        optional: optional_view(step),
         transition: step.transition.as_ref().map(transition_view),
         closed: step.closed,
         closed_by: step.closed_by.clone(),
