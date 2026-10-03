@@ -5577,12 +5577,11 @@ impl HostShared {
                         RuntimeErrorCode::BackendOperationFailed
                     },
                 );
+                let linear = prepared.execution_mode() == "linear_steps";
                 if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail())
                 {
                     task_error = task_error.with_native_detail(detail);
-                } else if prepared.execution_mode() == "linear_steps"
-                    && let Some(detail) = error.detail()
-                {
+                } else if linear && let Some(detail) = error.detail() {
                     // Workflow #336 L2c: a `linear_steps` package's failure always carries the
                     // kernel's detail.
                     task_error = task_error.with_native_detail(detail.to_owned());
@@ -5600,16 +5599,41 @@ impl HostShared {
                     code: error.code(),
                     severity,
                 });
-                let _ = failure
-                    .error
-                    .diagnostics()
-                    .recorded_event()
-                    .set(*event.event_id());
+                // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime
+                // lifecycle failure record, which carries the detail and names the terminal, as
+                // an outcome with an extra native detail does; otherwise the terminal alone
+                // records the failure.
+                let recorded = if linear {
+                    self.record_required_failure(
+                        &failure.error,
+                        &event,
+                        self.events
+                            .request_links(
+                                request,
+                                Some(token.instance_id()),
+                                Some(token.lease_id()),
+                                None,
+                            )
+                            .with_task_id(task_id)
+                            .with_run_id(run_id),
+                    )
+                } else {
+                    let _ = failure
+                        .error
+                        .diagnostics()
+                        .recorded_event()
+                        .set(*event.event_id());
+                    Ok(())
+                };
                 let failure = match post_admission_ocr_failure_diagnostic {
                     Ok(()) => failure,
                     Err(diagnostic_failure) => {
                         failure.replace_with_poison(*diagnostic_failure.error)
                     }
+                };
+                let failure = match recorded {
+                    Ok(()) => failure,
+                    Err(record_error) => failure.replace_with_poison(record_error),
                 };
                 return Err(self.cleanup_composite_failure_with_run_links(
                     request,

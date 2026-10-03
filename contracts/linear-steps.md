@@ -405,9 +405,12 @@ no part, and neither the stuck-recovery ladder nor the page-graph home entry use
 return-home package.
 
 **Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
-detail of its task failure is always the native detail of the run's runtime lifecycle failure
-record (at most 1024 bytes): for example `operation=<id> attempts=<n> after_page=<page>
-hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's own details above. The gate
+detail of its task failure is always the native detail of the receipt and of a runtime
+lifecycle failure record (the existing `runtime.failed` with its lifecycle part, severity error)
+written right after the task terminal and naming it, as an outcome with an extra native detail
+is recorded; at most 1024 bytes. For example `operation=<id> attempts=<n> after_page=<page>
+hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's own details above. A
+failure without a detail is recorded by the terminal alone, as before. The gate
 carries a prerequisite or return-home package's own failure out as its code, with its detail
 only for a recognition failure or an unknown page ("Prerequisite packages" above). A page-graph
 package's failure is unchanged: only the two resource-reading codes carry their detail.
@@ -451,6 +454,7 @@ linear run is read by older builds.
 | Attempt end | `StepFinished` | the next step's page, the step's own page (a swallowed input) or `<unrecognized>` |
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait`, `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
 | End | `Finalizing`, `TerminalCommitted` | the final page is the target page; `executed_steps` the operation count on success, the dispatched operations on failure |
+| A failure with a kernel detail | a runtime lifecycle failure record (`runtime.failed`) after the terminal, naming it | the detail as its native detail ("Failure detail" above) |
 | Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the last operation | unchanged |
 
 Candidate pages are never duplicated, since the admission rules keep an operation's own page,
