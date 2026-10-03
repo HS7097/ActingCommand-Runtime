@@ -34,6 +34,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `emulator-control.md` — explicit emulator instance start/stop/restart: origin gate, per-instance fence, close-before-stop, tool timeouts and wait criteria, event shape, the `device.connected` program fact and `actingctl emulator`.
 - `scheduling-pause.md` — operator scheduling pause / resume: origin gate, the dispatch gate and its `Deferred` presentation, the instance drain with `contained_task_paused`, status fields, no persistence or expiry, and `actingctl pause` / `resume`.
 - `linear-steps.md` — the `linear_steps` execution mode: its control declaration and the operation `transition` field, admission rules, step-by-step execution with intermediate states and retries for a swallowed input, failure codes and the mapping onto existing ledger records.
+- `policy-suspension.md` — the failure identity a scheduled `linear_steps` task's settlement records as its `error_code`, which failures accumulate toward a pause, the immediate rerun, lifting a pause by a package update, and the read-only `actingd suspended` report.
 - `application-lifecycle.md` — the `application` effect of task packages (launch / restart / stop of the instance's assigned application), the foreground gate before every pointer input with the `application.foreground` program fact, and the startup package the host schedules after emulator `start` / `restart`.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
 

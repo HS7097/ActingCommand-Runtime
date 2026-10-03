@@ -4859,6 +4859,8 @@ impl HostShared {
         context: &PolicyRunContext,
         task_request: &ContainedTaskRequest,
     ) -> Result<(RuntimeRequest, OperationSuccess), RequestFailure> {
+        // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item).
+        self.register_scheduled_resolution(context.decision_id())?;
         lock(&self.policy, "validate_policy_run_context")?
             .validate_run_context(context)
             .map_err(|error| {
@@ -4977,15 +4979,13 @@ impl HostShared {
                 .and_then(|deadline| self.package_material_deadline(deadline))
         };
         let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
-            let prepared = prepare_contained_task(
+            Some(self.prepare_scheduled_package(
+                context.decision_id(),
                 instance_alias,
                 task_request,
-                self.execution.vision_provider(),
                 material_deadline,
-            )?;
-            let prerequisites =
-                self.resolve_prerequisite_chain(instance_alias, &prepared, prerequisite_deadline)?;
-            Some((prepared, prerequisites))
+                prerequisite_deadline,
+            )?)
         } else {
             None
         };
@@ -5031,20 +5031,13 @@ impl HostShared {
         }
         let (prepared, prerequisites) = match prepared {
             Some(prepared) => prepared,
-            None => {
-                let prepared = prepare_contained_task(
-                    instance_alias,
-                    task_request,
-                    self.execution.vision_provider(),
-                    material_deadline,
-                )?;
-                let prerequisites = self.resolve_prerequisite_chain(
-                    instance_alias,
-                    &prepared,
-                    prerequisite_deadline,
-                )?;
-                (prepared, prerequisites)
-            }
+            None => self.prepare_scheduled_package(
+                context.decision_id(),
+                instance_alias,
+                task_request,
+                material_deadline,
+                prerequisite_deadline,
+            )?,
         };
         let expected_outcome_keys = lock(&self.policy, "validate_policy_outcome_declaration")?
             .referenced_outcome_keys(context)

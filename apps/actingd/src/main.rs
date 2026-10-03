@@ -8,6 +8,7 @@ mod check_config;
 mod config;
 mod ledger_maintenance;
 mod owner_unlock;
+mod suspended;
 
 // Test-only: the shared sealed C4 fixture support, reused for its 16x9 fake-device fixtures.
 #[cfg(test)]
@@ -74,6 +75,12 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         .is_some_and(|argument| argument == "unlock-owner")
     {
         return owner_unlock::run(arguments);
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "suspended")
+    {
+        return suspended::run(arguments);
     }
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {

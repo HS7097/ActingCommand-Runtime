@@ -2,11 +2,13 @@
 
 //! Runtime-owned failure, activity-window, and loop-budget state.
 
+use crate::failure_identity::{FailureIdentity, IdentityLayer, SuspensionLiftView};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetDenial,
-    PolicyBudgetDimension, PolicyBudgetReceipt, PolicyExecutionEventData, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, RuntimeErrorCode,
+    PackageRef, PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord,
+    PolicyBudgetDenial, PolicyBudgetDimension, PolicyBudgetReceipt, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord,
+    RuntimeErrorCode,
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
@@ -40,6 +42,19 @@ struct FailureStreak {
     escalation_streak: u16,
     disposition: PolicyFailureDisposition,
     retry_at_unix_ms: Option<u64>,
+    /// Workflow #336 L6 (§12.5, §12.7): the dispatch whose execution recorded this failure.
+    decision_id: String,
+    /// Set only while the pair is paused: what the suspension is lifted against.
+    paused_on: Option<PausedOn>,
+}
+
+/// Workflow #336 L6 (§12.7): the main package digest the paused dispatch was bound to and the
+/// prerequisite layers its failure identity names (none for any other failure code). Memory
+/// only; replay rebuilds it from the dispatch and execution records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PausedOn {
+    package_digest: Option<PackageRef>,
+    layers: Vec<IdentityLayer>,
 }
 
 #[derive(Default)]
@@ -55,20 +70,33 @@ pub(crate) struct PolicyControlState {
 }
 
 impl PolicyControlState {
+    #[cfg(test)]
     pub(crate) fn preview_admission(
         &self,
         catalog: &CompiledCatalog,
         intent: &DispatchIntent,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
+        self.preview_admission_lifted(catalog, intent, now_unix_ms, None)
+    }
+
+    /// The live admission gate. A paused pair is admitted again once `lift` shows its
+    /// suspension lifted (Workflow #336 L6, §12.7); without a view nothing is lifted.
+    pub(crate) fn preview_admission_lifted(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        now_unix_ms: u64,
+        lift: Option<&SuspensionLiftView<'_>>,
+    ) -> RuntimeHostResult<PolicyAdmissionRecord> {
         let result = self
-            .preview_failure_disposition(intent, now_unix_ms)
+            .preview_failure_disposition(intent, now_unix_ms, lift)
             .and_then(|()| self.preview_admission_at(catalog, intent, now_unix_ms));
         match result {
             Err(mut error) if is_availability_denial(&error) => {
                 let mut rejection = error.policy_rejection();
                 rejection.next_eligible_unix_ms =
-                    self.next_admission_time(catalog, intent, now_unix_ms)?;
+                    self.next_admission_time(catalog, intent, now_unix_ms, lift)?;
                 error.lifecycle.policy_rejection = Some(Box::new(rejection));
                 Err(error)
             }
@@ -76,14 +104,35 @@ impl PolicyControlState {
         }
     }
 
+    /// Whether the pair's suspension is lifted under `lift` (§12.7).
+    fn suspension_lifted(
+        failure: &FailureStreak,
+        intent: &DispatchIntent,
+        lift: Option<&SuspensionLiftView<'_>>,
+    ) -> bool {
+        let (Some(view), Some(paused_on)) = (lift, failure.paused_on.as_ref()) else {
+            return false;
+        };
+        view.lifted(
+            &intent.procedure_ref,
+            paused_on.package_digest.as_ref(),
+            &paused_on.layers,
+        )
+        .is_some()
+    }
+
     fn preview_failure_disposition(
         &self,
         intent: &DispatchIntent,
         now_unix_ms: u64,
+        lift: Option<&SuspensionLiftView<'_>>,
     ) -> RuntimeHostResult<()> {
         let key = (intent.task_id.clone(), intent.instance_id.clone());
         if let Some(failure) = self.failure_streaks.get(&key) {
             if failure.disposition == PolicyFailureDisposition::PausedTask {
+                if Self::suspension_lifted(failure, intent, lift) {
+                    return Ok(());
+                }
                 return Err(request("policy_task_paused", "reserve_policy_budget"));
             }
             if failure
@@ -213,14 +262,16 @@ impl PolicyControlState {
         catalog: &CompiledCatalog,
         intent: &DispatchIntent,
         now_unix_ms: u64,
+        lift: Option<&SuspensionLiftView<'_>>,
     ) -> RuntimeHostResult<Option<u64>> {
         let (_, profile) = task_and_profile(catalog, intent)?;
         let failure = self
             .failure_streaks
             .get(&(intent.task_id.clone(), intent.instance_id.clone()));
-        if failure
-            .is_some_and(|failure| failure.disposition == PolicyFailureDisposition::PausedTask)
-        {
+        if failure.is_some_and(|failure| {
+            failure.disposition == PolicyFailureDisposition::PausedTask
+                && !Self::suspension_lifted(failure, intent, lift)
+        }) {
             return Ok(None);
         }
         let from = self
@@ -507,6 +558,17 @@ impl PolicyControlState {
                 self.failure_streaks.remove(&key);
             }
             PolicyExecutionOutcome::Failed { failure } => {
+                // Live settlement and replay both pass here, so a restarted host rebuilds the
+                // same suspension from the dispatch and execution records (§12.7).
+                let paused_on =
+                    (failure.disposition == PolicyFailureDisposition::PausedTask).then(|| {
+                        PausedOn {
+                            package_digest: intent.package_digest.clone(),
+                            layers: FailureIdentity::parse(&failure.error_code)
+                                .map(|identity| identity.layers)
+                                .unwrap_or_default(),
+                        }
+                    });
                 self.failure_streaks.insert(
                     key,
                     FailureStreak {
@@ -516,11 +578,34 @@ impl PolicyControlState {
                         escalation_streak: failure.escalation_streak,
                         disposition: failure.disposition,
                         retry_at_unix_ms: failure.retry_at_unix_ms,
+                        decision_id: data.decision_id.clone(),
+                        paused_on,
                     },
                 );
             }
         }
         Ok(())
+    }
+
+    /// Workflow #336 L6: the failure code and dispatch of a pair's latest failed execution,
+    /// while no success has followed it.
+    pub(crate) fn latest_failure(&self, task_id: &str, instance_id: &str) -> Option<(&str, &str)> {
+        self.failure_streaks
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+            .map(|failure| (failure.error_code.as_str(), failure.decision_id.as_str()))
+    }
+
+    /// Workflow #336 R22: the pairs whose latest failure carries a failure identity and is
+    /// scheduled for a retry; the evaluator treats them as triggered once the backoff ends.
+    pub(crate) fn immediate_retry_pairs(&self) -> BTreeSet<(String, String)> {
+        self.failure_streaks
+            .iter()
+            .filter(|(_, failure)| {
+                failure.disposition == PolicyFailureDisposition::RetryScheduled
+                    && FailureIdentity::parse(&failure.error_code).is_some()
+            })
+            .map(|(pair, _)| pair.clone())
+            .collect()
     }
 }
 

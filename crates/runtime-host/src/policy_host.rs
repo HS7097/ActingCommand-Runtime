@@ -8,6 +8,7 @@ mod planning_transaction;
 use planning_transaction::planning_state_error;
 pub(crate) use planning_transaction::planning_transaction_error;
 
+use crate::failure_identity::SuspensionLiftView;
 use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
     is_availability_denial,
@@ -31,7 +32,7 @@ use actingcommand_policy::{
     DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources, EvaluationTime,
     InstanceSnapshot, MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS,
     PolicyEvaluation, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, compile_catalog, evaluate_with_eligibility,
+    TaskTerminalState, compile_catalog, evaluate_with_immediate_retries,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -215,6 +216,9 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// Workflow #191 ps1: the deferral code of an operator scheduling pause covering the
     /// instance alias, if any.
     pub(crate) scheduling_pause: &'a dyn Fn(&str) -> Option<&'static str>,
+    /// Workflow #336 L6 (§12.7): the configuration a paused pair's suspension is lifted
+    /// against, exactly as admission judges it.
+    pub(crate) suspension_lift: &'a SuspensionLiftView<'a>,
 }
 
 /// Correlates an admission request; Runtime rebuilds approval authority and current time.
@@ -1204,6 +1208,7 @@ impl PolicyHost {
             trigger,
             sampled_at_monotonic_ms,
             scheduling_pause,
+            suspension_lift,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -1220,13 +1225,16 @@ impl PolicyHost {
             .as_ref()
             .ok_or_else(|| request("policy_catalog_unavailable", "evaluate_policy_cycle"))?;
         let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
+        // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun.
+        let immediate_retries = self.control.immediate_retry_pairs();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_eligibility::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_immediate_retries::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
             time,
             seed,
+            &immediate_retries,
             |intent| match scheduling_pause(&intent.instance_id) {
                 // An operator scheduling pause defers the candidate with no wake time: only
                 // `ResumeScheduling` lifts it.
@@ -1237,10 +1245,12 @@ impl PolicyHost {
                     },
                     next_wake_unix_ms: None,
                 }),
-                None => match self
-                    .control
-                    .preview_admission(&active.compiled, intent, time.unix_ms)
-                {
+                None => match self.control.preview_admission_lifted(
+                    &active.compiled,
+                    intent,
+                    time.unix_ms,
+                    Some(suspension_lift),
+                ) {
                     Ok(_) => Ok(CandidateEligibility::Eligible),
                     Err(error) if is_availability_denial(&error) => {
                         let rejection = error.policy_rejection();
@@ -1459,13 +1469,34 @@ impl PolicyHost {
         &self,
         intent: &DispatchIntent,
         now_unix_ms: u64,
+        suspension_lift: &SuspensionLiftView<'_>,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
         let active = self
             .active
             .as_ref()
             .ok_or_else(|| request("policy_catalog_unavailable", "reserve_policy_budget"))?;
-        self.control
-            .preview_admission(&active.compiled, intent, now_unix_ms)
+        self.control.preview_admission_lifted(
+            &active.compiled,
+            intent,
+            now_unix_ms,
+            Some(suspension_lift),
+        )
+    }
+
+    /// Workflow #336 L6: the failure code and dispatch of a pair's latest failed execution,
+    /// while no success has followed it.
+    pub(crate) fn latest_failure(&self, task_id: &str, instance_id: &str) -> Option<(&str, &str)> {
+        self.control.latest_failure(task_id, instance_id)
+    }
+
+    /// Workflow #336 L6 (§12.6 point 4): the execution already recorded for a dispatch, if any.
+    pub(crate) fn recorded_execution(
+        &self,
+        decision_id: &str,
+    ) -> Option<&PolicyExecutionEventData> {
+        self.seen_dispatches
+            .get(decision_id)
+            .and_then(|dispatch| dispatch.execution.as_ref())
     }
 
     pub(crate) fn commit_admission(

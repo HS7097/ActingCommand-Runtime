@@ -44,6 +44,7 @@ use std::time::{Duration, Instant, SystemTime};
 mod linear;
 mod selection;
 mod timing;
+pub use linear::linear_main_interface;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
     ContainedTaskBoundaryIdentity, ContainedTaskBoundaryTiming, ContainedTaskEvaluationTiming,

@@ -13,6 +13,7 @@ mod emulator_control;
 mod error;
 mod events;
 mod fact_store;
+mod failure_identity;
 mod host;
 mod ipc;
 mod ledger_maintenance;
@@ -36,6 +37,7 @@ mod proposal;
 mod provider;
 mod provider_startup;
 mod strategy;
+mod suspension_report;
 mod time;
 
 #[cfg(feature = "test-observation")]
@@ -66,6 +68,7 @@ pub use policy_host::{
 pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;
 pub use provider_startup::ProviderStartup;
+pub use suspension_report::{SuspensionReportError, SuspensionReportRequest, suspension_report};
 
 #[cfg(test)]
 mod tests;

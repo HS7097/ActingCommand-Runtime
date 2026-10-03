@@ -437,6 +437,10 @@ package's failure is recorded as before.
 
 The new codes are strings; none of them starts the stuck-recovery ladder.
 
+A scheduled linear task records its failure as a failure identity built from these codes, the
+step and the detail; which of them can pause the task, the immediate rerun and the lift by a
+package update are in `policy-suspension.md`.
+
 ## Ledger
 
 A linear run writes only existing records with existing fields and enum values: no event

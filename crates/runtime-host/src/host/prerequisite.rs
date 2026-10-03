@@ -22,6 +22,7 @@
 //! `EntryRecoveryFailed`), or to the dependent package when none is open.
 
 use super::contained_task::{EntryRecoveryRuntime, prepare_contained_task};
+use super::failure_settlement::ResolvedLayer;
 use super::*;
 use actingcommand_contract::{PackageRef, TaskTimingBudgetOrigin};
 
@@ -97,6 +98,24 @@ impl HostShared {
         prepared: &PreparedContainedTask,
         material_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
     ) -> Result<Vec<PreparedContainedTask>, RequestFailure> {
+        self.resolve_prerequisite_chain_recorded(
+            instance_alias,
+            prepared,
+            material_deadline,
+            &mut Vec::new(),
+        )
+    }
+
+    /// `resolve_prerequisite_chain` that also records each layer's package id and source as
+    /// soon as it is known, a layer that is then refused included (Workflow #336 L6: the
+    /// scheduled path keeps them for the failure identity, §5.2.1 last item).
+    pub(super) fn resolve_prerequisite_chain_recorded(
+        &self,
+        instance_alias: &str,
+        prepared: &PreparedContainedTask,
+        material_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
+        recorded: &mut Vec<ResolvedLayer>,
+    ) -> Result<Vec<PreparedContainedTask>, RequestFailure> {
         let mut visited = BTreeSet::from([prepared.package_label().to_owned()]);
         // The next package id and whether it is the return-home fallback.
         let mut next = match prepared.prerequisite_package_id() {
@@ -113,6 +132,12 @@ impl HostShared {
         let mut declared = 0;
         while let Some((package_id, return_home)) = next {
             let layer = chain.len() + 1;
+            let dependent = chain.last().unwrap_or(prepared);
+            recorded.push(ResolvedLayer {
+                package_id: package_id.clone(),
+                return_home: return_home
+                    .then(|| (dependent.game().to_owned(), dependent.server().to_owned())),
+            });
             let source = if return_home {
                 " source=return_home"
             } else {

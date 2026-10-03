@@ -375,6 +375,8 @@ impl HostShared {
                     .map(SchedulingOutcomeProjection::outcome),
             ),
         )?;
+        // Workflow #336 L6: the run's resolution is no longer needed once it is recorded.
+        self.forget_scheduled_resolution(context.decision_id())?;
         let authoritative_outcome = authoritative_outcome
             .map(|projection| {
                 let settlement_position = self
@@ -635,12 +637,16 @@ impl HostShared {
         }
         self.ensure_scheduled_policy_lease_released(context)?;
         let input = self.scheduled_policy_failure_input(context, failure)?;
-        self.record_policy_dispatch_outcome_under_gate(
+        // Workflow #336 L6 (§12.4): a `linear_steps` run's failure is its failure identity.
+        let input = self.scheduled_failure_identity(context, failure, input)?;
+        let execution = self.record_policy_dispatch_outcome_under_gate(
             context.decision_id(),
             &input,
             Some(context),
             PolicyOutcomeCacheUpdate::Clear(context),
-        )
+        )?;
+        self.forget_scheduled_resolution(context.decision_id())?;
+        Ok(execution)
     }
 
     pub(super) fn ensure_scheduled_policy_lease_released(
@@ -1145,7 +1151,7 @@ impl HostShared {
         }
     }
 
-    fn policy_run_event_links(
+    pub(super) fn policy_run_event_links(
         &self,
         context: &PolicyRunContext,
     ) -> RuntimeHostResult<EventLinksDraft> {
@@ -1551,7 +1557,7 @@ fn linked_policy_run_events(
 /// pages of the intent type index (Workflow #317 rf2). No link names a decision, so the page
 /// query is the event type and the decision is the filter; none or more than one is
 /// `policy_dispatch_intent_missing`.
-fn policy_dispatch_intent(
+pub(super) fn policy_dispatch_intent(
     ledger: &GlobalLedger,
     decision_id: &str,
     through: u64,

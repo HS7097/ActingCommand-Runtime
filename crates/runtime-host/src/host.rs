@@ -159,6 +159,7 @@ mod device_diagnostic;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
+mod failure_settlement;
 mod foreground_gate;
 mod frame_retention;
 mod governance;
@@ -617,6 +618,16 @@ impl RuntimeHostConfig {
     ) -> Self {
         self.return_home_packages = return_home_packages;
         self
+    }
+
+    /// The configured return-home package ids, keyed by (game, server).
+    pub const fn return_home_packages(&self) -> &BTreeMap<(String, String), String> {
+        &self.return_home_packages
+    }
+
+    /// The installed procedure bindings, if any.
+    pub const fn procedure_manifest(&self) -> Option<&ProcedureManifest> {
+        self.procedure_manifest.as_ref()
     }
 
     pub fn state_root(&self) -> &Path {
@@ -1357,6 +1368,7 @@ impl RuntimeHost {
             parked_recovery_ladders: Mutex::new(BTreeMap::new()),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
+            scheduled_resolutions: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -2968,6 +2980,9 @@ struct HostShared {
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
     return_home_packages: BTreeMap<(String, String), String>,
+    // Workflow #336 L6: what each scheduled run's preparation resolved, by decision id, until
+    // its execution record is written (memory only).
+    scheduled_resolutions: Mutex<BTreeMap<String, failure_settlement::ScheduledResolution>>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
