@@ -88,6 +88,34 @@ impl HostShared {
             .cloned()
     }
 
+    /// The binding of the return-home package `return_home_packages` names for `game` and
+    /// `server` (Workflow #336 L2d, R23), for the stuck-recovery ladder and the page-graph home
+    /// entry of a run whose request binds no recovery package. actingd binds every configured
+    /// package id at startup (`return_home_package_unbound`); a host configured otherwise fails.
+    pub(super) fn configured_return_home(
+        &self,
+        game: &str,
+        server: &str,
+    ) -> RuntimeHostResult<Option<&ContainedTaskRecoveryBinding>> {
+        let Some(package_id) = self
+            .return_home_packages
+            .get(&(game.to_owned(), server.to_owned()))
+        else {
+            return Ok(None);
+        };
+        self.prerequisite_packages
+            .get(package_id)
+            .map(Some)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "return_home_package_unbound",
+                    "resolve_return_home_package",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+                .with_native_detail(format!("package_id={package_id}"))
+            })
+    }
+
     /// Resolves and admits the prerequisite chain of `prepared` (§5.2.1): empty when it declares
     /// no prerequisite package and has no return-home fallback, otherwise the packages outermost
     /// first. `material_deadline` is read only when there is a chain to admit.

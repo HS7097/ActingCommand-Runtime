@@ -307,7 +307,8 @@ build that predates the field refuses it with `config_decode_failed`.
 Workflow #336 L2c adds the optional top-level `return_home_packages`, per game
 and server the return-home package a `linear_steps` package without a declared
 prerequisite package falls back to (`contracts/linear-steps.md`, "Return-home
-fallback"):
+fallback"); since L2d the stuck-recovery ladder and the page-graph home entry of a
+run whose request binds no recovery package use it too:
 
 ```json
 "return_home_packages":[{"game":"neutral","server":"test","package_id":"neutral.test.return_home"}]

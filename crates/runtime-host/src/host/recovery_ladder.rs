@@ -11,7 +11,9 @@
 //! in the startup package queue for the host's scheduling thread.
 //!
 //! The rungs, in this fixed order, are existing work under the instance lease:
-//! `return_home` runs the failed run's bound recovery package as a standalone contained task,
+//! `return_home` runs the failed run's bound recovery package as a standalone contained task
+//! (when it bound none, the return-home package actingd configures for its package's game and
+//! server, with the longest response deadline; Workflow #336 L2d),
 //! `application_restart` schedules and runs the instance's startup package, and
 //! `emulator_restart` restarts the emulator through the emulator control path and runs the
 //! startup package its rebinding schedules. A rung whose prerequisite is missing is skipped,
@@ -52,6 +54,8 @@ pub(super) struct PendingRecoveryLadder {
     instance_alias: String,
     trigger: RecoveryLadderTrigger,
     recovery: Option<ContainedTaskRecoveryBinding>,
+    /// Workflow #336 L2d: `recovery` is the configured return-home package (the run bound none).
+    recovery_configured: bool,
     /// Instance, trigger correlation id, the ladder's request id and causation id.
     links: EventLinksDraft,
     /// The ladder's request id: task timing admission id of its rung runs.
@@ -147,6 +151,17 @@ impl HostShared {
         {
             return Ok(());
         }
+        // Workflow #336 L2d (R23): a run that binds no recovery package takes the return-home
+        // package actingd configures for its package's game and server.
+        let configured = match task_request.recovery() {
+            Some(_) => None,
+            None => {
+                let (game, server) = control
+                    .package_game_server()
+                    .ok_or_else(|| ladder_invariant("recovery_ladder_package_missing"))?;
+                self.configured_return_home(game, server)?
+            }
+        };
         let issuer = self.events.issuer();
         let request_id = issuer
             .mint_request_id()
@@ -162,7 +177,8 @@ impl HostShared {
                 task_id: *terminal.task_id.transport(),
                 failure_code: terminal.failure_code.to_owned(),
             },
-            recovery: task_request.recovery().cloned(),
+            recovery: task_request.recovery().or(configured).cloned(),
+            recovery_configured: configured.is_some(),
             links: request
                 .event_links(Some(instance_id), None, None)
                 .with_request_id(request_id)
@@ -357,8 +373,8 @@ impl HostShared {
         )
     }
 
-    /// R1: the failed run's bound recovery package as a standalone contained task under the
-    /// ladder's causation id.
+    /// R1: the failed run's bound recovery package (or the configured return-home package,
+    /// Workflow #336 L2d) as a standalone contained task under the ladder's causation id.
     fn recovery_return_home(
         &self,
         pending: &PendingRecoveryLadder,
@@ -367,16 +383,26 @@ impl HostShared {
             .recovery
             .as_ref()
             .ok_or_else(|| ladder_invariant("recovery_ladder_recovery_package_missing"))?;
-        let request =
-            match ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256()) {
-                Ok(request) => request,
-                Err(error) => {
-                    return Ok(RungAttempt::Failed {
-                        run_id: None,
-                        reason: error.code(),
-                    });
+        // Workflow #336 L2d (R24): the configured package takes the longest response deadline,
+        // as a startup package and a scheduled run do; a bound one keeps the default.
+        let request = ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256())
+            .and_then(|request| {
+                if pending.recovery_configured {
+                    request
+                        .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
+                } else {
+                    Ok(request)
                 }
-            };
+            });
+        let request = match request {
+            Ok(request) => request,
+            Err(error) => {
+                return Ok(RungAttempt::Failed {
+                    run_id: None,
+                    reason: error.code(),
+                });
+            }
+        };
         self.run_recovery_rung_package(&PendingStartupPackage {
             instance_id: pending.instance_id,
             instance_alias: pending.instance_alias.clone(),
