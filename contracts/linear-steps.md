@@ -276,7 +276,7 @@ run, the one the run derives from its request and lease). A prerequisite package
 map is read when `actingd` starts; a change needs a restart.
 
 **Gate.** A package whose chain is not empty runs through the entry gate instead of starting
-directly; a package without a prerequisite package starts as above. Layer `i` is a package `X_i`
+directly; a package whose prerequisite chain is empty starts as above. Layer `i` is a package `X_i`
 (`X_0` the dependent package) and its prerequisite package `X_(i+1)`:
 
 1. **First check, one frame.** One capture is evaluated for `X_i`'s first step's page only
@@ -401,14 +401,16 @@ with `contained_task_return_home_entry_unmatched`.
 The code is kept apart from `contained_task_prerequisite_entry_unmatched` so that a stale
 return-home package, maintained with the program, is told from a prerequisite package the
 author declared; neither starts the stuck-recovery ladder. A request's recovery binding plays
-no part, and neither the stuck-recovery ladder nor the page-graph home entry uses the
-return-home package.
+no part in the resolution, and the page-graph home entry does not use the return-home package.
+The ladder's return-home rung still takes the request binding; if that package is a linear
+package, it falls back like any linear run, and so does a linear startup package.
 
 **Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
 detail of its task failure is always the native detail of a runtime lifecycle failure record
-(the existing `runtime.failed` with its lifecycle part, severity error) written right after the
-task terminal and naming it, as an outcome with an extra native detail is recorded; at most
-1024 bytes. The receipt does not carry it. For example `operation=<id> attempts=<n> after_page=<page>
+(the existing `runtime.failed` with its lifecycle part) written right after the task terminal
+and naming it, as an outcome with an extra native detail is recorded; at most 1024 bytes. The
+record has the terminal's severity (`warning` for a scheduled run, `error` for a direct run), so
+the failure is not counted again at a higher severity. The receipt does not carry it. For example `operation=<id> attempts=<n> after_page=<page>
 hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's own details above. A
 failure without a detail is recorded by the terminal alone, as before. The gate
 carries a prerequisite or return-home package's own failure out as its code, with its detail
@@ -454,7 +456,7 @@ linear run is read by older builds.
 | Attempt end | `StepFinished` | the next step's page, the step's own page (a swallowed input) or `<unrecognized>` |
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait`, `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
 | End | `Finalizing`, `TerminalCommitted` | the final page is the target page; `executed_steps` the operation count on success, the dispatched operations on failure |
-| A failure with a kernel detail | a runtime lifecycle failure record (`runtime.failed`) after the terminal, naming it | the detail as its native detail ("Failure detail" above) |
+| A failure with a kernel detail | a runtime lifecycle failure record (`runtime.failed`) after the terminal, naming it, at the terminal's severity | the detail as its native detail ("Failure detail" above) |
 | Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the last operation | unchanged |
 
 Candidate pages are never duplicated, since the admission rules keep an operation's own page,

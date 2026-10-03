@@ -5601,10 +5601,10 @@ impl HostShared {
                 });
                 // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime
                 // lifecycle failure record, which carries the detail and names the terminal, as
-                // an outcome with an extra native detail does; otherwise the terminal alone
-                // records the failure.
+                // an outcome with an extra native detail does, at the terminal's severity;
+                // otherwise the terminal alone records the failure.
                 let recorded = if linear {
-                    self.record_required_failure(
+                    self.record_required_failure_with_severity(
                         &failure.error,
                         &event,
                         self.events
@@ -5616,6 +5616,7 @@ impl HostShared {
                             )
                             .with_task_id(task_id)
                             .with_run_id(run_id),
+                        Some(event.severity()),
                     )
                 } else {
                     let _ = failure
