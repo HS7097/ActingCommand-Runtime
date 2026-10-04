@@ -35,9 +35,14 @@ The following is the `post_admission_ocr` member of an operation, not a complete
 }
 ```
 
-`fields_recorded` is the fixed scheduling outcome key for this mode. Exactly one existing
-scheduling mapping must bind it. It also lets the existing terminal fact require the OCR
-artifacts without adding a Global event family or changing the Global event schema.
+`fields_recorded` is the fixed report key for this mode. Exactly one existing scheduling
+mapping must bind it at admission. Successful collection records the fields report under
+this key through the existing artifact facts. Host derives the task's scheduling disposition
+from its actual effect facts and terminal page's unique mapping: a run that observes an
+existing result can therefore have a different business outcome from a run that performed
+the designated operation. The 0.7 OCR comparison still selects its comparison outcome key,
+which Host checks against that same effect/page mapping. Missing or conflicting mappings
+and failed field collection retain their existing failures. No Global event shape changes.
 
 Fields are evidence only: no field value is written as an instance fact. A value the Runtime
 writes back as an instance fact is a resource reading (`resource-readings.md`), declared

@@ -1769,6 +1769,8 @@ pub struct ContainedTaskOutcome {
     pub outcome: TaskOutcome,
     pub final_page: Option<String>,
     pub executed_steps: u32,
+    /// A comparison-selected key for Host's consistency check. Field reports keep their
+    /// report key while Host derives the business disposition from effects and terminal page.
     pub selected_scheduling_outcome: Option<String>,
 }
 
@@ -3408,7 +3410,6 @@ impl PreparedContainedTask {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let resource_readings = ocr_collector.resource_readings;
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
-            let outcome_key = report.declaration.outcome_key.clone();
             if report.frames_collected == 0 {
                 return Err(ContainedTaskError::new(
                     "contained_task_post_admission_ocr_observation_missing",
@@ -3419,7 +3420,7 @@ impl PreparedContainedTask {
                 .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
                 .map_err(ContainedTaskRunError::Boundary)?;
             ocr_collector.fields_report_recorded = true;
-            Some(outcome_key)
+            None
         } else {
             match std::mem::take(ocr_collector).finish()? {
                 Some(report) => {
@@ -8093,8 +8094,11 @@ mod post_admission_ocr_tests {
             );
             let outcome = outcome.unwrap();
             assert_eq!(
-                outcome.selected_scheduling_outcome.as_deref(),
-                Some("fields_recorded")
+                (
+                    report.declaration.outcome_key.as_str(),
+                    outcome.selected_scheduling_outcome.as_deref(),
+                ),
+                ("fields_recorded", None)
             );
             assert_eq!(outcome.executed_steps, 1);
             assert_eq!(outcome.outcome, TaskOutcome::Success);
