@@ -182,14 +182,12 @@ fn task_request(package: &Path, sha: &String) -> ContainedTaskRequest {
     ContainedTaskRequest::new(package.display().to_string(), sha).expect("contained task request")
 }
 
-macro_rules! to_json {
-    ($value:expr) => {
-        serde_json::to_string($value).expect("evidence JSON")
-    };
+fn json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).expect("evidence JSON")
 }
 
 fn print_status(label: &str, status: &ContainedRunStatus) {
-    println!("RA|R1|{label}|{}", to_json!(status));
+    println!("RA|R1|{label}|{}", json(status));
 }
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
@@ -254,7 +252,7 @@ fn flow_event_types(output: &RuntimeFlowOutput) -> Vec<String> {
     output
         .events()
         .iter()
-        .map(|event| to_json!(&event.event_type))
+        .map(|event| json(&event.event_type))
         .collect()
 }
 
@@ -374,7 +372,7 @@ fn oneoff_338ra_1_manual_success_and_prepare_submit() {
     let original = original_client
         .run_contained_task(ALIAS, task_request(&fixture.package, &fixture.sha))
         .expect("original run_contained_task");
-    println!("RA|R2|ORIGINAL_RECEIPT|{}", to_json!(original.receipt()));
+    println!("RA|R2|ORIGINAL_RECEIPT|{}", json(original.receipt()));
 
     support::write_sealed_frame(&fixture.frame);
     thread::sleep(Duration::from_millis(500));
@@ -386,9 +384,9 @@ fn oneoff_338ra_1_manual_success_and_prepare_submit() {
     let prepared_correlation_id = prepared.correlation_id();
     println!(
         "RA|R2|PREPARED|request_id={}|correlation_id={}|holder={}|debug={prepared:?}",
-        to_json!(&prepared_request_id),
-        to_json!(&prepared_correlation_id),
-        to_json!(&prepared.holder())
+        json(&prepared_request_id),
+        json(&prepared_correlation_id),
+        json(&prepared.holder())
     );
     let before = connect(root)
         .contained_run_status(RunKey::RequestId(prepared_request_id), RunStatusMode::Full)
@@ -398,7 +396,7 @@ fn oneoff_338ra_1_manual_success_and_prepare_submit() {
     let split = split_client
         .submit_prepared(prepared)
         .expect("submit_prepared");
-    println!("RA|R2|SPLIT_RECEIPT|{}", to_json!(split.receipt()));
+    println!("RA|R2|SPLIT_RECEIPT|{}", json(split.receipt()));
     assert_eq!(split.receipt().request_id(), prepared_request_id);
     assert_eq!(split.receipt().correlation_id(), prepared_correlation_id);
     println!(
@@ -457,14 +455,14 @@ fn oneoff_338ra_1_manual_success_and_prepare_submit() {
     let recent = reader
         .recent_runs(fixture.instance_id, 0, 10)
         .expect("recent runs");
-    println!("RA|R1|RECENT_RUNS|{}", to_json!(&recent));
+    println!("RA|R1|RECENT_RUNS|{}", json(&recent));
     assert_eq!(recent.runs.len(), 2);
     assert!(!recent.incomplete);
     assert_eq!(recent.runs[0].request_id, Some(prepared_request_id));
     let one = reader
         .recent_runs(fixture.instance_id, 0, 1)
         .expect("recent runs limit 1");
-    println!("RA|R1|RECENT_RUNS_LIMIT_1|{}", to_json!(&one));
+    println!("RA|R1|RECENT_RUNS_LIMIT_1|{}", json(&one));
     assert_eq!(one.runs.len(), 1);
     let refused = reader
         .recent_runs(fixture.instance_id, 0, 11)
@@ -513,7 +511,7 @@ fn oneoff_338ra_2_cancel_and_reset_from_another_connection() {
     let recent = observer
         .recent_runs(fixture.instance_id, 0, 10)
         .expect("recent runs while running");
-    println!("RA|R1|RECENT_RUNS_RUNNING|{}", to_json!(&recent));
+    println!("RA|R1|RECENT_RUNS_RUNNING|{}", json(&recent));
     assert_eq!(recent.runs.len(), 1);
     assert_eq!(recent.runs[0].state, ContainedRunState::Running);
     let request_id = recent.runs[0].request_id.expect("running request id");
@@ -535,7 +533,7 @@ fn oneoff_338ra_2_cancel_and_reset_from_another_connection() {
         .expect("cancel_contained_task_and_reset wait 0");
     println!(
         "RA|R2|CANCEL_AND_RESET|wait_ms=0|status={}|reset={:?}",
-        to_json!(&first.status),
+        json(&first.status),
         first.reset
     );
     assert!(matches!(
@@ -551,7 +549,7 @@ fn oneoff_338ra_2_cancel_and_reset_from_another_connection() {
     println!(
         "RA|R2|CANCEL_AND_RESET|wait_ms=20000|elapsed_ms={}|status={}|reset={:?}",
         started.elapsed().as_millis(),
-        to_json!(&second.status),
+        json(&second.status),
         second.reset
     );
     assert!(matches!(
@@ -572,14 +570,14 @@ fn oneoff_338ra_2_cancel_and_reset_from_another_connection() {
         .expect("cancel_contained_task_and_reset after terminal");
     println!(
         "RA|R2|CANCEL_AND_RESET|after_terminal|status={}|reset={:?}",
-        to_json!(&third.status),
+        json(&third.status),
         third.reset
     );
     assert_eq!(third.reset, Some(ContainedTaskResetOutcome::NotNeeded));
     let once = stopper
         .cancel_contained_task(request_id)
         .expect("cancel_contained_task once");
-    println!("RA|R2|CANCEL_ONCE|status={}", to_json!(&once));
+    println!("RA|R2|CANCEL_ONCE|status={}", json(&once));
     assert!(matches!(once, ContainedTaskCancellationStatus::Terminal { .. }));
 
     for (mode_label, mode) in [("full", RunStatusMode::Full), ("brief", RunStatusMode::Brief)] {
@@ -604,7 +602,7 @@ fn oneoff_338ra_2_cancel_and_reset_from_another_connection() {
     }
     println!(
         "RA|R1|RECENT_RUNS_CANCELLED|{}",
-        to_json!(
+        json(
             &observer
                 .recent_runs(fixture.instance_id, 0, 10)
                 .expect("recent runs")
@@ -627,8 +625,8 @@ fn oneoff_338ra_3_runtime_killed_mid_run() {
     let request_id = prepared.request_id();
     println!(
         "RA|R2|PREPARED|request_id={}|correlation_id={}",
-        to_json!(&request_id),
-        to_json!(&prepared.correlation_id())
+        json(&request_id),
+        json(&prepared.correlation_id())
     );
     let submission = thread::spawn(move || submitter.submit_prepared(prepared));
     wait_until(Duration::from_secs(15), || {
@@ -667,7 +665,7 @@ fn oneoff_338ra_3_runtime_killed_mid_run() {
     }
     println!(
         "RA|R1|RECENT_RUNS_INTERRUPTED|{}",
-        to_json!(
+        json(
             &reader
                 .recent_runs(fixture.instance_id, 0, 10)
                 .expect("recent runs")
