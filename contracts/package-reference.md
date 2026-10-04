@@ -322,6 +322,13 @@ empty array still requests v3. Without the flag, generation retains v2 behavior.
 input is bounded by the existing package input byte limit (32 MiB). The output contains
 the declaration only in `bundle.json`; the source declaration file is not copied.
 
+Resource repositories name the source input `maintenance.json` at their root. The existing
+`resource validate` declaration reader decodes this shared array and calls
+`validate_bundle_maintenance_declarations` for its source-only structural rules, under
+the declaration reader's own 16 MiB document / 64 MiB total read bounds. It does not load
+pack material. The bundle index validator reuses those same rules and adds index closure;
+generation then checks actual material and full chains through the kernel.
+
 Each entry has exactly `package_id`, `server` and `uses`. Uses are a nonempty set of at
 most the three values `startup`, `prerequisite`, `return_home`. A reference must name a
 pack in this index with the same server; the package/server pair is unique. Each server

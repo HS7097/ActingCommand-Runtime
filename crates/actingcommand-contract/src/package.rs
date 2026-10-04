@@ -427,6 +427,39 @@ pub struct BundleMaintenance {
     pub uses: Vec<MaintenanceUse>,
 }
 
+/// Rules decidable from a source maintenance array alone. Bundle reference closure and
+/// actual package qualification are checked by the index and execution-kernel owners.
+pub fn validate_bundle_maintenance_declarations(
+    maintenance: &[BundleMaintenance],
+) -> RuntimeContractResult<()> {
+    let mut entries = std::collections::BTreeSet::new();
+    let mut roles = std::collections::BTreeSet::new();
+    for entry in maintenance {
+        if !bundle_text(&entry.package_id)
+            || !bundle_identifier(&entry.server)
+            || !entries.insert((&entry.package_id, &entry.server))
+            || entry.uses.is_empty()
+            || entry.uses.len() > 3
+            || entry
+                .uses
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != entry.uses.len()
+        {
+            return Err(RuntimeContractError::new("invalid_bundle_maintenance"));
+        }
+        for purpose in &entry.uses {
+            if *purpose != MaintenanceUse::Prerequisite && !roles.insert((&entry.server, purpose)) {
+                return Err(RuntimeContractError::new(
+                    "duplicate_bundle_maintenance_role",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BundleIndexV3Version {
     #[serde(rename = "actingcommand.bundle.v3")]
@@ -458,36 +491,14 @@ impl BundleIndexV3 {
         if self.maintenance.len() > self.packs.len() {
             return Err(RuntimeContractError::new("invalid_bundle_maintenance"));
         }
-        let mut entries = std::collections::BTreeSet::new();
-        let mut roles = std::collections::BTreeSet::new();
+        validate_bundle_maintenance_declarations(&self.maintenance)?;
         for entry in &self.maintenance {
-            if !entries.insert((&entry.package_id, &entry.server))
-                || entry.uses.is_empty()
-                || entry.uses.len() > 3
-                || entry
-                    .uses
-                    .iter()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-                    != entry.uses.len()
-            {
-                return Err(RuntimeContractError::new("invalid_bundle_maintenance"));
-            }
             if !self
                 .packs
                 .iter()
                 .any(|pack| pack.package_id == entry.package_id && pack.server == entry.server)
             {
                 return Err(RuntimeContractError::new("bundle_maintenance_pack_missing"));
-            }
-            for purpose in &entry.uses {
-                if *purpose != MaintenanceUse::Prerequisite
-                    && !roles.insert((&entry.server, purpose))
-                {
-                    return Err(RuntimeContractError::new(
-                        "duplicate_bundle_maintenance_role",
-                    ));
-                }
             }
         }
         Ok(())
