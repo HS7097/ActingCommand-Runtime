@@ -332,17 +332,26 @@ impl SelectedTouchBackend {
                             .backend
                             .close_once(DeviceCloseAuthority::LocalOnly)
                         {
+                            let cleanup = cleanup.with_backend_resources();
                             self.close_result = Some(Err(cleanup.clone()));
                             let mut error = active_failure.clone().merge_resource_cleanup(cleanup);
-                            if let Err(new_cleanup) = connected
+                            match connected
                                 .backend
                                 .close_once(DeviceCloseAuthority::LocalOnly)
                             {
-                                let unconfirmed = new_cleanup.resource_quiescence()
-                                    == Some(DeviceResourceQuiescence::Unconfirmed);
-                                error = error.merge_resource_cleanup(new_cleanup);
-                                if unconfirmed {
-                                    std::mem::forget(connected);
+                                Ok(outcome) => {
+                                    error = error
+                                        .with_close_outcome(&outcome.with_operation_resources());
+                                }
+                                Err(new_cleanup) => {
+                                    let unconfirmed = new_cleanup.resource_quiescence()
+                                        == Some(DeviceResourceQuiescence::Unconfirmed);
+                                    error = error.merge_resource_cleanup(
+                                        new_cleanup.with_operation_resources(),
+                                    );
+                                    if unconfirmed {
+                                        std::mem::forget(connected);
+                                    }
                                 }
                             }
                             return Err(error);
@@ -566,7 +575,11 @@ impl InputBackend for SelectedTouchBackend {
         if let Some(result) = &self.close_result {
             return result.clone();
         }
-        let result = self.active.backend.close_once(authority);
+        let result = self
+            .active
+            .backend
+            .close_once(authority)
+            .map_err(DeviceError::with_backend_resources);
         self.close_result = Some(result.clone());
         result
     }
@@ -2079,6 +2092,43 @@ mod tests {
                 original.resource_close_causes()[0].occurrence()
             ));
         }
+
+        // Workflow #342 F2, first red issuecomment-5975166569: active close and
+        // untransferred candidate cleanup keep separate scopes and shared receipts.
+        let active = original.with_backend_resources();
+        let candidate = DeviceResourceCloseOutcome::confirmed(2).with_operation_resources();
+        let mixed = active.clone().with_close_outcome(&candidate);
+        assert_eq!(mixed.resource_count(), 3);
+        assert_eq!(
+            mixed.resource_quiescence(),
+            Some(DeviceResourceQuiescence::Unconfirmed)
+        );
+        let scopes = mixed
+            .resource_contributions()
+            .map(|(_, quiescence, count, scope)| (scope, count, quiescence))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            scopes,
+            [
+                (
+                    Some(actingcommand_contract::ResourceDispositionScope::SessionBackends),
+                    1,
+                    DeviceResourceQuiescence::Unconfirmed
+                ),
+                (
+                    Some(actingcommand_contract::ResourceDispositionScope::OperationResources),
+                    2,
+                    DeviceResourceQuiescence::Confirmed
+                ),
+            ]
+        );
+        assert_eq!(
+            mixed
+                .merge_resource_cleanup(active)
+                .with_close_outcome(&candidate)
+                .resource_count(),
+            3
+        );
     }
 
     #[test]

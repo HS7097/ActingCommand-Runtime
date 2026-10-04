@@ -73,11 +73,19 @@ Counts describe that event's boundary and are not summed across ledger rows.
 
 Device summaries and successful close outcomes carry stable in-memory occurrence
 identities. Unions count only new independent contributions, including partial
-overlap. The session binds an installed backend's retained and final summaries to
-one ownership identity: a later complete summary expands its known count, while
-any Unconfirmed observation remains dominant. Temporary operation resources keep
-their own identities. Clones, conversion, responses, worker joins and terminal
-caches retain these identities. This metadata grants no close authority.
+overlap. Scope annotations belong to individual contributions. SelectedTouch marks
+its active backend's actual cleanup before caching it; an untransferred candidate's
+cleanup has operation scope. Kernel conversion preserves those identities and
+annotations through the original operation and cached Close. An acquisition
+failure assigns all of its untransferred resources to operation scope.
+
+The existing Nemu worker binds partial and complete reports about its owned resources
+to one shared occurrence, including its paired session's poisoned-lock result. A
+later complete summary expands that occurrence's known count, and any Unconfirmed
+observation remains dominant. Capture acquisition and priming keep successful
+cleanup outcomes, including the paired owner's cleanup after its view detached.
+Clones, conversion, responses, worker joins and terminal caches retain contribution
+identities. This metadata grants no close authority.
 
 A failed terminal Close composition allocates one fresh lifecycle receipt before
 the worker sends or returns it. An already recorded original operation keeps its

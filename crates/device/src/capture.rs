@@ -1031,24 +1031,38 @@ where
             .expect("non-empty successful capture candidates");
         let (_candidate_index, used, _elapsed_ms, backend) = successful.swap_remove(fastest_index);
         let mut cleanup_error: Option<DeviceError> = None;
+        let mut closed: Option<DeviceResourceCloseOutcome> = None;
         for (loser_index, _name, _elapsed_ms, mut loser) in successful {
-            if let Err(cleanup) = loser.close_once(DeviceCloseAuthority::LocalOnly) {
-                if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
-                    std::mem::forget(loser);
+            match loser.close_once(DeviceCloseAuthority::LocalOnly) {
+                Ok(outcome) => {
+                    closed = Some(match closed {
+                        Some(previous) => previous.combine(outcome),
+                        None => outcome,
+                    });
                 }
-                let cleanup = cleanup.with_resource_candidate_index(loser_index);
-                cleanup_error = Some(match cleanup_error {
-                    Some(primary) => primary.merge_resource_cleanup(cleanup),
-                    None => cleanup,
-                });
+                Err(cleanup) => {
+                    if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                    {
+                        std::mem::forget(loser);
+                    }
+                    let cleanup = cleanup.with_resource_candidate_index(loser_index);
+                    cleanup_error = Some(match cleanup_error {
+                        Some(primary) => primary.merge_resource_cleanup(cleanup),
+                        None => cleanup,
+                    });
+                }
             }
         }
         if let Some(primary) = cleanup_error {
+            let primary = match closed {
+                Some(outcome) => primary.with_close_outcome(&outcome),
+                None => primary,
+            };
             let mut backend = backend;
             return Err(crate::observe_open_failure(
                 crate::backend_open::capture_open_report(requested, Some(used), &attempts),
                 match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-                    Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+                    Ok(outcome) => primary.with_close_outcome(&outcome),
                     Err(winner_cleanup) => {
                         if winner_cleanup.resource_quiescence()
                             == Some(DeviceResourceQuiescence::Unconfirmed)
@@ -1090,7 +1104,7 @@ fn close_capture_candidates(
         |primary, (index, _name, _elapsed_ms, mut backend)| match backend
             .close_once(DeviceCloseAuthority::LocalOnly)
         {
-            Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+            Ok(outcome) => primary.with_close_outcome(&outcome),
             Err(cleanup) => {
                 if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     std::mem::forget(backend);
@@ -1196,7 +1210,7 @@ fn close_capture_backend_after_error(
     primary: DeviceError,
 ) -> DeviceError {
     match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+        Ok(outcome) => primary.with_close_outcome(&outcome),
         Err(cleanup) => {
             if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                 std::mem::forget(backend);
@@ -1385,11 +1399,12 @@ impl CaptureBackend for PrimedCaptureBackend {
             .close_once(authority)
             .map(|outcome| outcome.combine(DeviceResourceCloseOutcome::confirmed(local_count)))
             .map_err(|error| {
-                let quiescence = error
-                    .resource_quiescence()
-                    .unwrap_or(DeviceResourceQuiescence::Unconfirmed);
-                let resource_count = error.resource_count().saturating_add(local_count);
-                error.with_resource_quiescence(quiescence, resource_count)
+                let error = if error.resource_quiescence().is_none() {
+                    error.with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 0)
+                } else {
+                    error
+                };
+                error.with_close_outcome(&DeviceResourceCloseOutcome::confirmed(local_count))
             });
         self.close_result = Some(result.clone());
         result
@@ -1450,16 +1465,7 @@ fn prime_capture_backend(
                 primary.with_capture_probe_check(crate::backend_open::CaptureProbeCheck::Failed {
                     backend: name,
                 });
-            match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-                Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
-                Err(cleanup) => {
-                    if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
-                    {
-                        std::mem::forget(backend);
-                    }
-                    Err(primary.merge_resource_cleanup(cleanup))
-                }
-            }
+            Err(close_capture_backend_after_error(backend, primary))
         }
     }
 }
@@ -1954,7 +1960,7 @@ impl NemuIpcBackend {
             Ok(resolution) => resolution,
             Err(primary) => {
                 return match worker.shutdown_once(DeviceCloseAuthority::LocalOnly) {
-                    Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
+                    Ok(outcome) => Err(primary.with_close_outcome(&outcome)),
                     Err(cleanup) => {
                         let unconfirmed = cleanup.resource_quiescence()
                             == Some(DeviceResourceQuiescence::Unconfirmed);
@@ -2018,6 +2024,7 @@ struct NemuIpcWorker {
     timeout: Duration,
     poisoned: Arc<AtomicBool>,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
+    resources: Arc<crate::DeviceCloseOccurrence>,
 }
 
 impl NemuIpcWorker {
@@ -2192,6 +2199,7 @@ impl NemuIpcWorker {
             timeout,
             poisoned,
             close_result: None,
+            resources: Arc::default(),
         }
     }
 
@@ -2208,7 +2216,8 @@ impl NemuIpcWorker {
         if self.poisoned.load(Ordering::Acquire) {
             return Err(nemu_geometry_unconfirmed(
                 "Nemu IPC backend is poisoned after a previous timeout",
-            ));
+            )
+            .with_backend_resource_owner(&self.resources));
         }
         if self.handle.is_none() {
             return Err(DeviceError::fatal("Nemu IPC worker is unavailable"));
@@ -2235,7 +2244,8 @@ impl NemuIpcWorker {
                         Ok(_) => Err(nemu_geometry_unconfirmed(
                             "Nemu IPC geometry reply arrived after its deadline",
                         )),
-                    };
+                    }
+                    .map_err(|error| error.with_backend_resource_owner(&self.resources));
                 }
                 result
             }
@@ -2246,6 +2256,7 @@ impl NemuIpcWorker {
                 )))
             }
         }
+        .map_err(|error| error.with_backend_resource_owner(&self.resources))
     }
 
     fn capture_frame(&mut self) -> DeviceResult<NemuCapturedFrame> {
@@ -2275,21 +2286,22 @@ impl NemuIpcWorker {
             DeviceError::fatal(format!("failed to send Nemu IPC worker command: {err}"))
         })?;
         match rx.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.poisoned.store(true, Ordering::Release);
-                Err(DeviceError::fatal(format!(
-                    "Nemu IPC worker timed out after {:?}; backend marked poisoned and will not be reused",
-                    timeout
-                )))
+                Ok(result) => result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.poisoned.store(true, Ordering::Release);
+                    Err(DeviceError::fatal(format!(
+                        "Nemu IPC worker timed out after {:?}; backend marked poisoned and will not be reused",
+                        timeout
+                    )))
+                }
+                Err(err) => {
+                    self.poisoned.store(true, Ordering::Release);
+                    Err(DeviceError::fatal(format!(
+                        "Nemu IPC worker disconnected: {err}"
+                    )))
+                }
             }
-            Err(err) => {
-                self.poisoned.store(true, Ordering::Release);
-                Err(DeviceError::fatal(format!(
-                    "Nemu IPC worker disconnected: {err}"
-                )))
-            }
-        }
+        .map_err(|error| error.with_backend_resource_owner(&self.resources))
     }
 
     fn shutdown_once(
@@ -2319,7 +2331,8 @@ impl NemuIpcWorker {
                 None,
                 DeviceResourceQuiescence::Unconfirmed,
                 1,
-            ));
+            )
+            .with_backend_resource_owner(&self.resources));
             self.close_result = Some(result.clone());
             return result;
         }
@@ -2368,7 +2381,9 @@ impl NemuIpcWorker {
             (Err(primary), Ok(())) => Err(primary),
             (Ok(outcome), Err(join)) => Err(join.with_close_outcome(&outcome)),
             (Err(primary), Err(join)) => Err(primary.merge_resource_cleanup(join)),
-        };
+        }
+        .map(|outcome| outcome.with_backend_resource_owner(&self.resources))
+        .map_err(|error| error.with_backend_resource_owner(&self.resources));
         self.close_result = Some(result.clone());
         result
     }
@@ -3804,6 +3819,51 @@ mod tests {
         assert_eq!(first.resource_count(), 2);
         assert_eq!(close_calls.get(), 1);
         assert!(backend.primed.is_none());
+
+        // Workflow #342 F1, first red issuecomment-5975166569: an acquired
+        // backend's successful cleanup remains part of its failed acquisition.
+        let close_calls = Rc::new(Cell::new(0));
+        let failure = prime_capture_backend(
+            CaptureBackendName::FixtureSimulation,
+            Box::new(CloseCountingCaptureBackend {
+                close_calls: Rc::clone(&close_calls),
+            }),
+            None,
+        )
+        .err()
+        .expect("missing frame owner fails preparation");
+        assert_eq!(
+            failure.resource_quiescence(),
+            Some(DeviceResourceQuiescence::Confirmed)
+        );
+        assert_eq!(failure.resource_count(), 1);
+        assert_eq!(close_calls.get(), 1);
+        let failure = close_capture_backend_after_error(
+            Box::new(CloseCountingCaptureBackend {
+                close_calls: Rc::clone(&close_calls),
+            }),
+            DeviceError::transient("operation resources remain unconfirmed")
+                .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 2),
+        );
+        assert_eq!(
+            failure.resource_quiescence(),
+            Some(DeviceResourceQuiescence::Unconfirmed)
+        );
+        assert_eq!(failure.resource_count(), 3);
+        assert_eq!(close_calls.get(), 2);
+
+        let owner = Arc::default();
+        let partial = DeviceError::fatal("owned resource failed")
+            .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1)
+            .with_backend_resource_owner(&owner);
+        let complete = DeviceResourceCloseOutcome::confirmed(3).with_backend_resource_owner(&owner);
+        let combined = partial.with_close_outcome(&complete);
+        assert_eq!(combined.resource_count(), 3);
+        assert_eq!(
+            combined.resource_quiescence(),
+            Some(DeviceResourceQuiescence::Unconfirmed)
+        );
+        assert_eq!(combined.with_close_outcome(&complete).resource_count(), 3);
     }
 
     // Workflow #257 / C1-NEMU-CLOSE-v1, Defect regression.
@@ -4073,6 +4133,7 @@ mod tests {
                         },
                         poisoned: Arc::new(AtomicBool::new(false)),
                         close_result: None,
+                        resources: Arc::default(),
                     }),
                     frame_width: 0,
                     frame_height: 0,

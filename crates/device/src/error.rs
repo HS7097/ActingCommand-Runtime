@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{AdbInputBoundsContext, NemuConfiguredAdbClass, NemuResolutionContext};
+use actingcommand_contract::ResourceDispositionScope;
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -163,6 +164,7 @@ impl DeviceResourceCloseOutcome {
                 occurrence: Arc::default(),
                 quiescence: DeviceResourceQuiescence::Confirmed,
                 resource_count,
+                scope: None,
             }],
         }
     }
@@ -177,6 +179,41 @@ impl DeviceResourceCloseOutcome {
 
     pub fn vendor_stdio(&self) -> &[DeviceStdioObservation] {
         &self.vendor_stdio
+    }
+
+    pub fn resource_contributions(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &Arc<DeviceCloseOccurrence>,
+            DeviceResourceQuiescence,
+            u16,
+            Option<ResourceDispositionScope>,
+        ),
+    > {
+        self.resource_contributions.iter().map(|item| {
+            (
+                &item.occurrence,
+                item.quiescence,
+                item.resource_count,
+                item.scope,
+            )
+        })
+    }
+
+    pub(crate) fn with_operation_resources(mut self) -> Self {
+        for item in &mut self.resource_contributions {
+            item.scope = Some(ResourceDispositionScope::OperationResources);
+        }
+        self
+    }
+
+    pub(crate) fn with_backend_resource_owner(
+        mut self,
+        owner: &Arc<DeviceCloseOccurrence>,
+    ) -> Self {
+        bind_backend_resource_contributions(&mut self.resource_contributions, owner);
+        self
     }
 
     pub(crate) fn with_vendor_stdio(mut self, facts: Arc<crate::VendorStdioFacts>) -> Self {
@@ -466,6 +503,9 @@ struct ResourceContribution {
     occurrence: Arc<DeviceCloseOccurrence>,
     quiescence: DeviceResourceQuiescence,
     resource_count: u16,
+    // None is resolved by the acquisition/close boundary. Explicit scope belongs
+    // to this contribution, including mixed active/candidate cleanup results.
+    scope: Option<ResourceDispositionScope>,
 }
 
 fn merge_resource_contribution(
@@ -476,6 +516,13 @@ fn merge_resource_contribution(
         .iter_mut()
         .find(|current| Arc::ptr_eq(&current.occurrence, &incoming.occurrence))
     {
+        if let (Some(current), Some(incoming)) = (current.scope, incoming.scope) {
+            assert_eq!(
+                current, incoming,
+                "resource contribution ownership conflict"
+            );
+        }
+        current.scope = current.scope.or(incoming.scope);
         current.resource_count = current.resource_count.max(incoming.resource_count);
         if incoming.quiescence == DeviceResourceQuiescence::Unconfirmed {
             current.quiescence = DeviceResourceQuiescence::Unconfirmed;
@@ -485,10 +532,41 @@ fn merge_resource_contribution(
     }
 }
 
+fn bind_backend_resource_contributions(
+    contributions: &mut Vec<ResourceContribution>,
+    owner: &Arc<DeviceCloseOccurrence>,
+) {
+    let mut owned: Option<ResourceContribution> = None;
+    contributions.retain(|item| {
+        if item.scope == Some(ResourceDispositionScope::OperationResources) {
+            return true;
+        }
+        if let Some(current) = &mut owned {
+            current.resource_count = current
+                .resource_count
+                .checked_add(item.resource_count)
+                .expect("device resource count overflow");
+            if item.quiescence == DeviceResourceQuiescence::Unconfirmed {
+                current.quiescence = DeviceResourceQuiescence::Unconfirmed;
+            }
+        } else {
+            owned = Some(ResourceContribution {
+                occurrence: Arc::clone(owner),
+                quiescence: item.quiescence,
+                resource_count: item.resource_count,
+                scope: Some(ResourceDispositionScope::SessionBackends),
+            });
+        }
+        false
+    });
+    if let Some(owned) = owned {
+        contributions.push(owned);
+    }
+}
+
 #[derive(Clone, Default)]
 struct StoredDeviceEvidence {
     resource_contributions: Vec<ResourceContribution>,
-    backend_resources: bool,
     input_parameters: Option<actingcommand_contract::BackendInputParameterCheck>,
     frame_memory: Option<crate::FrameMemoryFailure>,
     capture_probe_check: Option<crate::backend_open::CaptureProbeCheck>,
@@ -709,7 +787,14 @@ impl DeviceError {
 
     pub fn resource_contributions(
         &self,
-    ) -> impl Iterator<Item = (&Arc<DeviceCloseOccurrence>, DeviceResourceQuiescence, u16)> {
+    ) -> impl Iterator<
+        Item = (
+            &Arc<DeviceCloseOccurrence>,
+            DeviceResourceQuiescence,
+            u16,
+            Option<ResourceDispositionScope>,
+        ),
+    > {
         self.evidence
             .iter()
             .flat_map(|evidence| &evidence.resource_contributions)
@@ -718,6 +803,7 @@ impl DeviceError {
                     &contribution.occurrence,
                     contribution.quiescence,
                     contribution.resource_count,
+                    contribution.scope,
                 )
             })
     }
@@ -725,16 +811,32 @@ impl DeviceError {
     /// An installed backend reports its own retained resources, rather than a command's
     /// temporary resources. Acquisition callers still classify these as operation resources.
     pub(crate) fn with_backend_resources(mut self) -> Self {
-        self.evidence
-            .get_or_insert_with(Default::default)
-            .backend_resources = true;
+        if let Some(evidence) = &mut self.evidence {
+            for item in &mut evidence.resource_contributions {
+                item.scope
+                    .get_or_insert(ResourceDispositionScope::SessionBackends);
+            }
+        }
         self
     }
 
-    pub fn has_backend_resources(&self) -> bool {
-        self.evidence
-            .as_ref()
-            .is_some_and(|evidence| evidence.backend_resources)
+    pub(crate) fn with_operation_resources(mut self) -> Self {
+        if let Some(evidence) = &mut self.evidence {
+            for item in &mut evidence.resource_contributions {
+                item.scope = Some(ResourceDispositionScope::OperationResources);
+            }
+        }
+        self
+    }
+
+    pub(crate) fn with_backend_resource_owner(
+        mut self,
+        owner: &Arc<DeviceCloseOccurrence>,
+    ) -> Self {
+        if let Some(evidence) = &mut self.evidence {
+            bind_backend_resource_contributions(&mut evidence.resource_contributions, owner);
+        }
+        self
     }
 
     fn add_resource_contribution(&mut self, incoming: ResourceContribution) {
@@ -796,6 +898,7 @@ impl DeviceError {
             occurrence: Arc::clone(&cause.occurrence),
             quiescence,
             resource_count,
+            scope: None,
         });
         let mut causes = self.resource_close_causes.into_vec();
         merge_resource_cause(&mut causes, cause);
@@ -825,6 +928,7 @@ impl DeviceError {
             occurrence: Arc::clone(&self.occurrence),
             quiescence,
             resource_count,
+            scope: None,
         }];
         self
     }
@@ -887,14 +991,10 @@ impl DeviceError {
         if let Some(evidence) = cleanup.evidence {
             let StoredDeviceEvidence {
                 resource_contributions,
-                backend_resources,
                 ..
             } = *evidence;
             for contribution in resource_contributions {
                 self.add_resource_contribution(contribution);
-            }
-            if backend_resources {
-                self = self.with_backend_resources();
             }
         }
         let mut causes = self.resource_close_causes.into_vec();

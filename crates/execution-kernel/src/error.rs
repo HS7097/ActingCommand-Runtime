@@ -344,6 +344,26 @@ impl ExecutionKernelError {
     }
 
     pub(crate) fn device(code: &'static str, error: &DeviceError) -> Self {
+        Self::device_with_scope(code, error, ResourceDispositionScope::OperationResources)
+    }
+
+    pub(crate) fn device_acquisition(code: &'static str, error: &DeviceError) -> Self {
+        let mut result = Self::device(code, error);
+        for resource in &mut result.lifecycle.resources {
+            resource.disposition.scope = ResourceDispositionScope::OperationResources;
+        }
+        result
+    }
+
+    pub(crate) fn device_close(code: &'static str, error: &DeviceError) -> Self {
+        Self::device_with_scope(code, error, ResourceDispositionScope::SessionBackends)
+    }
+
+    fn device_with_scope(
+        code: &'static str,
+        error: &DeviceError,
+        default_scope: ResourceDispositionScope,
+    ) -> Self {
         let code = match error.frame_memory_failure() {
             Some(actingcommand_device::FrameMemoryFailure::Capacity) => {
                 "frame_workspace_unavailable"
@@ -448,16 +468,16 @@ impl ExecutionKernelError {
                 causes,
                 resources: error
                     .resource_contributions()
-                    .map(
-                        |(occurrence, quiescence, resource_count)| ExecutionResourceContribution {
+                    .map(|(occurrence, quiescence, resource_count, scope)| {
+                        ExecutionResourceContribution {
                             occurrence: Arc::clone(occurrence),
                             disposition: ResourceDisposition {
-                                scope: ResourceDispositionScope::OperationResources,
+                                scope: scope.unwrap_or(default_scope),
                                 resource_count,
                                 quiescence: runtime_quiescence(quiescence),
                             },
-                        },
-                    )
+                        }
+                    })
                     .collect(),
                 ..ExecutionFailureContext::default()
             }),
@@ -517,36 +537,6 @@ impl ExecutionKernelError {
                 self.resource_quiescence,
                 Some(contribution.disposition.quiescence),
             );
-        }
-    }
-
-    pub(crate) fn with_session_resources(
-        mut self,
-        occurrence: &Arc<DeviceCloseOccurrence>,
-    ) -> Self {
-        if let Some(quiescence) = self.resource_quiescence {
-            self.lifecycle.resources = vec![ExecutionResourceContribution {
-                occurrence: Arc::clone(occurrence),
-                disposition: ResourceDisposition {
-                    scope: ResourceDispositionScope::SessionBackends,
-                    resource_count: self.resource_count,
-                    quiescence,
-                },
-            }];
-        }
-        self
-    }
-
-    pub(crate) fn device_operation(
-        code: &'static str,
-        error: &DeviceError,
-        owner: &Arc<DeviceCloseOccurrence>,
-    ) -> Self {
-        let result = Self::device(code, error);
-        if error.has_backend_resources() {
-            result.with_session_resources(owner)
-        } else {
-            result
         }
     }
 
@@ -652,7 +642,7 @@ const fn cleanup_severity(severity: DeviceErrorSeverity) -> CleanupCauseSeverity
     }
 }
 
-const fn runtime_quiescence(quiescence: DeviceResourceQuiescence) -> ResourceQuiescence {
+pub(crate) const fn runtime_quiescence(quiescence: DeviceResourceQuiescence) -> ResourceQuiescence {
     match quiescence {
         DeviceResourceQuiescence::Confirmed => ResourceQuiescence::Confirmed,
         DeviceResourceQuiescence::Unconfirmed => ResourceQuiescence::Unconfirmed,
