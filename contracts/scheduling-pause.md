@@ -185,10 +185,12 @@ epoch, which is why the epoch is part of the condition.
 
 An older Runtime does not know the field: `RuntimeOperation` denies unknown fields, the frame
 fails to decode and the connection is dropped without a receipt (stage
-`runtime.ipc.request_decode`, effect not performed). The client
-(`RuntimeClient::resume_scheduling_expected`) then reconnects and, when the same owner epoch
-answers, reads `Status`: the scope still paused at the expected revision means nothing was
-lifted and is reported as `runtime_operation_unsupported`; any other state, or a failed
+`runtime.ipc.request_decode`, effect not performed). Only when the call wrote its own frame
+and that connection then ended before the receipt header (end of stream, reset or abort) does
+the client (`RuntimeClient::resume_scheduling_expected`) reconnect and, when the same owner
+epoch answers, read `Status`; a connection already failed by an earlier call, a receipt
+timeout and every other failure are returned unchanged. After such a drop, the scope still
+paused at the expected revision means nothing was lifted and is reported as `runtime_operation_unsupported`; any other state, or a failed
 reconnect or another epoch, is the uncertain `runtime_scheduling_resume_unconfirmed` (or
 `runtime_owner_epoch_changed`). The client never falls back to an unconditional resume.
 

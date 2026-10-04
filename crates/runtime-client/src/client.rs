@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
-use crate::{RuntimeClientError, RuntimeClientErrorClass, RuntimeClientResult};
+use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
@@ -1114,27 +1114,29 @@ impl RuntimeClient {
     /// Lifts only the scheduling pause the caller saw (`ResumeScheduling` with `expected`,
     /// Workflow #338 R4): the Runtime refuses any other pause with
     /// `scheduling_pause_owner_epoch_mismatch` or `scheduling_pause_revision_mismatch`. A Runtime
-    /// that does not know the condition drops the connection without a receipt; the client then
-    /// reconnects and, in the same owner epoch, reads `Status`: the scope still paused at the
-    /// expected revision is `runtime_operation_unsupported` (nothing was lifted); anything else
-    /// is the uncertain `runtime_scheduling_resume_unconfirmed`. It never falls back to an
-    /// unconditional resume.
+    /// that does not know the condition drops the connection without a receipt: only when this
+    /// call wrote its own frame and that connection then ended before the receipt header
+    /// (`send_or_dropped`) does the client reconnect and, in the same owner epoch, read `Status`:
+    /// the scope still paused at the expected revision is `runtime_operation_unsupported`
+    /// (nothing was lifted); anything else is the uncertain
+    /// `runtime_scheduling_resume_unconfirmed`. Every other failure, a connection already failed
+    /// before this call or a receipt that timed out included, is returned unchanged. It never
+    /// falls back to an unconditional resume.
     pub fn resume_scheduling_expected(
         &self,
         scope: SchedulingPauseScope,
         expected: SchedulingPauseExpectation,
     ) -> RuntimeClientResult<RuntimeResult> {
         const OPERATION: &str = "resume_scheduling";
-        let result = match self.execute(
+        let result = match self.send_or_dropped(
             OPERATION,
             RuntimeOperation::ResumeScheduling {
                 scope: scope.clone(),
                 expected: Some(expected),
             },
-        ) {
-            Ok(result) => result,
-            Err(error) if !unconfirmed_without_receipt(&error) => return Err(error),
-            Err(error) => {
+        )? {
+            SentOutcome::Answered(result) => *result,
+            SentOutcome::Dropped(error) => {
                 let status = match self
                     .reconnect_in_owner_epoch(OPERATION)
                     .and_then(|()| self.status())
@@ -1181,27 +1183,30 @@ impl RuntimeClient {
 
     /// Reads what one instance can target and the resource target policy it holds now
     /// (`ResourceTargetView`, Workflow #338 R5). Read-only. A Runtime that does not know the
-    /// operation drops the connection without a receipt; the client then reconnects and, in the
-    /// same owner epoch, reports `runtime_operation_unsupported`.
+    /// operation drops the connection without a receipt: only when this call wrote its own frame
+    /// and that connection then ended before the receipt header (`send_or_dropped`) does the
+    /// client reconnect and, in the same owner epoch, report `runtime_operation_unsupported`.
+    /// Every other failure is returned unchanged.
     pub fn resource_target_view(
         &self,
         instance_alias: &str,
     ) -> RuntimeClientResult<actingcommand_contract::ResourceTargetView> {
         const OPERATION: &str = "resource_target_view";
-        match self.execute(
+        match self.send_or_dropped(
             OPERATION,
             RuntimeOperation::ResourceTargetView {
                 instance_alias: instance_alias.to_owned(),
             },
-        ) {
-            Ok(RuntimeResult::ResourceTargetView { view })
-                if view.instance_alias == instance_alias =>
-            {
-                Ok(*view)
-            }
-            Ok(_) => Err(self.unexpected_result(OPERATION)),
-            Err(error) if !unconfirmed_without_receipt(&error) => Err(error),
-            Err(error) => match self.reconnect_in_owner_epoch(OPERATION) {
+        )? {
+            SentOutcome::Answered(result) => match *result {
+                RuntimeResult::ResourceTargetView { view }
+                    if view.instance_alias == instance_alias =>
+                {
+                    Ok(*view)
+                }
+                _ => Err(self.unexpected_result(OPERATION)),
+            },
+            SentOutcome::Dropped(error) => match self.reconnect_in_owner_epoch(OPERATION) {
                 Ok(()) => Err(RuntimeClientError::fatal(
                     "runtime_operation_unsupported",
                     OPERATION,
@@ -1209,6 +1214,40 @@ impl RuntimeClient {
                 .with_related(error)),
                 Err(reconnect) => Err(error.with_related(reconnect)),
             },
+        }
+    }
+
+    /// Sends `operation` once, like `execute`, and tells apart the one failure an older
+    /// Runtime's decoder leaves (Workflow #338 R4, R5): this call created and wrote its own frame
+    /// on a connection that was not already failed, and the connection then ended before the
+    /// receipt header (`runtime_receipt_header_failed` with end of stream, reset or abort, for this
+    /// request). A connection already failed by an earlier call fails before anything is written
+    /// and is returned unchanged, as is every other failure, a receipt timeout included.
+    fn send_or_dropped(
+        &self,
+        operation_name: &'static str,
+        operation: RuntimeOperation,
+    ) -> RuntimeClientResult<SentOutcome> {
+        let mut connection = self.connection(operation_name)?;
+        let request = connection.request(operation_name, operation.clone(), self.correlation)?;
+        let request_id = request.request_id();
+        let receipt = match self.exchange_receipt(
+            &mut connection,
+            operation_name,
+            operation,
+            request,
+            None,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) if dropped_before_receipt(&error, request_id) => {
+                return Ok(SentOutcome::Dropped(error));
+            }
+            Err(error) => return Err(error),
+        };
+        drop(connection);
+        match receipt.result().cloned() {
+            Some(result) => Ok(SentOutcome::Answered(Box::new(result))),
+            None => Err(self.unexpected_result(operation_name)),
         }
     }
 
@@ -5590,12 +5629,26 @@ pub(super) fn receipt_response_timeout(
     }
 }
 
-/// A failure after the request was sent with no receipt and no error projection: what an
-/// older Runtime's decoder leaves when it drops a frame it cannot read.
-fn unconfirmed_without_receipt(error: &RuntimeClientError) -> bool {
-    error.projection().is_none()
-        && error.received_receipt().is_none()
-        && error.disposition() == RuntimeClientErrorClass::Uncertain
+/// The result of `send_or_dropped`: the Runtime's result, or the connection ending before the
+/// receipt of the frame this call wrote.
+enum SentOutcome {
+    Answered(Box<RuntimeResult>),
+    Dropped(RuntimeClientError),
+}
+
+/// The connection that carried `request_id` ended before its receipt header: what an older
+/// Runtime's decoder leaves when it drops a frame it cannot read (a timeout is not this).
+fn dropped_before_receipt(error: &RuntimeClientError, request_id: RequestId) -> bool {
+    error.code() == "runtime_receipt_header_failed"
+        && error.projection().is_none()
+        && error.receipt_header_io().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+            ) && io.request_id() == Some(&request_id)
+        })
 }
 
 fn contained_task_response_timeout(

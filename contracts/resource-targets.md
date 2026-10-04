@@ -632,8 +632,10 @@ them; it appends nothing itself. The projection's fact-store synchronization is 
 policy read.
 
 An older Runtime does not know the operation: the frame fails to decode and the connection is
-dropped without a receipt. `RuntimeClient::resource_target_view(alias)` then reconnects and,
-when the same owner epoch answers, reports `runtime_operation_unsupported`; the skill then
+dropped without a receipt. Only when the call wrote its own frame and that connection then
+ended before the receipt header does `RuntimeClient::resource_target_view(alias)` reconnect
+and, when the same owner epoch answers, report `runtime_operation_unsupported`; any other
+failure is returned unchanged; the skill then
 falls back to reading the scheduling catalog.
 
 ## Client and CLI
