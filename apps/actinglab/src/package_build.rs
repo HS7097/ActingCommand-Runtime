@@ -217,6 +217,28 @@ pub(super) fn run_digest(flags: &FlagArgs) -> CliOutcome<Value> {
 /// Workflow #288 A2b: `package bundle --applications <file> --packs-root <directory> --out
 /// <directory>`, with `--source-repository` and `--source-commit` together or not at all.
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
+    let maintenance = if flags.flags.contains_key("--maintenance") {
+        use std::io::Read;
+        let path = flags.required_path("--maintenance")?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .and_then(|file| {
+                file.take(DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+            })
+            .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?;
+        if bytes.len() > DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES {
+            return Err(CliError::usage(
+                "--maintenance exceeds the package input byte limit",
+            ));
+        }
+        Some(
+            serde_json::from_slice(&bytes)
+                .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?,
+        )
+    } else {
+        None
+    };
     let source = match (
         flags.flags.contains_key("--source-repository"),
         flags.flags.contains_key("--source-commit"),
@@ -237,6 +259,7 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
         packs_root: flags.required_path("--packs-root")?,
         out: flags.required_path("--out")?,
         source,
+        maintenance,
     };
     let mut lab = super::env_detection::build_readonly_lab()?;
     serialize_response(lab.package_bundle(request)?)

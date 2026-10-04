@@ -1828,6 +1828,24 @@ enum PostAdmissionOcrExecution {
 }
 
 impl PreparedContainedTask {
+    /// Fully prepares verified material with the existing metadata-only vision capability,
+    /// then returns only its read-only description. No executable task or provider escapes.
+    pub fn describe_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        deadline: std::time::Instant,
+    ) -> Result<crate::TaskPackageDescriptor, ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_metadata_path(
+            instance_label,
+            locator,
+            expected,
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
+        Ok(Self::from_bundle(bundle)?.package_descriptor())
+    }
+
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
@@ -2037,6 +2055,11 @@ impl PreparedContainedTask {
     /// Whether the task declares `resource_readings`; offline simulation does not read them.
     pub const fn has_resource_readings(&self) -> bool {
         self.program.resource_readings.is_some()
+    }
+
+    /// A host-scheduled startup package publishes no instance resource facts.
+    pub fn startup_incompatibility(&self) -> Option<&'static str> {
+        self.has_resource_readings().then_some("resource_readings")
     }
 
     /// Whether the task has a select step (Workflow #308).
