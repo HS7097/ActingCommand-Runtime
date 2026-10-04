@@ -872,6 +872,7 @@ impl RetentionIndex {
                 resource_count,
                 quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
                 owner_disposition: actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed,
+                ..
             } = payload.phase()
             && resource_count > 0
             && event.links().instance_id() == Some(&instance_id)
@@ -931,6 +932,7 @@ impl RetentionIndex {
                     if matches!(payload.phase(), RuntimeLifecyclePhase::ResourceQuiescence {
                         instance_id, resource_count, quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
                         owner_disposition: actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed,
+                        ..
                     } if instance_id == scope.instance && resource_count > 0))
             {
                 closure.close = Some(terminal(event));
@@ -1404,6 +1406,7 @@ fn successful_close<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionI
                 && matches!(payload.phase(), RuntimeLifecyclePhase::ResourceQuiescence {
                 instance_id, resource_count, quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
                 owner_disposition: actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed,
+                ..
             } if instance_id == identity.instance_id && resource_count > 0)
         }
         _ => false,

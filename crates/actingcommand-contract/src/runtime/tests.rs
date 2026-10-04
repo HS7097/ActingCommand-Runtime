@@ -163,6 +163,18 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     let epoch = *ids.mint_owner_epoch().expect("epoch").transport();
     let instance = *ids.mint_instance_id().expect("instance").transport();
     let entered = *ids.mint_event_id().expect("entered").transport();
+    let groups = vec![
+        crate::ResourceDisposition {
+            scope: crate::ResourceDispositionScope::OperationResources,
+            resource_count: 3,
+            quiescence: crate::ResourceQuiescence::Unconfirmed,
+        },
+        crate::ResourceDisposition {
+            scope: crate::ResourceDispositionScope::SessionBackends,
+            resource_count: 0,
+            quiescence: crate::ResourceQuiescence::Confirmed,
+        },
+    ];
     let recovery = crate::AdbTargetRecovery {
         endpoint: LifecycleNativeDetail::new("private-endpoint:5555", false),
         initial_error: LifecycleNativeDetail::new("preserved device offline", false),
@@ -205,6 +217,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
         "input_backend_close_failed",
     )
     .with_operation(Some("close_execution_kernel"))
+    .with_resource_dispositions(Some(groups.clone()))
     .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
     .with_instance_id(Some(instance))
     .with_entered_event_id(Some(entered))
@@ -266,6 +279,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
         panic!("runtime failed");
     };
     let record = outcome.lifecycle_failure().expect("lifecycle metadata");
+    assert_eq!(record.resource_dispositions(), Some(groups.as_slice()));
     assert_eq!(record.adb_recovery(), Some(&recovery));
     assert_eq!(record.owner_epoch(), epoch);
     assert_eq!(record.instance_id(), Some(instance));
@@ -286,6 +300,31 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     assert!(!public.contains("private-endpoint"));
     assert!(public.contains("reset"));
     assert!(public.contains("close_execution_kernel"));
+    assert!(public.contains("resource_dispositions"));
+    assert!(public.contains("operation_resources"));
+    for invalid in [Vec::new(), vec![groups[0], groups[0]], vec![groups[0]; 3]] {
+        assert!(sanitize(lifecycle.clone().with_resource_dispositions(Some(invalid))).is_err());
+    }
+    let without_groups = sanitize(lifecycle.clone().with_resource_dispositions(None))
+        .expect("old lifecycle without grouped evidence");
+    let old_group_wire =
+        serde_json::to_string(without_groups.payload()).expect("old lifecycle wire");
+    assert!(!old_group_wire.contains("resource_dispositions"));
+    let restored_old: EventPayload =
+        serde_json::from_str(&old_group_wire).expect("old lifecycle reader");
+    restored_old
+        .validate()
+        .expect("old lifecycle remains valid");
+    let EventPayload::Runtime(RuntimePayload::Failed(old_outcome)) = restored_old else {
+        panic!("old lifecycle failure");
+    };
+    assert!(
+        old_outcome
+            .lifecycle_failure()
+            .unwrap()
+            .resource_dispositions()
+            .is_none()
+    );
     let forged = wire.replace(
         "\"declared_sensitivity\":\"sensitive\"",
         "\"declared_sensitivity\":\"public\"",

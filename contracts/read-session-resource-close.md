@@ -50,6 +50,53 @@ terminal Close. That failure never becomes an empty, successfully closed backend
 Paired Nemu still invalidates its display in the application command. Original
 lease cleanup, cancellation, expiry and Unconfirmed owner retention remain in force.
 
+Preparation and operation failures retain their original resource summary through
+the worker's terminal Close. The close owner combines that summary with the actual
+installed backends' close results, including successful siblings. Any known
+Unconfirmed contribution makes the combined close Unconfirmed: Host retains the
+owner, marks the failure fatal and keeps the lease and destructive step. A Confirmed
+operation failure remains an operation failure; its confirmed resource retirement
+can finish and release the preparation lease.
+
+The lifecycle failure and ResourceQuiescence facts have an optional
+`resource_dispositions` array. Each row contains only `scope`, `resource_count`
+(`u16`) and `quiescence`; there is at most one row for each of these scopes:
+
+- `operation_resources`: the operation's temporary resources not transferred to an
+  installed session backend;
+- `session_backends`: installed backends and the resources those backends own.
+
+Only a real resource summary creates a row. `None` means no grouped evidence was
+recorded; an actually empty backend set can contribute SessionBackends 0/Confirmed.
+The combined count and decision come from the same contributions as these rows.
+Counts describe that event's boundary and are not summed across ledger rows.
+
+Device summaries and successful close outcomes carry stable in-memory occurrence
+identities. Unions count only new independent contributions, including partial
+overlap. The session binds an installed backend's retained and final summaries to
+one ownership identity: a later complete summary expands its known count, while
+any Unconfirmed observation remains dominant. Temporary operation resources keep
+their own identities. Clones, conversion, responses, worker joins and terminal
+caches retain these identities. This metadata grants no close authority.
+
+A failed terminal Close composition allocates one fresh lifecycle receipt before
+the worker sends or returns it. An already recorded original operation keeps its
+own receipt; the combined failure refers to it when available. Cause and stdio
+receipts stay shared, so cached returns neither suppress the combined fact nor
+duplicate its original causes. A confirmed Close records its combined rows in the
+existing ResourceQuiescence fact. Host error conversion retains the full grouped
+summary in its existing failure context.
+
+Full typed events and Forensic readers expose both kinds of fact. The existing
+public lifecycle-failure summary retains the categorical groups and counts while
+clearing native and sensitive details. Public lifecycle-observed projections keep
+their existing field selection; use the full event for ResourceQuiescence groups.
+The new optional fields default to None and omit None on serialization, so new
+readers retain the original meaning of old ledgers. Strict readers from before
+this schema change reject events carrying the new fields. Producer, reader and
+Tools therefore belong to the same deployed artifact; existing ledger history is
+not rewritten.
+
 Readonly, monitor and contained-task capture failures share this close path under
 the instance admission mutex. They can reuse a current business lease only when
 its existing close checks permit it. That lease remains with its original cleanup

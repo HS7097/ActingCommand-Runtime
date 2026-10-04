@@ -116,12 +116,22 @@ pub enum DeviceResourceClosePhase {
     LibraryUnload,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct DeviceResourceCloseOutcome {
     quiescence: DeviceResourceQuiescence,
     resource_count: u16,
     vendor_stdio: Vec<DeviceStdioObservation>,
+    resource_contributions: Vec<ResourceContribution>,
 }
+
+impl PartialEq for DeviceResourceCloseOutcome {
+    fn eq(&self, other: &Self) -> bool {
+        self.quiescence == other.quiescence
+            && self.resource_count == other.resource_count
+            && self.vendor_stdio == other.vendor_stdio
+    }
+}
+impl Eq for DeviceResourceCloseOutcome {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceStdioObservation {
@@ -144,11 +154,16 @@ fn merge_stdio_observations(
 }
 
 impl DeviceResourceCloseOutcome {
-    pub const fn confirmed(resource_count: u16) -> Self {
+    pub fn confirmed(resource_count: u16) -> Self {
         Self {
             quiescence: DeviceResourceQuiescence::Confirmed,
             resource_count,
             vendor_stdio: Vec::new(),
+            resource_contributions: vec![ResourceContribution {
+                occurrence: Arc::default(),
+                quiescence: DeviceResourceQuiescence::Confirmed,
+                resource_count,
+            }],
         }
     }
 
@@ -182,6 +197,17 @@ impl DeviceResourceCloseOutcome {
 
     pub fn combine(mut self, other: Self) -> Self {
         merge_stdio_observations(&mut self.vendor_stdio, &other.vendor_stdio);
+        for contribution in other.resource_contributions {
+            merge_resource_contribution(&mut self.resource_contributions, contribution);
+        }
+        let resource_count = self
+            .resource_contributions
+            .iter()
+            .fold(0_u16, |count, item| {
+                count
+                    .checked_add(item.resource_count)
+                    .expect("device resource count overflow")
+            });
         Self {
             quiescence: if matches!(
                 (self.quiescence, other.quiescence),
@@ -194,8 +220,9 @@ impl DeviceResourceCloseOutcome {
             } else {
                 DeviceResourceQuiescence::Unconfirmed
             },
-            resource_count: self.resource_count.saturating_add(other.resource_count),
+            resource_count,
             vendor_stdio: self.vendor_stdio,
+            resource_contributions: self.resource_contributions,
         }
     }
 }
@@ -432,6 +459,32 @@ pub struct DeviceError {
     resource_close_causes: Box<[DeviceResourceCloseCause]>,
     resource_quiescence: Option<DeviceResourceQuiescence>,
     resource_count: u16,
+    resource_contributions: Vec<ResourceContribution>,
+    backend_resources: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ResourceContribution {
+    occurrence: Arc<DeviceCloseOccurrence>,
+    quiescence: DeviceResourceQuiescence,
+    resource_count: u16,
+}
+
+fn merge_resource_contribution(
+    target: &mut Vec<ResourceContribution>,
+    incoming: ResourceContribution,
+) {
+    if let Some(current) = target
+        .iter_mut()
+        .find(|current| Arc::ptr_eq(&current.occurrence, &incoming.occurrence))
+    {
+        current.resource_count = current.resource_count.max(incoming.resource_count);
+        if incoming.quiescence == DeviceResourceQuiescence::Unconfirmed {
+            current.quiescence = DeviceResourceQuiescence::Unconfirmed;
+        }
+    } else {
+        target.push(incoming);
+    }
 }
 
 #[derive(Clone, Default)]
@@ -598,6 +651,8 @@ impl DeviceError {
             resource_close_causes: Box::default(),
             resource_quiescence: None,
             resource_count: 0,
+            resource_contributions: Vec::new(),
+            backend_resources: false,
         }
     }
 
@@ -614,6 +669,8 @@ impl DeviceError {
             resource_close_causes: Box::default(),
             resource_quiescence: None,
             resource_count: 0,
+            resource_contributions: Vec::new(),
+            backend_resources: false,
         }
     }
 
@@ -630,6 +687,8 @@ impl DeviceError {
             resource_close_causes: Box::default(),
             resource_quiescence: None,
             resource_count: 0,
+            resource_contributions: Vec::new(),
+            backend_resources: false,
         }
     }
 
@@ -652,6 +711,52 @@ impl DeviceError {
 
     pub const fn resource_count(&self) -> u16 {
         self.resource_count
+    }
+
+    pub fn resource_contributions(
+        &self,
+    ) -> impl Iterator<Item = (&Arc<DeviceCloseOccurrence>, DeviceResourceQuiescence, u16)> {
+        self.resource_contributions.iter().map(|contribution| {
+            (
+                &contribution.occurrence,
+                contribution.quiescence,
+                contribution.resource_count,
+            )
+        })
+    }
+
+    /// An installed backend reports its own retained resources, rather than a command's
+    /// temporary resources. Acquisition callers still classify these as operation resources.
+    pub(crate) fn with_backend_resources(mut self) -> Self {
+        self.backend_resources = true;
+        self
+    }
+
+    pub const fn has_backend_resources(&self) -> bool {
+        self.backend_resources
+    }
+
+    fn add_resource_contribution(&mut self, incoming: ResourceContribution) {
+        merge_resource_contribution(&mut self.resource_contributions, incoming);
+        self.resource_count = self
+            .resource_contributions
+            .iter()
+            .fold(0_u16, |count, item| {
+                count
+                    .checked_add(item.resource_count)
+                    .expect("device resource count overflow")
+            });
+        self.resource_quiescence = Some(
+            if self
+                .resource_contributions
+                .iter()
+                .any(|item| item.quiescence == DeviceResourceQuiescence::Unconfirmed)
+            {
+                DeviceResourceQuiescence::Unconfirmed
+            } else {
+                DeviceResourceQuiescence::Confirmed
+            },
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -685,26 +790,24 @@ impl DeviceError {
             observation_count: 1,
             dropped_count: 0,
         };
+        self.add_resource_contribution(ResourceContribution {
+            occurrence: Arc::clone(&cause.occurrence),
+            quiescence,
+            resource_count,
+        });
         let mut causes = self.resource_close_causes.into_vec();
         merge_resource_cause(&mut causes, cause);
         self.resource_close_causes = causes.into_boxed_slice();
-        self.resource_quiescence = Some(match (self.resource_quiescence, quiescence) {
-            (Some(DeviceResourceQuiescence::Unconfirmed), _)
-            | (_, DeviceResourceQuiescence::Unconfirmed) => DeviceResourceQuiescence::Unconfirmed,
-            _ => DeviceResourceQuiescence::Confirmed,
-        });
-        self.resource_count = self.resource_count.saturating_add(resource_count);
         self
     }
 
     pub fn with_resource_quiescence(
-        mut self,
+        self,
         quiescence: DeviceResourceQuiescence,
         resource_count: u16,
     ) -> Self {
-        self.resource_quiescence = Some(quiescence);
-        self.resource_count = self.resource_count.max(resource_count);
-        self
+        let count = self.resource_count.max(resource_count);
+        self.with_resource_summary(quiescence, count)
     }
 
     pub fn with_resource_summary(
@@ -714,6 +817,11 @@ impl DeviceError {
     ) -> Self {
         self.resource_quiescence = Some(quiescence);
         self.resource_count = resource_count;
+        self.resource_contributions = vec![ResourceContribution {
+            occurrence: Arc::clone(&self.occurrence),
+            quiescence,
+            resource_count,
+        }];
         self
     }
 
@@ -772,11 +880,13 @@ impl DeviceError {
 
     pub fn merge_resource_cleanup(mut self, cleanup: Self) -> Self {
         self = self.with_stdio_observations(cleanup.vendor_stdio());
+        for contribution in cleanup.resource_contributions {
+            self.add_resource_contribution(contribution);
+        }
+        self.backend_resources |= cleanup.backend_resources;
         let mut causes = self.resource_close_causes.into_vec();
-        let mut new_occurrence = cleanup.resource_close_causes.is_empty()
-            && !Arc::ptr_eq(&self.occurrence, &cleanup.occurrence);
         for cause in cleanup.resource_close_causes {
-            new_occurrence |= merge_resource_cause(&mut causes, cause);
+            merge_resource_cause(&mut causes, cause);
         }
         self.resource_close_causes = causes.into_boxed_slice();
         self.resource_quiescence = match (self.resource_quiescence, cleanup.resource_quiescence) {
@@ -790,11 +900,16 @@ impl DeviceError {
             }
             (None, None) => None,
         };
-        if new_occurrence {
-            self.resource_count = self.resource_count.saturating_add(cleanup.resource_count);
-        }
         if matches!(cleanup.severity, DeviceErrorSeverity::Fatal) {
             self.severity = DeviceErrorSeverity::Fatal;
+        }
+        self
+    }
+
+    pub(crate) fn with_close_outcome(mut self, outcome: &DeviceResourceCloseOutcome) -> Self {
+        self = self.with_stdio_observations(outcome.vendor_stdio());
+        for contribution in &outcome.resource_contributions {
+            self.add_resource_contribution(contribution.clone());
         }
         self
     }
@@ -865,9 +980,7 @@ impl DeviceError {
         let mut error = Self::fatal(messages.join("; "));
         error.close_causes = causes.into_boxed_slice();
         error.resource_close_causes = resource_causes.into_boxed_slice();
-        error.resource_quiescence = Some(quiescence);
-        error.resource_count = 1;
-        Err(error)
+        Err(error.with_resource_summary(quiescence, 1))
     }
 
     pub fn with_diagnostic_if_absent(

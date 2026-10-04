@@ -6,13 +6,14 @@ use crate::{
 };
 use actingcommand_contract::{
     ApplicationLifecycleAction, CaptureGeometryObservation, CaptureGeometryUnknownReason,
-    FencedWrite, FrameId, InputAction, InputFrameReference, ResourceQuiescence,
+    FencedWrite, FrameId, InputAction, InputFrameReference, ResourceDisposition,
+    ResourceDispositionScope, ResourceQuiescence,
 };
 use actingcommand_device::{
-    CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
-    DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, Frame, InputBackend,
-    InputExecutionContext, InputOperationCheck, NemuFrameGeometry, NemuSessionBackends,
-    PreparedSegmentedSwipePlan, SegmentedSwipeAction, prepare_segmented_swipe,
+    CaptureBackend, DeviceCloseAuthority, DeviceCloseOccurrence, DeviceError,
+    DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, Frame,
+    InputBackend, InputExecutionContext, InputOperationCheck, NemuFrameGeometry,
+    NemuSessionBackends, PreparedSegmentedSwipePlan, SegmentedSwipeAction, prepare_segmented_swipe,
     segmented_swipe_capability_error,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -87,8 +88,10 @@ enum SessionBackends {
     Independent {
         input: Option<Box<dyn InputBackend>>,
         capture: Option<Box<dyn CaptureBackend>>,
+        input_resources: Arc<DeviceCloseOccurrence>,
+        capture_resources: Arc<DeviceCloseOccurrence>,
     },
-    Nemu(NemuSessionBackends),
+    Nemu(NemuSessionBackends, Arc<DeviceCloseOccurrence>),
 }
 
 impl SessionBackends {
@@ -116,11 +119,13 @@ impl SessionBackends {
             })? {
                 Some(pair) => {
                     observations.push(pair.observation);
-                    Self::Nemu(pair.backend)
+                    Self::Nemu(pair.backend, Arc::default())
                 }
                 None => Self::Independent {
                     input: None,
                     capture: None,
+                    input_resources: Arc::default(),
+                    capture_resources: Arc::default(),
                 },
             };
             return Ok(observations);
@@ -239,23 +244,52 @@ enum SessionCommand {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExecutionResourceCloseOutcome {
     resource_count: u16,
     vendor_stdio: Vec<crate::ExecutionStdioObservation>,
+    pub(crate) resources: Vec<crate::error::ExecutionResourceContribution>,
 }
 
+impl PartialEq for ExecutionResourceCloseOutcome {
+    fn eq(&self, other: &Self) -> bool {
+        self.resource_count == other.resource_count
+            && self.vendor_stdio == other.vendor_stdio
+            && self.resource_dispositions() == other.resource_dispositions()
+    }
+}
+impl Eq for ExecutionResourceCloseOutcome {}
+
 impl ExecutionResourceCloseOutcome {
-    pub(crate) const fn confirmed(resource_count: u16) -> Self {
+    pub(crate) fn confirmed(resource_count: u16) -> Self {
         Self {
             resource_count,
             vendor_stdio: Vec::new(),
+            resources: vec![crate::error::ExecutionResourceContribution {
+                occurrence: Arc::default(),
+                disposition: ResourceDisposition {
+                    scope: ResourceDispositionScope::SessionBackends,
+                    resource_count,
+                    quiescence: ResourceQuiescence::Confirmed,
+                },
+            }],
         }
     }
 
-    fn from_device(outcome: actingcommand_device::DeviceResourceCloseOutcome) -> Self {
+    fn from_device(
+        outcome: actingcommand_device::DeviceResourceCloseOutcome,
+        occurrence: Arc<DeviceCloseOccurrence>,
+    ) -> Self {
         Self {
             resource_count: outcome.resource_count(),
+            resources: vec![crate::error::ExecutionResourceContribution {
+                occurrence,
+                disposition: ResourceDisposition {
+                    scope: ResourceDispositionScope::SessionBackends,
+                    resource_count: outcome.resource_count(),
+                    quiescence: ResourceQuiescence::Confirmed,
+                },
+            }],
             vendor_stdio: outcome
                 .vendor_stdio()
                 .iter()
@@ -276,8 +310,31 @@ impl ExecutionResourceCloseOutcome {
         self.resource_count
     }
 
+    pub fn resource_dispositions(&self) -> Option<Vec<ResourceDisposition>> {
+        crate::error::resource_dispositions(&self.resources)
+    }
+
+    fn with_confirmed_failure(mut self, primary: &ExecutionKernelError) -> Self {
+        crate::error::merge_resource_contributions(
+            &mut self.resources,
+            primary.resource_contributions(),
+        );
+        self.resource_count = self.resources.iter().fold(0_u16, |count, item| {
+            count
+                .checked_add(item.disposition.resource_count)
+                .expect("execution resource count overflow")
+        });
+        crate::error::merge_stdio_observations(&mut self.vendor_stdio, primary.vendor_stdio());
+        self
+    }
+
     fn combine(mut self, other: Self) -> Self {
-        self.resource_count = self.resource_count.saturating_add(other.resource_count);
+        crate::error::merge_resource_contributions(&mut self.resources, &other.resources);
+        self.resource_count = self.resources.iter().fold(0_u16, |count, item| {
+            count
+                .checked_add(item.disposition.resource_count)
+                .expect("execution resource count overflow")
+        });
         crate::error::merge_stdio_observations(&mut self.vendor_stdio, &other.vendor_stdio);
         self
     }
@@ -776,7 +833,9 @@ impl ExecutionSession {
         let result = match (close_result, join_session(&mut state)) {
             (Ok(outcome), Ok(())) => Ok(outcome),
             (Err(error), Ok(())) => Err(error),
-            (Ok(outcome), Err(error)) => Err(error.with_stdio_observations(outcome.vendor_stdio())),
+            (Ok(outcome), Err(error)) => {
+                Err(error.with_close_outcome(&outcome).with_close_recording())
+            }
             (Err(primary), Err(secondary)) => Err(ExecutionKernelError::merge(primary, secondary)),
         };
         state.close_result = Some(result.clone());
@@ -1104,13 +1163,16 @@ fn run_session(
             SessionCommand::ObserveGeometry { deadline, response } => {
                 let result = (|| {
                     geometry_remaining(deadline)?;
-                    let backend = match backends {
+                    let (backend, resources) = match backends {
                         SessionBackends::CloseFailed(error) => return Err(error.as_ref().clone()),
                         SessionBackends::Independent {
                             capture: Some(backend),
+                            capture_resources,
                             ..
-                        } => backend.as_mut(),
-                        SessionBackends::Nemu(pair) => pair.capture.as_mut(),
+                        } => (backend.as_mut(), capture_resources),
+                        SessionBackends::Nemu(pair, resources) => {
+                            (pair.capture.as_mut(), resources)
+                        }
                         SessionBackends::Pending
                         | SessionBackends::Independent { capture: None, .. } => {
                             return Ok(CaptureGeometryObservation::Unknown(
@@ -1119,7 +1181,11 @@ fn run_session(
                         }
                     };
                     let observation = backend.observe_geometry(deadline).map_err(|error| {
-                        ExecutionKernelError::device("capture_geometry_read_failed", &error)
+                        ExecutionKernelError::device_operation(
+                            "capture_geometry_read_failed",
+                            &error,
+                            resources,
+                        )
                     })?;
                     geometry_remaining(deadline)?;
                     Ok(observation)
@@ -1198,11 +1264,12 @@ fn run_session(
                 pending_frame = None;
                 committed_frame = None;
                 let invalidation = match backends {
-                    SessionBackends::Nemu(pair) => {
+                    SessionBackends::Nemu(pair, resources) => {
                         pair.owner.invalidate_display().map_err(|error| {
-                            ExecutionKernelError::device(
+                            ExecutionKernelError::device_operation(
                                 "application_frame_invalidation_failed",
                                 &error,
+                                resources,
                             )
                         })
                     }
@@ -1210,6 +1277,7 @@ fn run_session(
                     | SessionBackends::Independent {
                         input: None,
                         capture: None,
+                        ..
                     } => Ok(()),
                     SessionBackends::CloseFailed(error) => Err(error.as_ref().clone()),
                     SessionBackends::Independent { .. } => Err(ExecutionKernelError::fatal(
@@ -1286,13 +1354,15 @@ fn run_session(
                     authority,
                     ResourceCloseOrder::CaptureFirst,
                     input_check,
-                );
+                )
+                .map_err(ExecutionKernelError::with_close_recording);
                 if response.send(result.clone()).is_err() {
                     return match result {
                         Ok(outcome) => Err(ExecutionKernelError::fatal(
                             "execution_session_response_lost",
                         )
-                        .with_stdio_observations(outcome.vendor_stdio())),
+                        .with_close_outcome(&outcome)
+                        .with_close_recording()),
                         Err(error) => Err(ExecutionKernelError::merge(
                             error,
                             ExecutionKernelError::fatal("execution_session_response_lost"),
@@ -1395,23 +1465,44 @@ fn close_retained_after_failure(
                 response,
             }) => {
                 let result = close_resources(backends.take(), authority, order, input_check);
-                if response.send(result.clone()).is_err() {
-                    return Err(match result {
-                        Ok(outcome) => {
-                            ExecutionKernelError::fatal("execution_session_response_lost")
-                                .with_stdio_observations(outcome.vendor_stdio())
-                        }
-                        Err(cleanup) => cleanup,
-                    });
-                }
-                if geometry_response_lost {
-                    let primary = ExecutionKernelError::merge(
+                let primary = if geometry_response_lost {
+                    ExecutionKernelError::merge(
                         primary,
                         ExecutionKernelError::fatal("execution_session_response_lost"),
-                    );
+                    )
+                } else {
+                    primary
+                };
+                let result = match result {
+                    Ok(outcome)
+                        if primary.resource_quiescence()
+                            == Some(ResourceQuiescence::Unconfirmed)
+                            || geometry_response_lost =>
+                    {
+                        Err(primary
+                            .clone()
+                            .with_close_outcome(&outcome)
+                            .with_close_recording())
+                    }
+                    Ok(outcome) => Ok(outcome.with_confirmed_failure(&primary)),
+                    Err(cleanup) => Err(ExecutionKernelError::merge_cleanup(
+                        primary.clone(),
+                        cleanup,
+                    )
+                    .with_close_recording()),
+                };
+                if response.send(result.clone()).is_err() {
                     return Err(match result {
-                        Ok(_) => primary,
-                        Err(cleanup) => ExecutionKernelError::merge(primary, cleanup),
+                        Ok(outcome) => ExecutionKernelError::merge(
+                            primary,
+                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                        )
+                        .with_close_outcome(&outcome)
+                        .with_close_recording(),
+                        Err(cleanup) => ExecutionKernelError::merge(
+                            cleanup,
+                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ),
                     });
                 }
                 return result.map(|_| ());
@@ -1493,7 +1584,7 @@ fn execute_input(
     let mut observations = backends.prepare(provider, instance_alias, None)?;
     let execute = || -> ExecutionKernelResult<ExecutionInputOutcome> {
         let context = match backends {
-            SessionBackends::Nemu(_) => {
+            SessionBackends::Nemu(..) => {
                 let reference = frame
                     .ok_or_else(|| ExecutionKernelError::fatal("nemu_input_frame_required"))?;
                 let committed = committed_frame
@@ -1513,9 +1604,13 @@ fn execute_input(
             }
             _ => None,
         };
-        let backend = match backends {
+        let (backend, resources) = match backends {
             SessionBackends::CloseFailed(error) => return Err(error.as_ref().clone()),
-            SessionBackends::Independent { input, .. } => {
+            SessionBackends::Independent {
+                input,
+                input_resources,
+                ..
+            } => {
                 if input.is_none() {
                     let opened = provider.open_input(instance_alias).map_err(|error| {
                         observed_open_error(
@@ -1527,12 +1622,15 @@ fn execute_input(
                     observations.push(opened.observation);
                     *input = Some(opened.backend);
                 }
-                input
-                    .as_mut()
-                    .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?
-                    .as_mut()
+                (
+                    input
+                        .as_mut()
+                        .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?
+                        .as_mut(),
+                    input_resources,
+                )
             }
-            SessionBackends::Nemu(pair) => pair.input.as_mut(),
+            SessionBackends::Nemu(pair, resources) => (pair.input.as_mut(), resources),
             SessionBackends::Pending => {
                 return Err(ExecutionKernelError::fatal("input_backend_missing"));
             }
@@ -1550,7 +1648,11 @@ fn execute_input(
                 Some(report) => error.with_adb_recovery(report.clone()),
                 None => error,
             };
-            ExecutionKernelError::device("input_backend_operation_failed", &error)
+            ExecutionKernelError::device_operation(
+                "input_backend_operation_failed",
+                &error,
+                resources,
+            )
         })?;
         Ok(ExecutionInputOutcome {
             touch_response_us,
@@ -1577,9 +1679,13 @@ fn execute_capture(
 ) -> ExecutionKernelResult<Frame> {
     let mut observations = backends.prepare(provider, instance_alias, memory)?;
     let mut execute = || -> ExecutionKernelResult<Frame> {
-        let backend = match backends {
+        let (backend, resources) = match backends {
             SessionBackends::CloseFailed(error) => return Err(error.as_ref().clone()),
-            SessionBackends::Independent { capture, .. } => {
+            SessionBackends::Independent {
+                capture,
+                capture_resources,
+                ..
+            } => {
                 if capture.is_none() {
                     let opened =
                         provider
@@ -1594,12 +1700,15 @@ fn execute_capture(
                     observations.push(opened.observation);
                     *capture = Some(opened.backend);
                 }
-                capture
-                    .as_mut()
-                    .ok_or_else(|| ExecutionKernelError::fatal("capture_backend_missing"))?
-                    .as_mut()
+                (
+                    capture
+                        .as_mut()
+                        .ok_or_else(|| ExecutionKernelError::fatal("capture_backend_missing"))?
+                        .as_mut(),
+                    capture_resources,
+                )
             }
-            SessionBackends::Nemu(pair) => pair.capture.as_mut(),
+            SessionBackends::Nemu(pair, resources) => (pair.capture.as_mut(), resources),
             SessionBackends::Pending => {
                 return Err(ExecutionKernelError::fatal("capture_backend_missing"));
             }
@@ -1635,7 +1744,11 @@ fn execute_capture(
                 Ok(frame)
             })
             .map_err(|error| {
-                ExecutionKernelError::device("capture_backend_operation_failed", &error)
+                ExecutionKernelError::device_operation(
+                    "capture_backend_operation_failed",
+                    &error,
+                    resources,
+                )
             })
     };
     let result = execute();
@@ -1743,9 +1856,10 @@ fn close_after_failure(
     authority: DeviceCloseAuthority,
 ) -> ExecutionKernelError {
     match close_resources(backends, authority, order, None) {
-        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+        Ok(outcome) => primary.with_close_outcome(&outcome),
         Err(secondary) => ExecutionKernelError::merge_cleanup(primary, secondary),
     }
+    .with_close_recording()
 }
 
 fn prepare_application_backends(
@@ -1754,7 +1868,7 @@ fn prepare_application_backends(
     input_check: Option<Arc<dyn InputOperationCheck>>,
 ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
     match backends {
-        SessionBackends::Pending | SessionBackends::Nemu(_) => {
+        SessionBackends::Pending | SessionBackends::Nemu(..) => {
             Ok(ExecutionResourceCloseOutcome::confirmed(0))
         }
         SessionBackends::CloseFailed(error) => Err(error.as_ref().clone()),
@@ -1779,11 +1893,16 @@ fn close_resources(
     order: ResourceCloseOrder,
     input_check: Option<Arc<dyn InputOperationCheck>>,
 ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
-    let (capture, input) = match backends {
+    let (capture, input, capture_resources, input_resources) = match backends {
         SessionBackends::Pending => return Ok(ExecutionResourceCloseOutcome::confirmed(0)),
         SessionBackends::CloseFailed(error) => return Err(*error),
-        SessionBackends::Independent { capture, input } => (capture, input),
-        SessionBackends::Nemu(pair) => {
+        SessionBackends::Independent {
+            capture,
+            input,
+            capture_resources,
+            input_resources,
+        } => (capture, input, capture_resources, input_resources),
+        SessionBackends::Nemu(pair, resources) => {
             let NemuSessionBackends {
                 owner,
                 input,
@@ -1793,26 +1912,29 @@ fn close_resources(
             drop(capture);
             return owner
                 .close_once(authority, input_check)
-                .map(ExecutionResourceCloseOutcome::from_device)
+                .map(|outcome| {
+                    ExecutionResourceCloseOutcome::from_device(outcome, Arc::clone(&resources))
+                })
                 .map_err(|error| {
                     ExecutionKernelError::device("nemu_session_close_failed", &error)
+                        .with_session_resources(&resources)
                 });
         }
     };
     let (first, second) = match order {
         ResourceCloseOrder::CaptureFirst => (
-            close_capture(capture, authority.clone()),
-            close_input(input, authority),
+            close_capture(capture, authority.clone(), capture_resources),
+            close_input(input, authority, input_resources),
         ),
         ResourceCloseOrder::InputFirst => (
-            close_input(input, authority.clone()),
-            close_capture(capture, authority),
+            close_input(input, authority.clone(), input_resources),
+            close_capture(capture, authority, capture_resources),
         ),
     };
     match (first, second) {
         (Ok(first), Ok(second)) => Ok(first.combine(second)),
         (Err(error), Ok(outcome)) | (Ok(outcome), Err(error)) => {
-            Err(error.with_stdio_observations(outcome.vendor_stdio()))
+            Err(error.with_close_outcome(&outcome))
         }
         (Err(primary), Err(secondary)) => {
             Err(ExecutionKernelError::merge_cleanup(primary, secondary))
@@ -1823,6 +1945,7 @@ fn close_resources(
 fn close_capture(
     mut capture: Option<Box<dyn CaptureBackend>>,
     authority: DeviceCloseAuthority,
+    resources: Arc<DeviceCloseOccurrence>,
 ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
     let Some(mut backend) = capture.take() else {
         return Ok(ExecutionResourceCloseOutcome::confirmed(0));
@@ -1833,11 +1956,14 @@ fn close_capture(
                 .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1))
         });
     match result {
-        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(outcome)),
+        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(
+            outcome, resources,
+        )),
         Err(error) => {
             let quiescence = error
                 .resource_quiescence()
                 .unwrap_or(DeviceResourceQuiescence::Unconfirmed);
+            let count = u16::from(error.resource_quiescence().is_none());
             let error = if error.resource_close_causes().is_empty() {
                 error.with_resource_close_cause(
                     DeviceResourceKind::CaptureBackend,
@@ -1846,7 +1972,7 @@ fn close_capture(
                     None,
                     None,
                     quiescence,
-                    1,
+                    count,
                 )
             } else {
                 error
@@ -1854,10 +1980,10 @@ fn close_capture(
             if quiescence == DeviceResourceQuiescence::Unconfirmed {
                 std::mem::forget(backend);
             }
-            Err(ExecutionKernelError::device(
-                "capture_backend_close_failed",
-                &error,
-            ))
+            Err(
+                ExecutionKernelError::device("capture_backend_close_failed", &error)
+                    .with_session_resources(&resources),
+            )
         }
     }
 }
@@ -1865,6 +1991,7 @@ fn close_capture(
 fn close_input(
     mut input: Option<Box<dyn InputBackend>>,
     authority: DeviceCloseAuthority,
+    resources: Arc<DeviceCloseOccurrence>,
 ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
     let Some(backend) = input.as_mut() else {
         return Ok(ExecutionResourceCloseOutcome::confirmed(0));
@@ -1875,11 +2002,14 @@ fn close_input(
                 .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1))
         });
     match result {
-        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(outcome)),
+        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(
+            outcome, resources,
+        )),
         Err(error) => {
             let quiescence = error
                 .resource_quiescence()
                 .unwrap_or(DeviceResourceQuiescence::Unconfirmed);
+            let count = u16::from(error.resource_quiescence().is_none());
             let error = if error.resource_close_causes().is_empty() {
                 error.with_resource_close_cause(
                     DeviceResourceKind::InputBackend,
@@ -1888,7 +2018,7 @@ fn close_input(
                     None,
                     None,
                     quiescence,
-                    1,
+                    count,
                 )
             } else {
                 error
@@ -1896,10 +2026,10 @@ fn close_input(
             if quiescence == DeviceResourceQuiescence::Unconfirmed {
                 std::mem::forget(input.take().expect("input backend is present"));
             }
-            Err(ExecutionKernelError::device(
-                "input_backend_close_failed",
-                &error,
-            ))
+            Err(
+                ExecutionKernelError::device("input_backend_close_failed", &error)
+                    .with_session_resources(&resources),
+            )
         }
     }
 }

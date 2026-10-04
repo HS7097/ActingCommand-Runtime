@@ -2134,7 +2134,7 @@ impl NemuIpcWorker {
                                 return Err(match result {
                                     Ok(outcome) => {
                                         DeviceError::fatal("Nemu IPC close response lost")
-                                            .with_stdio_observations(outcome.vendor_stdio())
+                                            .with_close_outcome(&outcome)
                                     }
                                     Err(primary) => primary,
                                 });
@@ -2172,9 +2172,7 @@ impl NemuIpcWorker {
                 });
                 match (result, cleanup) {
                     (Ok(()), Ok(_)) => Ok(()),
-                    (Err(primary), Ok(outcome)) => {
-                        Err(primary.with_stdio_observations(outcome.vendor_stdio()))
-                    }
+                    (Err(primary), Ok(outcome)) => Err(primary.with_close_outcome(&outcome)),
                     (Ok(()), Err(cleanup)) => Err(cleanup),
                     (Err(primary), Err(cleanup)) => Err(primary.merge_resource_cleanup(cleanup)),
                 }
@@ -2368,7 +2366,7 @@ impl NemuIpcWorker {
         let result = match (result, self.join_bounded()) {
             (Ok(outcome), Ok(())) => Ok(outcome.combine(DeviceResourceCloseOutcome::confirmed(1))),
             (Err(primary), Ok(())) => Err(primary),
-            (Ok(outcome), Err(join)) => Err(join.with_stdio_observations(outcome.vendor_stdio())),
+            (Ok(outcome), Err(join)) => Err(join.with_close_outcome(&outcome)),
             (Err(primary), Err(join)) => Err(primary.merge_resource_cleanup(join)),
         };
         self.close_result = Some(result.clone());
@@ -2992,6 +2990,7 @@ fn worker_state_result<T>(
         Ok(state) => operation(state),
         Err(err) => Err(err.clone()),
     }
+    .map_err(DeviceError::with_backend_resources)
 }
 
 impl CaptureBackend for NemuIpcBackend {
@@ -3302,15 +3301,17 @@ fn require_geometry_open(
 }
 
 fn nemu_geometry_unconfirmed(message: impl Into<String>) -> DeviceError {
-    DeviceError::fatal(message).with_resource_close_cause(
-        DeviceResourceKind::InProcessWorker,
-        DeviceResourceClosePhase::WorkerReceive,
-        "nemu_ipc",
-        None,
-        None,
-        DeviceResourceQuiescence::Unconfirmed,
-        1,
-    )
+    DeviceError::fatal(message)
+        .with_resource_close_cause(
+            DeviceResourceKind::InProcessWorker,
+            DeviceResourceClosePhase::WorkerReceive,
+            "nemu_ipc",
+            None,
+            None,
+            DeviceResourceQuiescence::Unconfirmed,
+            1,
+        )
+        .with_backend_resources()
 }
 
 fn geometry_remaining(deadline: Instant) -> DeviceResult<Duration> {

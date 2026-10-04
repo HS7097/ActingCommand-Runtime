@@ -263,8 +263,15 @@ impl HostShared {
             )
             .with_operation(operation)
             .with_projection(fatal, runtime_code)
-            .with_entered_event_id(reference)
+            .with_entered_event_id(reference.or_else(|| {
+                host_error.and_then(|error| error.diagnostics().prior_recorded_event())
+            }))
             .with_instance_id(host_error.and_then(|error| error.lifecycle.instance_id))
+            .with_resource_dispositions(if cause.is_none() {
+                host_error.and_then(|error| error.diagnostics().resource_dispositions())
+            } else {
+                None
+            })
             .with_primary_detail(host_error.and_then(|error| error.diagnostic_detail().cloned()))
             .with_adb_recovery(
                 host_error.and_then(|error| error.diagnostics().adb_recovery().cloned()),
@@ -346,9 +353,11 @@ impl HostShared {
             let phase_close = matches!(
                 error.code(),
                 "input_backend_close_failed" | "capture_backend_close_failed"
-            ) && error.diagnostics().lifecycle_causes().iter().any(|cause| {
-                cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
-            });
+            ) && error.diagnostics().resource_dispositions().is_none()
+                && !error.diagnostics().is_resource_close_recording()
+                && error.diagnostics().lifecycle_causes().iter().any(|cause| {
+                    cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
+                });
             if error.diagnostics().recorded_event().get().is_none() && !phase_close {
                 let mut parts = Vec::new();
                 let mut remaining = error.lifecycle.ppocr_message.as_deref().unwrap_or("");
