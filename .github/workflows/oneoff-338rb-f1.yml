@@ -1,0 +1,60 @@
+name: one-off 338 Rb F1 (to be reverted)
+
+# One-off evidence for the Workflow #338 Rb review fix F1: the old-daemon branch of the client's
+# conditional resume and target view is taken only when the call's own frame was dropped before
+# its receipt. A runtime-client test against a real host, with proxies emulating (1) the a9a1845d
+# decoder dropping the frame, (2) a connection already failed by an earlier timed-out call and
+# (3) a current daemon whose answer arrives after the client's receipt wait. Reverted right after
+# its run; the PR's final diff contains neither this file nor one-off-338rb/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  f1:
+    name: Rb F1 old-daemon detection evidence
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      PRODUCT_SHA: 2a477b773e080dcf44e80e3975e24fa7a99facd5
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git rev-parse HEAD).Trim()
+          Write-Host "RB|F1|SCOPE|head $head product $env:PRODUCT_SHA"
+          $diff = @(& git diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-338rb' ':(exclude).github/workflows/oneoff-338rb-f1.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+      - name: Client - old-daemon detection
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          New-Item -ItemType Directory -Force -Path 'crates/runtime-client/src/tests' | Out-Null
+          Copy-Item -LiteralPath 'one-off-338rb/client_f1.rs' -Destination 'crates/runtime-client/src/tests/oneoff_338rb_f1.rs'
+          Add-Content -LiteralPath 'crates/runtime-client/src/tests.rs' -Value "`nmod oneoff_338rb_f1;"
+          $log = Join-Path $env:RUNNER_TEMP 'client.log'
+          $ErrorActionPreference = 'Continue'
+          & cargo test --locked -p actingcommand-runtime-client --lib oneoff_338rb_f1 -- --nocapture --test-threads=1 *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log | Where-Object { $_ -match 'RB\||^test |test result|panicked|error(\[|:)' } | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            Get-Content -LiteralPath $log -Tail 200 | ForEach-Object { Write-Host $_ }
+            throw "client evidence failed with exit code $code"
+          }
