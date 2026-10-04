@@ -3877,6 +3877,20 @@ pub enum ContainedTaskCancellationReason {
     PausedByOperator,
 }
 
+impl ContainedTaskCancellationReason {
+    /// The reason of a cancelled terminal from its committed `failure_code` (Workflow #338 R1):
+    /// the three cancellation codes map to their reason, any other value or none to
+    /// `RecoveredAfterRestart`.
+    pub fn from_failure_code(failure_code: Option<&str>) -> Self {
+        match failure_code {
+            Some("contained_task_deadline_exceeded") => Self::DeadlineExceeded,
+            Some("contained_task_cancelled") => Self::ClientRequested,
+            Some("contained_task_paused") => Self::PausedByOperator,
+            _ => Self::RecoveredAfterRestart,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContainedTaskLeaseTerminal {
