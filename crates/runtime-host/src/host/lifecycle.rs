@@ -253,7 +253,7 @@ impl HostShared {
         let gate = lock(&self.fact_write_gate, "append_runtime_lifecycle_failure")?;
         let mut persisted = Vec::new();
         let mut emit = |cause: Option<&actingcommand_contract::LifecycleCauseDraft>,
-                        reference,
+                        reference: Option<EventId>,
                         client_part: Option<(&str, usize, usize)>| {
             let lifecycle = actingcommand_contract::RuntimeLifecycleFailureDraft::new(
                 self.owner_epoch,
