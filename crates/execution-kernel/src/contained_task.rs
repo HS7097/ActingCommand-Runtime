@@ -2057,6 +2057,11 @@ impl PreparedContainedTask {
         self.program.resource_readings.is_some()
     }
 
+    /// A host-scheduled startup package publishes no instance resource facts.
+    pub fn startup_incompatibility(&self) -> Option<&'static str> {
+        self.has_resource_readings().then_some("resource_readings")
+    }
+
     /// Whether the task has a select step (Workflow #308).
     pub fn has_select_steps(&self) -> bool {
         self.program

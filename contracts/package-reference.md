@@ -343,7 +343,9 @@ application names or index labels. This does not prove execution or recognition 
 `validate_bundle_maintenance(&index, &descriptors)` checks that the admitted material set
 matches every indexed identity, task, server and content digest, then checks each use and
 complete prerequisite chain against the bindings supplied by the declaration. Startup
-uses ordinary task admission. Prerequisites retain the existing exclusions for
+uses ordinary task admission and rejects resource readings through
+`PreparedContainedTask::startup_incompatibility`, the same predicate used by Host before
+its startup lease. Prerequisites retain the existing exclusions for
 recognize-only, stability termination, post-admission OCR/fields, resource readings and
 designated operations. Return-home packages additionally declare no prerequisite of
 their own. The shared `PrerequisiteChain` predicate owns game/server/resolution

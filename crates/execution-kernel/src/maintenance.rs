@@ -22,6 +22,7 @@ pub struct TaskPackageDescriptor {
     prerequisite_package_id: Option<String>,
     linear_entry_page: Option<String>,
     maximum_executed_steps: u32,
+    startup_incompatibility: Option<&'static str>,
     prerequisite_incompatibility: Option<&'static str>,
 }
 
@@ -41,6 +42,7 @@ impl PreparedContainedTask {
             prerequisite_package_id: self.prerequisite_package_id().map(str::to_owned),
             linear_entry_page: self.linear_entry_page().map(str::to_owned),
             maximum_executed_steps: self.maximum_executed_steps(),
+            startup_incompatibility: self.startup_incompatibility(),
             prerequisite_incompatibility: self.prerequisite_incompatibility(),
         }
     }
@@ -80,7 +82,7 @@ impl TaskPackageDescriptor {
 
     pub fn use_incompatibility(&self, purpose: MaintenanceUse) -> Option<&'static str> {
         match purpose {
-            MaintenanceUse::Startup => None,
+            MaintenanceUse::Startup => self.startup_incompatibility,
             MaintenanceUse::Prerequisite => self.prerequisite_incompatibility,
             MaintenanceUse::ReturnHome => self.prerequisite_incompatibility.or_else(|| {
                 self.prerequisite_package_id
