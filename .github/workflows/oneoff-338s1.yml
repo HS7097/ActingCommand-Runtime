@@ -1,0 +1,117 @@
+name: one-off 338 S1 review fixes (to be reverted)
+
+# One-off evidence for the Workflow #338 S1 review fixes F1/F2/F3 on the product commit: the
+# actingctl.exe of its Windows exact-SHA build against the fixture runtime
+# tests/support/c4_runtime.rs (actingd restarted and stopped under a live mcp-serve; an
+# ac_diagnose result over budget; a suspended report of another state root, from a stand-in
+# actingd built here with plain rustc), then the earlier scripted dual-era client again as a
+# regression run. The sources live in one-off-338s1/ and are copied into place only inside this
+# job. Reverted right after its run; the PR's final diff contains neither this file nor
+# one-off-338s1/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  s1:
+    name: S1 review fixes on the exact-SHA build
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      PRODUCT_SHA: 6a58f19918b65004c740418704e5328a695fff53
+      BUILD_RUN_ID: 37213496844
+      BASE_SHA: a9a1845dcd12c5f179e7630d1585517ce11c6815
+      RA_TIP: 9619265b1014e638de521561075cddb191b37bef
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Scope (product files equal the product commit)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git rev-parse HEAD).Trim()
+          Write-Host "S1F|SCOPE|head $head product $env:PRODUCT_SHA base $env:BASE_SHA ra $env:RA_TIP"
+          $diff = @(& git diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-338s1' ':(exclude).github/workflows/oneoff-338s1.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+          foreach ($ancestor in @($env:BASE_SHA, $env:RA_TIP)) {
+            & git merge-base --is-ancestor $ancestor $env:PRODUCT_SHA
+            if ($LASTEXITCODE -ne 0) { throw "$ancestor is not an ancestor of $env:PRODUCT_SHA" }
+          }
+          $lock = @(& git diff --name-only $env:BASE_SHA $env:PRODUCT_SHA -- Cargo.lock | Where-Object { $_ })
+          Write-Host "S1F|SCOPE|Cargo.lock changed from base: $($lock.Count)"
+          if ($lock.Count -ne 0) { throw "Cargo.lock changed" }
+      - name: Download the product commit's exact-SHA build; build the stand-in actingd
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $dir = Join-Path $env:RUNNER_TEMP 's1-build'
+          & gh run download $env:BUILD_RUN_ID -R $env:GITHUB_REPOSITORY -n "actingcommand-runtime-$env:PRODUCT_SHA" -D $dir
+          if ($LASTEXITCODE -ne 0) { throw "artifact download failed with exit code $LASTEXITCODE" }
+          $manifest = Get-Content -LiteralPath (Join-Path $dir 'BUILD-MANIFEST.json') -Raw | ConvertFrom-Json
+          Write-Host "S1F|BUILD|run $env:BUILD_RUN_ID artifact actingcommand-runtime-$env:PRODUCT_SHA manifest commit_sha $($manifest.commit_sha)"
+          if ($manifest.commit_sha -ne $env:PRODUCT_SHA) { throw "the artifact was built from $($manifest.commit_sha)" }
+          foreach ($file in @('actingctl.exe', 'actingcommand-actingd.exe')) {
+            $path = Join-Path $dir $file
+            $listed = $manifest.files | Where-Object { $_.path -eq $file }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host "S1F|BUILD|$file sha256 $hash manifest $($listed.sha256)"
+            if ($hash -ne $listed.sha256) { throw "$file does not match BUILD-MANIFEST.json" }
+          }
+          $fake = Join-Path $env:RUNNER_TEMP 'fake-actingd.exe'
+          & rustc --edition 2021 -O 'one-off-338s1/fake_actingd.rs' -o $fake
+          if ($LASTEXITCODE -ne 0) { throw "stand-in actingd build failed with exit code $LASTEXITCODE" }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ONEOFF_ACTINGCTL=$(Join-Path $dir 'actingctl.exe')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ONEOFF_ACTINGD=$(Join-Path $dir 'actingcommand-actingd.exe')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ONEOFF_FAKE_ACTINGD=$fake"
+      - name: Review fixes F1 F2 F3 on the fixture runtime
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Copy-Item -LiteralPath 'one-off-338s1/review_fixes.rs' -Destination 'apps/actingctl/tests/oneoff_338s1f.rs'
+          $log = Join-Path $env:RUNNER_TEMP 'review-fixes.log'
+          $ErrorActionPreference = 'Continue'
+          & cargo test --locked -p actingcommand-actingctl --test oneoff_338s1f -- --nocapture --test-threads=1 *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log | Where-Object { $_ -match 'S1F\||^test |test result|panicked|error(\[|:)' } | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            Get-Content -LiteralPath $log -Tail 300 | ForEach-Object { Write-Host $_ }
+            throw "review fix evidence failed with exit code $code"
+          }
+      - name: Regression - the earlier scripted dual-era client
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Copy-Item -LiteralPath 'one-off-338s1/mcp_client.rs' -Destination 'apps/actingctl/tests/oneoff_338s1.rs'
+          $log = Join-Path $env:RUNNER_TEMP 'mcp-client.log'
+          $ErrorActionPreference = 'Continue'
+          & cargo test --locked -p actingcommand-actingctl --test oneoff_338s1 -- --nocapture --test-threads=1 *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log | Where-Object { $_ -match 'S1\|.*(TIMING|exit |client.action|truncated|suspended_report)|^test |test result|panicked|error(\[|:)' } | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            Get-Content -LiteralPath $log -Tail 300 | ForEach-Object { Write-Host $_ }
+            throw "scripted client regression failed with exit code $code"
+          }
