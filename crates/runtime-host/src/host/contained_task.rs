@@ -6522,7 +6522,7 @@ impl HostShared {
     /// then a lease release when the lease has no terminal. The scan is bounded to the previous
     /// epoch, the events between the last two `runtime.started` / `runtime.takeover` events
     /// (the later one is this start's); older epochs are not reached. A run of the scheduler
-    /// chain (one with a `policy.dispatch_intent` on its request) keeps the policy dispatch
+    /// chain (one with a `policy.dispatch_intent` on its run or request) keeps the policy dispatch
     /// reconciliation, and a run of an instance this start did not register stays open. A run
     /// settled once has its terminal and lies before the next start's previous epoch, so no
     /// restart settles it again. Any failure fails the start.
@@ -6598,9 +6598,23 @@ impl HostShared {
                     PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                 ))
             })?;
-        if events
-            .iter()
-            .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
+        // The scheduler chain: the run of a policy dispatch keeps `reconcile_policy_dispatches`.
+        let policy_intents = self
+            .ledger
+            .query(EventQuery {
+                run_id: Some(run_id),
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error(
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                ))
+            })?;
+        if !policy_intents.is_empty()
+            || events
+                .iter()
+                .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
         {
             return Ok(());
         }

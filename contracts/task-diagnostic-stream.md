@@ -348,7 +348,7 @@ as an interrupted run recovered after restart, `task.terminal_committed` retains
 is inferred by counting ledger completion events, and original errors and
 committed effects remain unchanged.
 
-A direct contained run (one without a `policy.dispatch_intent` on its request) that the
+A direct contained run (no `policy.dispatch_intent` on its run or request) that the
 previous owner epoch admitted (`task.requested` with `package_admitted`) and never terminated
 is settled when the next owner starts (Workflow #338 R3): after the scheduler chain's
 reconciliation, the start scans the events between the last two `runtime.started` /
