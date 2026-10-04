@@ -74,11 +74,16 @@ fn begin_write(
             }
             // The Runtime recorded its warning event and still takes Cli writes.
             warnings.push(
-                error
-                    .blocked_by(
-                        "governance.allowed_clients in actingd.config.json (apps/actingd/src/config.rs:295-320)",
-                    )
-                    .into_warning(),
+                ToolError::new(
+                    "safety",
+                    "governance_client_not_allowed",
+                    "actingd's allowed_clients does not list actingctl-mcp; the Runtime recorded a warning and the write went ahead",
+                )
+                .with_detail("card_refusal", error.into_value())
+                .blocked_by(
+                    "governance.allowed_clients in actingd.config.json (apps/actingd/src/config.rs:295-320)",
+                )
+                .into_warning(),
             );
         }
     }
