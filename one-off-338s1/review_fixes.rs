@@ -283,7 +283,11 @@ fn oneoff_338s1f_review_fixes() {
     let state_root = state_root_path.to_str().expect("utf-8").to_owned();
     support::write_sealed_frame(&root.path().join("sealed.png"));
     let package = root.path().join("neutral-task.zip");
-    let sha = write_neutral_contained_task_package(&package);
+    let sha = write_neutral_contained_task_package(&package, [0, 0, 255]);
+    // The same task whose terminal page expects a colour the tapped frame never shows: the run
+    // is admitted, taps, and fails on the unrecognised page.
+    let failing = root.path().join("neutral-task-failing.zip");
+    let failing_sha = write_neutral_contained_task_package(&failing, [0, 255, 0]);
     let instance_id = *IdentifierIssuer::new()
         .expect("issuer")
         .mint_instance_id()
@@ -308,9 +312,10 @@ fn oneoff_338s1f_review_fixes() {
 
     let mut runtime = Runtime::spawn(root.path(), instance_id, "first");
     task_run(&state_root, &package, &sha);
-    // The frame now shows the terminal page, so these two runs cannot start from home.
-    task_run(&state_root, &package, &sha);
-    task_run(&state_root, &package, &sha);
+    for _ in 0..3 {
+        support::write_sealed_frame(&root.path().join("sealed.png"));
+        task_run(&state_root, &failing, &failing_sha);
+    }
 
     let mut server = Server::spawn(
         "fixes",
@@ -342,13 +347,17 @@ fn oneoff_338s1f_review_fixes() {
     let measured = server.tool("ac_diagnose", json!({"instance": ALIAS}));
     assert_eq!(measured["ok"], true);
     let runs = measured["result"]["runs"].as_array().cloned().unwrap_or_default();
+    println!(
+        "S1F|F2|runs in the window: {:?}",
+        runs.iter().map(|run| run["state"].clone()).collect::<Vec<_>>()
+    );
     let run_bytes = runs.iter().map(|run| run.to_string().len()).collect::<Vec<_>>();
     let payload = json!({"ok": true, "result": measured["result"]}).to_string().len();
     let errors_bytes = measured["result"]["errors_page"]["events"].to_string().len();
     let base = payload - run_bytes.iter().sum::<usize>() - errors_bytes;
     println!("S1F|F2|measured: payload {payload}, base {base}, runs {run_bytes:?}, errors page {errors_bytes}");
     if run_bytes.is_empty() {
-        println!("S1F|F2|no failed or open runs in the window: the run cut is not exercised");
+        panic!("no failed or open runs in the window: the run cut cannot be shown");
     } else {
         let rows_bytes = PAYLOAD_LIMIT - base - 400;
         write_report(&report, &state_root_path, rows_bytes);
@@ -402,7 +411,21 @@ fn oneoff_338s1f_review_fixes() {
     server.close();
 }
 
-fn write_neutral_contained_task_package(path: &Path) -> String {
+fn write_neutral_contained_task_package(path: &Path, terminal_colour: [u8; 3]) -> String {
+    let pack = format!(
+        r#"{{
+                "schema_version":"0.3",
+                "game":"neutral",
+                "server":"test",
+                "coordinate_space":{{"width":16,"height":9}},
+                "defaults":{{"color_max_distance":0.0}},
+                "targets":[
+                    {{"type":"color","id":"page/home","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}},
+                    {{"type":"color","id":"page/terminal","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}
+                ]
+            }}"#,
+        terminal_colour[0], terminal_colour[1], terminal_colour[2]
+    );
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -446,20 +469,7 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                 }]
             }"#,
         ),
-        (
-            "resources/recognition/neutral.test.pack.json",
-            br#"{
-                "schema_version":"0.3",
-                "game":"neutral",
-                "server":"test",
-                "coordinate_space":{"width":16,"height":9},
-                "defaults":{"color_max_distance":0.0},
-                "targets":[
-                    {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
-                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
-                ]
-            }"#,
-        ),
+        ("resources/recognition/neutral.test.pack.json", pack.as_bytes()),
         (
             "resources/recognition/neutral.test.pages.json",
             br#"{
