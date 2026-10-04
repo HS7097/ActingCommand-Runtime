@@ -196,6 +196,14 @@ must exactly name a declared item. Duplicate normalized items, duplicate/conflic
 aliases and invalid canonical references fail admission as ambiguous. Unknown observations
 remain unresolved; no tolerant substitution or retry is applied to fields.
 
+Dictionary and post-admission truth-set preparation read the exact resource-relative
+path from the admitted bundle's manifest. A `files` manifest requires exactly one matching
+entry with `sha256`. Content-directory admission instead derives its `hashes` map from the
+verified in-memory snapshot; preparation reads that map when the manifest has no `files`
+member. Containment verifies every declared hash against the same contained bytes before
+issuing the bundle. Missing or malformed hashes still fail, and preparation compares the
+manifest digest with the task's declared digest under the existing dictionary/truth limits.
+
 A `dictionary_entry` field may explicitly declare `text_extraction`:
 
 ```json

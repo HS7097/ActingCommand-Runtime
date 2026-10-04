@@ -5609,6 +5609,25 @@ fn manifest_entry_sha256(
     bundle: &LoadedBundle,
     relative_path: &str,
 ) -> Result<Sha256Hash, ContainedTaskError> {
+    // Content-directory admission generates the manifest's hashes map in memory from the
+    // verified snapshot. LoadedBundle has checked those hashes against these same bytes.
+    // A manifest with files retains the exact single-entry requirement below.
+    if bundle.manifest().get("files").is_none() {
+        return bundle
+            .manifest()
+            .get("hashes")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|hashes| hashes.get(relative_path))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+            })
+            .and_then(|value| {
+                Sha256Hash::parse_hex(value).map_err(|_| {
+                    ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+                })
+            });
+    }
     let files = bundle
         .manifest()
         .get("files")
