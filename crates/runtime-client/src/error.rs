@@ -53,7 +53,12 @@ const UNCERTAIN_AFTER_SEND_CODES: &[&str] = &[
     "runtime_result_unexpected",
     "runtime_shutdown_receipt_unconfirmed",
     "material_read_receipt_selection_mismatch",
+    "runtime_scheduling_resume_unconfirmed",
 ];
+
+/// Client conclusions that settle a request whose receipt never arrived (Workflow #338 R4, R5):
+/// the same owner, reached again, shows the request was not performed.
+const SETTLED_WITHOUT_RECEIPT_CODES: &[&str] = &["runtime_operation_unsupported"];
 
 /// The client codes of a contained run's own cancelled receipt (`run_contained_task`).
 const CONTAINED_TASK_STOPPED_CODES: &[&str] = &[
@@ -202,10 +207,11 @@ impl RuntimeClientError {
         }
     }
 
-    /// A committed terminal receipt settles its own request; a later related failure does not
-    /// make that request's effect unknown.
+    /// A committed terminal receipt, or a client conclusion that the request was not performed,
+    /// settles its own request; a later or underlying related failure does not make that
+    /// request's effect unknown.
     fn is_uncertain(&self) -> bool {
-        if self.committed_receipt.is_some() {
+        if self.committed_receipt.is_some() || SETTLED_WITHOUT_RECEIPT_CODES.contains(&self.code) {
             return false;
         }
         let own = self.projection.is_none()

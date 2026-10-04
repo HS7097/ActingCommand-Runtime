@@ -107,6 +107,120 @@ pub enum ResourceTargetsRejectionReason {
     DuplicateTask,
 }
 
+/// What one instance can target and the resource target policy it holds now
+/// (`ResourceTargetView`, Workflow #338 R5). `targetable` and `not_targetable` judge every pool
+/// of the active catalog with the predicates of an `actingcommand.resource-targets.v2` check;
+/// `active` is the stored policy as the evaluator reads it. Read-only; nothing is recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceTargetView {
+    pub instance_alias: String,
+    /// The value a policy document's `instance` field takes for this instance.
+    pub policy_instance: String,
+    pub evaluated_at_unix_ms: u64,
+    /// Ledger position of the projection the view was computed from.
+    pub as_of_ledger_position: u64,
+    /// Hash of the active catalog; absent, with both lists empty, when none is active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_hash: Option<String>,
+    pub targetable: Vec<TargetableResource>,
+    pub not_targetable: Vec<NotTargetableResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<ActiveResourceTargets>,
+}
+
+/// A pool a v2 target of this instance may name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetableResource {
+    pub resource: String,
+    pub fact_key: String,
+    /// The tasks of the instance whose run produces the pool, in catalog order.
+    pub producing_tasks: Vec<String>,
+    /// The pool valuation's `scale`; absent when a target must state its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_scale: Option<u64>,
+    /// The pool valuation's `gap.weight_milli`; absent when a target must state its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_importance_milli: Option<u64>,
+    pub scale_required: bool,
+    pub importance_required: bool,
+    pub observation: ResourceTargetObservation,
+}
+
+/// The pool's inventory as the time-validity projection shows it to the instance: a current
+/// value with its observation time, or why there is none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceTargetObservation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<ResourceTargetPendingReason>,
+}
+
+/// A pool no target of this instance may name, with the reason a document naming it meets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotTargetableResource {
+    pub resource: String,
+    pub reason: ResourceTargetsRejectionReason,
+}
+
+/// The instance's stored policy: its identity, the `fact.published` event that holds it, its
+/// targets in document form and, per target whose pool still resolves, what it observes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActiveResourceTargets {
+    pub policy_sha256: String,
+    pub schema_version: String,
+    pub version: u64,
+    pub event_id: EventId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until_unix_ms: Option<u64>,
+    pub expired: bool,
+    pub targets: Vec<serde_json::Value>,
+    pub conditions: Vec<ResourceTargetCondition>,
+}
+
+impl ResourceTargetView {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        let invalid = || RuntimeContractError::new("invalid_resource_target_view");
+        crate::validate_instance_alias(&self.instance_alias).map_err(|_| invalid())?;
+        if self.policy_instance.is_empty()
+            || self.evaluated_at_unix_ms == 0
+            || self
+                .catalog_hash
+                .as_deref()
+                .is_some_and(|hash| !canonical_sha256(hash))
+            || (self.catalog_hash.is_none()
+                && !(self.targetable.is_empty() && self.not_targetable.is_empty()))
+            || self.targetable.iter().any(|resource| {
+                resource.scale_required != resource.default_scale.is_none()
+                    || resource.importance_required != resource.default_importance_milli.is_none()
+                    || resource.observation.pending.is_some()
+                        != resource.observation.current.is_none()
+                    || resource.observation.current.is_some()
+                        != resource.observation.observed_at_unix_ms.is_some()
+            })
+        {
+            return Err(invalid());
+        }
+        if let Some(active) = &self.active
+            && (!canonical_sha256(&active.policy_sha256)
+                || active.version == 0
+                || active.targets.is_empty()
+                || active.targets.len() > MAX_RESOURCE_TARGETS
+                || active.conditions.len() > active.targets.len())
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+}
+
 impl ResourceTargetsApplied {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         let invalid = || RuntimeContractError::new("invalid_resource_targets_applied");
