@@ -322,9 +322,26 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                 })
                 .expect("combined confirmed Close fact")
         };
-        let released = events
+        // The Runtime's preparation lease uses its own synthetic correlation.
+        let lease_events = host
+            .query_persisted_events_for_test(EventQuery {
+                instance_id: Some(instance_id()),
+                ..EventQuery::default()
+            })
+            .expect("preparation lease ledger");
+        let granted = lease_events
             .iter()
-            .filter(|event| event.event_type() == EventType::LeaseReleased)
+            .filter(|event| event.event_type() == EventType::LeaseGranted)
+            .collect::<Vec<_>>();
+        assert_eq!(granted.len(), 1);
+        let lease_id = granted[0].links().lease_id().expect("preparation lease");
+        assert!(granted[0].sequence() < failures[0].0.sequence());
+        let released = lease_events
+            .iter()
+            .filter(|event| {
+                event.event_type() == EventType::LeaseReleased
+                    && event.links().lease_id() == Some(lease_id)
+            })
             .collect::<Vec<_>>();
         assert_eq!(released.len(), usize::from(!unconfirmed));
         if let Some(released) = released.first() {
