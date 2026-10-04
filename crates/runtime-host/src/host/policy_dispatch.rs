@@ -3,8 +3,8 @@
 use super::contained_task::{SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, SchedulingPauseDeadlines};
 use super::*;
 use actingcommand_contract::{
-    BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState,
-    SchedulingDrainSummary, SchedulingPauseScope, SchedulingPauseState,
+    BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
+    SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseScope, SchedulingPauseState,
     SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
 
@@ -212,6 +212,32 @@ fn scheduling_pause_denied(code: &'static str, operation: &'static str) -> Reque
         RuntimeReceiptState::Denied,
         None,
     )
+}
+
+/// Workflow #338 R4: a conditional resume lifts only the pause the caller saw. Called with the
+/// pause table locked; `revision` is the scope's current revision (zero for an instance scope
+/// that was never paused).
+fn check_scheduling_pause_expectation(
+    expected: Option<&SchedulingPauseExpectation>,
+    owner_epoch: OwnerEpoch,
+    revision: u64,
+) -> Result<(), RequestFailure> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    if expected.owner_epoch != owner_epoch {
+        return Err(scheduling_pause_denied(
+            "scheduling_pause_owner_epoch_mismatch",
+            "resume_scheduling",
+        ));
+    }
+    if expected.revision != revision {
+        return Err(scheduling_pause_denied(
+            "scheduling_pause_revision_mismatch",
+            "resume_scheduling",
+        ));
+    }
+    Ok(())
 }
 
 /// Workflow #191 ps2: a failed device hand-back fails the pause request (`Failed`); a fatal
@@ -1788,15 +1814,23 @@ impl HostShared {
     /// `ResumeScheduling` (Workflow #191 ps1, ps2): lifts the matching gate and bumps its
     /// revision. An instance whose pause is still draining (`Draining`) or handing its device
     /// back (`Paused`) cannot be resumed yet. An instance resume then reconnects the device at
-    /// once instead of at the next lazy open (ps2); a global resume reconnects nothing.
+    /// once instead of at the next lazy open (ps2); a global resume reconnects nothing. With
+    /// `expected` (Workflow #338 R4) the owner epoch and the scope's revision are compared first,
+    /// under the same lock as the lift.
     pub(super) fn resume_scheduling(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         scope: &SchedulingPauseScope,
+        expected: Option<&SchedulingPauseExpectation>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let SchedulingPauseScope::Instance { instance_alias } = scope else {
             let revision = {
                 let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
+                check_scheduling_pause_expectation(
+                    expected,
+                    self.owner_epoch,
+                    table.global_revision,
+                )?;
                 if table.global.is_none() {
                     return Err(scheduling_pause_denied(
                         "scheduling_not_paused",
@@ -1823,6 +1857,15 @@ impl HostShared {
         let admission = lock(&instance_guard, "lock_instance_admission")?;
         let revision = {
             let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
+            check_scheduling_pause_expectation(
+                expected,
+                self.owner_epoch,
+                table
+                    .instance_revisions
+                    .get(instance_alias)
+                    .copied()
+                    .unwrap_or(0),
+            )?;
             match table.instances.get(instance_alias).map(|state| state.stage) {
                 None => {
                     return Err(scheduling_pause_denied(

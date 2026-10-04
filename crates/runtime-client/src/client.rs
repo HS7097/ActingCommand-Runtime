@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
-use crate::{RuntimeClientError, RuntimeClientResult};
+use crate::{RuntimeClientError, RuntimeClientErrorClass, RuntimeClientResult};
 use actingcommand_contract::{
     AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
@@ -25,8 +25,8 @@ use actingcommand_contract::{
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
     RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
-    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseScope, TaskId, TaskOutcome, TaskPayload,
-    TaskSemanticFact, TerminalEvent,
+    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseExpectation, SchedulingPauseScope, TaskId,
+    TaskOutcome, TaskPayload, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -1100,6 +1100,7 @@ impl RuntimeClient {
             "resume_scheduling",
             RuntimeOperation::ResumeScheduling {
                 scope: scope.clone(),
+                expected: None,
             },
         )?;
         match &result {
@@ -1108,6 +1109,127 @@ impl RuntimeClient {
             }
             _ => Err(self.unexpected_result("resume_scheduling")),
         }
+    }
+
+    /// Lifts only the scheduling pause the caller saw (`ResumeScheduling` with `expected`,
+    /// Workflow #338 R4): the Runtime refuses any other pause with
+    /// `scheduling_pause_owner_epoch_mismatch` or `scheduling_pause_revision_mismatch`. A Runtime
+    /// that does not know the condition drops the connection without a receipt; the client then
+    /// reconnects and, in the same owner epoch, reads `Status`: the scope still paused at the
+    /// expected revision is `runtime_operation_unsupported` (nothing was lifted); anything else
+    /// is the uncertain `runtime_scheduling_resume_unconfirmed`. It never falls back to an
+    /// unconditional resume.
+    pub fn resume_scheduling_expected(
+        &self,
+        scope: SchedulingPauseScope,
+        expected: SchedulingPauseExpectation,
+    ) -> RuntimeClientResult<RuntimeResult> {
+        const OPERATION: &str = "resume_scheduling";
+        let result = match self.execute(
+            OPERATION,
+            RuntimeOperation::ResumeScheduling {
+                scope: scope.clone(),
+                expected: Some(expected),
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) if !unconfirmed_without_receipt(&error) => return Err(error),
+            Err(error) => {
+                let status = match self
+                    .reconnect_in_owner_epoch(OPERATION)
+                    .and_then(|()| self.status())
+                {
+                    Ok(status) => status,
+                    Err(reconnect) => {
+                        return Err(RuntimeClientError::fatal(
+                            "runtime_scheduling_resume_unconfirmed",
+                            OPERATION,
+                        )
+                        .with_related(error)
+                        .with_related(reconnect));
+                    }
+                };
+                let revision = match &scope {
+                    SchedulingPauseScope::Global => {
+                        status.scheduling_pause().map(|pause| pause.revision)
+                    }
+                    SchedulingPauseScope::Instance { instance_alias } => status
+                        .instances()
+                        .iter()
+                        .find(|instance| instance.instance_alias() == instance_alias)
+                        .and_then(|instance| instance.pause())
+                        .map(|pause| pause.revision),
+                };
+                return Err(RuntimeClientError::fatal(
+                    if revision == Some(expected.revision) {
+                        "runtime_operation_unsupported"
+                    } else {
+                        "runtime_scheduling_resume_unconfirmed"
+                    },
+                    OPERATION,
+                )
+                .with_related(error));
+            }
+        };
+        match &result {
+            RuntimeResult::SchedulingResumed { scope: resumed, .. } if *resumed == scope => {
+                Ok(result)
+            }
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
+    /// Reads what one instance can target and the resource target policy it holds now
+    /// (`ResourceTargetView`, Workflow #338 R5). Read-only. A Runtime that does not know the
+    /// operation drops the connection without a receipt; the client then reconnects and, in the
+    /// same owner epoch, reports `runtime_operation_unsupported`.
+    pub fn resource_target_view(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeClientResult<actingcommand_contract::ResourceTargetView> {
+        const OPERATION: &str = "resource_target_view";
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::ResourceTargetView {
+                instance_alias: instance_alias.to_owned(),
+            },
+        ) {
+            Ok(RuntimeResult::ResourceTargetView { view })
+                if view.instance_alias == instance_alias =>
+            {
+                Ok(*view)
+            }
+            Ok(_) => Err(self.unexpected_result(OPERATION)),
+            Err(error) if !unconfirmed_without_receipt(&error) => Err(error),
+            Err(error) => match self.reconnect_in_owner_epoch(OPERATION) {
+                Ok(()) => Err(RuntimeClientError::fatal(
+                    "runtime_operation_unsupported",
+                    OPERATION,
+                )
+                .with_related(error)),
+                Err(reconnect) => Err(error.with_related(reconnect)),
+            },
+        }
+    }
+
+    /// Replaces this handle's connection after a send whose receipt never arrived and checks
+    /// that the same owner still answers; another epoch latches `runtime_owner_epoch_changed`.
+    fn reconnect_in_owner_epoch(&self, operation: &'static str) -> RuntimeClientResult<()> {
+        {
+            let mut connection = self.connection(operation)?;
+            let address = self
+                .shared
+                .info
+                .socket_addr()
+                .map_err(|_| RuntimeClientError::fatal("runtime_info_invalid", operation))?;
+            connection.stream = connect_runtime_stream(address, connection.io_timeout, operation)?;
+            connection.terminal_error = None;
+        }
+        if self.health()? != self.shared.info.owner_epoch() {
+            let error = RuntimeClientError::fatal("runtime_owner_epoch_changed", operation);
+            return Err(self.connection(operation)?.latch(error));
+        }
+        Ok(())
     }
 
     /// Reconnects one physical instance and self-checks it now (`SelfCheckInstance`,
@@ -5455,6 +5577,7 @@ pub(super) fn receipt_response_timeout(
         RuntimeOperation::SelfCheckInstance { .. }
         | RuntimeOperation::ResumeScheduling {
             scope: SchedulingPauseScope::Instance { .. },
+            ..
         } => Duration::from_millis(actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS)
             .checked_add(io_timeout)
             .ok_or_else(|| {
@@ -5465,6 +5588,14 @@ pub(super) fn receipt_response_timeout(
             }),
         _ => Ok(io_timeout),
     }
+}
+
+/// A failure after the request was sent with no receipt and no error projection: what an
+/// older Runtime's decoder leaves when it drops a frame it cannot read.
+fn unconfirmed_without_receipt(error: &RuntimeClientError) -> bool {
+    error.projection().is_none()
+        && error.received_receipt().is_none()
+        && error.disposition() == RuntimeClientErrorClass::Uncertain
 }
 
 fn contained_task_response_timeout(

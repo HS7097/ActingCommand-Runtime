@@ -1556,6 +1556,27 @@ impl SchedulingPauseScope {
     }
 }
 
+/// The pause a conditional `ResumeScheduling` may lift (Workflow #338 R4): the owner epoch the
+/// caller saw it in and the revision of its scope then. The host compares both with its own
+/// under the pause table's lock and refuses a resume of any other pause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingPauseExpectation {
+    pub owner_epoch: OwnerEpoch,
+    pub revision: u64,
+}
+
+impl SchedulingPauseExpectation {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.revision == 0 {
+            return Err(RuntimeContractError::new(
+                "invalid_scheduling_pause_expectation",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// The in-flight contained runs an instance pause drained: `finished` ended on their own,
 /// `cancelled` were asked to stop after the drain timeout (`contained_task_paused`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3072,9 +3093,13 @@ pub enum RuntimeOperation {
         reason_code: String,
         drain_timeout_ms: u64,
     },
-    /// Lifts the matching scheduling pause; same origin gate as `PauseScheduling`.
+    /// Lifts the matching scheduling pause; same origin gate as `PauseScheduling`. With
+    /// `expected` (Workflow #338 R4) only the pause of that owner epoch and scope revision is
+    /// lifted; without it the resume is unconditional, as before.
     ResumeScheduling {
         scope: SchedulingPauseScope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected: Option<SchedulingPauseExpectation>,
     },
     /// Reconnects one physical instance and self-checks it now (Workflow #317 sc3): the
     /// host's controlled preparation phase, under a dedicated preparation lease, closes a
@@ -3182,6 +3207,11 @@ pub enum RuntimeOperation {
     /// entry of that fact. Agent/Adapter only.
     ApplyResourceTargets {
         document_json: String,
+    },
+    /// Reads what one instance can target and its stored resource target policy (Workflow #338
+    /// R5). Read-only: records nothing and has no origin gate, like `Status`.
+    ResourceTargetView {
+        instance_alias: String,
     },
 }
 
@@ -3322,7 +3352,10 @@ impl RuntimeOperation {
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
             | Self::ControlEmulatorInstance { instance_alias, .. }
-            | Self::ClearMonitor { instance_alias } => validate_instance_alias(instance_alias),
+            | Self::ClearMonitor { instance_alias }
+            | Self::ResourceTargetView { instance_alias } => {
+                validate_instance_alias(instance_alias)
+            }
             Self::ConfigureMonitor {
                 instance_alias,
                 policy,
@@ -3356,7 +3389,13 @@ impl RuntimeOperation {
                 }
                 Ok(())
             }
-            Self::ResumeScheduling { scope } => scope.validate(),
+            Self::ResumeScheduling { scope, expected } => {
+                scope.validate()?;
+                if let Some(expected) = expected {
+                    expected.validate()?;
+                }
+                Ok(())
+            }
             Self::SelfCheckInstance { instance_alias } => validate_instance_alias(instance_alias),
             Self::RecognizeArtifact { request } => request.validate(),
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
@@ -3538,6 +3577,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::ApplyResourceTargets { .. } => {
                 "RuntimeOperation::ApplyResourceTargets(<document>)"
             }
+            Self::ResourceTargetView { .. } => "RuntimeOperation::ResourceTargetView(<redacted>)",
         })
     }
 }
@@ -4352,6 +4392,10 @@ pub enum RuntimeResult {
     ResourceTargetsApplied {
         applied: Box<crate::ResourceTargetsApplied>,
     },
+    /// The read-only view of one instance's resource targets (`ResourceTargetView`).
+    ResourceTargetView {
+        view: Box<crate::ResourceTargetView>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4857,6 +4901,14 @@ impl RuntimeReceipt {
                     ));
                 }
                 applied.validate()?;
+            }
+            Some(RuntimeResult::ResourceTargetView { view }) => {
+                if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {
+                    return Err(RuntimeContractError::new(
+                        "invalid_resource_target_view_receipt",
+                    ));
+                }
+                view.validate()?;
             }
             _ => {}
         }

@@ -590,6 +590,52 @@ policy inputs → registered instances → fact store → ledger append → fact
 between the phases and `policy` is never taken under `fact_write_gate`. A catalog activated
 between the phases is named by `checked_catalog_hash`.
 
+## Read-only view: `ResourceTargetView` (Workflow #338 R5)
+
+`RuntimeOperation::ResourceTargetView { instance_alias }` answers
+`RuntimeResult::ResourceTargetView { view }` (`Completed`, no terminal). It has no origin gate
+(like `Status`), records nothing and changes no policy. An unknown alias is `instance_unknown`.
+
+```text
+{instance_alias, policy_instance, evaluated_at_unix_ms, as_of_ledger_position, catalog_hash?,
+ targetable:[{resource, fact_key, producing_tasks:[...], default_scale?, default_importance_milli?,
+              scale_required, importance_required,
+              observation:{current?, observed_at_unix_ms?, pending?}}],
+ not_targetable:[{resource, reason}],
+ active?: {policy_sha256, schema_version, version, event_id, valid_until_unix_ms?, expired,
+           targets:[...], conditions:[...]}}
+```
+
+- `policy_instance` is the value a document's `instance` field takes for this instance (the
+  policy instance id of the authoritative projection).
+- `targetable` / `not_targetable` judge every pool of the active catalog with the predicates of
+  a v2 target that names no tasks: the pool resolves, is observable through a `resource.` or
+  `inventory.` fact and is in the instance's scope (else `resource_not_observable` or
+  `resource_out_of_scope`), and some task of the instance produces at least one unit per run
+  (else `unmapped_task`). `default_scale` / `default_importance_milli` are the pool valuation's
+  `scale` / `gap.weight_milli`; `scale_required` / `importance_required` say a target must
+  state its own. `observation` reads the inventory through the time-validity projection
+  exactly as a target condition does: `current` and `observed_at_unix_ms`, or `pending` with
+  its reason. Without an active catalog both lists are empty and `catalog_hash` is absent.
+- `active` is the instance's stored policy as the evaluator reads it (the v1 or v2 row decoders
+  and the active or expired state), with the `fact.published` event that holds it (`version`,
+  `event_id`), `expired` once `valid_until_unix_ms` has passed, the targets in document form
+  and one condition per target whose pool still resolves (the `ApplyResourceTargets`
+  condition). It is absent without a policy or after a withdrawal. A stored policy the
+  evaluator cannot read is `resource_target_view_policy_unreadable` (`Denied`,
+  `ledger_failure`, the decoder's code as detail); a store revision whose hash differs from the
+  projected policy is `resource_target_view_policy_inconsistent`.
+
+The view takes the check phase's locks in its order (`policy_outcome_gate` → `policy` →
+`fact_write_gate`, the projection, then the fact store for the active revision) and releases
+them; it appends nothing itself. The projection's fact-store synchronization is that of every
+policy read.
+
+An older Runtime does not know the operation: the frame fails to decode and the connection is
+dropped without a receipt. `RuntimeClient::resource_target_view(alias)` then reconnects and,
+when the same owner epoch answers, reports `runtime_operation_unsupported`; the skill then
+falls back to reading the scheduling catalog.
+
 ## Client and CLI
 
 `RuntimeClient::apply_resource_targets(document_json) -> ResourceTargetsApplied` checks only

@@ -371,11 +371,11 @@ impl HostShared {
                 }
                 self.pause_scheduling(validated, scope, reason_code, *drain_timeout_ms)
             }
-            RuntimeOperation::ResumeScheduling { scope } => {
+            RuntimeOperation::ResumeScheduling { scope, expected } => {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.resume_scheduling(validated, scope)
+                self.resume_scheduling(validated, scope, expected.as_ref())
             }
             // Workflow #317 sc3 (d): a manual reconnect and self-check of a physical instance.
             RuntimeOperation::SelfCheckInstance { instance_alias } => {
@@ -518,6 +518,9 @@ impl HostShared {
             RuntimeOperation::PromoteProposal { proposal } => self.promote_proposal(proposal),
             RuntimeOperation::ApplyResourceTargets { document_json } => {
                 self.apply_resource_targets(validated, document_json)
+            }
+            RuntimeOperation::ResourceTargetView { instance_alias } => {
+                self.resource_target_view(instance_alias)
             }
         }
     }
