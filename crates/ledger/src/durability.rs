@@ -205,6 +205,9 @@ fn lifecycle_commit_sync(phase: &RuntimeLifecyclePhase) -> CommitSync {
         | RuntimeLifecyclePhase::StartupPackageScheduled { .. }
         | RuntimeLifecyclePhase::RecoveryLadderStarted { .. }
         | RuntimeLifecyclePhase::RecoveryRungFinished { .. }
+        | RuntimeLifecyclePhase::InstancePreparationFinished { .. }
+        | RuntimeLifecyclePhase::RecoveryEnvironmentReady { .. }
+        | RuntimeLifecyclePhase::RecoveryInstanceStopped { .. }
         | RuntimeLifecyclePhase::RecoveryLadderFinished { .. }
         | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
         | RuntimeLifecyclePhase::FactSnapshotSetSkipped { .. } => CommitSync::Full,

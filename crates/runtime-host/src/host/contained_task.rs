@@ -4741,35 +4741,6 @@ impl HostShared {
                 ),
             ));
         }
-        // ADB baseline: the package runs only against an answering adbd; a probe failure is
-        // recorded typed and takes no lease.
-        if let Err(error) = self.execution.probe_adb_baseline_until(
-            instance_alias,
-            Instant::now() + Duration::from_secs(30),
-            &|| self.fatal.is_shutdown_requested(),
-        ) {
-            if error.resource_quiescence()
-                == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
-            {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::execution("run_startup_package", &error),
-                ));
-            }
-            let mut host_error = RuntimeHostError::request(
-                pending.run.adb_not_ready_code(),
-                "run_startup_package",
-                RuntimeErrorCode::BackendOperationFailed,
-            )
-            .with_native_detail(format!(
-                "instance_alias={instance_alias}; adb_failed={error}"
-            ));
-            host_error.lifecycle.instance_id = Some(resolved.instance_id());
-            return Err(RequestFailure::request(
-                host_error,
-                RuntimeReceiptState::Failed,
-                None,
-            ));
-        }
         let execution_provenance = resolved.provenance();
         let (task_actor, task_source) = scheduled_request_transport_origin(execution_provenance);
         let issuer = self.events.issuer();
@@ -4865,6 +4836,52 @@ impl HostShared {
         }
         let prerequisites =
             self.resolve_prerequisite_chain(instance_alias, &prepared, || Ok(material_deadline))?;
+        if pending.recovery_rung {
+            let (capture, input) = prepared.recovery_entry_channels();
+            if let Some(code) = self
+                .recovery_entry_unavailable(resolved.instance_id(), capture, input)
+                .map_err(RequestFailure::poison_without_terminal)?
+            {
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        code,
+                        "run_startup_package",
+                        RuntimeErrorCode::BackendOperationFailed,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                ));
+            }
+        }
+        // An application action needs ADB independently of input/capture. Other recovery
+        // entries use their configured providers and let those owners establish channels.
+        if (!pending.recovery_rung || prepared.has_application_effect())
+            && let Err(error) = self.execution.probe_adb_baseline_until(
+                instance_alias,
+                Instant::now() + Duration::from_secs(30),
+                &|| self.fatal.is_shutdown_requested(),
+            )
+        {
+            if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::execution("run_startup_package", &error),
+                ));
+            }
+            let mut host_error = RuntimeHostError::request(
+                pending.run.adb_not_ready_code(),
+                "run_startup_package",
+                RuntimeErrorCode::BackendOperationFailed,
+            )
+            .with_native_detail(format!(
+                "instance_alias={instance_alias}; adb_failed={error}"
+            ));
+            host_error.lifecycle.instance_id = Some(resolved.instance_id());
+            return Err(RequestFailure::request(
+                host_error,
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
         // Workflow #335 S5b: a startup or return-home package writes no instance facts; one
         // that declares resource readings is refused before any lease and any input.
         if prepared.has_resource_readings() {

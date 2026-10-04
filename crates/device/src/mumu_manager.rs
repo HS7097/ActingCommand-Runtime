@@ -732,6 +732,8 @@ pub struct EmulatorControlOutcome {
     /// `\n`, `\r`, `\t` stripped.
     pub output_summary: String,
     pub instance_index: u16,
+    /// Actual process observation from the poll that satisfied this action.
+    pub process_started: bool,
     /// `is_process_started && is_android_started && adb_port != 0` at the last poll.
     pub running: bool,
     pub adb_port: Option<u16>,
@@ -918,6 +920,7 @@ pub fn control_instance(
                         exit_code,
                         output_summary: summary,
                         instance_index,
+                        process_started: state.process_started,
                         running: state.running(),
                         adb_port: state.adb_port,
                         player_state: state.player_state,

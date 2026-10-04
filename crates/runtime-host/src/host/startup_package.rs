@@ -20,8 +20,8 @@
 //! attached as related failure). Failures are recorded as `runtime.failed` under the
 //! instance and the causation id; a fatal one poisons the host like any other.
 //!
-//! A configured package is always invoked after `start` / `restart`; an instance without one
-//! never has anything pulled. A daemon that finds the instance already running at startup
+//! A configured package is scheduled after `start` / `restart` when connection preparation
+//! succeeds; an instance without one has no package scheduled. A daemon already running at startup
 //! schedules nothing: only the two control actions do.
 //!
 //! Slice #316-B4: the same queue and thread also carry stuck-recovery ladders
@@ -78,6 +78,7 @@ pub(super) struct PendingStartupPackage {
     /// admission id).
     pub(super) control_request_id: RequestId,
     pub(super) run: HostPackageRun,
+    pub(super) recovery_rung: bool,
     /// Workflow #336 L2d: on a ladder rung run of the configured return-home package, the
     /// failed package it must match.
     pub(super) configured_return_home: Option<Box<super::contained_task::PackageIdentity>>,
@@ -193,6 +194,7 @@ impl HostShared {
             causation_id,
             control_request_id,
             run: HostPackageRun::StartupPackage,
+            recovery_rung: false,
             configured_return_home: None,
         }))
     }

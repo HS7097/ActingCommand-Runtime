@@ -2099,6 +2099,39 @@ impl PreparedContainedTask {
         pages.next().is_none().then_some(page)
     }
 
+    /// Channels needed before an application effect can repair the connection. This reads
+    /// only the hash-admitted program. An `any` linear application entry performs no capture
+    /// or input first; a page entry must still observe its page/prerequisite gate.
+    pub fn recovery_entry_channels(&self) -> (bool, bool) {
+        let first = self.program.operations.first();
+        let application_entry = self.control.execution_mode != "recognize_only"
+            && first.is_some_and(|operation| {
+                operation.from == "any" && operation.application.is_some()
+            });
+        let capture = !(application_entry && self.control.execution_mode == linear::LINEAR_STEPS);
+        let input = self.control.execution_mode != "recognize_only"
+            && !application_entry
+            && self
+                .program
+                .operations
+                .iter()
+                .take_while(|operation| {
+                    self.control.execution_mode != linear::LINEAR_STEPS
+                        || operation.application.is_none()
+                })
+                .any(|operation| operation.click.is_some() || operation.select.is_some());
+        (capture, input)
+    }
+
+    pub fn has_application_effect(&self) -> bool {
+        self.control.execution_mode != "recognize_only"
+            && self
+                .program
+                .operations
+                .iter()
+                .any(|operation| operation.application.is_some())
+    }
+
     /// Workflow #336 L2b: whether the package may run as a prerequisite package. Its
     /// `scheduling_outcome`, when declared without a designated operation, is ignored there.
     pub fn is_prerequisite_compatible(&self) -> bool {

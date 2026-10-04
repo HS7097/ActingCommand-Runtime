@@ -1823,6 +1823,28 @@ pub enum RuntimeLifecyclePhase {
         run_id: Option<RunId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environment: Option<crate::TerminalEvent>,
+    },
+    /// Actual preparation results after safe resource disposition and lease release.
+    /// Missing channel reports remain unknown, independently of a failed other channel.
+    InstancePreparationFinished {
+        stage: RecoveryTriggerStage,
+        capture: crate::BackendObservationStatus,
+        input: crate::BackendObservationStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_code: Option<String>,
+    },
+    /// Confirmed provider Stop, new Start and successful fresh input/capture preparation.
+    RecoveryEnvironmentReady {
+        stop: crate::TerminalEvent,
+        start: crate::TerminalEvent,
+        preparation: crate::TerminalEvent,
+    },
+    /// The provider observed this instance's old process gone; any following Start shares
+    /// these ladder links and must still pass admission/fencing.
+    RecoveryInstanceStopped {
+        stop: crate::TerminalEvent,
     },
     /// The ladder ended; `rungs_tried` counts the rungs that were executed (not skipped).
     RecoveryLadderFinished {
