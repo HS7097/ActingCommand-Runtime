@@ -323,9 +323,10 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                 .expect("combined confirmed Close fact")
         };
         // The Runtime's preparation lease uses its own synthetic correlation.
+        let prepared_instance_id = *closed.links().instance_id().expect("self-check instance");
         let lease_events = host
             .query_persisted_events_for_test(EventQuery {
-                instance_id: Some(instance_id()),
+                instance_id: Some(prepared_instance_id),
                 ..EventQuery::default()
             })
             .expect("preparation lease ledger");
