@@ -1,0 +1,92 @@
+name: one-off 338 Rc (to be reverted)
+
+# One-off evidence for Workflow #338 slice Rc (frozen model 5978610792, section six, row Rc): on
+# the fixture runtime (tests/support/c4_runtime.rs) a direct run whose Runtime child is killed
+# mid-run, its settlement at the next start, the resubmission of the original request, a further
+# restart, and a run two epochs back; on the runtime-host fixtures a scheduled (policy dispatch)
+# run killed during its blocked input and restarted. The test sources live in one-off-338rc/ and
+# are copied into place only inside this job. Reverted right after its run; the PR's final diff
+# contains neither this file nor one-off-338rc/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rc:
+    name: Rc previous-epoch settlement evidence
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      PRODUCT_SHA: 1a3e0179923959b03272ca17fb4213c93397c705
+      BASE_SHA: 9619265b1014e638de521561075cddb191b37bef
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git rev-parse HEAD).Trim()
+          Write-Host "RC|SCOPE|head $head product $env:PRODUCT_SHA base $env:BASE_SHA"
+          $diff = @(& git diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-338rc' ':(exclude).github/workflows/oneoff-338rc.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+          & git merge-base --is-ancestor $env:BASE_SHA $env:PRODUCT_SHA
+          if ($LASTEXITCODE -ne 0) { throw "the base $env:BASE_SHA is not an ancestor of $env:PRODUCT_SHA" }
+          $changed = @(& git diff --name-only $env:BASE_SHA $env:PRODUCT_SHA | Where-Object { $_ })
+          Write-Host "RC|SCOPE|product files changed from base: $($changed -join ', ')"
+          $manifests = @($changed | Where-Object { $_ -like '*Cargo.toml' -or $_ -eq 'Cargo.lock' })
+          Write-Host "RC|SCOPE|Cargo.lock and Cargo.toml files changed: $($manifests.Count)"
+          if ($manifests.Count -ne 0) { throw "manifests changed: $($manifests -join ', ')" }
+      - name: Direct runs on the fixture runtime
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Copy-Item -LiteralPath 'one-off-338rc/fixture.rs' -Destination 'apps/actingctl/tests/oneoff_338rc.rs'
+          $log = Join-Path $env:RUNNER_TEMP 'fixture.log'
+          $ErrorActionPreference = 'Continue'
+          & cargo test --locked -p actingcommand-actingctl --test oneoff_338rc -- --nocapture --test-threads=1 *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log | Where-Object { $_ -match 'RC\||^test |test result|panicked|error(\[|:)' } | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            Get-Content -LiteralPath $log -Tail 200 | ForEach-Object { Write-Host $_ }
+            throw "fixture evidence failed with exit code $code"
+          }
+      - name: Scheduler chain on the runtime-host fixtures
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Copy-Item -LiteralPath 'one-off-338rc/host_rc.rs' -Destination 'crates/runtime-host/src/tests/oneoff_338rc.rs'
+          Add-Content -LiteralPath 'crates/runtime-host/src/tests.rs' -Value "`nmod oneoff_338rc;"
+          $log = Join-Path $env:RUNNER_TEMP 'host.log'
+          $ErrorActionPreference = 'Continue'
+          & cargo test --locked -p actingcommand-runtime-host --lib oneoff_338rc -- --nocapture --test-threads=1 *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log | ForEach-Object {
+            $line = $_
+            if ($line.Length -gt 3000) { $line = $line.Substring(0, 3000) + '...' }
+            if ($line -match 'RC\||^test |test result|panicked|error(\[|:)') { Write-Host $line }
+          }
+          if ($code -ne 0) {
+            Get-Content -LiteralPath $log -Tail 200 | ForEach-Object { Write-Host $_ }
+            throw "scheduler chain evidence failed with exit code $code"
+          }
