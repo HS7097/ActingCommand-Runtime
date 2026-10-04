@@ -409,6 +409,108 @@ impl BundleIndexV2 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceUse {
+    Startup,
+    Prerequisite,
+    ReturnHome,
+}
+
+/// Source declarations and bundle v3 use this same shape. Machine and instance bindings
+/// belong to the consuming installer, not to a resource bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleMaintenance {
+    pub package_id: String,
+    pub server: String,
+    pub uses: Vec<MaintenanceUse>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BundleIndexV3Version {
+    #[serde(rename = "actingcommand.bundle.v3")]
+    V3,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleIndexV3 {
+    pub schema_version: BundleIndexV3Version,
+    pub game: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<BundleSource>,
+    pub packs: Vec<BundlePackV2>,
+    pub maintenance: Vec<BundleMaintenance>,
+}
+
+impl BundleIndexV3 {
+    /// Structural closure only; actual material admission and use eligibility are owned by
+    /// execution-kernel and must also pass before a consumer installs these bindings.
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        BundleIndexV2 {
+            schema_version: BundleIndexVersion::V2,
+            game: self.game.clone(),
+            source: self.source.clone(),
+            packs: self.packs.clone(),
+        }
+        .validate()?;
+        if self.maintenance.len() > self.packs.len() {
+            return Err(RuntimeContractError::new("invalid_bundle_maintenance"));
+        }
+        let mut entries = std::collections::BTreeSet::new();
+        let mut roles = std::collections::BTreeSet::new();
+        for entry in &self.maintenance {
+            if !entries.insert((&entry.package_id, &entry.server))
+                || entry.uses.is_empty()
+                || entry.uses.len() > 3
+                || entry
+                    .uses
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != entry.uses.len()
+            {
+                return Err(RuntimeContractError::new("invalid_bundle_maintenance"));
+            }
+            if !self
+                .packs
+                .iter()
+                .any(|pack| pack.package_id == entry.package_id && pack.server == entry.server)
+            {
+                return Err(RuntimeContractError::new("bundle_maintenance_pack_missing"));
+            }
+            for purpose in &entry.uses {
+                if *purpose != MaintenanceUse::Prerequisite
+                    && !roles.insert((&entry.server, purpose))
+                {
+                    return Err(RuntimeContractError::new(
+                        "duplicate_bundle_maintenance_role",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Version-specific shapes keep required v3 fields mandatory and keep v2 strict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BundleIndex {
+    V3(BundleIndexV3),
+    V2(BundleIndexV2),
+}
+
+impl BundleIndex {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        match self {
+            Self::V2(index) => index.validate(),
+            Self::V3(index) => index.validate(),
+        }
+    }
+}
+
 /// A game or server key of a bundle: 1-128 bytes of `[a-z0-9._-]`, usable as one path segment.
 fn bundle_identifier(value: &str) -> bool {
     value.len() <= 128

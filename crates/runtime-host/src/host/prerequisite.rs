@@ -25,18 +25,10 @@ use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, prepare_conta
 use super::failure_settlement::ResolvedLayer;
 use super::*;
 use actingcommand_contract::{PackageRef, TaskTimingBudgetOrigin};
+pub(super) use actingcommand_execution_kernel::MAX_PREREQUISITE_DEPTH;
+use actingcommand_execution_kernel::{MAX_GATED_STEPS, PrerequisiteChain};
 
-/// At most three declared prerequisite packages besides the dependent package; a return-home
-/// layer (Workflow #336 L2c) is not counted.
-pub(super) const MAX_PREREQUISITE_DEPTH: usize = 3;
-/// The step indices of one gated run, prerequisite packages included.
-const MAX_GATED_STEPS: u64 = 1_000;
-
-const UNBOUND: &str = "contained_task_prerequisite_unbound";
-const CYCLE: &str = "contained_task_prerequisite_cycle";
-const DEPTH_EXCEEDED: &str = "contained_task_prerequisite_depth_exceeded";
 const ADMISSION_FAILED: &str = "contained_task_prerequisite_admission_failed";
-const MISMATCH: &str = "contained_task_prerequisite_mismatch";
 pub(super) const INCOMPATIBLE: &str = "contained_task_prerequisite_incompatible";
 const STEP_LIMIT: &str = "contained_task_prerequisite_step_limit";
 const FINAL_PAGE_MISSING: &str = "contained_task_prerequisite_final_page_missing";
@@ -78,19 +70,14 @@ pub(super) fn configured_return_home_incompatibility(
     package: &PreparedContainedTask,
     dependent: &PackageIdentity,
 ) -> Option<String> {
-    let reason = package.prerequisite_incompatibility().or_else(|| {
-        if package.game() != dependent.game {
-            Some("game")
-        } else if package.server() != dependent.server {
-            Some("server")
-        } else if package.resolution() != dependent.resolution {
-            Some("resolution")
-        } else if package.prerequisite_package_id().is_some() {
-            Some("return_home_declares_prerequisite")
-        } else {
-            None
-        }
-    })?;
+    let reason = package
+        .package_descriptor()
+        .prerequisite_incompatibility_with(
+            &dependent.game,
+            &dependent.server,
+            dependent.resolution,
+            true,
+        )?;
     Some(format!(
         "package_id={} reason={reason} source=return_home",
         package.package_label()
@@ -107,18 +94,16 @@ impl HostShared {
     /// `linear_steps` package that declares no prerequisite package and has a first step page
     /// (no application entry, R24), when the host maps its game and server to a package that is
     /// not already in the chain.
-    fn return_home_fallback(
+    fn next_prerequisite(
         &self,
-        layer: &PreparedContainedTask,
-        visited: &BTreeSet<String>,
-    ) -> Option<String> {
-        if layer.prerequisite_package_id().is_some() || layer.linear_entry_page().is_none() {
-            return None;
-        }
-        self.return_home_packages
-            .get(&(layer.game().to_owned(), layer.server().to_owned()))
-            .filter(|package_id| !visited.contains(*package_id))
-            .cloned()
+        chain: &PrerequisiteChain,
+    ) -> Option<actingcommand_execution_kernel::PrerequisiteLink> {
+        let layer = chain.dependent();
+        chain.next(
+            self.return_home_packages
+                .get(&(layer.game().to_owned(), layer.server().to_owned()))
+                .map(String::as_str),
+        )
     }
 
     /// The binding of the return-home package `return_home_packages` names for `game` and
@@ -176,108 +161,48 @@ impl HostShared {
         material_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
         recorded: &mut Vec<ResolvedLayer>,
     ) -> Result<Vec<PreparedContainedTask>, RequestFailure> {
-        let mut visited = BTreeSet::from([prepared.package_label().to_owned()]);
-        // The next package id and whether it is the return-home fallback.
-        let mut next = match prepared.prerequisite_package_id() {
-            Some(first) => Some((first.to_owned(), false)),
-            None => self
-                .return_home_fallback(prepared, &visited)
-                .map(|package_id| (package_id, true)),
-        };
+        let mut qualification = PrerequisiteChain::new(prepared.package_descriptor());
+        let mut next = self.next_prerequisite(&qualification);
         if next.is_none() {
             return Ok(Vec::new());
         }
         let deadline = material_deadline()?;
         let mut chain: Vec<PreparedContainedTask> = Vec::new();
-        let mut declared = 0;
-        while let Some((package_id, return_home)) = next {
-            let layer = chain.len() + 1;
+        let pure_refusal = |error: actingcommand_execution_kernel::ContainedTaskError| {
+            prerequisite_refusal(error.code(), error.detail().unwrap_or("").to_owned())
+        };
+        while let Some(link) = next {
             let dependent = chain.last().unwrap_or(prepared);
             recorded.push(ResolvedLayer {
-                package_id: package_id.clone(),
-                return_home: return_home
+                package_id: link.package_id.clone(),
+                return_home: link
+                    .return_home
                     .then(|| (dependent.game().to_owned(), dependent.server().to_owned())),
             });
-            let source = if return_home {
-                " source=return_home"
-            } else {
-                ""
-            };
-            let detail =
-                |extra: &str| format!("layer={layer} package_id={package_id}{extra}{source}");
-            let Some(binding) = self.prerequisite_packages.get(&package_id) else {
-                return Err(prerequisite_refusal(UNBOUND, detail("")));
-            };
-            if !visited.insert(package_id.clone()) {
-                return Err(prerequisite_refusal(CYCLE, detail("")));
-            }
-            if !return_home {
-                if declared >= MAX_PREREQUISITE_DEPTH {
-                    return Err(prerequisite_refusal(DEPTH_EXCEEDED, detail("")));
-                }
-                declared += 1;
-            }
+            let binding = self.prerequisite_packages.get(&link.package_id);
+            qualification
+                .begin(&link, binding.is_some())
+                .map_err(pure_refusal)?;
+            let binding = binding.expect("shared prerequisite predicate checked the binding");
             let request = ContainedTaskRequest::new(
                 binding.package_path(),
                 binding.expected_sha256().clone(),
             )
-            .map_err(|_| prerequisite_refusal(ADMISSION_FAILED, detail("")))?;
+            .map_err(|_| prerequisite_refusal(ADMISSION_FAILED, link.detail("")))?;
             let admitted = prepare_contained_task(
                 instance_alias,
                 &request,
                 self.execution.vision_provider(),
                 deadline,
             )
-            .map_err(|failure| prerequisite_admission_failure(failure, detail("")))?;
-            if admitted.package_label() != package_id {
-                return Err(prerequisite_refusal(
-                    MISMATCH,
-                    detail(&format!(
-                        " declared_package_id={}",
-                        admitted.package_label()
-                    )),
-                ));
-            }
-            let dependent = chain.last().unwrap_or(prepared);
-            let incompatible = admitted.prerequisite_incompatibility().or_else(|| {
-                if admitted.game() != dependent.game() {
-                    Some("game")
-                } else if admitted.server() != dependent.server() {
-                    Some("server")
-                } else if admitted.resolution() != dependent.resolution() {
-                    Some("resolution")
-                } else {
-                    None
-                }
-            });
-            if let Some(reason) = incompatible {
-                return Err(prerequisite_refusal(
-                    INCOMPATIBLE,
-                    detail(&format!(" reason={reason}")),
-                ));
-            }
-            // Only a `linear_steps` package declares a prerequisite; a page-graph package ends
-            // the chain. The return-home layer falls back no further.
-            next = match admitted.prerequisite_package_id() {
-                Some(package_id) => Some((package_id.to_owned(), false)),
-                None if return_home => None,
-                None => self
-                    .return_home_fallback(&admitted, &visited)
-                    .map(|package_id| (package_id, true)),
-            };
+            .map_err(|failure| prerequisite_admission_failure(failure, link.detail("")))?;
+            qualification
+                .admit(&link, admitted.package_descriptor())
+                .map_err(pure_refusal)?;
+            next = self.next_prerequisite(&qualification);
             chain.push(admitted);
         }
-        let steps = chain
-            .iter()
-            .chain(std::iter::once(prepared))
-            .map(|task| u64::from(task.maximum_executed_steps()))
-            .sum::<u64>();
-        if steps > MAX_GATED_STEPS {
-            return Err(prerequisite_refusal(
-                STEP_LIMIT,
-                format!("maximum_executed_steps={steps}"),
-            ));
-        }
+        qualification.finish().map_err(pure_refusal)?;
         Ok(chain)
     }
 }

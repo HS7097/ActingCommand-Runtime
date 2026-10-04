@@ -1828,6 +1828,24 @@ enum PostAdmissionOcrExecution {
 }
 
 impl PreparedContainedTask {
+    /// Fully prepares verified material with the existing metadata-only vision capability,
+    /// then returns only its read-only description. No executable task or provider escapes.
+    pub fn describe_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        deadline: std::time::Instant,
+    ) -> Result<crate::TaskPackageDescriptor, ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_metadata_path(
+            instance_label,
+            locator,
+            expected,
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
+        Ok(Self::from_bundle(bundle)?.package_descriptor())
+    }
+
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
