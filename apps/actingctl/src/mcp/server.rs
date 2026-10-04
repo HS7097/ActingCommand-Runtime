@@ -7,6 +7,7 @@
 //! connection, so `initialize` and `server/discover` answer at once. At stdin EOF the
 //! server takes no new request, gives answers in flight up to 2 s and exits with 0.
 
+use super::jobs::Jobs;
 use super::lock;
 use super::protocol::{
     self, Era, INVALID_PARAMS, INVALID_REQUEST, Incoming, LegacyVersion, METHOD_NOT_FOUND,
@@ -45,6 +46,7 @@ pub(super) struct ServerConfig {
 struct Shared {
     tiers: TierSet,
     runtime: RuntimeAccess,
+    jobs: Jobs,
     /// This process's identity in the cursors it issues.
     session: u64,
     /// The version a legacy `initialize` negotiated; `None` until one arrives.
@@ -170,6 +172,7 @@ pub(super) fn serve(config: ServerConfig) -> Result<ExitCode, String> {
     let shared = Arc::new(Shared {
         tiers: config.tiers,
         runtime: RuntimeAccess::new(config.root, config.state_root),
+        jobs: Jobs::new(),
         session: session_identity(),
         legacy: Mutex::new(None),
         calls: Mutex::new(HashMap::new()),
@@ -662,6 +665,7 @@ fn run_job(shared: &Shared, job: Job) {
         cancelled: &call.cancelled,
         deadline: call.started + tools::CALL_BUDGET,
         session: shared.session,
+        jobs: &shared.jobs,
     };
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| (tool.run)(&context, &arguments)))
         .unwrap_or_else(|_| {

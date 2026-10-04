@@ -114,13 +114,29 @@ impl RuntimeAccess {
                 slot.client = None;
             }
         }
-        runtime_error(error)
+        client_error(error)
+    }
+
+    /// A new connection with this origin, for one write and its job: (Cli, Cli) as actingctl,
+    /// or (Agent, Adapter) for resource targets.
+    pub(super) fn connect_fresh(
+        &self,
+        actor: EventActor,
+        source: EventSource,
+    ) -> Result<RuntimeClient, ToolError> {
+        let state_root = self.locate().state_root.map_err(|reason| {
+            ToolError::usage("install_state_root_unresolved", reason).blocked_by(
+                "mcp-serve --state-root <dir>, or state_root in <root>\\actingd.config.json",
+            )
+        })?;
+        RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
+            .map_err(|error| unavailable(&error, &state_root))
     }
 }
 
 /// A Runtime client failure as a tool error. Its class is the client's own
 /// `RuntimeClientError::disposition()` (R6), the same class CLI, UI and Lab report.
-fn runtime_error(error: &RuntimeClientError) -> ToolError {
+pub(super) fn client_error(error: &RuntimeClientError) -> ToolError {
     let mut mapped = ToolError::new(
         error.disposition().as_str(),
         error.code(),

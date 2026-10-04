@@ -89,10 +89,40 @@ pub(super) fn latest_run(
 /// second while the state is not_found, admitted or running.
 pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["handle", "run_id", "wait_s"])?;
-    let key = match (arguments.string("handle")?, arguments.string("run_id")?) {
+    let wait = Duration::from_secs(arguments.integer("wait_s", 0, MAX_WAIT_S)?.unwrap_or(0));
+    let last_read = context
+        .deadline
+        .checked_sub(WAIT_READ_RESERVE)
+        .unwrap_or(context.deadline);
+    let wait_until = (Instant::now() + wait).min(last_read);
+    let handle = arguments.string("handle")?;
+    let job = handle.and_then(|handle| context.jobs.find(handle));
+    // A job of this process that is not a run (a pause, a resume, an emulator control, a
+    // stop) has no run status: its phase and, once it ended, its outcome.
+    if let Some(job) = job.as_ref().filter(|job| job.kind != "run_pack") {
+        if arguments.string("run_id")?.is_some() {
+            return Err(invalid_argument(
+                "handle",
+                "or run_id: give exactly one of them",
+            ));
+        }
+        job.wait_until(wait_until);
+        return Ok(ToolSuccess::new(
+            json!({"handle": job.handle, "job": job.snapshot()}),
+        ));
+    }
+    let key = match (handle, arguments.string("run_id")?) {
         (Some(handle), None) => RunKey::RequestId(
-            serde_json::from_value::<RequestId>(json!(handle))
-                .map_err(|_| invalid_argument("handle", "must be a Runtime request_id"))?,
+            serde_json::from_value::<RequestId>(json!(handle)).map_err(|_| {
+                if handle.starts_with("correlation_") {
+                    ToolError::usage(
+                        "handle_unknown",
+                        "this job handle is not held by this MCP process: the process that started it ended, or it is another one's",
+                    )
+                } else {
+                    invalid_argument("handle", "must be a Runtime request_id or a job handle")
+                }
+            })?,
         ),
         (None, Some(run_id)) => RunKey::RunId(
             serde_json::from_value::<RunId>(json!(run_id))
@@ -105,13 +135,7 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
             ));
         }
     };
-    let wait = Duration::from_secs(arguments.integer("wait_s", 0, MAX_WAIT_S)?.unwrap_or(0));
     let connected = context.runtime.connect()?;
-    let last_read = context
-        .deadline
-        .checked_sub(WAIT_READ_RESERVE)
-        .unwrap_or(context.deadline);
-    let wait_until = (Instant::now() + wait).min(last_read);
     loop {
         let status = connected
             .client
@@ -121,11 +145,19 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
             status.state,
             ContainedRunState::NotFound | ContainedRunState::Admitted | ContainedRunState::Running
         );
+        // A submit job of this process that failed before admission leaves no run.
+        let job_failed_first = job.as_ref().is_some_and(|job| job.finished())
+            && status.state == ContainedRunState::NotFound;
         if !may_change
+            || job_failed_first
             || context.cancelled.load(Ordering::SeqCst)
             || Instant::now() + POLL_INTERVAL >= wait_until
         {
-            return Ok(ToolSuccess::new(json!(status)));
+            let mut result = json!(status);
+            if let Some(job) = &job {
+                result["job"] = job.snapshot();
+            }
+            return Ok(ToolSuccess::new(result));
         }
         thread::sleep(POLL_INTERVAL);
     }

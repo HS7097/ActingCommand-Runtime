@@ -5,7 +5,9 @@
 //! tier gate, the result envelope `{ok, result, warnings?}` / `{ok:false, error}` and the
 //! output budget (§四 结果形状 / 预算).
 
+use super::jobs::Jobs;
 use super::observer;
+use super::operator;
 use super::protocol::Era;
 use super::runs;
 use super::runtime::RuntimeAccess;
@@ -99,6 +101,7 @@ pub(super) struct ToolContext<'a> {
     pub(super) deadline: Instant,
     /// This server process's identity; it binds every cursor it issues.
     pub(super) session: u64,
+    pub(super) jobs: &'a Jobs,
 }
 
 pub(super) type ToolOutcome = Result<ToolSuccess, ToolError>;
@@ -166,6 +169,27 @@ impl ToolError {
         &self.0.message
     }
 
+    /// `{class, code, message, blocked_by, details}`.
+    pub(super) fn into_value(self) -> Value {
+        let body = *self.0;
+        json!({
+            "class": body.class,
+            "code": body.code,
+            "message": body.message,
+            "blocked_by": body.blocked_by,
+            "details": body.details,
+        })
+    }
+
+    /// The Runtime's host failure code this error carries, if any.
+    pub(super) fn host_code(&self) -> Option<&str> {
+        self.0
+            .details
+            .get("host_failure")
+            .and_then(|failure| failure.get("code"))
+            .and_then(Value::as_str)
+    }
+
     /// The same failure reported beside a successful result.
     pub(super) fn into_warning(self) -> Value {
         let body = *self.0;
@@ -190,6 +214,11 @@ impl<'a> Arguments<'a> {
             Some(unknown) => Err(invalid_argument(unknown, "is not an argument of this tool")),
             None => Ok(Self { map }),
         }
+    }
+
+    /// The argument as given, when present.
+    pub(super) fn value(&self, key: &str) -> Option<&'a Value> {
+        self.map.get(key).filter(|value| !value.is_null())
     }
 
     pub(super) fn has(&self, key: &str) -> bool {
@@ -297,7 +326,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         destructive: false,
         idempotent: true,
         input_schema: get_run_input,
-        result_schema: run_status_schema,
+        result_schema: get_run_result,
         run: runs::get_run,
     },
     ToolDef {
@@ -311,6 +340,102 @@ pub(super) static TOOLS: &[ToolDef] = &[
         input_schema: diagnose_input,
         result_schema: diagnose_result,
         run: runs::diagnose,
+    },
+    ToolDef {
+        name: "ac_resources_list",
+        title: "Targetable resources",
+        tier: Tier::Observer,
+        description: "What one instance can target, as the Runtime reports it, unchanged: targetable resources (resource, fact_key, producing tasks, defaults, what must be given, the current observation) and the not-targetable ones with their reason. policy_instance is the value the instance field of a policy document takes. An actingd older than v0.11.0 answers runtime_operation_unsupported: read the resources of the scheduling catalog instead.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: instance_only_input,
+        result_schema: resources_list_result,
+        run: operator::resources_list,
+    },
+    ToolDef {
+        name: "ac_targets_get",
+        title: "Active resource targets",
+        tier: Tier::Observer,
+        description: "The resource target policy one instance holds now, as the Runtime reports it, unchanged: active {policy_sha256, schema_version, version, event_id, valid_until_unix_ms, expired, targets, conditions}, or no active field when it holds none. An actingd older than v0.11.0 answers runtime_operation_unsupported: read the resources of the scheduling catalog instead.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: instance_only_input,
+        result_schema: targets_get_result,
+        run: operator::targets_get,
+    },
+    ToolDef {
+        name: "ac_run_pack",
+        title: "Run a task package",
+        tier: Tier::Operator,
+        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: a busy instance comes back as the Runtime's LeaseBusy or ContainedTaskBusy, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: run_pack_input,
+        result_schema: run_pack_result,
+        run: operator::run_pack,
+    },
+    ToolDef {
+        name: "ac_stop_run",
+        title: "Stop a run",
+        tier: Tier::Operator,
+        description: "Stops one manual run (MCP, CLI, UI or Lab) by its handle, the Runtime request_id, from any process: the run's package is abandoned and the screen stays where it is; there is no return home, no recovery package and no rerun; only touch points that may still be held are lifted. Answers {cancellation, touch_release, job_phase}; touch_release is done, failed or not_needed: not_needed includes a run that had already ended before this call, and failed (for example LeaseBusy) can mean the still-connected submitter already lifted them itself. When this server submitted the run and its job still waits, only the stop is sent and that job lifts the touches. Otherwise a background job waits for the run to end, up to the longest run deadline; not done within wait_s (default 20) the answer is {handle, job_phase} for ac_get_run. A scheduled run cannot be stopped by a client: the Runtime's refusal comes back, blocked_by ac_pause.",
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: stop_run_input,
+        result_schema: stop_run_result,
+        run: operator::stop_run,
+    },
+    ToolDef {
+        name: "ac_pause",
+        title: "Pause scheduling",
+        tier: Tier::Operator,
+        description: "Pauses scheduling, the same pause as actingctl pause: for one instance (alias, instance_id or ADB port) or, without instance, everywhere. reason is a code (default mcp.pause); drain_timeout_s 1-600 (default 60). An instance pause drains every in-flight contained run on that instance, manual runs and other sessions' runs included: when the drain times out the Runtime asks them all to stop. The pause stays until ac_resume or an actingd restart; it does not end with this MCP process. Answers {paused (the Runtime's result with its revision), owner_epoch}: pass the owner_epoch and the revision to ac_resume. Not done within the call budget, the answer is {handle, job_phase} for ac_get_run.",
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: pause_input,
+        result_schema: job_result,
+        run: operator::pause,
+    },
+    ToolDef {
+        name: "ac_resume",
+        title: "Resume scheduling",
+        tier: Tier::Operator,
+        description: "Lifts exactly the scheduling pause the caller saw: expected_owner_epoch and expected_revision are the owner_epoch and the revision ac_pause gave (or ac_overview shows). The Runtime refuses any other pause (scheduling_pause_owner_epoch_mismatch, scheduling_pause_revision_mismatch): someone else's pause, or one made again after a restart. An older actingd answers runtime_operation_unsupported and nothing is lifted. An instance resume reconnects the device at once and runs its self-check. Answers {resumed} or, beyond the call budget, {handle, job_phase}.",
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: resume_input,
+        result_schema: job_result,
+        run: operator::resume,
+    },
+    ToolDef {
+        name: "ac_emulator",
+        title: "Emulator control",
+        tier: Tier::Operator,
+        description: "Starts, stops or restarts one instance's emulator through the Runtime (action start, stop or restart), as actingctl emulator does; the Runtime takes it only from an operator origin. stop and restart end whatever runs on that emulator. It can take up to 230 s: within the call budget the answer is {controlled}, otherwise {handle, job_phase} for ac_get_run.",
+        read_only: false,
+        destructive: true,
+        idempotent: false,
+        input_schema: emulator_input,
+        result_schema: job_result,
+        run: operator::emulator,
+    },
+    ToolDef {
+        name: "ac_targets_set",
+        title: "Set resource targets",
+        tier: Tier::Operator,
+        description: "Sets one instance's resource targets: targets are actingcommand.resource-targets.v2 targets ([] withdraws the policy when the Runtime takes that), and the server writes the v2 document around them with the instance value ac_resources_list reports (policy_instance). valid_days (1-365) sets valid_until; without it none is written. The Runtime checks the document; a refusal comes back with its position (details.rejection). Use ac_resources_list for what may be targeted and ac_targets_get for what is active.",
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: targets_set_input,
+        result_schema: targets_set_result,
+        run: operator::targets_set,
     },
 ];
 
@@ -478,19 +603,7 @@ fn envelope(outcome: ToolOutcome) -> Value {
             }
             Value::Object(envelope)
         }
-        Err(error) => {
-            let body = *error.0;
-            json!({
-                "ok": false,
-                "error": {
-                    "class": body.class,
-                    "code": body.code,
-                    "message": body.message,
-                    "blocked_by": body.blocked_by,
-                    "details": body.details,
-                },
-            })
-        }
+        Err(error) => json!({"ok": false, "error": error.into_value()}),
     }
 }
 
@@ -846,5 +959,218 @@ fn diagnose_result() -> Value {
             "report_warnings",
             "suspended_report",
         ],
+    })
+}
+
+/// A job of this process: its kind, phase, warnings and, once it ended, its outcome.
+fn job_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string"},
+            "phase": {"type": "string"},
+            "warnings": {"type": "array"},
+            "outcome": {},
+        },
+        "required": ["kind", "phase", "warnings"],
+    })
+}
+
+/// A run status (with this process's job when it has one), or a job that is not a run.
+fn get_run_result() -> Value {
+    let mut run = run_status_schema();
+    run["properties"]["job"] = job_schema();
+    json!({
+        "anyOf": [
+            run,
+            {
+                "type": "object",
+                "properties": {"handle": {"type": "string"}, "job": job_schema()},
+                "required": ["handle", "job"],
+            },
+        ],
+    })
+}
+
+fn instance_only_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {"instance": instance_argument()},
+        "required": ["instance"],
+        "additionalProperties": false,
+    })
+}
+
+fn view_header_properties() -> Value {
+    json!({
+        "instance_alias": {"type": "string"},
+        "policy_instance": {"type": "string"},
+        "evaluated_at_unix_ms": {"type": "integer"},
+        "as_of_ledger_position": {"type": "integer"},
+        "catalog_hash": {"type": "string"},
+    })
+}
+
+fn resources_list_result() -> Value {
+    let mut properties = view_header_properties();
+    properties["targetable"] = json!({"type": "array", "items": {"type": "object"}});
+    properties["not_targetable"] = json!({"type": "array", "items": {"type": "object"}});
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": ["instance_alias", "policy_instance", "targetable", "not_targetable"],
+    })
+}
+
+fn targets_get_result() -> Value {
+    let mut properties = view_header_properties();
+    properties["active"] = json!({"anyOf": [{"type": "object"}, {"type": "null"}]});
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": ["instance_alias", "policy_instance"],
+    })
+}
+
+fn run_pack_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "package": {"type": "string", "minLength": 1, "description": "The task package's path."},
+            "package_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The package's sha256 or content reference; default: actinglab package digest.",
+            },
+            "recovery_package": {"type": "string", "minLength": 1},
+            "recovery_package_ref": {"type": "string", "minLength": 1},
+            "deadline_s": {"type": "integer", "minimum": 60, "maximum": 1800, "default": 1800},
+        },
+        "required": ["instance", "package"],
+        "additionalProperties": false,
+    })
+}
+
+fn run_pack_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "handle": {"type": "string"},
+            "correlation_id": {"type": "string"},
+            "phase": {"type": "string"},
+        },
+        "required": ["handle", "correlation_id", "phase"],
+    })
+}
+
+fn stop_run_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "handle": {"type": "string", "minLength": 1, "description": "The run's Runtime request_id."},
+            "wait_s": {"type": "integer", "minimum": 0, "maximum": 25, "default": 20},
+        },
+        "required": ["handle"],
+        "additionalProperties": false,
+    })
+}
+
+fn stop_run_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "cancellation": {"type": "object"},
+            "touch_release": {"type": "string", "enum": ["done", "failed", "not_needed"]},
+            "touch_release_error": {"type": "object"},
+            "job_phase": {"type": "string"},
+            "handle": {"type": "string"},
+        },
+    })
+}
+
+fn pause_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "reason": {"type": "string", "pattern": "^[a-z0-9_.-]{1,64}$", "default": "mcp.pause"},
+            "drain_timeout_s": {"type": "integer", "minimum": 1, "maximum": 600, "default": 60},
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn resume_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "expected_owner_epoch": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The owner_epoch ac_pause gave or ac_overview shows.",
+            },
+            "expected_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The pause revision ac_pause gave or ac_overview shows.",
+            },
+        },
+        "required": ["expected_owner_epoch", "expected_revision"],
+        "additionalProperties": false,
+    })
+}
+
+fn emulator_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "action": {"type": "string", "enum": ["start", "stop", "restart"]},
+        },
+        "required": ["instance", "action"],
+        "additionalProperties": false,
+    })
+}
+
+/// A job's outcome within the call budget, or its handle and phase.
+fn job_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "paused": {"type": "object"},
+            "owner_epoch": {"type": "string"},
+            "resumed": {"type": "object"},
+            "controlled": {"type": "object"},
+            "handle": {"type": "string"},
+            "job_phase": {"type": "string"},
+        },
+    })
+}
+
+fn targets_set_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "targets": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {"type": "object"},
+                "description": "actingcommand.resource-targets.v2 targets; [] withdraws.",
+            },
+            "valid_days": {"type": "integer", "minimum": 1, "maximum": 365},
+        },
+        "required": ["instance", "targets"],
+        "additionalProperties": false,
+    })
+}
+
+fn targets_set_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {"applied": {"type": "object"}},
+        "required": ["applied"],
     })
 }

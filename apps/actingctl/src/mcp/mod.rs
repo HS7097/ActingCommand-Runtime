@@ -6,7 +6,9 @@
 //! whether it is done come from the Runtime and runtime-client unchanged.
 
 mod child;
+mod jobs;
 mod observer;
+mod operator;
 mod protocol;
 mod runs;
 mod runtime;
