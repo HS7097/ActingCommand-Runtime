@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "mcp")]
+mod mcp;
 mod shutdown_wait;
 
 use actingcommand_contract::{
@@ -31,7 +33,16 @@ const DEFAULT_PAUSE_REASON: &str = "operator";
 const DEFAULT_PAUSE_DRAIN_TIMEOUT_MS: u64 = 60_000;
 
 fn main() -> ExitCode {
-    match run(env::args_os().skip(1).collect()) {
+    let arguments: Vec<OsString> = env::args_os().skip(1).collect();
+    // Workflow #338: `mcp-serve` and `mcp-config` take their own flags, so they leave before
+    // `Invocation::parse`, which requires `--state-root`.
+    #[cfg(feature = "mcp")]
+    {
+        if let Some(exit) = mcp::dispatch(&arguments) {
+            return exit;
+        }
+    }
+    match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {
                 if output
