@@ -142,7 +142,7 @@ fn job_answer(
             .unwrap_or(context.deadline),
     );
     let warnings = job.warnings();
-    if job.wait_until(until) {
+    if job.wait_until(until, context.cancelled) {
         let outcome = job.outcome().unwrap_or(Value::Null);
         if let Some(error) = outcome.get("error") {
             return Err(error_from_value(error));

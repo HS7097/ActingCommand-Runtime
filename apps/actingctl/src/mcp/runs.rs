@@ -106,7 +106,7 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
                 "or run_id: give exactly one of them",
             ));
         }
-        job.wait_until(wait_until);
+        job.wait_until(wait_until, context.cancelled);
         return Ok(ToolSuccess::new(
             json!({"handle": job.handle, "job": job.snapshot()}),
         ));

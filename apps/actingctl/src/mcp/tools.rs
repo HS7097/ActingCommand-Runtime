@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 /// The `instructions` both clients read (§四 instructions).
-pub(super) const INSTRUCTIONS: &str = "ActingCommand local control (tools-only). Start with ac_overview. Long operations return a handle (a Runtime request_id) at once; poll ac_get_run with wait_s. If an ac_run_pack call was interrupted before it returned, call ac_overview before submitting again. After an uncertain result call ac_get_run before anything else; never resend a write with new arguments. Approvals, actingd configuration edits and daemon restarts belong to the person. Tiers: observer (read), operator (device/scheduling), author (Lab recording); tools outside the enabled tiers answer tier_not_enabled. Manual: skill `actingcommand`.";
+pub(super) const INSTRUCTIONS: &str = "ActingCommand local control (tools-only). Start with ac_overview. Long operations return a handle at once; a run's handle is its Runtime request_id and survives restarts, other job handles last only as long as this process; poll ac_get_run with wait_s. If an ac_run_pack call was interrupted before it returned, call ac_overview before submitting again. After an uncertain result call ac_get_run before anything else; never resend a write with new arguments. Approvals, actingd configuration edits and daemon restarts belong to the person. Tiers: observer (read), operator (device/scheduling), author (Lab recording); tools outside the enabled tiers answer tier_not_enabled. Manual: skill `actingcommand`.";
 
 /// The longest a tool call waits inside the server; Runtime IO itself is bounded at 5 s.
 pub(super) const CALL_BUDGET: Duration = Duration::from_secs(25);
@@ -321,7 +321,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_get_run",
         title: "Run status",
         tier: Tier::Observer,
-        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run.",
+        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run. A submit refused before admission stays not_found with job.phase failed and the Runtime's error (for example LeaseBusy, class safety) in job.outcome.error.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -369,7 +369,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_run_pack",
         title: "Run a task package",
         tier: Tier::Operator,
-        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: a busy instance comes back as the Runtime's LeaseBusy or ContainedTaskBusy, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
+        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: a busy instance comes back in ac_get_run's job.outcome.error as the Runtime's LeaseBusy or ContainedTaskBusy, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -381,7 +381,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_stop_run",
         title: "Stop a run",
         tier: Tier::Operator,
-        description: "Stops one manual run (MCP, CLI, UI or Lab) by its handle, the Runtime request_id, from any process: the run's package is abandoned and the screen stays where it is; there is no return home, no recovery package and no rerun; only touch points that may still be held are lifted. Answers {cancellation, touch_release, job_phase}; touch_release is done, failed or not_needed: not_needed includes a run that had already ended before this call, and failed (for example LeaseBusy) can mean the still-connected submitter already lifted them itself. When this server submitted the run and its job still waits, only the stop is sent and that job lifts the touches. Otherwise a background job waits for the run to end, up to the longest run deadline; not done within wait_s (default 20) the answer is {handle, job_phase} for ac_get_run. A scheduled run cannot be stopped by a client: the Runtime's refusal comes back, blocked_by ac_pause.",
+        description: "Stops one manual run (MCP, CLI, UI or Lab) by its handle, the Runtime request_id, from any process: the run's package is abandoned and the screen stays where it is; there is no return home, no recovery package and no rerun; only touch points that may still be held are lifted. Answers {cancellation, touch_release, job_phase}; touch_release is done, failed or not_needed: not_needed includes a run that had already ended before this call, and failed (for example LeaseBusy) can mean the still-connected submitter already lifted them itself. When this server submitted the run and its job still waits, only the stop is sent and that job lifts the touches. Otherwise a background job waits for the run to end, up to the longest run deadline; not done within wait_s (default 20) the answer is {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id. A scheduled run cannot be stopped by a client: the Runtime's refusal comes back, blocked_by ac_pause.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -393,7 +393,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_pause",
         title: "Pause scheduling",
         tier: Tier::Operator,
-        description: "Pauses scheduling, the same pause as actingctl pause: for one instance (alias, instance_id or ADB port) or, without instance, everywhere. reason is a code (default mcp.pause); drain_timeout_s 1-600 (default 60). An instance pause drains every in-flight contained run on that instance, manual runs and other sessions' runs included: when the drain times out the Runtime asks them all to stop. The pause stays until ac_resume or an actingd restart; it does not end with this MCP process. Answers {paused (the Runtime's result with its revision), owner_epoch}: pass the owner_epoch and the revision to ac_resume. Not done within the call budget, the answer is {handle, job_phase} for ac_get_run.",
+        description: "Pauses scheduling, the same pause as actingctl pause: for one instance (alias, instance_id or ADB port) or, without instance, everywhere. reason is a code (default mcp.pause); drain_timeout_s 1-600 (default 60). An instance pause drains every in-flight contained run on that instance, manual runs and other sessions' runs included: when the drain times out the Runtime asks them all to stop. The pause stays until ac_resume or an actingd restart; it does not end with this MCP process. Answers {paused (the Runtime's result with its revision), owner_epoch}: pass the owner_epoch and the revision to ac_resume. Not done within the call budget, the answer is {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -405,7 +405,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_resume",
         title: "Resume scheduling",
         tier: Tier::Operator,
-        description: "Lifts exactly the scheduling pause the caller saw: expected_owner_epoch and expected_revision are the owner_epoch and the revision ac_pause gave (or ac_overview shows). The Runtime refuses any other pause (scheduling_pause_owner_epoch_mismatch, scheduling_pause_revision_mismatch): someone else's pause, or one made again after a restart. An older actingd answers runtime_operation_unsupported and nothing is lifted. An instance resume reconnects the device at once and runs its self-check. Answers {resumed} or, beyond the call budget, {handle, job_phase}.",
+        description: "Lifts exactly the scheduling pause the caller saw: expected_owner_epoch and expected_revision are the owner_epoch and the revision ac_pause gave (or ac_overview shows). The Runtime refuses any other pause (scheduling_pause_owner_epoch_mismatch, scheduling_pause_revision_mismatch): someone else's pause, or one made again after a restart. An older actingd answers runtime_operation_unsupported and nothing is lifted. An instance resume reconnects the device at once and runs its self-check. Answers {resumed} or, beyond the call budget, {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -417,7 +417,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_emulator",
         title: "Emulator control",
         tier: Tier::Operator,
-        description: "Starts, stops or restarts one instance's emulator through the Runtime (action start, stop or restart), as actingctl emulator does; the Runtime takes it only from an operator origin. stop and restart end whatever runs on that emulator. It can take up to 230 s: within the call budget the answer is {controlled}, otherwise {handle, job_phase} for ac_get_run.",
+        description: "Starts, stops or restarts one instance's emulator through the Runtime (action start, stop or restart), as actingctl emulator does; the Runtime takes it only from an operator origin. stop and restart end whatever runs on that emulator. It can take up to 230 s: within the call budget the answer is {controlled}, otherwise {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id.",
         read_only: false,
         destructive: true,
         idempotent: false,

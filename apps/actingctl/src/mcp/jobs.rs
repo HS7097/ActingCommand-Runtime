@@ -10,6 +10,7 @@ use super::lock;
 use super::tools::ToolError;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -142,12 +143,14 @@ impl Job {
         lock(&self.state).phase
     }
 
-    /// Waits until the job ends or `until` passes; true when it ended.
-    pub(super) fn wait_until(&self, until: Instant) -> bool {
+    /// Waits until the job ends, `until` passes or the call is cancelled
+    /// (`notifications/cancelled`, checked at every wake-up); true when it ended. A cancelled
+    /// wait leaves the job running.
+    pub(super) fn wait_until(&self, until: Instant, cancelled: &AtomicBool) -> bool {
         let mut state = lock(&self.state);
         while !state.finished {
             let left = until.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+            if left.is_zero() || cancelled.load(Ordering::SeqCst) {
                 return false;
             }
             state = self
