@@ -4224,6 +4224,7 @@ const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
     "crates/runtime-host/src/host/performance.rs::HostShared::capacity_allows_transfer -> admit_capacity",
     "crates/runtime-host/src/host/performance.rs::HostShared::require_business_capacity -> admit_capacity",
     "crates/runtime-host/src/host/policy_dispatch.rs::HostShared::admit_policy_dispatch -> admit_capacity",
+    "crates/runtime-host/src/host/recovery_ladder.rs::HostShared::recovery_admitted -> require_business_capacity",
     "crates/runtime-host/src/performance/capacity.rs::PerformanceMonitor::preflight_capacity -> admit_capacity",
 ];
 
