@@ -510,10 +510,14 @@ fn list_tools(shared: &Shared, id: &Value, era: Era, params: Option<&Value>) -> 
     protocol::response(id, protocol::complete(era, json!({"tools": listed})))
 }
 
-/// The tool, its arguments and the progress token of a `CallToolRequest`.
-fn parse_call(
-    params: Option<Value>,
-) -> Result<(&'static ToolDef, Map<String, Value>, Option<Value>), String> {
+/// What a `CallToolRequest` names.
+struct CallRequest {
+    tool: &'static ToolDef,
+    arguments: Map<String, Value>,
+    progress_token: Option<Value>,
+}
+
+fn parse_call(params: Option<Value>) -> Result<CallRequest, String> {
     let Some(Value::Object(mut params)) = params else {
         return Err("tools/call requires params {name, arguments}".to_owned());
     };
@@ -533,7 +537,11 @@ fn parse_call(
         .and_then(|meta| meta.get("progressToken"))
         .filter(|token| token.is_string() || token.is_i64() || token.is_u64())
         .cloned();
-    Ok((tool, arguments, progress_token))
+    Ok(CallRequest {
+        tool,
+        arguments,
+        progress_token,
+    })
 }
 
 fn call_tool(
@@ -544,8 +552,12 @@ fn call_tool(
     params: Option<Value>,
     sink: &Sink,
 ) {
-    let (tool, arguments, progress_token) = match parse_call(params) {
-        Ok(parts) => parts,
+    let CallRequest {
+        tool,
+        arguments,
+        progress_token,
+    } = match parse_call(params) {
+        Ok(request) => request,
         Err(message) => {
             return sink.respond(
                 shared,
