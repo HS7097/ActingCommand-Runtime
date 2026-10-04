@@ -68,11 +68,21 @@ impl RuntimeAccess {
 
     pub(super) fn connect(&self) -> Result<Connected, ToolError> {
         let mut slot = lock(&self.slot);
-        if let Some(client) = &slot.client {
-            return Ok(Connected {
-                client: client.clone(),
-                generation: slot.generation,
-            });
+        if let Some(client) = slot.client.clone() {
+            // A cached connection may outlive its daemon (actingd stopped, restarted or
+            // redeployed while the client keeps this server). `Health` is answered from the
+            // Runtime's memory and writes nothing; a failure, or an owner epoch other than the
+            // one this connection was opened on, drops the connection and connects afresh,
+            // so earlier cursors answer cursor_invalid.
+            match client.health() {
+                Ok(epoch) if epoch == client.runtime_info().owner_epoch() => {
+                    return Ok(Connected {
+                        client,
+                        generation: slot.generation,
+                    });
+                }
+                _ => slot.client = None,
+            }
         }
         let state_root = self.locate().state_root.map_err(|reason| {
             ToolError::usage("install_state_root_unresolved", reason).blocked_by(

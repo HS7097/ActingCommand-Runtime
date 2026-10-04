@@ -17,6 +17,8 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_client::{ContainedRunState, RecentContainedRuns, RunKey, RunStatusMode};
 use serde_json::{Map, Value, json};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::thread::{self, JoinHandle};
@@ -155,7 +157,8 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
         None => now.saturating_sub(DEFAULT_WINDOW_MS),
     };
     // The read-only `actingd suspended` runs beside the Runtime reads.
-    let suspension = start_suspension_report(context);
+    let location = context.runtime.locate();
+    let suspension = start_suspension_report(context, location.root.as_deref());
     let connected = context.runtime.connect()?;
     let status = connected
         .client
@@ -200,7 +203,12 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
         .client
         .query_event_page(query.clone(), EVENTS_PROFILE, request)
         .map_err(|error| context.runtime.failure(&connected, &error))?;
-    let report = finish_suspension_report(suspension, &alias, &json!(instance_id));
+    let report = finish_suspension_report(
+        suspension,
+        location.state_root.as_deref().ok(),
+        &alias,
+        &json!(instance_id),
+    );
     let diagnosis = Diagnosis {
         instance: json!({"alias": alias, "instance_id": instance_id}),
         since,
@@ -213,8 +221,10 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
         snapshot: page.snapshot_ledger_position(),
         // A page with a task filter is not a page ac_events can continue.
         continuable: task_id.is_none(),
+        repeating: report.repeating,
         suspended: report.suspended,
         lift: report.lift,
+        report_warnings: report.warnings,
         report_status: report.status,
     };
     diagnosis.render_within_budget(context, &connected, &query)
@@ -232,8 +242,10 @@ struct Diagnosis {
     errors_next: Option<RuntimeEventQueryCursor>,
     snapshot: u64,
     continuable: bool,
+    repeating: Vec<Value>,
     suspended: Vec<Value>,
     lift: Vec<Value>,
+    report_warnings: Vec<Value>,
     report_status: Value,
 }
 
@@ -242,8 +254,10 @@ struct Diagnosis {
 struct Kept {
     runs: usize,
     errors: usize,
+    repeating: usize,
     suspended: usize,
     lift: usize,
+    report_warnings: usize,
 }
 
 impl Diagnosis {
@@ -256,23 +270,32 @@ impl Diagnosis {
         let mut kept = Kept {
             runs: self.runs.len(),
             errors: self.errors.len(),
+            repeating: self.repeating.len(),
             suspended: self.suspended.len(),
             lift: self.lift.len(),
+            report_warnings: self.report_warnings.len(),
         };
         loop {
             let result = self.render(context, connected, query, kept)?;
             if tools::fits_success(&result) {
                 return Ok(ToolSuccess::new(result));
             }
-            // Cut the errors page first, then the report rows, then the oldest runs.
+            // Cut what another tool can read again first: the errors page (ac_events), then
+            // the runs, oldest first (ac_get_run / ac_events). The rows of the actingd
+            // suspended report have no other MCP route, so they go last: repeating, lift,
+            // suspended, then the report's warnings.
             if kept.errors > 0 {
                 kept.errors -= 1;
+            } else if kept.runs > 0 {
+                kept.runs -= 1;
+            } else if kept.repeating > 0 {
+                kept.repeating -= 1;
             } else if kept.lift > 0 {
                 kept.lift -= 1;
             } else if kept.suspended > 0 {
                 kept.suspended -= 1;
-            } else if kept.runs > 0 {
-                kept.runs -= 1;
+            } else if kept.report_warnings > 0 {
+                kept.report_warnings -= 1;
             } else {
                 // Nothing left to cut: the result answers output_budget_exceeded.
                 return Ok(ToolSuccess::new(result));
@@ -297,6 +320,13 @@ impl Diagnosis {
         );
         list_into(&mut result, "suspended", &self.suspended, kept.suspended);
         list_into(&mut result, "lift", &self.lift, kept.lift);
+        list_into(&mut result, "repeating", &self.repeating, kept.repeating);
+        list_into(
+            &mut result,
+            "report_warnings",
+            &self.report_warnings,
+            kept.report_warnings,
+        );
         result.insert("suspended_report".to_owned(), self.report_status.clone());
         if self.incomplete {
             result.insert("incomplete".to_owned(), json!(true));
@@ -362,8 +392,11 @@ fn list_into(result: &mut Map<String, Value>, name: &str, items: &[Value], kept:
 
 /// Starts `<root>\runtime\actingcommand-actingd.exe suspended --config
 /// <root>\actingd.config.json`, read-only beside a running daemon.
-fn start_suspension_report(context: &ToolContext<'_>) -> Result<SuspensionChild, Value> {
-    let Some(root) = context.runtime.locate().root else {
+fn start_suspension_report(
+    context: &ToolContext<'_>,
+    root: Option<&Path>,
+) -> Result<SuspensionChild, Value> {
+    let Some(root) = root else {
         return Err(json!({
             "status": "unavailable",
             "code": "install_root_unresolved",
@@ -384,16 +417,28 @@ fn start_suspension_report(context: &ToolContext<'_>) -> Result<SuspensionChild,
     }))
 }
 
-/// The report's rows for one instance, and the report's own status.
+/// The report's rows for one instance, its report-level warnings, and its own status.
 struct SuspensionRows {
     complete: bool,
     suspended: Vec<Value>,
     lift: Vec<Value>,
+    repeating: Vec<Value>,
+    warnings: Vec<Value>,
     status: Value,
+}
+
+/// Whether two paths name the same directory, as written or once resolved.
+fn same_directory(left: &Path, right: &Path) -> bool {
+    left == right
+        || matches!(
+            (fs::canonicalize(left), fs::canonicalize(right)),
+            (Ok(left), Ok(right)) if left == right
+        )
 }
 
 fn finish_suspension_report(
     child: Result<SuspensionChild, Value>,
+    state_root: Option<&Path>,
     alias: &str,
     instance_id: &Value,
 ) -> SuspensionRows {
@@ -401,6 +446,8 @@ fn finish_suspension_report(
         complete: false,
         suspended: Vec::new(),
         lift: Vec::new(),
+        repeating: Vec::new(),
+        warnings: Vec::new(),
         status,
     };
     let captured = match child.map(JoinHandle::join) {
@@ -436,6 +483,27 @@ fn finish_suspension_report(
             if captured.status.success()
                 && document.get("status").and_then(Value::as_str) == Some("ok") =>
         {
+            // The report reads <root>\actingd.config.json's state root; when mcp-serve was
+            // given another --state-root, its rows describe another Runtime.
+            let report_state_root = document
+                .get("state_root")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            let same_root = match (report_state_root.as_deref(), state_root) {
+                (Some(report), Some(located)) => same_directory(report, located),
+                _ => false,
+            };
+            if !same_root {
+                return unavailable(json!({
+                    "status": "unavailable",
+                    "code": "suspended_report_state_root_mismatch",
+                    "message": "actingd suspended read another state root than the one this server reads; its rows are left out",
+                    "details": {
+                        "report_state_root": report_state_root.map(|path| path.display().to_string()),
+                        "state_root": state_root.map(|path| path.display().to_string()),
+                    },
+                }));
+            }
             let rows = |key: &str| {
                 document
                     .get(key)
@@ -456,6 +524,12 @@ fn finish_suspension_report(
                 complete: true,
                 suspended: rows("suspended"),
                 lift: rows("lifted"),
+                repeating: rows("repeating"),
+                warnings: document
+                    .get("warnings")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
                 status: json!({
                     "status": "ok",
                     "through_sequence": document.get("through_sequence"),

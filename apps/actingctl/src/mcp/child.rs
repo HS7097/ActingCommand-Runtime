@@ -3,8 +3,10 @@
 //! Child-process hygiene for the subprocess tools (#338 §四 子进程卫生): the child's stdin
 //! is null, its stdout and stderr are piped and read to the end at the same time, and on
 //! Windows it opens no console window (`CREATE_NO_WINDOW` through std's `CommandExt`, no
-//! new dependency). A child still running at the caller's deadline is not killed, which
-//! would need a Job Object and a new dependency; it ends on its own time limit.
+//! new dependency). A child still running at the caller's deadline is deliberately not
+//! killed (std's `Child::kill` could end it): Lab children are not killed by the model, and
+//! `actingd suspended` is a bounded batch job that ends on its own. Only children left behind
+//! when this server itself is killed would need a Job Object (a new dependency) to end.
 
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
