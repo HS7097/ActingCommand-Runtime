@@ -97,6 +97,7 @@ pub struct NemuSessionBackends {
 pub struct NemuIpcSession {
     backend: Mutex<NemuIpcBackend>,
     input_config: NemuInputConfig,
+    resources: Arc<crate::DeviceCloseOccurrence>,
 }
 
 impl NemuIpcSession {
@@ -159,6 +160,7 @@ impl NemuIpcSession {
         report.serial_configured = Some(selection.configured_serial.is_some());
         report.installation_source = selection.mumu.as_ref().map(|context| context.source.into());
         let owner = Arc::new(Self {
+            resources: Arc::clone(&backend.worker.as_ref().expect("new Nemu worker").resources),
             backend: Mutex::new(backend),
             input_config: input,
         });
@@ -182,7 +184,7 @@ impl NemuIpcSession {
                 Err(primary) => {
                     // The prime closed only the view; the owner's worker is closed here.
                     let primary = match owner.close_once(DeviceCloseAuthority::LocalOnly, None) {
-                        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+                        Ok(outcome) => primary.with_close_outcome(&outcome),
                         Err(cleanup) => primary.merge_resource_cleanup(cleanup),
                     };
                     if let Some(check) = primary.capture_probe_check() {
@@ -209,9 +211,10 @@ impl NemuIpcSession {
     }
 
     fn lock(&self) -> DeviceResult<std::sync::MutexGuard<'_, NemuIpcBackend>> {
-        self.backend
-            .lock()
-            .map_err(|_| contact_unconfirmed("Nemu session state is poisoned"))
+        self.backend.lock().map_err(|_| {
+            contact_unconfirmed("Nemu session state is poisoned")
+                .with_backend_resource_owner(&self.resources)
+        })
     }
 
     pub fn invalidate_display(&self) -> DeviceResult<()> {

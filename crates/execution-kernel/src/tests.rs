@@ -278,6 +278,13 @@ fn c1b9_d09_close_terminal_cache() {
             );
         }
         if let (Err(first), Err(second)) = (&first, &second) {
+            assert_eq!(first.resource_count(), 1);
+            assert_eq!(first.resource_count(), second.resource_count());
+            assert_eq!(
+                first.failure_context().resource_dispositions(),
+                second.failure_context().resource_dispositions()
+            );
+            assert!(Arc::ptr_eq(first.recorded_event(), second.recorded_event()));
             assert!(Arc::ptr_eq(
                 &first.lifecycle_causes()[0].recorded_event,
                 &second.lifecycle_causes()[0].recorded_event
@@ -311,6 +318,7 @@ fn c1b9_d14_occurrence_folding() {
     ));
     let combined = ExecutionKernelError::merge(first, second);
     assert_eq!(combined.lifecycle_causes().len(), 1);
+    assert_eq!(combined.resource_count(), 1);
     let distinct = DeviceError::fatal("same native detail").with_resource_close_cause(
         DeviceResourceKind::VendorStdio,
         DeviceResourceClosePhase::RestoreCrt,
@@ -329,6 +337,54 @@ fn c1b9_d14_occurrence_folding() {
         .len(),
         2
     );
+
+    // Workflow #342 D1 first red: issuecomment-5974667337. Partial overlap includes
+    // summary-only failures and successful close contributions, which have no causes.
+    let a = DeviceError::transient("operation A")
+        .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 3);
+    let b = DeviceError::transient("operation B")
+        .with_resource_summary(DeviceResourceQuiescence::Confirmed, 2);
+    let c = DeviceError::transient("operation C")
+        .with_resource_summary(DeviceResourceQuiescence::Confirmed, 4);
+    let left = a.clone().merge_resource_cleanup(b.clone());
+    let right = b.clone().merge_resource_cleanup(c.clone());
+    let union = left.clone().merge_resource_cleanup(right.clone());
+    assert_eq!(union.resource_count(), 9);
+    let closed = ExecutionResourceCloseOutcome::confirmed(2);
+    let left = ExecutionKernelError::device("operation_failed", &left).with_close_outcome(&closed);
+    let right =
+        ExecutionKernelError::device("operation_failed", &right).with_close_outcome(&closed);
+    let combined = ExecutionKernelError::merge(left, right);
+    assert_eq!(combined.resource_count(), 11);
+    assert_eq!(
+        combined.resource_quiescence(),
+        Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+    );
+    assert_eq!(
+        combined.failure_context().resource_dispositions(),
+        Some(vec![
+            actingcommand_contract::ResourceDisposition {
+                scope: actingcommand_contract::ResourceDispositionScope::OperationResources,
+                resource_count: 9,
+                quiescence: actingcommand_contract::ResourceQuiescence::Unconfirmed,
+            },
+            actingcommand_contract::ResourceDisposition {
+                scope: actingcommand_contract::ResourceDispositionScope::SessionBackends,
+                resource_count: 2,
+                quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
+            },
+        ])
+    );
+    let repeated = ExecutionKernelError::merge(combined.clone(), combined);
+    assert_eq!(repeated.resource_count(), 11);
+    let a = actingcommand_device::DeviceResourceCloseOutcome::confirmed(1);
+    let b = actingcommand_device::DeviceResourceCloseOutcome::confirmed(2);
+    let c = actingcommand_device::DeviceResourceCloseOutcome::confirmed(3);
+    let left = a.combine(b.clone());
+    let right = b.combine(c);
+    let closed = left.combine(right);
+    assert_eq!(closed.resource_count(), 6);
+    assert_eq!(closed.clone().combine(closed).resource_count(), 6);
 }
 
 impl FakeProvider {

@@ -3,7 +3,8 @@
 use actingcommand_contract::{
     CleanupCauseDraft, CleanupCauseSeverity, DiagnosticDetailDraft, EventId, InstanceId,
     LifecycleCauseDraft, LifecycleFailurePhase, LifecycleNativeDetail, OwnerResourceDisposition,
-    ResourceQuiescence, RuntimeResourceClosePhase, RuntimeResourceKind, Sensitivity,
+    ResourceDisposition, ResourceDispositionScope, ResourceQuiescence, RuntimeResourceClosePhase,
+    RuntimeResourceKind, Sensitivity,
 };
 use actingcommand_device::{
     DeviceCloseOccurrence, DeviceClosePhase, DeviceError, DeviceErrorSensitivity,
@@ -54,6 +55,68 @@ pub struct ExecutionLifecycleCause {
     source_occurrence: Option<Arc<DeviceCloseOccurrence>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExecutionResourceContribution {
+    pub occurrence: Arc<DeviceCloseOccurrence>,
+    pub disposition: ResourceDisposition,
+}
+
+pub(crate) fn merge_resource_contributions(
+    target: &mut Vec<ExecutionResourceContribution>,
+    incoming: &[ExecutionResourceContribution],
+) {
+    for contribution in incoming {
+        if let Some(current) = target
+            .iter_mut()
+            .find(|current| Arc::ptr_eq(&current.occurrence, &contribution.occurrence))
+        {
+            assert_eq!(current.disposition.scope, contribution.disposition.scope);
+            // A retained backend can report part of its owned resources before Close
+            // reports the complete boundary. Its identity counts that owner only once.
+            current.disposition.resource_count = current
+                .disposition
+                .resource_count
+                .max(contribution.disposition.resource_count);
+            if contribution.disposition.quiescence == ResourceQuiescence::Unconfirmed {
+                current.disposition.quiescence = ResourceQuiescence::Unconfirmed;
+            }
+        } else {
+            target.push(contribution.clone());
+        }
+    }
+}
+
+pub(crate) fn resource_dispositions(
+    contributions: &[ExecutionResourceContribution],
+) -> Option<Vec<ResourceDisposition>> {
+    if contributions.is_empty() {
+        return None;
+    }
+    let mut groups: Vec<ResourceDisposition> = Vec::new();
+    for contribution in contributions {
+        let incoming = contribution.disposition;
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| group.scope == incoming.scope)
+        {
+            group.resource_count = group
+                .resource_count
+                .checked_add(incoming.resource_count)
+                .expect("execution resource count overflow");
+            if incoming.quiescence == ResourceQuiescence::Unconfirmed {
+                group.quiescence = ResourceQuiescence::Unconfirmed;
+            }
+        } else {
+            groups.push(incoming);
+        }
+    }
+    groups.sort_by_key(|group| match group.scope {
+        ResourceDispositionScope::OperationResources => 0,
+        ResourceDispositionScope::SessionBackends => 1,
+    });
+    Some(groups)
+}
+
 #[derive(Clone)]
 pub struct ExecutionKernelError {
     code: &'static str,
@@ -78,9 +141,25 @@ pub struct ExecutionFailureContext {
     recorded_event: Arc<OnceLock<EventId>>,
     native_detail: Option<Box<LifecycleNativeDetail>>,
     causes: Vec<ExecutionLifecycleCause>,
+    resources: Vec<ExecutionResourceContribution>,
+    close_recording: bool,
+    prior_recorded_event: Option<Arc<OnceLock<EventId>>>,
 }
 
 impl ExecutionFailureContext {
+    pub fn resource_dispositions(&self) -> Option<Vec<ResourceDisposition>> {
+        resource_dispositions(&self.resources)
+    }
+
+    pub fn prior_recorded_event(&self) -> Option<EventId> {
+        self.prior_recorded_event
+            .as_ref()
+            .and_then(|receipt| receipt.get().copied())
+    }
+
+    pub const fn is_resource_close_recording(&self) -> bool {
+        self.close_recording
+    }
     pub fn backend_open_observations(&self) -> &[actingcommand_device::BackendOpenObservation] {
         &self.backend_open
     }
@@ -157,7 +236,13 @@ impl ExecutionFailureContext {
         self
     }
 
-    fn merge(&mut self, secondary: &mut Self) -> bool {
+    fn merge(&mut self, secondary: &mut Self) {
+        merge_resource_contributions(&mut self.resources, &secondary.resources);
+        if secondary.close_recording && !self.close_recording {
+            self.recorded_event = Arc::clone(&secondary.recorded_event);
+            self.prior_recorded_event = secondary.prior_recorded_event.clone();
+            self.close_recording = true;
+        }
         for observation in &secondary.backend_open {
             if !self
                 .backend_open
@@ -168,7 +253,6 @@ impl ExecutionFailureContext {
             }
         }
         merge_stdio_observations(&mut self.vendor_stdio, &secondary.vendor_stdio);
-        let mut added_resource_cause = false;
         for cause in std::mem::take(&mut secondary.causes) {
             if self.causes.iter().any(|current| {
                 Arc::ptr_eq(&current.recorded_event, &cause.recorded_event)
@@ -179,13 +263,11 @@ impl ExecutionFailureContext {
             }) {
                 continue;
             }
-            added_resource_cause |= cause.cause.resource().is_some();
             self.causes.push(cause);
         }
         if self.cleanup_cause.is_none() {
             self.cleanup_cause = secondary.cleanup_cause.take();
         }
-        added_resource_cause
     }
 }
 
@@ -229,6 +311,10 @@ impl ExecutionKernelError {
         &self.lifecycle
     }
 
+    pub(crate) fn resource_contributions(&self) -> &[ExecutionResourceContribution] {
+        &self.lifecycle.resources
+    }
+
     pub fn vendor_stdio(&self) -> &[ExecutionStdioObservation] {
         self.lifecycle.vendor_stdio()
     }
@@ -258,6 +344,26 @@ impl ExecutionKernelError {
     }
 
     pub(crate) fn device(code: &'static str, error: &DeviceError) -> Self {
+        Self::device_with_scope(code, error, ResourceDispositionScope::OperationResources)
+    }
+
+    pub(crate) fn device_acquisition(code: &'static str, error: &DeviceError) -> Self {
+        let mut result = Self::device(code, error);
+        for resource in &mut result.lifecycle.resources {
+            resource.disposition.scope = ResourceDispositionScope::OperationResources;
+        }
+        result
+    }
+
+    pub(crate) fn device_close(code: &'static str, error: &DeviceError) -> Self {
+        Self::device_with_scope(code, error, ResourceDispositionScope::SessionBackends)
+    }
+
+    fn device_with_scope(
+        code: &'static str,
+        error: &DeviceError,
+        default_scope: ResourceDispositionScope,
+    ) -> Self {
         let code = match error.frame_memory_failure() {
             Some(actingcommand_device::FrameMemoryFailure::Capacity) => {
                 "frame_workspace_unavailable"
@@ -360,6 +466,19 @@ impl ExecutionKernelError {
                 adb_recovery: error.adb_recovery().map(adb_recovery_record).map(Box::new),
                 native_detail: device_native_detail(error),
                 causes,
+                resources: error
+                    .resource_contributions()
+                    .map(|(occurrence, quiescence, resource_count, scope)| {
+                        ExecutionResourceContribution {
+                            occurrence: Arc::clone(occurrence),
+                            disposition: ResourceDisposition {
+                                scope: scope.unwrap_or(default_scope),
+                                resource_count,
+                                quiescence: runtime_quiescence(quiescence),
+                            },
+                        }
+                    })
+                    .collect(),
                 ..ExecutionFailureContext::default()
             }),
             closed_sessions: Vec::new(),
@@ -370,14 +489,8 @@ impl ExecutionKernelError {
     }
 
     pub(crate) fn merge(mut primary: Self, mut secondary: Self) -> Self {
-        let added_resource_cause = primary.lifecycle.merge(&mut secondary.lifecycle);
-        primary.resource_quiescence =
-            merge_quiescence(primary.resource_quiescence, secondary.resource_quiescence);
-        if added_resource_cause || primary.resource_count == 0 {
-            primary.resource_count = primary
-                .resource_count
-                .saturating_add(secondary.resource_count);
-        }
+        primary.lifecycle.merge(&mut secondary.lifecycle);
+        primary.refresh_resource_summary();
         primary
             .closed_sessions
             .append(&mut secondary.closed_sessions);
@@ -395,7 +508,10 @@ impl ExecutionKernelError {
 
     /// Retains the primary operation and the real result of its owner-led cleanup.
     pub fn merge_cleanup(mut primary: Self, secondary: Self) -> Self {
-        if primary.lifecycle.cleanup_cause.is_none() {
+        if primary.lifecycle.cleanup_cause.is_none()
+            && !Arc::ptr_eq(primary.recorded_event(), secondary.recorded_event())
+            && !(secondary.lifecycle.close_recording && primary.code == secondary.code)
+        {
             primary.lifecycle.cleanup_cause = Some(Box::new(CleanupCauseDraft::new(
                 secondary.code,
                 if secondary.is_fatal() {
@@ -407,6 +523,39 @@ impl ExecutionKernelError {
             )));
         }
         Self::merge(primary, secondary)
+    }
+
+    fn refresh_resource_summary(&mut self) {
+        self.resource_count = 0;
+        self.resource_quiescence = None;
+        for contribution in &self.lifecycle.resources {
+            self.resource_count = self
+                .resource_count
+                .checked_add(contribution.disposition.resource_count)
+                .expect("execution resource count overflow");
+            self.resource_quiescence = merge_quiescence(
+                self.resource_quiescence,
+                Some(contribution.disposition.quiescence),
+            );
+        }
+    }
+
+    pub(crate) fn with_close_outcome(
+        mut self,
+        outcome: &crate::ExecutionResourceCloseOutcome,
+    ) -> Self {
+        self = self.with_stdio_observations(outcome.vendor_stdio());
+        merge_resource_contributions(&mut self.lifecycle.resources, &outcome.resources);
+        self.refresh_resource_summary();
+        self
+    }
+
+    /// Allocate once at the real Close composition, before response/join/cache clones.
+    pub(crate) fn with_close_recording(mut self) -> Self {
+        self.lifecycle.prior_recorded_event = Some(Arc::clone(self.recorded_event()));
+        *self.lifecycle = self.lifecycle.as_ref().clone().with_fresh_recording();
+        self.lifecycle.close_recording = true;
+        self
     }
 
     pub(crate) fn merge_retirement(mut primary: Self, secondary: Self) -> Self {
@@ -493,7 +642,7 @@ const fn cleanup_severity(severity: DeviceErrorSeverity) -> CleanupCauseSeverity
     }
 }
 
-const fn runtime_quiescence(quiescence: DeviceResourceQuiescence) -> ResourceQuiescence {
+pub(crate) const fn runtime_quiescence(quiescence: DeviceResourceQuiescence) -> ResourceQuiescence {
     match quiescence {
         DeviceResourceQuiescence::Confirmed => ResourceQuiescence::Confirmed,
         DeviceResourceQuiescence::Unconfirmed => ResourceQuiescence::Unconfirmed,

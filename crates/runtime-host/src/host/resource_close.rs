@@ -344,6 +344,7 @@ impl HostShared {
                         resource_count: outcome.resource_count(),
                         quiescence: outcome.quiescence(),
                         owner_disposition,
+                        resource_dispositions: outcome.resource_dispositions(),
                     },
                     links,
                 )
@@ -799,6 +800,15 @@ impl HostShared {
                     EventSource::Device,
                     OriginModule::DeviceProxy,
                 )?;
+                if error.resource_quiescence().is_some() {
+                    let failure = RuntimeHostError::execution("open_instance_backends", &error);
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::ConnectionPreparation,
+                        RuntimeLifecycleFailure::Host(&failure),
+                        links.clone(),
+                        None,
+                    )?;
+                }
                 (
                     error.failure_context().backend_open_observations().to_vec(),
                     Some(error.code()),

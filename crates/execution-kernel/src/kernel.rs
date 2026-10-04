@@ -252,7 +252,7 @@ impl ExecutionKernel {
             return primary;
         };
         match self.close_instance(instance, authority) {
-            Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+            Ok(outcome) => primary.with_close_outcome(&outcome).with_close_recording(),
             Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
         }
     }

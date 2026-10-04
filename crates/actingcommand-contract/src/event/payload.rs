@@ -931,6 +931,47 @@ pub enum ResourceQuiescence {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ResourceDispositionScope {
+    OperationResources,
+    SessionBackends,
+}
+
+/// The resources described by this lifecycle boundary, grouped by actual ownership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceDisposition {
+    pub scope: ResourceDispositionScope,
+    pub resource_count: u16,
+    pub quiescence: ResourceQuiescence,
+}
+
+fn validate_resource_dispositions(
+    groups: &[ResourceDisposition],
+) -> Result<(u16, ResourceQuiescence), SanitizationError> {
+    if groups.is_empty()
+        || groups.len() > 2
+        || (groups.len() == 2 && groups[0].scope == groups[1].scope)
+    {
+        return Err(SanitizationError::new(
+            "invalid_resource_disposition_scopes",
+            "resource_dispositions",
+        ));
+    }
+    let mut count = 0_u16;
+    let mut quiescence = ResourceQuiescence::Confirmed;
+    for group in groups {
+        count = count.checked_add(group.resource_count).ok_or_else(|| {
+            SanitizationError::new("resource_count_overflow", "resource_dispositions")
+        })?;
+        if group.quiescence == ResourceQuiescence::Unconfirmed {
+            quiescence = ResourceQuiescence::Unconfirmed;
+        }
+    }
+    Ok((count, quiescence))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OwnerResourceDisposition {
     None,
     InUse,
@@ -1276,6 +1317,7 @@ impl RuntimeLifecycleFailureDraft {
     ) -> Self {
         Self {
             record: RuntimeLifecycleFailureRecord {
+                resource_dispositions: None,
                 adb_recovery: None,
                 owner_epoch,
                 stage: stage.into(),
@@ -1301,6 +1343,10 @@ impl RuntimeLifecycleFailureDraft {
     }
     pub fn with_operation(mut self, operation: Option<&str>) -> Self {
         self.record.operation = operation.map(str::to_owned);
+        self
+    }
+    pub fn with_resource_dispositions(mut self, groups: Option<Vec<ResourceDisposition>>) -> Self {
+        self.record.resource_dispositions = groups;
         self
     }
     pub fn with_projection(
@@ -1367,6 +1413,8 @@ impl RuntimeLifecycleFailureDraft {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecycleFailureRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_dispositions: Option<Vec<ResourceDisposition>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     task_timing: Option<Box<crate::TaskTimingObservations>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capacity: Option<crate::CapacityDecision>,
@@ -1399,6 +1447,9 @@ pub struct RuntimeLifecycleFailureRecord {
 }
 
 impl RuntimeLifecycleFailureRecord {
+    pub fn resource_dispositions(&self) -> Option<&[ResourceDisposition]> {
+        self.resource_dispositions.as_deref()
+    }
     pub fn task_timing(&self) -> Option<&crate::TaskTimingObservations> {
         self.task_timing.as_deref()
     }
@@ -1452,6 +1503,9 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_diagnostic_detail_stage(&self.stage)?;
+        if let Some(groups) = &self.resource_dispositions {
+            validate_resource_dispositions(groups)?;
+        }
         if let Some(timing) = &self.task_timing {
             timing.validate()?;
         }
@@ -1745,6 +1799,8 @@ pub enum RuntimeLifecyclePhase {
         resource_count: u16,
         quiescence: ResourceQuiescence,
         owner_disposition: OwnerResourceDisposition,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource_dispositions: Option<Vec<ResourceDisposition>>,
     },
     /// Emulator instance control handed the instance's configured startup package to the
     /// host's own scheduling point (slice #316-B3); the run itself records `task.*` events
@@ -10559,6 +10615,19 @@ impl EventPayload {
             ));
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            if let RuntimeLifecyclePhase::ResourceQuiescence {
+                resource_count,
+                quiescence,
+                resource_dispositions: Some(groups),
+                ..
+            } = &value.phase
+                && validate_resource_dispositions(groups)? != (*resource_count, *quiescence)
+            {
+                return Err(SanitizationError::new(
+                    "resource_disposition_summary_mismatch",
+                    "runtime_payload",
+                ));
+            }
             if (value.phase == RuntimeLifecyclePhase::BackendOpenObserved)
                 != value.backend_open.is_some()
             {
