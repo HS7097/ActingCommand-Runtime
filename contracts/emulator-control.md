@@ -295,6 +295,25 @@ its failure, and the accepted ladder is queued for the scheduling thread of the 
 (`actingcommand-runtime-startup`). `task.failed` and every receipt keep their shape; the
 original task is never re-run.
 
+Ordinary physical-instance backend failures during startup or connection preparation also
+enter this owner after the original temporary resources and installed session backends have
+confirmed disposition, and the preparation lease has been released. The trigger carries
+`stage: startup_preparation | connection_preparation`, the actual preparation event reference
+`preparation { sequence, event_id }`, and the original `failure_code`; it has no task/run IDs.
+Successful fallback, invalid input parameters/configuration, admission/budget denial,
+owner/ledger failure and unconfirmed resource disposal do not enter this path. Preparation
+performed by the ladder has `stage: recovery_preparation` and cannot trigger another ladder.
+The current owner remembers only the latest preparation event. A subsequent preparation,
+backend open or binding invalidation supersedes a queued preparation trigger.
+
+Instance aliases, indices, tool paths and addresses come from formal configuration and the
+registered provider binding. Provider control polls discover the current process state and
+port; the new Start must match the registered instance index. Native process identity is
+resolved by the configured backend when it opens on that binding. Application identities,
+package locators/digests, game/server and target pages come from resource/configuration
+declarations. The ladder contains no host-specific paths, ports, process IDs or game rules;
+vendor protocols remain in the existing provider adapter.
+
 Rungs, in this fixed order, each existing work under the instance lease:
 
 - `return_home`: the failed run's bound recovery package (`--recovery-package`) runs as a
@@ -306,43 +325,71 @@ Rungs, in this fixed order, each existing work under the instance lease:
   chain layer or declares a prerequisite package of its own is refused before any lease with
   `contained_task_prerequisite_incompatible` (Workflow #336 L2d; `contracts/linear-steps.md`,
   "Return-home fallback"). Skipped with `no_recovery_package` when the run had none bound and
-  none is configured. An ADB baseline probe failure is `recovery_ladder_adb_not_ready`;
+  none is configured. A preparation trigger resolves the game/server through the configured
+  startup package's hash/containment admission, then uses its bound recovery package or the
+  configured return-home mapping. Each actual run admits its own material. An ADB baseline
+  probe failure, when the admitted actions need ADB, is `recovery_ladder_adb_not_ready`;
   admission refusals keep their `contained_task_package_*` code; failures are recorded as
   `runtime.failed` with category `recovery_ladder`.
 - `application_restart`: the instance's startup package is scheduled
   (`startup_package_scheduled` under the ladder's links, a fresh causation id) and run, exactly
   as after `emulator start`. Skipped with `no_startup_package` when none is configured.
-- `emulator_restart`: one `command.received` (`emulator.instance.restart`, origin
-  `(Runtime, Runtime, Runtime)`) under the ladder's links, then the `restart` path of this contract
-  (fence, session close, `MuMuManager`, rebinding, ADB baseline, `command.validated` or
-  `command.rejected` + `runtime.failed`, `runtime.instance_bound`, `device.connected`), whose
-  rebinding schedules the startup package, which then runs. Skipped with
-  `no_emulator_control` when the instance is not discovery-bound, and with
-  `no_startup_package` when no startup package is configured (the rung cannot complete
-  without it).
+- `emulator_restart`: Stop and then Start through this contract's existing provider control
+  path, under one instance admission guard. Each action records `command.received`, then
+  `command.validated` or `command.rejected` + `runtime.failed`. Stop must observe the old
+  process gone before `recovery_instance_stopped` is recorded and Start is considered.
+  Admission/fencing is checked again before Start. Stop failure, timeout, ambiguous identity
+  or unconfirmed close ends the rung without Start. Start binds its newly observed port,
+  completes the existing ADB baseline and performs fresh input/capture preparation. Only
+  `capture.ok && touch.ok && failure_code == null` records `recovery_environment_ready`.
+  Skipped with `no_emulator_control` when the instance is not discovery-bound. With no startup
+  package the rung and ladder finish `environment_ready`. With a package, the environment
+  fact remains separate and its ordinary bounded run must reach the package target before
+  the rung and ladder finish `recovered`. Shared managers, ADB servers and other instances
+  are outside this instance control operation.
+
+R1/R2 channel eligibility uses the hash-admitted program and current typed backend facts.
+A known failed capture/input channel skips an entry that needs it with `capture_unavailable`
+or `input_unavailable`; an actual failed ADB baseline required by application actions skips
+with `adb_unavailable`. An `any` linear application entry needs neither capture nor input
+before its application action. A page entry still needs capture for its entry/prerequisite
+gate. Missing/unknown channel observations are attempted through the normal provider path.
+Input unavailability never establishes ADB unavailability. A rung is tried at most once.
 
 A rung recovers when its package run completes `success` (its target page reached); any other
 end fails it, with the failure code as `reason` (`recovery_rung_target_not_reached` for a run
 that completed without reaching its target, `recovery_ladder_shutdown_requested` when the host
-is shutting down). The first rung that recovers ends the ladder `recovered`; when every rung
-failed or was skipped it ends `exhausted`.
+is shutting down). The first successful application rung ends the ladder `recovered`; a
+successful cold environment without a package ends it `environment_ready`. When every rung
+failed or was skipped it ends `exhausted`. No result replays an uncertain business operation.
 
 Cool-down: at most one ladder per instance per `stuck_recovery_cooldown_secs` (default 600),
 measured from the accepted trigger. A trigger inside the window records
 `recovery_ladder_suppressed { reason: "cooldown", until_unix_ms }` and does nothing else; a
 trigger while a ladder for the instance is queued or running records `reason:
 "already_running"` (`until_unix_ms` is the running ladder's window end).
+Scheduling pause, shutdown or capacity denial suppresses admission and is rechecked at each
+rung/control boundary (`admission_denied`). A superseded preparation trigger records
+`preparation_superseded`; these two reasons use `until_unix_ms: 0` (no inferred wake time).
 
 Facts are `runtime.lifecycle_observed` events (origin `(Runtime, Runtime, Runtime)`) linked to
-the instance and the trigger run's correlation id, under a fresh request id and the ladder's
+the instance and the trigger's actual correlation id, under a fresh request id and the ladder's
 own causation id. Phases (`kind`, snake_case, unknown fields refused):
 
 | phase | fields | severity |
 | --- | --- | --- |
-| `recovery_ladder_started` | `trigger { run_id, task_id, failure_code }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (all three rungs, in order; `reason` exactly when skipped) | info |
-| `recovery_rung_finished` | `rung`, `outcome: "recovered" \| "failed" \| "skipped"`, `run_id?` (the rung's run, when it completed), `reason?` (skip reason or failure code) | info; `failed` warning |
-| `recovery_ladder_finished` | `outcome: "recovered" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped) | `recovered` info; `exhausted` error |
-| `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running"`, `until_unix_ms` | info |
+| `instance_preparation_finished` | `stage`, `capture`, `input` (typed backend observation statuses), `failure_code?`; linked to the instance and real self-check request | failure warning; otherwise info |
+| `recovery_ladder_started` | `trigger { stage, run_id?, task_id?, preparation?, failure_code }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (all three rungs, in order; `reason` exactly when skipped) | info |
+| `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
+| `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
+| `recovery_rung_finished` | `rung`, `outcome: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `reason?`, `environment?` | info; `failed` warning |
+| `recovery_ladder_finished` | `outcome: "recovered" \| "environment_ready" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped) | success info; `exhausted` error |
+| `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied"`, `until_unix_ms` | admission denial warning; otherwise info |
+
+Task triggers use `stage: task` (the deserialization default), require task/run IDs and omit
+`preparation`. Preparation triggers require `preparation` and omit task/run IDs.
+`environment_ready` is valid only for R3, with no run ID and an `environment` event reference.
+`recovered` continues to require a real successful package run ID. Unknown fields are refused.
 
 `rung` is `return_home`, `application_restart` or `emulator_restart`. A ladder with no
 recovery package, no startup package and no emulator control records `recovery_ladder_started`

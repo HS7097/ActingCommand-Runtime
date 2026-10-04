@@ -658,8 +658,9 @@ impl HostShared {
             instance_id,
             links,
             &admission,
+            actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
         )
-        .map(|(_, cooldown_until)| cooldown_until)
+        .map(|(_, cooldown_until, _)| cooldown_until)
     }
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
@@ -703,8 +704,25 @@ impl HostShared {
             instance_id,
             links,
             admission,
+            actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
         )
-        .map(|(selfcheck, _)| selfcheck)
+        .map(|(selfcheck, _, _)| selfcheck)
+    }
+
+    pub(super) fn prepare_recovery_connection(
+        &self,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<TerminalEvent>)> {
+        self.prepare_instance_connection_with_cooldown(
+            &resolved.instance_alias,
+            resolved.instance_id(),
+            links,
+            admission,
+            actingcommand_contract::RecoveryTriggerStage::RecoveryPreparation,
+        )
+        .map(|(check, _, event)| (check, event))
     }
 
     /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover
@@ -715,7 +733,16 @@ impl HostShared {
         instance_id: InstanceId,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
-    ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<u64>)> {
+        stage: actingcommand_contract::RecoveryTriggerStage,
+    ) -> RuntimeHostResult<(
+        SchedulingResumeSelfCheck,
+        Option<u64>,
+        Option<TerminalEvent>,
+    )> {
+        lock(&self.recovery_ladders, "begin_preparation_attempt")?
+            .entry(instance_id)
+            .or_default()
+            .preparation = None;
         let frame_owner = self
             .events
             .issuer()
@@ -754,6 +781,7 @@ impl HostShared {
                 return Ok((
                     scheduling_resume_selfcheck(&[], Some(failure_code)),
                     cooldown_until,
+                    None,
                 ));
             }
         };
@@ -774,14 +802,29 @@ impl HostShared {
             Ok(())
         };
         let opened = match &retained_close {
-            Ok(()) => Some(self.execution.open_instance_backends(
-                instance_alias,
-                self.mark_resources_in_use()?,
-                frame_store.memory_budget(),
-            )),
+            Ok(()) => {
+                self.invalidate_backend_selfcheck_facts(instance_id)?;
+                Some(self.execution.open_instance_backends(
+                    instance_alias,
+                    self.mark_resources_in_use()?,
+                    frame_store.memory_budget(),
+                ))
+            }
             Err(_) => None,
         };
         let open_failed = matches!(opened, Some(Err(_)));
+        // Device acquisition errors can be fatal to that backend without being owner/ledger
+        // failures. Only typed ordinary acquisition failures with confirmed temporary-resource
+        // disposal qualify; invalid parameter/configuration observations never qualify.
+        let recoverable = opened.as_ref().is_some_and(|result| result.as_ref().is_err_and(|error| {
+            actingcommand_contract::is_preparation_recovery_trigger(error.code())
+                && error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
+                && error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
+                    "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native"))
+                && !error.failure_context().backend_open_observations().iter().any(|observation|
+                    observation.report.attempts.iter().any(|attempt| attempt.input_parameters.as_ref()
+                        .is_some_and(|check| check.status == actingcommand_contract::BackendObservationStatus::Failed)))
+        }));
         let (observations, mut failure_code) = match opened {
             None => (Vec::new(), None),
             Some(Ok(observations)) => {
@@ -841,6 +884,7 @@ impl HostShared {
                 Some(admission),
             )?;
         }
+        let cleanup_succeeded = closed.is_ok();
         if let Err(close_error) = closed {
             // The close path recorded the failure; an unconfirmed close retained the owner and
             // marked the Runtime fatal, as on every close path.
@@ -858,10 +902,16 @@ impl HostShared {
         if failure_code.is_some() {
             self.withhold_policy_instance_availability(instance_id)?;
         }
-        Ok((
-            scheduling_resume_selfcheck(&observations, failure_code),
-            None,
-        ))
+        let selfcheck = scheduling_resume_selfcheck(&observations, failure_code);
+        let event = self.record_preparation_finished(
+            instance_id,
+            links,
+            stage,
+            &observations,
+            &selfcheck,
+            recoverable && confirmed && cleanup_succeeded,
+        )?;
+        Ok((selfcheck, None, Some(event)))
     }
 
     /// A preparation step other than an open failed without being fatal (the preparation lease

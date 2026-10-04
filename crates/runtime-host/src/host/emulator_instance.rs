@@ -46,10 +46,14 @@ const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// instance with a startup package, that package with its scheduling intent recorded but
 /// not yet queued.
 pub(super) struct EmulatorControlDriven {
-    outcome: EmulatorControlOutcome,
+    pub(super) outcome: EmulatorControlOutcome,
     adb_wait_ms: u64,
     pub(super) terminal: TerminalEvent,
     pub(super) startup_package: Option<super::startup_package::PendingStartupPackage>,
+    pub(super) preparation: Option<(
+        actingcommand_contract::SchedulingResumeSelfCheck,
+        Option<TerminalEvent>,
+    )>,
 }
 
 impl HostShared {
@@ -102,9 +106,30 @@ impl HostShared {
         control_request_id: RequestId,
     ) -> Result<EmulatorControlDriven, RequestFailure> {
         let instance_id = resolved.instance_id();
-        let event_action = action.event_action();
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
+        self.drive_emulator_control_while_guarded(
+            resolved,
+            links,
+            action,
+            control_request_id,
+            &admission,
+            false,
+        )
+    }
+
+    /// A cold recovery holds this same admission guard across confirmed Stop and Start.
+    pub(super) fn drive_emulator_control_while_guarded(
+        &self,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        action: EmulatorInstanceAction,
+        control_request_id: RequestId,
+        admission: &MutexGuard<'_, ()>,
+        recovery: bool,
+    ) -> Result<EmulatorControlDriven, RequestFailure> {
+        let instance_id = resolved.instance_id();
+        let event_action = action.event_action();
         let fence = self
             .monitor_recovery_admission(instance_id)
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -123,7 +148,7 @@ impl HostShared {
             links.clone(),
             false,
             LeaseReleaseReason::HostShutdown,
-            &admission,
+            admission,
         ) {
             Ok(Ok(())) => {}
             Ok(Err(close_error)) => {
@@ -220,7 +245,6 @@ impl HostShared {
                 }
             }
         };
-        drop(admission);
         let validated = self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -248,17 +272,31 @@ impl HostShared {
         // Workflow #317 sc3 (b), #316 goal 5: a started or restarted physical instance is
         // connected and self-checked at once; it stays unavailable until that self-check passes.
         // A failed preparation is recorded and does not fail the completed control action.
-        if action != EmulatorInstanceAction::Stop && rebound.device_self_checked() {
-            let admission = lock(&instance_guard, "lock_instance_admission")?;
-            self.prepare_instance_connection(
-                &rebound.instance_alias,
-                instance_id,
-                links.clone(),
-                &admission,
-            )
-            .map_err(RequestFailure::poison_without_terminal)?;
-        }
-        let startup_package = if action == EmulatorInstanceAction::Stop {
+        let preparation = if action != EmulatorInstanceAction::Stop && rebound.device_self_checked()
+        {
+            if recovery {
+                Some(
+                    self.prepare_recovery_connection(&rebound, links.clone(), admission)
+                        .map_err(RequestFailure::poison_without_terminal)?,
+                )
+            } else {
+                let check = self
+                    .prepare_instance_connection(
+                        &rebound.instance_alias,
+                        instance_id,
+                        links.clone(),
+                        admission,
+                    )
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                Some((check, None))
+            }
+        } else {
+            None
+        };
+        let preparation_failed = preparation.as_ref().is_some_and(|(check, _)| {
+            !check.capture.ok || !check.touch.ok || check.failure_code.is_some()
+        });
+        let startup_package = if action == EmulatorInstanceAction::Stop || preparation_failed {
             None
         } else {
             self.prepare_startup_package(&rebound, links, control_request_id)?
@@ -268,6 +306,7 @@ impl HostShared {
             adb_wait_ms,
             terminal: terminal_event,
             startup_package,
+            preparation,
         })
     }
 
@@ -344,6 +383,27 @@ impl HostShared {
         outcome: &EmulatorControlOutcome,
     ) -> RuntimeHostResult<RegisteredInstance> {
         let instance_id = resolved.instance_id();
+        let binding = resolved
+            .adb_endpoint
+            .as_ref()
+            .and_then(ResolvedInstanceEndpoint::discovered_binding);
+        let state_confirmed = match action {
+            EmulatorInstanceAction::Stop => !outcome.process_started,
+            EmulatorInstanceAction::Start | EmulatorInstanceAction::Restart => {
+                outcome.process_started && outcome.running
+            }
+        };
+        if !state_confirmed
+            || binding.is_none_or(|binding| binding.instance_index() != outcome.instance_index)
+        {
+            let mut error = RuntimeHostError::request(
+                "emulator_control_instance_unconfirmed",
+                CONTROL_OPERATION,
+                RuntimeErrorCode::BackendOperationFailed,
+            );
+            error.lifecycle.instance_id = Some(instance_id);
+            return Err(error);
+        }
         let adb_port = match action {
             EmulatorInstanceAction::Stop => None,
             EmulatorInstanceAction::Start | EmulatorInstanceAction::Restart => {

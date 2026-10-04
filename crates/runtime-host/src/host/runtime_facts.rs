@@ -240,6 +240,10 @@ impl HostShared {
         links: &EventLinksDraft,
         report: &BackendOpenReport,
     ) -> RuntimeHostResult<()> {
+        lock(&self.recovery_ladders, "supersede_preparation_attempt")?
+            .entry(instance_id)
+            .or_default()
+            .preparation = None;
         let _availability = lock(
             &self.backend_selfcheck_availability_gate,
             "record_backend_selfcheck_facts",
@@ -345,6 +349,10 @@ impl HostShared {
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<()> {
+        lock(&self.recovery_ladders, "invalidate_preparation_attempt")?
+            .entry(instance_id)
+            .or_default()
+            .preparation = None;
         let _availability = lock(
             &self.backend_selfcheck_availability_gate,
             "invalidate_backend_selfcheck_facts",
@@ -518,6 +526,33 @@ impl HostShared {
         let (input, capture, nemu) = (status("input"), status("capture"), status("nemu"));
         Ok(![&input, &capture, &nemu].contains(&&failed)
             && (nemu == passed || (input == passed && capture == passed)))
+    }
+
+    /// Only an explicit current failure skips an entry. Unknown/missing channel facts leave
+    /// the decision to the ordinary execution path; an input failure says nothing about ADB.
+    pub(super) fn recovery_entry_unavailable(
+        &self,
+        instance_id: InstanceId,
+        capture: bool,
+        input: bool,
+    ) -> RuntimeHostResult<Option<&'static str>> {
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let store = lock(&self.runtime_facts, "read_recovery_entry_channels")?;
+        let failed = |entry| {
+            store
+                .get(
+                    &scope,
+                    &format!("{BACKEND_SELFCHECK_PREFIX}{entry}.{BACKEND_SELFCHECK_STATUS_SUFFIX}"),
+                )
+                .is_some_and(|record| record.value == FactValue::String("failed".to_owned()))
+        };
+        Ok(if capture && (failed("capture") || failed("nemu")) {
+            Some("recovery_capture_unavailable")
+        } else if input && (failed("input") || failed("nemu")) {
+            Some("recovery_input_unavailable")
+        } else {
+            None
+        })
     }
 
     /// The alias of a registered instance and whether its device connection is self-checked
