@@ -10,7 +10,6 @@ on:
   push:
     branches: [stable]
   pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       source_sha:
