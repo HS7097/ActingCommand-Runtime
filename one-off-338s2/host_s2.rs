@@ -286,7 +286,7 @@ fn oneoff_338s2_operator_tools_on_the_fixture_catalog() {
             .expect("correlation events");
         let payload = serde_json::to_string(&action.payload).expect("payload");
         println!(
-            "S2H|PROVENANCE|client.action surface_mcp={} payload_has_control={:?} actor={:?} source={:?} correlation_events={:?}",
+            "S2H|PROVENANCE|client.action surface_mcp={} payload_has_control={} actor={:?} source={:?} correlation_events={:?}",
             payload.contains("\"surface_id\":\"mcp\""),
             ["ac_targets_set", "ac_pause", "ac_resume"]
                 .into_iter()
