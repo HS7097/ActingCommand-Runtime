@@ -7,6 +7,7 @@
 
 use super::observer;
 use super::protocol::Era;
+use super::runs;
 use super::runtime::RuntimeAccess;
 use serde_json::{Map, Value, json};
 use std::sync::atomic::AtomicBool;
@@ -255,7 +256,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_overview",
         title: "ActingCommand overview",
         tier: Tier::Observer,
-        description: "Snapshot of the local ActingCommand Runtime; call it first. Returns daemon {online, owner_epoch} (online false with the reason when actingd does not answer), global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, reason_code} and its monitor; plus lab_tool {present} and install {root, state_root, build}. instance (alias, instance_id or ADB port) narrows the rows to one. It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
+        description: "Snapshot of the local ActingCommand Runtime; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, reason_code}, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {code, message}} (code runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. incomplete true means part of the snapshot could not be read (see warnings). It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -286,6 +287,30 @@ pub(super) static TOOLS: &[ToolDef] = &[
         input_schema: material_input,
         result_schema: material_result,
         run: observer::material,
+    },
+    ToolDef {
+        name: "ac_get_run",
+        title: "Run status",
+        tier: Tier::Observer,
+        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: get_run_input,
+        result_schema: run_status_schema,
+        run: runs::get_run,
+    },
+    ToolDef {
+        name: "ac_diagnose",
+        title: "Instance diagnosis",
+        tier: Tier::Observer,
+        description: "What went wrong on one instance within a bounded window (since_unix_ms, default the last 24 h, at most 7 days back, else since_out_of_range; the window used is echoed). Returns runs: its recent failed or open runs (failed, admitted, running, interrupted_unterminated) as brief actingcommand.run-status.v1, newest first, from the 10 most recent runs; errors_page: the first page (oldest first) of its errors view in the window, rows as in ac_events, with next_cursor to continue in ac_events (view errors, same instance and since_unix_ms) when no task_id filter is set; suspended and lift: this instance's rows of the read-only actingd suspended report, verbatim; suspended_report: that report's status. task_id narrows runs and errors to one task. incomplete true means a read did not finish; a list cut to the output budget is marked <list>_truncated.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: diagnose_input,
+        result_schema: diagnose_result,
+        run: runs::diagnose,
     },
 ];
 
@@ -555,9 +580,16 @@ fn overview_result() -> Value {
                         "queued": {"type": "integer"},
                         "pause": {"type": "object"},
                         "monitor": {"type": "object"},
+                        "run": run_status_schema(),
+                        "run_incomplete": {"type": "boolean"},
                     },
                     "required": ["alias", "instance_id", "lease_active", "queued"],
                 },
+            },
+            "run_window": {
+                "type": "object",
+                "properties": {"since_unix_ms": {"type": "integer"}},
+                "required": ["since_unix_ms"],
             },
             "lab_tool": {
                 "type": "object",
@@ -574,7 +606,7 @@ fn overview_result() -> Value {
             },
             "incomplete": {"type": "boolean"},
         },
-        "required": ["daemon", "instances", "lab_tool", "install"],
+        "required": ["daemon", "lab_tool", "install"],
     })
 }
 
@@ -689,5 +721,124 @@ fn material_result() -> Value {
             "sha256": {"type": "string"},
             "size": {"type": "integer"},
         },
+    })
+}
+
+/// `actingcommand.run-status.v1` as runtime-client projects it (Workflow #338 R1).
+fn run_status_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "string"},
+            "request_id": {"type": ["string", "null"]},
+            "correlation_id": {"type": "string"},
+            "run_id": {"type": "string"},
+            "task_id": {"type": "string"},
+            "instance_id": {"type": "string"},
+            "dispatch": {"type": "string", "enum": ["manual", "scheduled", "unknown"]},
+            "origin": {"type": "string", "enum": ["cli", "ui", "lab", "scheduler", "unknown"]},
+            "package_ref": {},
+            "recovery_packages": {"type": "array"},
+            "state": {
+                "type": "string",
+                "enum": [
+                    "not_found",
+                    "admitted",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "interrupted_unterminated",
+                ],
+            },
+            "terminal": {"type": "object"},
+            "lease": {"type": "object"},
+            "progress": {"type": "object"},
+            "evidence": {"type": "object"},
+        },
+        "required": [
+            "schema_version",
+            "request_id",
+            "dispatch",
+            "origin",
+            "recovery_packages",
+            "state",
+            "evidence",
+        ],
+    })
+}
+
+fn get_run_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "handle": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The Runtime request_id of the run (an ac_run_pack handle).",
+            },
+            "run_id": {"type": "string", "minLength": 1, "description": "The run's run_id."},
+            "wait_s": {"type": "integer", "minimum": 0, "maximum": 25, "default": 0},
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn diagnose_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "task_id": {"type": "string", "minLength": 1, "description": "A Runtime task_id."},
+            "since_unix_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Window start; default 24 h ago, at most 7 days ago.",
+            },
+        },
+        "required": ["instance"],
+        "additionalProperties": false,
+    })
+}
+
+fn diagnose_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": {"type": "object"},
+            "window": {
+                "type": "object",
+                "properties": {"since_unix_ms": {"type": "integer"}},
+                "required": ["since_unix_ms"],
+            },
+            "runs": {"type": "array", "items": run_status_schema()},
+            "runs_truncated": {"type": "boolean"},
+            "errors_page": {
+                "type": "object",
+                "properties": {
+                    "events": {"type": "array", "items": {"type": "object"}},
+                    "more": {"type": "boolean"},
+                    "truncated": {"type": "boolean"},
+                    "next_cursor": {"type": "string"},
+                    "snapshot_ledger_position": {"type": "integer"},
+                },
+                "required": ["events", "more", "snapshot_ledger_position"],
+            },
+            "suspended": {"type": "array", "items": {"type": "object"}},
+            "suspended_truncated": {"type": "boolean"},
+            "lift": {"type": "array", "items": {"type": "object"}},
+            "lift_truncated": {"type": "boolean"},
+            "suspended_report": {"type": "object"},
+            "incomplete": {"type": "boolean"},
+        },
+        "required": [
+            "instance",
+            "window",
+            "runs",
+            "errors_page",
+            "suspended",
+            "lift",
+            "suspended_report",
+        ],
     })
 }

@@ -108,16 +108,15 @@ impl RuntimeAccess {
     }
 }
 
-/// TEMP until Ra: every Runtime client failure is class `runtime`, with the Runtime's own
-/// code in `details.runtime_code`. Ra's `RuntimeClientError::disposition()` replaces this
-/// function, which is the only place a Runtime failure gets its class.
-fn error_class(_error: &RuntimeClientError) -> &'static str {
-    "runtime"
-}
-
+/// A Runtime client failure as a tool error. Its class is the client's own
+/// `RuntimeClientError::disposition()` (R6), the same class CLI, UI and Lab report.
 fn runtime_error(error: &RuntimeClientError) -> ToolError {
-    let mut mapped = ToolError::new(error_class(error), error.code(), error.to_string())
-        .with_detail("operation", json!(error.operation()));
+    let mut mapped = ToolError::new(
+        error.disposition().as_str(),
+        error.code(),
+        error.to_string(),
+    )
+    .with_detail("operation", json!(error.operation()));
     if let Some(projection) = error.projection() {
         mapped = mapped.with_detail("runtime_code", json!(projection.code));
     }
@@ -139,7 +138,7 @@ fn runtime_error(error: &RuntimeClientError) -> ToolError {
 /// where it points, or its owner epoch does not match.
 fn unavailable(error: &RuntimeClientError, state_root: &Path) -> ToolError {
     ToolError::new(
-        error_class(error),
+        error.disposition().as_str(),
         "runtime_unavailable",
         format!(
             "actingd does not answer for state root {}: {error}",

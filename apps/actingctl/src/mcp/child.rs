@@ -6,11 +6,6 @@
 //! new dependency). A child still running at the caller's deadline is not killed, which
 //! would need a Job Object and a new dependency; it ends on its own time limit.
 
-#![expect(
-    dead_code,
-    reason = "#338 S1 phase 1 has no subprocess tool yet; ac_diagnose (phase 2) is the first caller"
-)]
-
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};

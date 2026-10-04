@@ -8,6 +8,7 @@
 mod child;
 mod observer;
 mod protocol;
+mod runs;
 mod runtime;
 mod server;
 mod tools;

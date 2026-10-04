@@ -507,7 +507,13 @@ fn list_tools(shared: &Shared, id: &Value, era: Era, params: Option<&Value>) -> 
         .filter(|tool| shared.tiers.contains(tool.tier))
         .map(|tool| tools::definition(tool, era))
         .collect::<Vec<_>>();
-    protocol::response(id, protocol::complete(era, json!({"tools": listed})))
+    let mut result = json!({"tools": listed});
+    if era == Era::Modern {
+        // 2026-07-28 `ListToolsResult extends CacheableResult` (SEP-2549): both fields required.
+        result["ttlMs"] = json!(0);
+        result["cacheScope"] = json!("private");
+    }
+    protocol::response(id, protocol::complete(era, result))
 }
 
 /// What a `CallToolRequest` names.

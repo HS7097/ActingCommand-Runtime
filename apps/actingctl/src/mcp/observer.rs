@@ -4,6 +4,7 @@
 //! read; like the CLI's reads they record no client.action. Every fact comes from the
 //! Runtime and runtime-client unchanged; this module only selects, pages and bounds it.
 
+use super::runs;
 use super::runtime::{Connected, Location, read_bounded};
 use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
@@ -28,7 +29,7 @@ use std::time::Duration;
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 /// ac_events reads full payloads, as the ledger's diagnostic code lives in them.
-const EVENTS_PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
+pub(super) const EVENTS_PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
 const MAX_TEXT_BYTES: u64 = 8192;
 const DEFAULT_TEXT_BYTES: u64 = 4096;
 /// The largest material ac_material exports.
@@ -52,6 +53,8 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
     let connected = match context.runtime.connect() {
         Ok(connected) => connected,
         Err(error) => {
+            // No instance data at all, rather than an empty list that reads as an empty
+            // system: the daemon section says why.
             result.insert(
                 "daemon".to_owned(),
                 json!({
@@ -59,7 +62,6 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
                     "error": {"code": error.code(), "message": error.message()},
                 }),
             );
-            result.insert("instances".to_owned(), json!([]));
             result.insert("lab_tool".to_owned(), json!({"present": lab_present}));
             result.insert("install".to_owned(), install);
             return Ok(ToolSuccess {
@@ -76,27 +78,49 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
         Some(selector) => Some(select_instance(status.instances(), selector)?.instance_alias()),
         None => None,
     };
+    let mut incomplete = false;
     let monitors = match connected.client.monitor_status() {
         Ok(monitors) => Some(monitors),
         Err(error) => {
             warnings.push(context.runtime.failure(&connected, &error).into_warning());
+            incomplete = true;
             None
         }
     };
-    let instances = status
+    let window = runs::default_window()?;
+    let mut instances = Vec::new();
+    for instance in status
         .instances()
         .iter()
         .filter(|instance| selected.is_none_or(|alias| instance.instance_alias() == alias))
-        .map(|instance| {
-            let monitor = monitors.as_ref().and_then(|monitors| {
-                monitors
-                    .instances()
-                    .iter()
-                    .find(|monitor| monitor.instance_alias() == instance.instance_alias())
-            });
-            instance_row(instance, monitor)
-        })
-        .collect::<Vec<_>>();
+    {
+        let monitor = monitors.as_ref().and_then(|monitors| {
+            monitors
+                .instances()
+                .iter()
+                .find(|monitor| monitor.instance_alias() == instance.instance_alias())
+        });
+        let mut row = instance_row(instance, monitor);
+        // At most one brief run status per instance: its newest admitted run in the window,
+        // which is the open one when a run is open.
+        match runs::latest_run(context, &connected, instance, window) {
+            Ok(latest) => {
+                if latest.incomplete {
+                    incomplete = true;
+                    row["run_incomplete"] = json!(true);
+                }
+                if let Some(run) = latest.runs.first() {
+                    row["run"] = json!(run);
+                }
+            }
+            Err(error) => {
+                incomplete = true;
+                row["run_incomplete"] = json!(true);
+                warnings.push(error.into_warning());
+            }
+        }
+        instances.push(row);
+    }
     result.insert(
         "daemon".to_owned(),
         json!({"online": true, "owner_epoch": status.owner_epoch()}),
@@ -105,9 +129,10 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
         result.insert("global_pause".to_owned(), json!(pause));
     }
     result.insert("instances".to_owned(), Value::Array(instances));
+    result.insert("run_window".to_owned(), json!({"since_unix_ms": window}));
     result.insert("lab_tool".to_owned(), json!({"present": lab_present}));
     result.insert("install".to_owned(), install);
-    if monitors.is_none() {
+    if incomplete {
         result.insert("incomplete".to_owned(), json!(true));
     }
     Ok(ToolSuccess {
@@ -152,7 +177,7 @@ fn instance_row(
 
 /// The instance an `instance` argument names by alias, instance_id or ADB port, as the
 /// Runtime's status lists them.
-fn select_instance<'s>(
+pub(super) fn select_instance<'s>(
     instances: &'s [RuntimeInstanceStatus],
     selector: &str,
 ) -> Result<&'s RuntimeInstanceStatus, ToolError> {
@@ -326,7 +351,7 @@ fn page_result(
     Value::Object(result)
 }
 
-fn event_row(event: &ProjectedEvent) -> Value {
+pub(super) fn event_row(event: &ProjectedEvent) -> Value {
     let mut row = Map::new();
     row.insert("seq".to_owned(), json!(event.sequence));
     row.insert("ts".to_owned(), json!(event.timestamp_unix_ms));
@@ -391,7 +416,7 @@ fn cursor_invalid() -> ToolError {
 
 /// `v1.<server>.<connection>.<snapshot>.<after>.<query fingerprint>`: the Runtime cursor
 /// bound to this server process and this connection.
-fn encode_cursor(
+pub(super) fn encode_cursor(
     context: &ToolContext<'_>,
     connected: &Connected,
     cursor: &RuntimeEventQueryCursor,
