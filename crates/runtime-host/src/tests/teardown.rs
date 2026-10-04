@@ -177,8 +177,8 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         (false, true, false),
         (true, false, false),
         (true, true, false),
-        (true, false, true),
-        (true, true, true),
+        (false, false, true),
+        (false, true, true),
     ] {
         use actingcommand_contract::{
             ResourceDisposition, ResourceDispositionScope, ResourceQuiescence,
@@ -203,11 +203,8 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             *state.capture_open_error.lock().expect("capture open error") = Some(primary);
         }
         if backend_close_failure {
-            *state
-                .capture_close_error
-                .lock()
-                .expect("capture close error") = Some(
-                DeviceError::fatal("retained capture close failed")
+            *state.close_error.lock().expect("input close error") = Some(
+                DeviceError::fatal("retained input close failed")
                     .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1),
             );
         }
@@ -280,7 +277,7 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             operation,
             ResourceDisposition {
                 scope: ResourceDispositionScope::SessionBackends,
-                resource_count: u16::from(input_open_failure),
+                resource_count: u16::from(!input_open_failure),
                 quiescence: if backend_close_failure {
                     ResourceQuiescence::Unconfirmed
                 } else {
@@ -318,7 +315,7 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                     else {
                         return false;
                     };
-                    assert_eq!(resource_count, 3 + u16::from(input_open_failure));
+                    assert_eq!(resource_count, 3 + u16::from(!input_open_failure));
                     assert_eq!(quiescence, ResourceQuiescence::Confirmed);
                     assert_eq!(resource_dispositions.as_deref(), Some(groups.as_slice()));
                     true
@@ -334,9 +331,10 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             assert!(closed.sequence() < released.sequence());
         }
         assert_eq!(host.fatal_error().expect("health").is_some(), unconfirmed);
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 0);
         assert_eq!(
-            state.capture_close_count.load(Ordering::Acquire),
-            usize::from(input_open_failure)
+            state.close_count.load(Ordering::Acquire),
+            usize::from(!input_open_failure)
         );
         assert_eq!(
             state.unfenced_capture_close_count.load(Ordering::Acquire),
@@ -344,9 +342,10 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         );
         drop(client);
         assert_eq!(host.close().is_err(), unconfirmed);
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 0);
         assert_eq!(
-            state.capture_close_count.load(Ordering::Acquire),
-            usize::from(input_open_failure)
+            state.close_count.load(Ordering::Acquire),
+            usize::from(!input_open_failure)
         );
     }
 
@@ -665,6 +664,7 @@ fn required_failure_events_preserve_cleanup_detail() {
             );
             let mut types = Vec::new();
             let mut resource_causes = 0;
+            let mut close_summaries = 0;
             for event in &events {
                 if let ProjectionPayload::Full(payload) = &event.payload
                     && let EventPayload::Runtime(
@@ -698,6 +698,27 @@ fn required_failure_events_preserve_cleanup_detail() {
                     && let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
                         failure,
                     )) = payload.as_ref()
+                    && let Some(lifecycle) = failure.lifecycle_failure()
+                    && let Some(groups) = lifecycle.resource_dispositions()
+                {
+                    assert!(lifecycle.cause().is_none());
+                    assert_eq!(lifecycle.stage(), "runtime.lifecycle.session_close");
+                    assert_eq!(
+                        groups,
+                        [actingcommand_contract::ResourceDisposition {
+                            scope:
+                                actingcommand_contract::ResourceDispositionScope::SessionBackends,
+                            resource_count: 1 + u16::from(capture),
+                            quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
+                        }]
+                    );
+                    close_summaries += 1;
+                    continue;
+                }
+                if let ProjectionPayload::Full(payload) = &event.payload
+                    && let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                        failure,
+                    )) = payload.as_ref()
                     && let Some(cause) = failure
                         .lifecycle_failure()
                         .and_then(|lifecycle| lifecycle.cause())
@@ -717,6 +738,7 @@ fn required_failure_events_preserve_cleanup_detail() {
                 }
             }
             assert_eq!(resource_causes, usize::from(cleanup_detail.is_some()));
+            assert_eq!(close_summaries, usize::from(cleanup_detail.is_some()));
             if let Some(baseline) = &baseline_types {
                 assert_eq!(&types, baseline);
             } else {

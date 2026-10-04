@@ -68,8 +68,8 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
         .collect::<Vec<_>>();
     assert_eq!(
         failures.len(),
-        10,
-        "four actual phases plus one typed resource-close cause for each failed instance"
+        12,
+        "one Close summary, four actual phases and one resource-close cause per failed instance"
     );
     for instance in [first, second] {
         let actual = failures
@@ -84,11 +84,30 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
                 (failure.instance_id() == Some(instance)).then_some((event, failure))
             })
             .collect::<Vec<_>>();
-        assert_eq!(actual.len(), 5);
+        assert_eq!(actual.len(), 6);
+        let roots = actual
+            .iter()
+            .filter(|(_, failure)| failure.cause().is_none())
+            .collect::<Vec<_>>();
+        assert_eq!(roots.len(), 1);
+        let root_id = *roots[0].0.event_id();
+        assert_eq!(
+            roots[0].1.resource_dispositions(),
+            Some(
+                [actingcommand_contract::ResourceDisposition {
+                    scope: actingcommand_contract::ResourceDispositionScope::SessionBackends,
+                    resource_count: 1,
+                    quiescence: actingcommand_contract::ResourceQuiescence::Unconfirmed,
+                },]
+                .as_slice()
+            )
+        );
         assert_eq!(
             actual
                 .iter()
-                .filter(|(_, failure)| failure.cause().expect("phase").resource().is_some())
+                .filter(|(_, failure)| failure
+                    .cause()
+                    .is_some_and(|cause| cause.resource().is_some()))
                 .count(),
             1
         );
@@ -98,8 +117,13 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
                 event.links(),
                 &actingcommand_contract::EventLinks::default()
             );
-            assert!(failure.entered_event_id().is_none());
-            assert!(failure.cause().expect("phase").native_detail().is_some());
+            if let Some(cause) = failure.cause() {
+                assert_eq!(failure.entered_event_id(), Some(root_id));
+                assert!(cause.native_detail().is_some());
+                assert!(failure.resource_dispositions().is_none());
+            } else {
+                assert!(failure.entered_event_id().is_none());
+            }
             let public = serde_json::to_string(&event.payload().public_projection())
                 .expect("public projection");
             assert!(!public.contains("native detail"));
