@@ -55,7 +55,7 @@ impl HostShared {
                 &self.policy_outcome_gate,
                 "apply_resource_targets_outcome_state",
             )?;
-            let mut policy = lock(&self.policy, "apply_resource_targets_outcome_keys")?;
+            let mut policy = lock(self.policy()?, "apply_resource_targets_outcome_keys")?;
             let outcome_keys = policy.outcome_key_snapshot()?;
             let _fact_gate = lock(&self.fact_write_gate, "apply_resource_targets_facts")?;
             let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
@@ -187,7 +187,7 @@ impl HostShared {
             &self.policy_outcome_gate,
             "resource_target_view_outcome_state",
         )?;
-        let mut policy = lock(&self.policy, "resource_target_view_outcome_keys")?;
+        let mut policy = lock(self.policy()?, "resource_target_view_outcome_keys")?;
         let outcome_keys = policy.outcome_key_snapshot()?;
         let _fact_gate = lock(&self.fact_write_gate, "resource_target_view_facts")?;
         let (facts, _) = self.project_authoritative_policy_inputs_under_gate(

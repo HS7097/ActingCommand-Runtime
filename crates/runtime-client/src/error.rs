@@ -52,6 +52,7 @@ const UNCERTAIN_AFTER_SEND_CODES: &[&str] = &[
     "runtime_result_missing",
     "runtime_result_unexpected",
     "runtime_shutdown_receipt_unconfirmed",
+    "install_transition_receipt_unconfirmed",
     "material_read_receipt_selection_mismatch",
     "runtime_scheduling_resume_unconfirmed",
 ];

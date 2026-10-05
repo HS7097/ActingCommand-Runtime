@@ -29,7 +29,7 @@ impl HostShared {
     ) -> Result<(), RequestFailure> {
         let instance_id = token.instance_id();
         let needs_close = self
-            .execution
+            .execution()?
             .session_needs_close(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
@@ -60,7 +60,7 @@ impl HostShared {
             ));
         }
         if !self
-            .execution
+            .execution()?
             .has_owned_resources(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
@@ -72,7 +72,7 @@ impl HostShared {
             self.record_owner_resource_close()?;
             return Ok(());
         }
-        self.execution
+        self.execution()?
             .forget_input_frames(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
@@ -96,9 +96,12 @@ impl HostShared {
         let mut nemu_instances = 0usize;
         let mut uses_nemu = false;
         for (registered_id, instance_alias) in registered {
-            let resolved = self.execution.resolve(&instance_alias).map_err(|error| {
-                RuntimeHostError::execution("resolve_device_session_gate", &error)
-            })?;
+            let resolved = self
+                .execution()?
+                .resolve(&instance_alias)
+                .map_err(|error| {
+                    RuntimeHostError::execution("resolve_device_session_gate", &error)
+                })?;
             let nemu = resolved.configuration().is_some_and(|configuration| {
                 [&configuration.capture_backend, &configuration.input_backend]
                     .into_iter()
@@ -195,7 +198,7 @@ impl HostShared {
         if let Some(disposition) = owner.retained_resource_disposition()? {
             return Ok(disposition);
         }
-        let has_sessions = self.execution.has_sessions().map_err(|error| {
+        let has_sessions = self.execution()?.has_sessions().map_err(|error| {
             RuntimeHostError::execution("inspect_remaining_execution_sessions", &error)
         })?;
         let disposition = if has_sessions {
@@ -280,7 +283,7 @@ impl HostShared {
         target: ResourceCloseTarget,
     ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
         if let Some(error) = self
-            .execution
+            .execution()?
             .unconfirmed_instance_close_error(token.instance_id())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
@@ -292,7 +295,7 @@ impl HostShared {
             return Ok(Err(error));
         }
         let has_session = self
-            .execution
+            .execution()?
             .has_owned_resources(token.instance_id())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
@@ -320,13 +323,13 @@ impl HostShared {
             .nemu_close_check(token, Arc::clone(&witness), connection_id)
             .map_err(RequestFailure::poison_without_terminal)?;
         let closed = match target {
-            ResourceCloseTarget::Session => self.execution.close_instance_with_input_check(
+            ResourceCloseTarget::Session => self.execution()?.close_instance_with_input_check(
                 token.instance_id(),
                 authority,
                 input_check,
             ),
             ResourceCloseTarget::ApplicationBackends => self
-                .execution
+                .execution()?
                 .prepare_application_resources(token.instance_id(), authority, input_check),
         };
         match closed {
@@ -446,7 +449,7 @@ impl HostShared {
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
         if !self
-            .execution
+            .execution()?
             .has_owned_resources(instance_id)
             .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
         {
@@ -623,7 +626,16 @@ impl HostShared {
             .collect::<Vec<_>>();
         let mut cooling = Vec::new();
         for (instance_alias, instance_id) in instances {
+            self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
+            if lock(&self.scheduling_pause, "read_install_startup_pause")?
+                .instance_state(&instance_alias)
+                .is_some_and(|pause| {
+                    pause.stage == actingcommand_contract::InstancePauseStage::Released
+                })
+            {
+                continue;
+            }
             if let Some(cooldown_until) =
                 self.prepare_physical_instance_on_start(&instance_alias, instance_id)?
             {
@@ -633,7 +645,16 @@ impl HostShared {
         for (instance_alias, instance_id, cooldown_until) in cooling {
             let wait_ms = cooldown_until.saturating_sub(self.monotonic_ms()?);
             thread::sleep(Duration::from_millis(wait_ms));
-            self.prepare_physical_instance_on_start(&instance_alias, instance_id)?;
+            self.check_install_preparation()?;
+            if self
+                .prepare_physical_instance_on_start(&instance_alias, instance_id)?
+                .is_some()
+            {
+                self.require_install_selfcheck(
+                    instance_id,
+                    &scheduling_resume_selfcheck(&[], Some("lease_cooldown")),
+                )?;
+            }
         }
         Ok(())
     }
@@ -653,14 +674,17 @@ impl HostShared {
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
-        self.prepare_instance_connection_with_cooldown(
+        let (check, cooldown_until, _) = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
             links,
             &admission,
             actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
-        )
-        .map(|(_, cooldown_until, _)| cooldown_until)
+        )?;
+        if cooldown_until.is_none() {
+            self.require_install_selfcheck(instance_id, &check)?;
+        }
+        Ok(cooldown_until)
     }
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
@@ -792,7 +816,7 @@ impl HostShared {
         // reconnect is a disconnect and a connect. A failed close skips the opens and ends the
         // phase as a failed final close does.
         let retained_close = if self
-            .execution
+            .execution()?
             .has_session(instance_id)
             .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
         {
@@ -804,10 +828,11 @@ impl HostShared {
         let opened = match &retained_close {
             Ok(()) => {
                 self.invalidate_backend_selfcheck_facts(instance_id)?;
-                Some(self.execution.open_instance_backends(
+                Some(self.execution()?.open_instance_backends_until(
                     instance_alias,
                     self.mark_resources_in_use()?,
                     frame_store.memory_budget(),
+                    self.install_preparation_deadline()?,
                 ))
             }
             Err(_) => None,

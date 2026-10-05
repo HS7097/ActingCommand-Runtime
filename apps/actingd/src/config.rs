@@ -697,11 +697,28 @@ type ConfiguredScheduledProcedureTask = (String, ScheduledProcedureTask);
 type AssembledProcedureBinding = (ProcedureBinding, Option<ConfiguredScheduledProcedureTask>);
 
 pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
+    load_for(path, actingcommand_contract::InstallConfigPurpose::Running)
+}
+
+pub(super) fn load_for(
+    path: &Path,
+    purpose: actingcommand_contract::InstallConfigPurpose,
+) -> Result<ActingdConfigFile, &'static str> {
+    let installation =
+        actingcommand_contract::process_installation_for(purpose).map_err(|error| error.code())?;
+    let selected_path = installation
+        .map(|selected| selected.resolve_config(path))
+        .transpose()
+        .map_err(|error| error.code())?;
+    let path = selected_path.as_deref().unwrap_or(path);
     let metadata = fs::metadata(path).map_err(|_| "config_unavailable")?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_CONFIG_BYTES {
         return Err("config_size_invalid");
     }
-    let bytes = fs::read(path).map_err(|_| "config_read_failed")?;
+    let bytes = match installation {
+        Some(selected) => selected.config_bytes().map_err(|error| error.code())?,
+        None => fs::read(path).map_err(|_| "config_read_failed")?,
+    };
     let mut config =
         serde_json::from_slice::<ActingdConfigFile>(&bytes).map_err(|_| "config_decode_failed")?;
     config.source_root = path
@@ -709,6 +726,33 @@ pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
+    if let Some(selected) = installation {
+        match (
+            &selected.selection().provider,
+            &config.vision_provider_manifest,
+        ) {
+            (None, None) => {}
+            (Some(reference), Some(configured)) => {
+                let configured = if configured.is_absolute() {
+                    configured.clone()
+                } else {
+                    config.source_root.join(configured)
+                };
+                let expected = fs::canonicalize(
+                    reference
+                        .resolve(selected.root())
+                        .map_err(|error| error.code())?,
+                )
+                .map_err(|_| "install_provider_unavailable")?;
+                if fs::canonicalize(configured).map_err(|_| "install_provider_unavailable")?
+                    != expected
+                {
+                    return Err("install_provider_selection_mismatch");
+                }
+            }
+            _ => return Err("install_provider_selection_mismatch"),
+        }
+    }
     Ok(config)
 }
 

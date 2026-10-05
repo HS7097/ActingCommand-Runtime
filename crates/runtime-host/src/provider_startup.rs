@@ -15,6 +15,7 @@ pub struct ProviderStartup<'a> {
     pub(crate) events: &'a RuntimeEvents,
     pub(crate) owner_epoch: OwnerEpoch,
     pub(crate) links: EventLinksDraft,
+    pub(crate) preparation_boundary: &'a dyn Fn() -> RuntimeHostResult<()>,
 }
 
 impl ProviderStartup<'_> {
@@ -23,6 +24,9 @@ impl ProviderStartup<'_> {
         backend: ProviderBackend,
         observation: ProviderStartupObservation,
     ) -> RuntimeHostResult<()> {
+        if matches!(observation, ProviderStartupObservation::Started { .. }) {
+            (self.preparation_boundary)()?;
+        }
         let severity = if matches!(observation, ProviderStartupObservation::Failed { .. }) {
             EventSeverity::Fatal
         } else {

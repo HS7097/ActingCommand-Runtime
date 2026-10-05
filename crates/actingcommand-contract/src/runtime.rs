@@ -3004,6 +3004,10 @@ pub enum RuntimeOperation {
     RequestShutdown {
         target: RuntimeShutdownTarget,
     },
+    InstallTransition {
+        target: RuntimeShutdownTarget,
+        action: crate::InstallTransitionAction,
+    },
     Status,
     ProjectInterface {
         request: ProjectInterfaceRequest,
@@ -3269,6 +3273,10 @@ impl RuntimeOperation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::RequestShutdown { target } => target.validate(),
+            Self::InstallTransition { target, action } => {
+                target.validate()?;
+                action.validate()
+            }
             Self::Health
             | Self::Status
             | Self::MonitorStatus
@@ -3477,6 +3485,7 @@ impl fmt::Debug for RuntimeOperation {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
             Self::RequestShutdown { .. } => "RuntimeOperation::RequestShutdown",
+            Self::InstallTransition { .. } => "RuntimeOperation::InstallTransition",
             Self::Status => "RuntimeOperation::Status",
             Self::ProjectInterface { .. } => {
                 "RuntimeOperation::ProjectInterface(<version-negotiation>)"
@@ -3639,6 +3648,16 @@ impl RuntimeRequest {
             )
         {
             return Err(RuntimeContractError::new("invalid_shutdown_origin"));
+        }
+        if matches!(self.operation, RuntimeOperation::InstallTransition { .. })
+            && !matches!(
+                (self.actor, self.source),
+                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+            )
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_install_transition_origin",
+            ));
         }
         if matches!(
             self.operation,
@@ -4183,6 +4202,9 @@ impl IdentifierIssuer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeResult {
+    InstallTransition {
+        status: crate::InstallTransitionStatus,
+    },
     ShutdownAccepted {
         target: RuntimeShutdownTarget,
     },
@@ -4723,6 +4745,14 @@ impl RuntimeReceipt {
                 target.validate()?;
                 if self.state != RuntimeReceiptState::Admitted || self.terminal.is_none() {
                     return Err(RuntimeContractError::new("invalid_shutdown_receipt"));
+                }
+            }
+            Some(RuntimeResult::InstallTransition { status }) => {
+                status.validate()?;
+                if self.state != RuntimeReceiptState::Completed {
+                    return Err(RuntimeContractError::new(
+                        "invalid_install_transition_receipt",
+                    ));
                 }
             }
             Some(RuntimeResult::Status { status }) => status.validate()?,

@@ -184,7 +184,7 @@ impl HostShared {
         // Outside the fact write gate and outside any device session; the per-instance
         // admission guard stays held so no lease is granted while the emulator changes state.
         let outcome = match self
-            .execution
+            .execution()?
             .control_instance(&resolved.instance_alias, action)
         {
             Ok(outcome) => outcome,
@@ -325,7 +325,7 @@ impl HostShared {
             if stopped() || Instant::now() >= deadline {
                 break;
             }
-            match self.execution.probe_adb_baseline_until(
+            match self.execution()?.probe_adb_baseline_until(
                 &rebound.instance_alias,
                 deadline,
                 &stopped,
@@ -431,7 +431,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        self.execution
+        self.execution()?
             .rebind_discovered_endpoint(&record.instance_alias, adb_port)
             .map_err(|error| {
                 let mut error = RuntimeHostError::execution("rebind_instance_endpoint", &error);
@@ -439,7 +439,7 @@ impl HostShared {
                 error
             })?;
         let rebound = self
-            .execution
+            .execution()?
             .resolve(&record.instance_alias)
             .map_err(|error| RuntimeHostError::execution("rebind_instance_endpoint", &error))?;
         record.audit_endpoint = rebound.audit_endpoint().to_owned();

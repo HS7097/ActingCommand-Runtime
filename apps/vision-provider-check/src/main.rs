@@ -138,6 +138,10 @@ struct ExportAuditReport {
 }
 
 fn main() {
+    if let Err(error) = actingcommand_contract::process_installation() {
+        eprintln!("FATAL vision-provider-check: {error}");
+        std::process::exit(1);
+    }
     if let Err(err) = run(env::args().skip(1)) {
         eprintln!("FATAL: {err}");
         std::process::exit(1);

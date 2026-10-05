@@ -82,6 +82,101 @@ file's pinned size and SHA-256 (`scripts/windows-tools/windows-tool-sources.v1.j
 
 ## Prepare private configuration
 
+### A/B installation inputs and Host control
+
+An A/B installation selects `<root>/A/{runtime,tools,ui}` or
+`<root>/B/{runtime,tools,ui}` through `<root>/install/active.json`.
+`actingcommand-contract::InstallSelection` defines this input: schema
+`actingcommand.install-selection.v1`, slot, positive generation, and SHA-256
+references for the slot's `MEMBERS.json` and private generation config/provider
+files. acsetup owns selection and configuration commits. Runtime reads them and
+keeps its state under the one configured state root.
+
+The stable launcher supplies `ACTINGCOMMAND_INSTALL_ROOT` and
+`ACTINGCOMMAND_INSTALL_SELECTION` (the complete selection JSON) to the chosen
+program. Each process verifies and retains those inputs. Direct slot entry also
+checks that the selected slot matches its executable. The fixed configuration
+argument `<root>/actingd.config.json` resolves to the pinned private generation.
+MCP subprocesses inherit that same selection and use that slot's tools; restart
+the MCP process to select another generation. ADB subprocesses use the installation
+root as their working directory and retain the existing slot tool hash checks.
+
+acsetup creates and permanently retains the empty `install/slot-A.lock` and
+`slot-B.lock` locators. `InstallSlotLock::try_shared(root, slot)` opens an existing
+locator and acquires nonblocking OS read occupancy before slot material is read;
+`try_exclusive` acquires materialization occupancy. Neither operation creates,
+truncates or writes a locator. Missing, nonempty, unavailable and occupied locators
+return distinct errors. `release(self)` reports an explicit unlock error; dropping
+the handle or terminating its process releases the OS occupancy.
+
+All six Runtime/Tools binary entrypoints take process-lifetime read occupancy,
+including direct slot entry. An `InstalledProcess` clone retains shared occupancy
+with its immutable inputs. MCP children receive the same snapshot and acquire
+their own occupancy for their full process lifetimes, including after MCP exits.
+UI and stable forwarding consumers use this same contract. acsetup must also
+check native process/file occupation for older consumers and ADB: shared-lock
+availability alone does not prove their absence or permit a slot replacement.
+
+The installation owner uses `InstalledProcess::read_active(root)` for its current
+CAS baseline, independent of inherited environment, and `from_selection_bytes(root,
+bytes)` for an explicit candidate or an exact selection returned to UI. Both use
+the same bounded reader and shared occupancy as `read(root)`. Running consumers
+retain their original `read` result. The installer releases exclusive occupancy
+after materialization, then retains the candidate reader's shared occupancy
+through checking and commit; acquisition failure stops that step.
+
+`check-config` and `ledger-maintenance verify` use `InstallConfigPurpose::CandidateCheck`:
+they lock their actual executable slot and read the explicitly supplied config,
+without substituting the active selection. Relative paths keep that config's
+parent directory as their base. The launcher only resolves the root config alias;
+an explicit candidate path is preserved. Running processes use `Running` and
+require the configuration selected by their pinned snapshot.
+
+Installation control uses the ordinary Runtime connection, with `(Cli, Cli)` or
+`(User, Ui)` origin, an accepted governance identity and the exact owner target.
+The CLI declares `client: actingctl`; a configured governance allowlist must
+permit that identity. The client method is `RuntimeClient::install_transition`.
+The corresponding CLI entry is:
+
+```powershell
+actingctl install-transition --state-root <state-root> --action-json '<action-json>'
+```
+
+The JSON action is `begin_drain` (transition_id and optional timeout_ms), `query`
+(transition_id), `abort` (ticket), `commit_shutdown` (ticket), or `release`
+(ticket and optional timeout_ms). Save the complete returned ticket. A drain
+closes new root admission while admitted calls, leases, queued work and their
+cleanup finish. Wait for `drained`, then submit that ticket's `commit_shutdown`;
+`--wait 60` on this action observes the accepted owner's actual close and process
+exit through the existing shutdown waiter. A completed control receipt describes
+the action; only `released` describes completed new-owner preparation.
+
+Start the selected daemon in held mode with:
+
+```powershell
+actingcommand-actingd --config <selected-config> --install-held '<held-json>'
+```
+
+The held input contains transition_id, request_id, optional timeout_ms and an
+optional previous drained ticket. The Host opens its owner and ledger, answers
+installation control and necessary ledger reads, and waits before constructing
+the Provider. Verify its new exact owner/ticket and send `release`. It keeps root
+admission closed through Provider/basic preparation and restores user pauses only
+from the supplied predecessor's matching drained and accepted-shutdown ledger
+facts. Ordinary startup invalidates those old installation facts.
+
+Drain, held and release deadlines default to 60 seconds and are bounded at
+600 seconds; supply a shorter duration when the authorized window is shorter.
+A drain timeout removes only this transaction's barrier. A held timeout stays
+closed before Provider assembly; release failure or timeout stays closed and
+preserves native preparation/cleanup failures. A missing client receipt is
+unknown: reconnect, declare identity and query the original transition. The
+client never retries an installation action automatically. Installation status
+and original pauses are the Host-owned ledger facts `host.install_transition`
+and `host.install_transition.pauses`.
+
+### Standalone configuration
+
 Copy `actingd.config.example.json` to a private editable configuration path. Keep
 the distributed template unchanged so its manifest hash remains meaningful.
 Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:

@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-contract = { workspace = true }
 actingcommand-ledger-forensics = { workspace = true }
 actingcommand-vision-ffi = { workspace = true }
 serde = { workspace = true }

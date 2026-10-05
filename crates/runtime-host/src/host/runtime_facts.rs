@@ -587,9 +587,17 @@ impl HostShared {
         &self,
         record: RuntimeFactRecord,
     ) -> RuntimeHostResult<RuntimeFactChange> {
-        let result: RuntimeHostResult<RuntimeFactChange> = (|| {
+        self.record_runtime_fact_with_event(record)
+            .map(|(change, _)| change)
+    }
+
+    pub(super) fn record_runtime_fact_with_event(
+        &self,
+        record: RuntimeFactRecord,
+    ) -> RuntimeHostResult<(RuntimeFactChange, Option<EventId>)> {
+        let result = (|| {
             let _gate = lock(&self.fact_write_gate, "record_runtime_fact")?;
-            self.record_runtime_fact_under_gate(record)
+            self.record_runtime_fact_and_event_under_gate(record)
         })();
         if let Err(error) = &result
             && error.is_fatal()
@@ -605,15 +613,23 @@ impl HostShared {
         &self,
         record: RuntimeFactRecord,
     ) -> RuntimeHostResult<RuntimeFactChange> {
+        self.record_runtime_fact_and_event_under_gate(record)
+            .map(|(change, _)| change)
+    }
+
+    fn record_runtime_fact_and_event_under_gate(
+        &self,
+        record: RuntimeFactRecord,
+    ) -> RuntimeHostResult<(RuntimeFactChange, Option<EventId>)> {
         let precheck = {
             let store = lock(&self.runtime_facts, "record_runtime_fact")?;
             precheck_runtime_fact(&store, &record)?
         };
         if let Some(unchanged) = precheck {
-            return Ok(unchanged);
+            return Ok((unchanged, None));
         }
         let links = self.runtime_fact_links(&record.scope)?;
-        self.append_event_under_fact_gate(
+        let event = self.append_event_under_fact_gate(
             EventSeverity::Info,
             EventSource::Runtime,
             OriginModule::RuntimeFacts,
@@ -626,7 +642,7 @@ impl HostShared {
             .map_err(|error| runtime_fact_desync(&error, "record_runtime_fact"))?;
         self.runtime_facts_dirty.store(true, Ordering::Release);
         self.synchronize_fact_store_under_gate()?;
-        Ok(change)
+        Ok((change, Some(*event.event_id())))
     }
 
     /// Records an instance-scope string fact only when it differs from the stored value;
@@ -702,7 +718,7 @@ impl HostShared {
     /// nothing; a pair of an instance no longer registered has no instance scope and is left
     /// as the ledger holds it.
     pub(super) fn record_policy_settlement_facts_on_start(&self) -> RuntimeHostResult<()> {
-        let settlements = lock(&self.policy, "read_policy_settlements")?.latest_settlements()?;
+        let settlements = lock(self.policy()?, "read_policy_settlements")?.latest_settlements()?;
         for settlement in &settlements {
             if self
                 .settlement_instance_id(&settlement.instance_alias)?

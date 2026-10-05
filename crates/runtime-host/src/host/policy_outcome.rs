@@ -14,7 +14,7 @@ impl HostShared {
     pub(super) fn reconcile_pending_policy_settlements(&self) -> RuntimeHostResult<()> {
         let result: RuntimeHostResult<()> = (|| {
             let _gate = lock(&self.policy_outcome_gate, "reconcile_policy_settlements")?;
-            let mut policy = lock(&self.policy, "reconcile_policy_settlements")?;
+            let mut policy = lock(self.policy()?, "reconcile_policy_settlements")?;
             let missing_outcomes = policy
                 .pending_dispatch_outcomes()
                 .into_iter()
@@ -357,7 +357,7 @@ impl HostShared {
         )?;
         let execution_input = PolicyExecutionInput::Succeeded;
         let replayed = {
-            let policy = lock(&self.policy, "replay_scheduled_policy_completion")?;
+            let policy = lock(self.policy()?, "replay_scheduled_policy_completion")?;
             policy
                 .replay_execution(context.decision_id(), &execution_input)?
                 .is_some()
@@ -411,7 +411,7 @@ impl HostShared {
         completed_replay: bool,
     ) -> RuntimeHostResult<Option<SchedulingOutcomeProjection>> {
         let expected_keys = {
-            let policy = lock(&self.policy, "read_policy_outcome_keys")?;
+            let policy = lock(self.policy()?, "read_policy_outcome_keys")?;
             if completed_replay {
                 policy.referenced_outcome_keys_for_completed_run(context)?
             } else {
@@ -921,10 +921,10 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
-            let replay = lock(&self.policy, "replay_policy_dispatch_outcome")?
+            let replay = lock(self.policy()?, "replay_policy_dispatch_outcome")?
                 .replay_execution(decision_id, input)?;
             if let Some(existing) = replay {
-                let mut policy = lock(&self.policy, "finish_replayed_policy_outcome")?;
+                let mut policy = lock(self.policy()?, "finish_replayed_policy_outcome")?;
                 self.finish_policy_dispatch_outcome(&mut policy, &existing, context, cache_update)?;
                 let settlement = policy
                     .latest_settlement(&existing.task_id, &existing.instance_id)?
@@ -934,10 +934,11 @@ impl HostShared {
                 return Ok(existing);
             }
             if let Some(context) = context {
-                lock(&self.policy, "validate_policy_run_context")?.validate_run_context(context)?;
+                lock(self.policy()?, "validate_policy_run_context")?
+                    .validate_run_context(context)?;
             }
             let (instance_id, admitted_at_unix_ms) = {
-                let policy = lock(&self.policy, "read_policy_dispatch_instance")?;
+                let policy = lock(self.policy()?, "read_policy_dispatch_instance")?;
                 (
                     policy.execution_instance_id(decision_id)?.to_owned(),
                     policy.admitted_at(decision_id)?,
@@ -983,7 +984,7 @@ impl HostShared {
                     )
                 })?;
             let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
-            let mut policy = lock(&self.policy, "record_policy_dispatch_outcome")?;
+            let mut policy = lock(self.policy()?, "record_policy_dispatch_outcome")?;
             let data = match policy.prepare_execution(
                 decision_id,
                 observed_at_unix_ms,

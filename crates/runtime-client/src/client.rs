@@ -894,6 +894,69 @@ impl RuntimeClient {
         }
     }
 
+    /// Submits one installation control request to this connection's exact owner.
+    /// A missing receipt is unknown: reconnect and query the original transition ID.
+    /// This method never retries or converts a client timeout into a Host timeout.
+    pub fn install_transition(
+        &self,
+        action: actingcommand_contract::InstallTransitionAction,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        let target = self.shared.info.shutdown_target();
+        let committing = matches!(
+            action,
+            actingcommand_contract::InstallTransitionAction::CommitShutdown { .. }
+        );
+        let expected = action.clone();
+        let receipt = self
+            .execute_receipt(
+                "install_transition",
+                RuntimeOperation::InstallTransition { target, action },
+                None,
+            )
+            .map_err(|error| {
+                if error.projection().is_some() {
+                    error
+                } else {
+                    RuntimeClientError::fatal(
+                        "install_transition_receipt_unconfirmed",
+                        "install_transition",
+                    )
+                    .with_related(error)
+                }
+            })?;
+        let matches = match receipt.result() {
+            Some(RuntimeResult::InstallTransition { status }) => {
+                !committing
+                    && status.ticket.target == target
+                    && match &expected {
+                        actingcommand_contract::InstallTransitionAction::BeginDrain {
+                            transition_id,
+                            ..
+                        } => {
+                            status.ticket.transition_id == *transition_id
+                                && status.ticket.request_id == receipt.request_id()
+                        }
+                        actingcommand_contract::InstallTransitionAction::Query {
+                            transition_id,
+                        } => status.ticket.transition_id == *transition_id,
+                        actingcommand_contract::InstallTransitionAction::Abort { ticket }
+                        | actingcommand_contract::InstallTransitionAction::Release {
+                            ticket, ..
+                        } => status.ticket == *ticket,
+                        _ => false,
+                    }
+            }
+            Some(RuntimeResult::ShutdownAccepted { target: accepted }) => {
+                committing && *accepted == target
+            }
+            _ => false,
+        };
+        if !matches {
+            return Err(self.unexpected_result("install_transition"));
+        }
+        Ok(receipt)
+    }
+
     /// Re-runs the provider's instance discovery through the Runtime and returns every
     /// reported instance with its bound alias. Binds nothing; see `DiscoverInstances`.
     pub fn discover_instances(&self) -> RuntimeClientResult<RuntimeInstanceDiscovery> {

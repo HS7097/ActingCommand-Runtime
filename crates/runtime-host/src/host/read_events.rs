@@ -53,7 +53,7 @@ impl HostShared {
         // Every policy dispatch writer appends and applies under the policy guard (Workflow
         // #191 U5-F1), so taking it after reading the position sees every event up to it.
         let (catalog, decisions) = {
-            let policy = lock(&self.policy, "project_runtime_policy")?;
+            let policy = lock(self.policy()?, "project_runtime_policy")?;
             (
                 policy
                     .active_loaded_at(&self.ledger, ledger_position)
@@ -511,7 +511,7 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let (state, source) = self.observe_runtime_state(validated, || {
-            let status = lock(&self.monitor_registry, "read_monitor_registry")?
+            let status = lock(self.monitor_registry()?, "read_monitor_registry")?
                 .status(self.owner_epoch)
                 .map_err(RequestFailure::poison_without_terminal)?;
             Ok(actingcommand_contract::RuntimeObservedState::Monitor { status })

@@ -86,7 +86,7 @@ impl HostShared {
         control: Option<Arc<ContainedRunControl>>,
         closing: bool,
     ) -> RuntimeHostResult<Option<RuntimeInputCheck>> {
-        let resolved = self.execution.resolve(alias).map_err(|error| {
+        let resolved = self.execution()?.resolve(alias).map_err(|error| {
             RuntimeHostError::execution("resolve_nemu_input_configuration", &error)
         })?;
         let Some(configuration) = resolved

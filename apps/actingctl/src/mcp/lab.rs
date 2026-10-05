@@ -575,6 +575,8 @@ fn command_line(command: &LabCommand, map: &Map<String, Value>) -> Result<Vec<St
 struct Program {
     actinglab: PathBuf,
     root: PathBuf,
+    config: PathBuf,
+    installation: Option<actingcommand_contract::InstalledProcess>,
     state_root: Result<PathBuf, String>,
 }
 
@@ -591,6 +593,7 @@ pub(super) struct Answer {
 impl Program {
     fn locate(context: &ToolContext<'_>) -> Result<Self, ToolError> {
         let location = context.runtime.locate();
+        location.check()?;
         let Some(root) = location.root else {
             return Err(ToolError::usage(
                 "lab_tool_unavailable",
@@ -608,6 +611,10 @@ impl Program {
         }
         Ok(Self {
             actinglab,
+            config: location
+                .config
+                .unwrap_or_else(|| root.join("actingd.config.json")),
+            installation: location.installation,
             root,
             state_root: location.state_root,
         })
@@ -616,6 +623,7 @@ impl Program {
     /// `actinglab --json <arguments>`, talking to this server's Runtime when it is known.
     fn command(&self, arguments: &[String]) -> Command {
         let mut command = Command::new(&self.actinglab);
+        super::runtime::pin_child(&mut command, self.installation.as_ref());
         command.arg("--json").args(arguments);
         if let Ok(state_root) = &self.state_root {
             command.env(STATE_ROOT_ENV, state_root);
@@ -1357,14 +1365,15 @@ pub(super) fn binding_draft(
 /// stdout is exported; inline stay `{config, exit_code, status?, error?, report_export}` with
 /// `status` and `error` copied from the report's top level (review F3).
 fn check_config(program: &Program) -> Result<Value, ToolError> {
-    let config = program.root.join("actingd.config.json");
+    let config = &program.config;
     let mut command = Command::new(
         program
             .root
             .join("runtime")
             .join("actingcommand-actingd.exe"),
     );
-    command.arg("check-config").arg("--config").arg(&config);
+    command.arg("check-config").arg("--config").arg(config);
+    super::runtime::pin_child(&mut command, program.installation.as_ref());
     let captured = child::run_to_end(command).map_err(|failure| match failure {
         ChildFailure::Spawn(error) | ChildFailure::Io(error) => ToolError::new(
             "runtime",

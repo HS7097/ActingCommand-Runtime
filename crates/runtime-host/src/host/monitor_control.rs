@@ -40,7 +40,7 @@ impl HostShared {
             EventAction::MonitorConfigure,
             None,
         )?;
-        let mut registry = lock(&self.monitor_registry, "configure_monitor_registry")?;
+        let mut registry = lock(self.monitor_registry()?, "configure_monitor_registry")?;
         let update = match registry.prepare_configure(
             instance_alias,
             policy,
@@ -78,7 +78,7 @@ impl HostShared {
             EventAction::MonitorClear,
             None,
         )?;
-        let mut registry = lock(&self.monitor_registry, "clear_monitor_registry")?;
+        let mut registry = lock(self.monitor_registry()?, "clear_monitor_registry")?;
         let update = match registry.prepare_clear(instance_alias) {
             Ok(update) => update,
             Err(error) => {
@@ -252,7 +252,7 @@ impl HostShared {
         .map_err(RuntimeHostError::artifact)?;
         let memory = frame_store.memory_budget();
         let registration = self.mark_resources_in_use()?;
-        let captured = self.execution.capture_retained_with_registration_guard(
+        let captured = self.execution()?.capture_retained_with_registration_guard(
             &probe.instance_alias,
             registration,
             memory.clone(),
@@ -385,7 +385,7 @@ impl HostShared {
             );
         }
 
-        let observation = match self.execution.observe_monitor(
+        let observation = match self.execution()?.observe_monitor(
             &probe.instance_alias,
             probe.policy.expected_page(),
             &frame,
@@ -425,7 +425,7 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
-        let mut registry = lock(&self.monitor_registry, "complete_monitor_probe")?;
+        let mut registry = lock(self.monitor_registry()?, "complete_monitor_probe")?;
         let update = registry.prepare_completion(
             probe,
             started_at_unix_ms,
@@ -470,7 +470,7 @@ impl HostShared {
         started_at_unix_ms: u64,
         error: RuntimeHostError,
     ) -> RuntimeHostResult<()> {
-        let mut registry = lock(&self.monitor_registry, "refuse_monitor_probe")?;
+        let mut registry = lock(self.monitor_registry()?, "refuse_monitor_probe")?;
         let update = registry.prepare_failure(
             probe,
             started_at_unix_ms,
@@ -637,7 +637,7 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
-        let mut registry = lock(&self.monitor_registry, "fail_monitor_probe")?;
+        let mut registry = lock(self.monitor_registry()?, "fail_monitor_probe")?;
         let update =
             registry.prepare_failure(probe, started_at_unix_ms, unix_ms_now()?, runtime_code)?;
         let failed = self.append_event_raw(
@@ -699,7 +699,7 @@ impl HostShared {
                 )
             })?;
         let resolved = self
-            .execution
+            .execution()?
             .resolve(instance_alias)
             .map_err(|error| RuntimeHostError::execution("resolve_monitor_instance", &error))?;
         if resolved.instance_id() != registered.instance_id
@@ -719,14 +719,14 @@ impl HostShared {
 pub(super) fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     while !shared.fatal.is_shutdown_requested() {
         let now_unix_ms = unix_ms_now()?;
-        let due = lock(&shared.monitor_registry, "read_due_monitors")?
+        let due = lock(shared.monitor_registry()?, "read_due_monitors")?
             .due(now_unix_ms, MAX_MONITOR_PROBES_PER_TICK)?;
         for probe in due {
             if shared.fatal.is_shutdown_requested() {
                 return Ok(());
             }
             let Some(_work) = shared.begin_work()? else {
-                return Ok(());
+                break;
             };
             if let Err(error) = shared.run_monitor_probe(&probe) {
                 shared.fatal.mark(error.clone())?;

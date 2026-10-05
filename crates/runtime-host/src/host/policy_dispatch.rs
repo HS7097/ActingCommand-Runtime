@@ -136,6 +136,40 @@ pub(super) struct SchedulingPauseTable {
 }
 
 impl SchedulingPauseTable {
+    pub(super) fn from_install_pauses(
+        global: Option<SchedulingPauseState>,
+        instances: BTreeMap<String, InstancePauseState>,
+    ) -> Self {
+        Self {
+            global_revision: global.as_ref().map_or(0, |pause| pause.revision),
+            global,
+            instance_revisions: instances
+                .iter()
+                .map(|(alias, pause)| (alias.clone(), pause.revision))
+                .collect(),
+            instances,
+            client_resets: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn validate_install_scopes(
+        &self,
+        registered: &BTreeMap<InstanceId, RegisteredInstance>,
+    ) -> RuntimeHostResult<()> {
+        if self.instances.keys().any(|alias| {
+            !registered
+                .values()
+                .any(|instance| &instance.instance_alias == alias)
+        }) {
+            return Err(RuntimeHostError::request(
+                "install_pause_scope_mismatch",
+                "restore_install_pauses",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        Ok(())
+    }
+
     /// Moves an instance pause of `revision` from stage `from` to `to`; any other state means
     /// the pause this request set was lost.
     fn advance_instance(
@@ -164,6 +198,22 @@ impl SchedulingPauseTable {
         self.client_resets
             .get(instance_alias)
             .is_some_and(|connections| !connections.is_empty())
+    }
+
+    pub(super) fn install_cleanup_pending(&self) -> bool {
+        self.client_resets
+            .values()
+            .any(|connections| !connections.is_empty())
+    }
+
+    pub(super) fn install_reset_continuation(
+        &self,
+        instance_alias: &str,
+        connection: ConnectionId,
+    ) -> bool {
+        self.client_resets
+            .get(instance_alias)
+            .is_some_and(|connections| connections.contains(&connection))
     }
 
     /// The deferral code a policy dispatch to `instance_alias` meets, if a gate is closed.
@@ -391,7 +441,7 @@ impl HostShared {
             })?;
         let (outcome_keys, facts, resources, missing_instance_facts, unknown_offset_tasks) = {
             let _outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-            let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
+            let mut policy = lock(self.policy()?, "read_policy_outcome_keys")?;
             // The previous evaluated cycle's eligibility verdicts take effect here, before
             // this cycle's inputs are projected (Workflow #308 slice 5b).
             policy.apply_eligibility_verdicts();
@@ -414,7 +464,7 @@ impl HostShared {
                 unknown_offset_tasks,
             )
         };
-        let workloads = lock(&self.policy, "read_policy_performance_workloads")?
+        let workloads = lock(self.policy()?, "read_policy_performance_workloads")?
             .active_performance_workloads()?;
         let mut controlled_resources = resources;
         lock(
@@ -433,7 +483,7 @@ impl HostShared {
         // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration.
         let suspension_lift = self.suspension_lift_view(&procedure_manifest);
         let (mut cycle, eligibility_unknown_pairs) = {
-            let mut policy = lock(&self.policy, "evaluate_policy_cycle")?;
+            let mut policy = lock(self.policy()?, "evaluate_policy_cycle")?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
             let cycle = policy.evaluate(
                 &facts,
@@ -888,7 +938,7 @@ impl HostShared {
             (facts, fact_projection)
         };
         let (catalog, workloads) = {
-            let policy = lock(&self.policy, "project_forward_catalog")?;
+            let policy = lock(self.policy()?, "project_forward_catalog")?;
             let catalog = policy.active_loaded().ok_or_else(|| {
                 RuntimeHostError::request(
                     "policy_catalog_unavailable",
@@ -934,7 +984,7 @@ impl HostShared {
         let mut rejection = None;
         let result = (|| {
             {
-                let policy = lock(&self.policy, "validate_policy_dispatch")?;
+                let policy = lock(self.policy()?, "validate_policy_dispatch")?;
                 if let Some(replay) = policy.replay_admission(intent, reason_chain)? {
                     return Ok(replay);
                 }
@@ -1140,7 +1190,7 @@ impl HostShared {
             // from here across the intent append, the lease and the outcome append until both
             // events are applied (lock order: policy_outcome_gate -> policy -> fact_write_gate).
             let outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-            let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
+            let mut policy = lock(self.policy()?, "read_policy_outcome_keys")?;
             let (outcome_keys, current_facts, fact_gate) = {
                 let outcome_keys = policy.outcome_key_snapshot()?;
                 if outcome_keys.generation.as_ref().is_none_or(|generation| {
@@ -1976,7 +2026,7 @@ impl HostShared {
         &self,
         decision_id: &str,
     ) -> RuntimeHostResult<Option<CatalogGeneration>> {
-        Ok(lock(&self.policy, "read_pinned_policy_catalog")?.pinned_catalog(decision_id))
+        Ok(lock(self.policy()?, "read_pinned_policy_catalog")?.pinned_catalog(decision_id))
     }
 
     pub(super) fn project_policy_input_identity(
@@ -1995,7 +2045,7 @@ impl HostShared {
                 &self.policy_outcome_gate,
                 "snapshot_policy_input_identity_outcome_state",
             )?;
-            let mut policy = lock(&self.policy, "read_policy_input_identity_outcome_keys")?;
+            let mut policy = lock(self.policy()?, "read_policy_input_identity_outcome_keys")?;
             let outcome_keys = policy.outcome_key_snapshot()?;
             let _fact_gate = lock(&self.fact_write_gate, "project_policy_input_identity_facts")?;
             let (facts, _) = self.project_authoritative_policy_inputs_under_gate(

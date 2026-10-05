@@ -134,7 +134,7 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -164,6 +164,7 @@ mod foreground_gate;
 mod frame_retention;
 mod governance;
 mod input;
+mod installation;
 mod instance_discovery;
 mod lab_operation;
 mod lease;
@@ -242,6 +243,9 @@ use state_control::reconcile_runtime_state;
 
 #[derive(Clone, Copy)]
 pub enum RuntimeLifecycleFailureStage {
+    InstallDrain,
+    InstallHeld,
+    InstallRelease,
     PolicyInitialization,
     PolicyMonitor,
     PolicyForward,
@@ -368,6 +372,7 @@ pub struct GovernancePolicy {
 
 #[derive(Clone)]
 pub struct RuntimeHostConfig {
+    install_held: Option<actingcommand_contract::InstallHeldStartup>,
     state_root: PathBuf,
     device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
     bind_address: SocketAddr,
@@ -411,6 +416,7 @@ impl RuntimeHostConfig {
     pub fn new(state_root: impl Into<PathBuf>, secret_fingerprint_salt: impl AsRef<[u8]>) -> Self {
         Self {
             state_root: state_root.into(),
+            install_held: None,
             device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode::default(),
             bind_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             scheduler: SchedulerConfig::default(),
@@ -439,6 +445,11 @@ impl RuntimeHostConfig {
 
     pub fn with_bind_address(mut self, bind_address: SocketAddr) -> Self {
         self.bind_address = bind_address;
+        self
+    }
+
+    pub fn with_install_held(mut self, held: actingcommand_contract::InstallHeldStartup) -> Self {
+        self.install_held = Some(held);
         self
     }
 
@@ -871,6 +882,8 @@ impl RuntimeHost {
         ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>>,
     ) -> RuntimeHostResult<Self> {
         config.validate()?;
+        let lifecycle_admission =
+            installation::LifecycleAdmission::new(config.install_held.clone())?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
             RuntimeHostError::fatal(
                 "state_root_create_failed",
@@ -1115,81 +1128,6 @@ impl RuntimeHost {
             }
             return Err(original);
         }
-        let provider = match assemble(&mut crate::ProviderStartup {
-            ledger: &ledger,
-            events: &events,
-            owner_epoch,
-            links: events.system_links()?,
-        }) {
-            Ok(provider) => provider,
-            Err(original) => {
-                // Assembly has not opened any device session. Native library caches keep
-                // their existing process lifetime; this does not attest SDK shutdown.
-                let ledger_closed = ledger.close();
-                let owner_closed = owner.close(config.clock.sample()?.unix_ms);
-                ledger_closed.map_err(|_| ledger_error("close_startup_ledger"))?;
-                owner_closed?;
-                return Err(original);
-            }
-        };
-        let registered_instances = initial_registered_instances(provider.as_ref())?;
-        let startup_packages = startup_package::resolve_startup_packages(
-            &config.startup_packages,
-            &registered_instances,
-        )?;
-        let stuck_recovery =
-            recovery_ladder::resolve_stuck_recovery(&config.stuck_recovery, &registered_instances)?;
-        let monitor_registry = MonitorRegistry::open(
-            &config.state_root,
-            registered_instances
-                .values()
-                .map(|instance| instance.instance_alias.clone()),
-            owner_epoch,
-            &ledger,
-            &events,
-        )?;
-        let mut policy = PolicyHost::open(
-            &config.state_root,
-            Arc::clone(&state),
-            &ledger,
-            config.policy_cadence.clone(),
-            &events,
-        )?;
-        reconcile_policy_dispatches(&mut policy, &ledger, &events)?;
-        let authoritative_policy_outcomes =
-            recover_authoritative_policy_outcomes(&policy, &ledger)?;
-        let policy_dispatch_clocks = policy
-            .recovered_dispatch_clocks()?
-            .into_iter()
-            .map(|(decision_id, admitted_at_unix_ms)| {
-                (
-                    decision_id,
-                    PolicyDispatchClock::recovered(admitted_at_unix_ms),
-                )
-            })
-            .collect();
-        ApprovalProjection::recover(&ledger, Arc::clone(&state))?;
-        reconcile_runtime_state(&state, &ledger, &events)?;
-        let agent_instance_ids = registered_instances
-            .values()
-            .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
-            .collect::<BTreeMap<_, _>>();
-        let mut agent_dispatcher = AgentDispatcherState::recover(&ledger, &agent_instance_ids)?;
-        if let Some(agent_config) = &config.agent_dispatcher {
-            reconcile_agent_wakes(
-                &mut agent_dispatcher,
-                &ledger,
-                &events,
-                &registered_instances,
-                agent_config,
-            )?;
-        } else if agent_dispatcher.has_live_obligations() {
-            return Err(RuntimeHostError::fatal(
-                "agent_dispatcher_config_missing",
-                "start_runtime_host",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        }
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
                 "runtime_bind_failed",
@@ -1211,14 +1149,6 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        append_runtime_start_event(
-            &ledger,
-            &events,
-            &config.state_root,
-            takeover,
-            config.device_diagnostic_mode,
-        )?;
-        append_instance_binding_events(&ledger, &events, &registered_instances)?;
         let prepared = (|| {
             let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
             let performance_interval = performance.sample_interval().or_else(|| {
@@ -1294,9 +1224,9 @@ impl RuntimeHost {
         let shared = Arc::new(HostShared {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
-            lifecycle_admission: RwLock::new(false),
+            lifecycle_admission: Mutex::new(lifecycle_admission),
             scheduler: Arc::new(Mutex::new(scheduler)),
-            policy: Mutex::new(policy),
+            policy: OnceLock::new(),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
             frame_retention: Mutex::new(
@@ -1324,7 +1254,7 @@ impl RuntimeHost {
             runtime_facts_dirty: AtomicBool::new(runtime_facts_dirty),
             maximum_frame_bytes: config.maximum_frame_bytes,
             policy_inputs: Mutex::new(config.policy_inputs),
-            authoritative_policy_outcomes: Mutex::new(authoritative_policy_outcomes),
+            authoritative_policy_outcomes: Mutex::new(BTreeMap::new()),
             procedure_manifest: Mutex::new(config.procedure_manifest),
             verified_materials: Mutex::new(material_read::VerifiedMaterialCache::default()),
             verified_artifacts: Mutex::new(planning::VerifiedArtifactIndex::default()),
@@ -1333,12 +1263,12 @@ impl RuntimeHost {
             ledger,
             artifacts,
             state,
-            agent_dispatcher_config: config.agent_dispatcher,
-            agent_dispatcher: Mutex::new(agent_dispatcher),
+            agent_dispatcher_config: config.agent_dispatcher.clone(),
+            agent_dispatcher: Mutex::new(AgentDispatcherState::default()),
             events,
-            execution: ExecutionKernel::new(provider),
-            registered_instances: Mutex::new(registered_instances),
-            monitor_registry: Mutex::new(monitor_registry),
+            execution: OnceLock::new(),
+            registered_instances: Mutex::new(BTreeMap::new()),
+            monitor_registry: OnceLock::new(),
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
             #[cfg(test)]
@@ -1354,16 +1284,16 @@ impl RuntimeHost {
             #[cfg(test)]
             lease_expiry_test_checkpoints: Mutex::new(Vec::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
-            policy_dispatch_clocks: Mutex::new(policy_dispatch_clocks),
+            policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeMap::new()),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
-            startup_packages,
+            startup_packages: OnceLock::new(),
             pending_host_work: Mutex::new(VecDeque::new()),
             resource_packages: config.resource_packages,
-            stuck_recovery,
+            stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             parked_recovery_ladders: Mutex::new(BTreeMap::new()),
             prerequisite_packages: config.prerequisite_packages,
@@ -1384,191 +1314,233 @@ impl RuntimeHost {
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
             fatal,
         });
-        if let Err(original) = shared.synchronize_fact_store() {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        // Slice #315-B2c-2: the automatic release of a dead previous owner is recorded here.
-        if let Some(released) = released_by_exit
-            && let Err(original) =
-                shared.append_lifecycle_observed(released.phase(), EventLinksDraft::default())
-        {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        // Slice #313-f4: the configured policy instances seed the instance fact store once the
-        // store is synchronized; every evaluation reads its instance set from the store.
-        if let Err(original) = shared.seed_policy_instance_facts() {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        if let Some(config_manifest) = &config.config_manifest
-            && let Err(original) = shared.record_config_manifest(config_manifest)
-        {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        // Workflow #308 slice 5b: settlements replayed or reconciled above reach the runtime
-        // fact store exactly as a live settlement does; identical records append nothing.
-        if let Err(original) = shared.record_policy_settlement_facts_on_start() {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        // Workflow #338 R3 (#343-1): the direct contained runs the previous owner epoch admitted
-        // and never terminated are settled as their resubmission would settle them; the
-        // scheduler chain was reconciled above (`reconcile_policy_dispatches`).
-        if let Err(original) = shared.settle_previous_epoch_contained_runs() {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        if let Err(original) = shared.expire_agent_sessions() {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        // Workflow #317 sc3 (a): every registered physical instance starts unavailable and is
-        // connected and self-checked once, in order, before the host answers anyone; a failed
-        // preparation leaves its instance unavailable, only a fatal failure stops the start.
-        if let Err(original) = shared.prepare_physical_instances_on_start() {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        // Workflow #332 G-flake3: start's last capacity sample, after start preparation and
-        // before any thread admits business, so the first periodic tick keeps the
-        // 2 x interval freshness however long the preparation above took.
-        if let Err(original) = lock(&shared.performance, "sample_capacity_before_business")
-            .and_then(|mut performance| {
-                performance.sample_and_record_capacity(&shared.ledger, &shared.events)
-            })
-        {
-            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-            return Err(original);
-        }
-        let sweep_shared = Arc::clone(&shared);
-        let sweep_thread = match thread::Builder::new()
-            .name("actingcommand-runtime-sweeper".to_string())
-            .spawn(move || lease_sweep_loop(sweep_shared))
-        {
-            Ok(thread) => thread,
-            Err(_) => {
-                let original = RuntimeHostError::fatal(
-                    "runtime_sweeper_spawn_failed",
-                    "start_runtime_host",
-                    RuntimeErrorCode::RuntimeFatal,
-                );
-                failed_start_cleanup(shared, &info_path, None, None, None, None)?;
-                return Err(original);
-            }
-        };
-        let monitor_shared = Arc::clone(&shared);
-        let monitor_thread = match thread::Builder::new()
-            .name("actingcommand-runtime-monitor".to_string())
-            .spawn(move || monitor_probe_loop(monitor_shared))
-        {
-            Ok(thread) => thread,
-            Err(_) => {
-                let original = RuntimeHostError::fatal(
-                    "runtime_monitor_spawn_failed",
-                    "start_runtime_host",
-                    RuntimeErrorCode::RuntimeFatal,
-                );
-                failed_start_cleanup(shared, &info_path, Some(sweep_thread), None, None, None)?;
-                return Err(original);
-            }
-        };
-        // Slice #316-B3: the host's own scheduling point for startup packages, a peer of the
-        // monitor thread; a start request never runs the package on its connection thread.
-        let startup_shared = Arc::clone(&shared);
-        let startup_thread = match thread::Builder::new()
-            .name("actingcommand-runtime-startup".to_string())
-            .spawn(move || startup_package::startup_package_loop(startup_shared))
-        {
-            Ok(thread) => thread,
-            Err(_) => {
-                let original = RuntimeHostError::fatal(
-                    "runtime_startup_spawn_failed",
-                    "start_runtime_host",
-                    RuntimeErrorCode::RuntimeFatal,
-                );
-                failed_start_cleanup(
-                    shared,
-                    &info_path,
-                    Some(sweep_thread),
-                    Some(monitor_thread),
-                    None,
-                    None,
-                )?;
-                return Err(original);
-            }
-        };
-        let performance_thread = if let Some(interval) = performance_interval {
-            let performance_shared = Arc::clone(&shared);
-            match thread::Builder::new()
-                .name("actingcommand-runtime-performance".to_string())
-                .spawn(move || performance_monitor_loop(performance_shared, interval))
-            {
-                Ok(thread) => Some(thread),
-                Err(_) => {
-                    let original = RuntimeHostError::fatal(
-                        "runtime_performance_spawn_failed",
-                        "start_runtime_host",
-                        RuntimeErrorCode::RuntimeFatal,
-                    );
-                    failed_start_cleanup(
-                        shared,
-                        &info_path,
-                        Some(sweep_thread),
-                        Some(monitor_thread),
-                        Some(startup_thread),
-                        None,
-                    )?;
-                    return Err(original);
-                }
-            }
-        } else {
-            None
-        };
-        let accept_shared = Arc::clone(&shared);
-        let maximum_frame_bytes = config.maximum_frame_bytes;
-        let io_timeout = config.io_timeout;
-        #[cfg(feature = "test-observation")]
-        let accept_observation_owner = crate::test_observation::current_observation_owner();
-        let accept_thread = match thread::Builder::new()
-            .name("actingcommand-runtime-ipc".to_string())
-            .spawn(move || {
-                #[cfg(feature = "test-observation")]
-                let _observation_owner =
-                    crate::test_observation::enter_observation_owner(accept_observation_owner);
-                accept_loop(listener, accept_shared, maximum_frame_bytes, io_timeout)
-            }) {
-            Ok(thread) => thread,
-            Err(_) => {
-                let original = RuntimeHostError::fatal(
-                    "runtime_accept_spawn_failed",
-                    "start_runtime_host",
-                    RuntimeErrorCode::RuntimeFatal,
-                );
-                failed_start_cleanup(
-                    shared,
-                    &info_path,
-                    Some(sweep_thread),
-                    Some(monitor_thread),
-                    Some(startup_thread),
-                    performance_thread,
-                )?;
-                return Err(original);
-            }
-        };
-        Ok(Self {
+        let mut host = Self {
             info,
             info_path,
             owner_released_by_exit: released_by_exit,
-            shared: Some(shared),
-            accept_thread: Some(accept_thread),
-            sweep_thread: Some(sweep_thread),
-            monitor_thread: Some(monitor_thread),
-            startup_thread: Some(startup_thread),
-            performance_thread,
-        })
+            shared: Some(Arc::clone(&shared)),
+            accept_thread: None,
+            sweep_thread: None,
+            monitor_thread: None,
+            startup_thread: None,
+            performance_thread: None,
+        };
+        let prepared = (|| {
+            shared.synchronize_fact_store()?;
+            shared.initialize_installation()?;
+            if let Some(released) = released_by_exit {
+                shared.append_lifecycle_observed(released.phase(), EventLinksDraft::default())?;
+            }
+            let accept_shared = Arc::clone(&shared);
+            let maximum_frame_bytes = config.maximum_frame_bytes;
+            let io_timeout = config.io_timeout;
+            #[cfg(feature = "test-observation")]
+            let accept_observation_owner = crate::test_observation::current_observation_owner();
+            host.accept_thread = Some(
+                thread::Builder::new()
+                    .name("actingcommand-runtime-ipc".to_string())
+                    .spawn(move || {
+                        #[cfg(feature = "test-observation")]
+                        let _observation_owner = crate::test_observation::enter_observation_owner(
+                            accept_observation_owner,
+                        );
+                        accept_loop(listener, accept_shared, maximum_frame_bytes, io_timeout)
+                    })
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "runtime_accept_spawn_failed",
+                            "start_runtime_host",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?,
+            );
+            shared.wait_install_release()?;
+            shared.check_install_preparation()?;
+            let preparation_boundary = || shared.check_install_preparation();
+            let provider = assemble(&mut crate::ProviderStartup {
+                ledger: &shared.ledger,
+                events: &shared.events,
+                owner_epoch,
+                links: shared.events.system_links()?,
+                preparation_boundary: &preparation_boundary,
+            })?;
+            installation::set_prepared(
+                &shared.execution,
+                ExecutionKernel::new(Arc::clone(&provider)),
+            )?;
+            shared.check_install_preparation()?;
+            let registered_instances = initial_registered_instances(provider.as_ref())?;
+            drop(provider);
+            let startup_packages = startup_package::resolve_startup_packages(
+                &config.startup_packages,
+                &registered_instances,
+            )?;
+            let stuck_recovery = recovery_ladder::resolve_stuck_recovery(
+                &config.stuck_recovery,
+                &registered_instances,
+            )?;
+            let monitor_registry = MonitorRegistry::open(
+                &config.state_root,
+                registered_instances
+                    .values()
+                    .map(|instance| instance.instance_alias.clone()),
+                owner_epoch,
+                &shared.ledger,
+                &shared.events,
+            )?;
+            let mut policy = PolicyHost::open(
+                &config.state_root,
+                Arc::clone(&shared.state),
+                &shared.ledger,
+                config.policy_cadence.clone(),
+                &shared.events,
+            )?;
+            reconcile_policy_dispatches(&mut policy, &shared.ledger, &shared.events)?;
+            let authoritative_policy_outcomes =
+                recover_authoritative_policy_outcomes(&policy, &shared.ledger)?;
+            let policy_dispatch_clocks = policy
+                .recovered_dispatch_clocks()?
+                .into_iter()
+                .map(|(decision_id, admitted_at_unix_ms)| {
+                    (
+                        decision_id,
+                        PolicyDispatchClock::recovered(admitted_at_unix_ms),
+                    )
+                })
+                .collect();
+            ApprovalProjection::recover(&shared.ledger, Arc::clone(&shared.state))?;
+            reconcile_runtime_state(&shared.state, &shared.ledger, &shared.events)?;
+            let agent_instance_ids = registered_instances
+                .values()
+                .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+                .collect::<BTreeMap<_, _>>();
+            let mut agent_dispatcher =
+                AgentDispatcherState::recover(&shared.ledger, &agent_instance_ids)?;
+            if let Some(agent_config) = &config.agent_dispatcher {
+                reconcile_agent_wakes(
+                    &mut agent_dispatcher,
+                    &shared.ledger,
+                    &shared.events,
+                    &registered_instances,
+                    agent_config,
+                )?;
+            } else if agent_dispatcher.has_live_obligations() {
+                return Err(RuntimeHostError::fatal(
+                    "agent_dispatcher_config_missing",
+                    "start_runtime_host",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+
+            shared.check_install_preparation()?;
+            append_runtime_start_event(
+                &shared.ledger,
+                &shared.events,
+                &config.state_root,
+                takeover,
+                config.device_diagnostic_mode,
+            )?;
+            append_instance_binding_events(&shared.ledger, &shared.events, &registered_instances)?;
+            installation::set_prepared(&shared.policy, Mutex::new(policy))?;
+            installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
+            installation::set_prepared(&shared.startup_packages, startup_packages)?;
+            installation::set_prepared(&shared.stuck_recovery, stuck_recovery)?;
+            *lock(&shared.registered_instances, "prepare_registered_instances")? =
+                registered_instances;
+            *lock(
+                &shared.authoritative_policy_outcomes,
+                "prepare_policy_outcomes",
+            )? = authoritative_policy_outcomes;
+            *lock(&shared.policy_dispatch_clocks, "prepare_policy_clocks")? =
+                policy_dispatch_clocks;
+            *lock(&shared.agent_dispatcher, "prepare_agent_dispatcher")? = agent_dispatcher;
+            shared.seed_policy_instance_facts()?;
+            if let Some(config_manifest) = &config.config_manifest {
+                shared.record_config_manifest(config_manifest)?;
+            }
+            shared.record_policy_settlement_facts_on_start()?;
+            // The scheduler reconciliation above precedes direct-run settlement; both
+            // complete before background execution or root admission (#351 / #352).
+            shared.settle_previous_epoch_contained_runs()?;
+            shared.expire_agent_sessions()?;
+            shared.check_install_preparation()?;
+            shared.restore_install_pauses()?;
+            shared.prepare_physical_instances_on_start()?;
+            shared.check_install_preparation()?;
+            lock(&shared.performance, "sample_capacity_before_business")?
+                .sample_and_record_capacity(&shared.ledger, &shared.events)?;
+            let sweep_shared = Arc::clone(&shared);
+            host.sweep_thread = Some(
+                thread::Builder::new()
+                    .name("actingcommand-runtime-sweeper".to_string())
+                    .spawn(move || lease_sweep_loop(sweep_shared))
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "runtime_sweeper_spawn_failed",
+                            "start_runtime_host",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?,
+            );
+            let monitor_shared = Arc::clone(&shared);
+            host.monitor_thread = Some(
+                thread::Builder::new()
+                    .name("actingcommand-runtime-monitor".to_string())
+                    .spawn(move || monitor_probe_loop(monitor_shared))
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "runtime_monitor_spawn_failed",
+                            "start_runtime_host",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?,
+            );
+            let startup_shared = Arc::clone(&shared);
+            host.startup_thread = Some(
+                thread::Builder::new()
+                    .name("actingcommand-runtime-startup".to_string())
+                    .spawn(move || startup_package::startup_package_loop(startup_shared))
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "runtime_startup_spawn_failed",
+                            "start_runtime_host",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?,
+            );
+            if let Some(interval) = performance_interval {
+                let performance_shared = Arc::clone(&shared);
+                host.performance_thread = Some(
+                    thread::Builder::new()
+                        .name("actingcommand-runtime-performance".to_string())
+                        .spawn(move || performance_monitor_loop(performance_shared, interval))
+                        .map_err(|_| {
+                            RuntimeHostError::fatal(
+                                "runtime_performance_spawn_failed",
+                                "start_runtime_host",
+                                RuntimeErrorCode::RuntimeFatal,
+                            )
+                        })?,
+                );
+            }
+            shared.finish_install_preparation()?;
+            Ok::<_, RuntimeHostError>(())
+        })();
+        if let Err(mut original) = prepared {
+            if let Err(recording) = shared.fail_install_preparation(&original) {
+                original = original
+                    .into_fatal()
+                    .with_related_failure("install_failure_recording", &recording);
+            }
+            drop(shared);
+            if let Err(cleanup) = host.close() {
+                original = original
+                    .into_fatal()
+                    .with_related_failure("startup_cleanup", &cleanup);
+            }
+            return Err(original);
+        }
+        Ok(host)
     }
 
     pub const fn runtime_info(&self) -> &RuntimeInfo {
@@ -1594,6 +1566,23 @@ impl RuntimeHost {
             .shared_ref("begin_policy_work")?
             .begin_work()?
             .map(|guard| RuntimePolicyWork { _guard: guard }))
+    }
+
+    /// Keeps a pending policy trigger while installation has closed root admission.
+    /// `None` means actual shutdown; a temporary drain is not a daemon close request.
+    pub fn wait_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
+        loop {
+            if let Some(error) = self.fatal_error()? {
+                return Err(error);
+            }
+            if self.is_shutdown_requested()? {
+                return Ok(None);
+            }
+            if let Some(work) = self.begin_policy_work()? {
+                return Ok(Some(work));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     pub fn fatal_error(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
@@ -1650,7 +1639,8 @@ impl RuntimeHost {
         Option<actingcommand_runtime_state::StateDocument>,
     )> {
         let shared = self.shared_ref("activate_policy_catalog_with_expected_for_test")?;
-        let catalog = lock(&shared.policy, "stage_policy_catalog_for_cas_test")?.stage(sources)?;
+        let catalog =
+            lock(shared.policy()?, "stage_policy_catalog_for_cas_test")?.stage(sources)?;
         let result = shared.switch_policy_catalog(
             catalog,
             Some(expected),
@@ -1921,7 +1911,7 @@ impl RuntimeHost {
             &shared.policy_outcome_gate,
             "policy_outcome_key_snapshot_for_test",
         )?;
-        lock(&shared.policy, "policy_outcome_key_snapshot_for_test")?.outcome_key_snapshot()
+        lock(shared.policy()?, "policy_outcome_key_snapshot_for_test")?.outcome_key_snapshot()
     }
 
     #[cfg(test)]
@@ -2868,12 +2858,12 @@ fn initial_registered_instances(
 
 /// A scoped Runtime-owned policy admission; dropping it does not stop or close the host.
 pub struct RuntimePolicyWork<'a> {
-    _guard: RwLockReadGuard<'a, bool>,
+    _guard: installation::LifecycleWork<'a>,
 }
 
 struct HostWork<'a> {
     shared: &'a HostShared,
-    _guard: RwLockReadGuard<'a, bool>,
+    _guard: installation::LifecycleWork<'a>,
 }
 
 impl std::ops::Deref for HostWork<'_> {
@@ -2887,14 +2877,14 @@ impl std::ops::Deref for HostWork<'_> {
 struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     shutdown_target: actingcommand_contract::RuntimeShutdownTarget,
-    // Concurrent work holds the read side; idle shutdown never waits for a busy writer slot.
-    lifecycle_admission: RwLock<bool>,
+    // One owner serializes root admission, drain, held startup and exact-owner shutdown.
+    lifecycle_admission: Mutex<installation::LifecycleAdmission>,
     scheduler: Arc<Mutex<SeedScheduler>>,
     // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     // A policy admission takes `policy` after `policy_outcome_gate` and holds it without a
     // break across the intent append, the lease acquisition and the outcome append, until it
     // has applied both events (Workflow #191 U5-F1).
-    policy: Mutex<PolicyHost>,
+    policy: OnceLock<Mutex<PolicyHost>>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
     frame_retention: Mutex<Option<frame_retention::FrameRetention>>,
@@ -2945,9 +2935,9 @@ struct HostShared {
     agent_dispatcher: Mutex<AgentDispatcherState>,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
-    execution: ExecutionKernel,
+    execution: OnceLock<ExecutionKernel>,
     registered_instances: Mutex<BTreeMap<InstanceId, RegisteredInstance>>,
-    monitor_registry: Mutex<MonitorRegistry>,
+    monitor_registry: OnceLock<Mutex<MonitorRegistry>>,
     queued_requests: Mutex<BTreeMap<RequestId, QueuedRequestContext>>,
     queue_terminals: Mutex<QueueTerminalStore>,
     #[cfg(test)]
@@ -2974,13 +2964,13 @@ struct HostShared {
     scheduling_pause: Mutex<SchedulingPauseTable>,
     // Slice #316-B3: startup packages by registered instance, and the work handed to the
     // host's own scheduling thread (startup packages; since #316-B4 also recovery ladders).
-    startup_packages: BTreeMap<InstanceId, ContainedTaskRequest>,
+    startup_packages: OnceLock<BTreeMap<InstanceId, ContainedTaskRequest>>,
     pending_host_work: Mutex<VecDeque<startup_package::PendingHostWork>>,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults), the
     // per-instance ladder window, and direct-run triggers waiting for their receipt write.
-    stuck_recovery: BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>,
+    stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
     recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
     parked_recovery_ladders: Mutex<BTreeMap<RequestId, recovery_ladder::PendingRecoveryLadder>>,
     // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
@@ -3059,116 +3049,6 @@ struct OperationSuccess {
 }
 
 impl HostShared {
-    fn work_guard(&self) -> RuntimeHostResult<RwLockReadGuard<'_, bool>> {
-        self.lifecycle_admission.read().map_err(|_| {
-            RuntimeHostError::fatal(
-                "runtime_lifecycle_admission_poisoned",
-                "admit_runtime_work",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })
-    }
-
-    fn begin_work(&self) -> RuntimeHostResult<Option<RwLockReadGuard<'_, bool>>> {
-        let guard = self.work_guard()?;
-        if *guard {
-            return Ok(None);
-        }
-        Ok(Some(guard))
-    }
-
-    fn request_shutdown(
-        &self,
-        request: &ValidatedRuntimeRequest<'_>,
-        target: actingcommand_contract::RuntimeShutdownTarget,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        use actingcommand_contract::RuntimeShutdownDecision;
-        let admission = match self.lifecycle_admission.try_write() {
-            Ok(guard) => Some(guard),
-            Err(TryLockError::WouldBlock) => None,
-            Err(TryLockError::Poisoned(_)) => {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::fatal(
-                        "runtime_lifecycle_admission_poisoned",
-                        "request_runtime_shutdown",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ),
-                ));
-            }
-        };
-        if let Some(error) = self
-            .fatal
-            .current()
-            .map_err(RequestFailure::poison_without_terminal)?
-        {
-            return Err(RequestFailure::poison_without_terminal(error));
-        }
-        let decision = if target != self.shutdown_target {
-            RuntimeShutdownDecision::OwnerMismatch
-        } else if self.fatal.is_shutdown_requested() {
-            RuntimeShutdownDecision::AlreadyStopping
-        } else if admission.is_none() {
-            RuntimeShutdownDecision::Busy
-        } else {
-            let scheduler = lock(&self.scheduler, "check_shutdown_leases")
-                .map_err(RequestFailure::poison_without_terminal)?;
-            let queued = lock(&self.queued_requests, "check_shutdown_queue")
-                .map_err(RequestFailure::poison_without_terminal)?;
-            if !scheduler.active_tokens().is_empty() || !queued.is_empty() {
-                RuntimeShutdownDecision::Busy
-            } else {
-                RuntimeShutdownDecision::Accepted
-            }
-        };
-        let event = self.append_event(
-            if decision == RuntimeShutdownDecision::Accepted {
-                EventSeverity::Info
-            } else {
-                EventSeverity::Warning
-            },
-            request.source(),
-            OriginModule::Runtime,
-            request.actor(),
-            request.event_links(None, None, None),
-            RuntimePayloadDraft::lifecycle_observed(
-                self.owner_epoch,
-                RuntimeLifecyclePhase::ShutdownRequest { target, decision },
-                AuditInput::new(),
-            ),
-        )?;
-        match decision {
-            RuntimeShutdownDecision::Accepted => {
-                // Persist the exact target before closing admission. The daemon owns close/join.
-                let mut admission = admission.expect("acceptance requires exclusive admission");
-                *admission = true;
-                self.fatal.request_shutdown();
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Admitted,
-                    terminal: Some(terminal(&event)),
-                    result: RuntimeResult::ShutdownAccepted { target },
-                })
-            }
-            denied => Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "runtime_shutdown_denied",
-                    "request_runtime_shutdown",
-                    match denied {
-                        RuntimeShutdownDecision::Busy => RuntimeErrorCode::RuntimeBusy,
-                        RuntimeShutdownDecision::OwnerMismatch => {
-                            RuntimeErrorCode::RuntimeOwnerMismatch
-                        }
-                        RuntimeShutdownDecision::AlreadyStopping => {
-                            RuntimeErrorCode::RuntimeUnavailable
-                        }
-                        RuntimeShutdownDecision::Accepted => unreachable!(),
-                    },
-                ),
-                RuntimeReceiptState::Denied,
-                Some(terminal(&event)),
-            )),
-        }
-    }
-
     #[cfg(test)]
     fn consume_scheduled_policy_checkpoint_for_test(
         &self,
@@ -3248,94 +3128,101 @@ impl HostShared {
                 ),
             }
         }
-        match self.execution.owned_instance_ids() {
-            Ok(instances) => {
-                for instance_id in instances {
-                    let result = (|| {
-                        // Cached Unconfirmed outcomes are reduced below without another close attempt.
-                        if !self.execution.has_session(instance_id).map_err(|error| {
-                            RuntimeHostError::execution("inspect_retained_session", &error)
-                        })? {
-                            return Ok(());
-                        }
-                        let instance_guard = self
-                            .instance_guard(instance_id)
-                            .map_err(|failure| *failure.error)?;
-                        let admission = lock(&instance_guard, "lock_instance_admission")?;
-                        self.close_retained_instance_while_guarded(
-                            instance_id,
-                            EventLinksDraft::default(),
-                            false,
-                            LeaseReleaseReason::HostShutdown,
-                            &admission,
-                        )?
-                        .map_err(|error| {
-                            RuntimeHostError::execution("close_execution_session", &error)
-                        })
-                    })();
-                    self.record_lifecycle_result(
-                        RuntimeLifecycleFailureStage::SessionClose,
-                        &mut failure,
-                        result,
-                    );
+        if let Some(execution) = self.execution.get() {
+            match execution.owned_instance_ids() {
+                Ok(instances) => {
+                    for instance_id in instances {
+                        let result = (|| {
+                            // Cached Unconfirmed outcomes are reduced below without another close attempt.
+                            if !self
+                                .execution()?
+                                .has_session(instance_id)
+                                .map_err(|error| {
+                                    RuntimeHostError::execution("inspect_retained_session", &error)
+                                })?
+                            {
+                                return Ok(());
+                            }
+                            let instance_guard = self
+                                .instance_guard(instance_id)
+                                .map_err(|failure| *failure.error)?;
+                            let admission = lock(&instance_guard, "lock_instance_admission")?;
+                            self.close_retained_instance_while_guarded(
+                                instance_id,
+                                EventLinksDraft::default(),
+                                false,
+                                LeaseReleaseReason::HostShutdown,
+                                &admission,
+                            )?
+                            .map_err(|error| {
+                                RuntimeHostError::execution("close_execution_session", &error)
+                            })
+                        })();
+                        self.record_lifecycle_result(
+                            RuntimeLifecycleFailureStage::SessionClose,
+                            &mut failure,
+                            result,
+                        );
+                    }
                 }
-            }
-            Err(error) => self.record_lifecycle_result(
-                RuntimeLifecycleFailureStage::SessionClose,
-                &mut failure,
-                Err(RuntimeHostError::execution(
-                    "list_retained_sessions",
-                    &error,
-                )),
-            ),
-        }
-        if let Err(mut error) = self.execution.close_after_resource_retirement() {
-            let aggregate_error = RuntimeHostError::execution("close_execution_kernel", &error);
-            let unconfirmed = error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed);
-            let closed_sessions = error.take_closed_sessions();
-            if closed_sessions.is_empty() {
-                self.record_lifecycle_result(
+                Err(error) => self.record_lifecycle_result(
                     RuntimeLifecycleFailureStage::SessionClose,
                     &mut failure,
                     Err(RuntimeHostError::execution(
-                        "close_execution_kernel",
+                        "list_retained_sessions",
                         &error,
                     )),
-                );
-            } else {
-                for (instance_id, session_error) in closed_sessions {
-                    let mut session_error =
-                        RuntimeHostError::execution("close_execution_kernel", &session_error);
-                    session_error.lifecycle.instance_id = Some(instance_id);
+                ),
+            }
+            if let Err(mut error) = execution.close_after_resource_retirement() {
+                let aggregate_error = RuntimeHostError::execution("close_execution_kernel", &error);
+                let unconfirmed =
+                    error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed);
+                let closed_sessions = error.take_closed_sessions();
+                if closed_sessions.is_empty() {
                     self.record_lifecycle_result(
                         RuntimeLifecycleFailureStage::SessionClose,
                         &mut failure,
-                        Err(session_error),
+                        Err(RuntimeHostError::execution(
+                            "close_execution_kernel",
+                            &error,
+                        )),
+                    );
+                } else {
+                    for (instance_id, session_error) in closed_sessions {
+                        let mut session_error =
+                            RuntimeHostError::execution("close_execution_kernel", &session_error);
+                        session_error.lifecycle.instance_id = Some(instance_id);
+                        self.record_lifecycle_result(
+                            RuntimeLifecycleFailureStage::SessionClose,
+                            &mut failure,
+                            Err(session_error),
+                        );
+                    }
+                    // Keep the kernel reduction after the original per-session errors.
+                    record_failure(
+                        &mut failure,
+                        Err(
+                            RuntimeHostError::execution("close_execution_kernel", &error)
+                                .with_failure_stage(
+                                    RuntimeLifecycleFailureStage::SessionClose.as_str(),
+                                ),
+                        ),
                     );
                 }
-                // Keep the kernel reduction after the original per-session errors.
-                record_failure(
-                    &mut failure,
-                    Err(
-                        RuntimeHostError::execution("close_execution_kernel", &error)
-                            .with_failure_stage(
-                                RuntimeLifecycleFailureStage::SessionClose.as_str(),
-                            ),
-                    ),
-                );
-            }
-            if unconfirmed {
-                self.record_lifecycle_result(
-                    RuntimeLifecycleFailureStage::SessionClose,
-                    &mut failure,
-                    lock(&self.owner, "retain_unconfirmed_owner")
-                        .and_then(|mut owner| owner.retain_unconfirmed()),
-                );
-                self.record_lifecycle_result(
-                    RuntimeLifecycleFailureStage::HostClose,
-                    &mut failure,
-                    self.fatal.mark(aggregate_error),
-                );
+                if unconfirmed {
+                    self.record_lifecycle_result(
+                        RuntimeLifecycleFailureStage::SessionClose,
+                        &mut failure,
+                        lock(&self.owner, "retain_unconfirmed_owner")
+                            .and_then(|mut owner| owner.retain_unconfirmed()),
+                    );
+                    self.record_lifecycle_result(
+                        RuntimeLifecycleFailureStage::HostClose,
+                        &mut failure,
+                        self.fatal.mark(aggregate_error),
+                    );
+                }
             }
         }
         match self.fatal.current() {
@@ -3404,6 +3291,11 @@ fn accept_loop(
     let mut connections = Vec::new();
     let mut failure = None;
     while !shared.fatal.is_shutdown_requested() {
+        if let Err(error) = shared.tick_install() {
+            record_failure(&mut failure, shared.fatal.mark(error.clone()));
+            record_failure(&mut failure, Err(error));
+            break;
+        }
         reap_finished_connections(&mut connections, &shared, &mut failure);
         if shared.fatal.is_shutdown_requested() {
             break;
@@ -3535,8 +3427,8 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         if shared.fatal.is_shutdown_requested() {
             break;
         }
-        let Some(_work) = shared.begin_work()? else {
-            break;
+        let Some(_work) = shared.begin_continuation()? else {
+            continue;
         };
         if let Err(error) = shared.expire_due_leases() {
             shared.fatal.mark(error.clone())?;
@@ -3703,66 +3595,4 @@ fn join_runtime_thread(
             RuntimeErrorCode::RuntimeFatal,
         )
     })?
-}
-
-fn failed_start_cleanup(
-    shared: Arc<HostShared>,
-    info_path: &Path,
-    sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
-    monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
-    startup_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
-    performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
-) -> RuntimeHostResult<()> {
-    shared.fatal.request_shutdown();
-    let mut failure = None;
-    shared.record_lifecycle_result(
-        RuntimeLifecycleFailureStage::ShutdownJoin,
-        &mut failure,
-        join_runtime_thread(sweep_thread, "join_runtime_sweeper"),
-    );
-    shared.record_lifecycle_result(
-        RuntimeLifecycleFailureStage::ShutdownJoin,
-        &mut failure,
-        join_runtime_thread(monitor_thread, "join_runtime_monitor"),
-    );
-    shared.record_lifecycle_result(
-        RuntimeLifecycleFailureStage::ShutdownJoin,
-        &mut failure,
-        join_runtime_thread(startup_thread, "join_runtime_startup"),
-    );
-    shared.record_lifecycle_result(
-        RuntimeLifecycleFailureStage::ShutdownJoin,
-        &mut failure,
-        join_runtime_thread(performance_thread, "join_runtime_performance"),
-    );
-    if let Err(error) = fs::remove_file(info_path)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        shared.record_lifecycle_result(
-            RuntimeLifecycleFailureStage::InfoFileRemoval,
-            &mut failure,
-            Err(RuntimeHostError::fatal(
-                "runtime_info_remove_failed",
-                "abort_runtime_start",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-            .with_native_detail(error.to_string())),
-        );
-    }
-    match Arc::try_unwrap(shared) {
-        Ok(shared) => device_diagnostic::record_host_close_result(&mut failure, shared.close()),
-        Err(shared) => {
-            shared.record_lifecycle_result(
-                RuntimeLifecycleFailureStage::RetainedReference,
-                &mut failure,
-                Err(RuntimeHostError::fatal(
-                    "runtime_reference_leaked",
-                    "abort_runtime_start",
-                    RuntimeErrorCode::RuntimeFatal,
-                )),
-            );
-            shared.finish_device_diagnostics(&mut failure);
-        }
-    }
-    failure.map_or(Ok(()), Err)
 }

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Lazy location and connection (#338 §四 定位 / 启动预算 / 连接). Nothing here runs at
-//! startup: the first tool call finds the install root and the state root and connects
+//! Installation inputs are pinned at process startup (#352); the first tool call connects
 //! with `RuntimeClient::connect`, which checks the owner epoch against `runtime-info.json`.
 //! A connection the client has locked after a failure is dropped, and the next call
 //! connects again; cursors issued on the old connection then answer `cursor_invalid`.
@@ -21,6 +20,9 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 pub(super) struct RuntimeAccess {
     root: Option<PathBuf>,
+    config: Option<PathBuf>,
+    installation: Option<actingcommand_contract::InstalledProcess>,
+    location_error: Option<String>,
     state_root: Option<PathBuf>,
     slot: Mutex<Slot>,
 }
@@ -33,9 +35,43 @@ struct Slot {
 }
 
 /// Where the install and the Runtime state live, as found at one call.
+#[derive(Clone)]
 pub(super) struct Location {
     pub(super) root: Option<PathBuf>,
+    pub(super) config: Option<PathBuf>,
+    pub(super) installation: Option<actingcommand_contract::InstalledProcess>,
+    error: Option<String>,
     pub(super) state_root: Result<PathBuf, String>,
+}
+
+impl Location {
+    pub(super) fn check(&self) -> Result<(), ToolError> {
+        match &self.error {
+            Some(error) => Err(ToolError::usage(
+                "install_selection_unavailable",
+                error.clone(),
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
+pub(super) fn pin_child(
+    command: &mut std::process::Command,
+    installation: Option<&actingcommand_contract::InstalledProcess>,
+) {
+    if let Some(installation) = installation {
+        command
+            .env(
+                actingcommand_contract::INSTALL_ROOT_ENV,
+                installation.root(),
+            )
+            .env(
+                actingcommand_contract::INSTALL_SELECTION_ENV,
+                installation.selection_json(),
+            )
+            .current_dir(installation.root());
+    }
 }
 
 /// The control connection with (Cli, Cli) origin, as actingctl itself uses.
@@ -46,8 +82,64 @@ pub(super) struct Connected {
 
 impl RuntimeAccess {
     pub(super) fn new(root: Option<PathBuf>, state_root: Option<PathBuf>) -> Self {
+        let located = (|| {
+            let process = actingcommand_contract::process_installation()
+                .map_err(|error| error.code().to_owned())?;
+            let installation = match process {
+                Some(selected) => {
+                    if let Some(root) = &root {
+                        let root = fs::canonicalize(root).map_err(|error| error.to_string())?;
+                        if root != selected.root() {
+                            return Err("install_process_root_mismatch".to_owned());
+                        }
+                    }
+                    Some(selected.clone())
+                }
+                None => root
+                    .as_deref()
+                    .map(actingcommand_contract::InstalledProcess::read)
+                    .transpose()
+                    .map_err(|error| error.code().to_owned())?
+                    .flatten(),
+            };
+            let program_root = installation
+                .as_ref()
+                .map(|selected| selected.program_root())
+                .or(root)
+                .or_else(executable_install_root);
+            let config = installation
+                .as_ref()
+                .map(|selected| selected.config_path())
+                .or_else(|| {
+                    program_root
+                        .as_ref()
+                        .map(|root| root.join("actingd.config.json"))
+                });
+            if installation.is_some()
+                && let Some(requested) = &state_root
+            {
+                let configured = configured_state_root(config.as_deref())?;
+                if requested != &configured {
+                    let requested =
+                        fs::canonicalize(requested).map_err(|error| error.to_string())?;
+                    let configured =
+                        fs::canonicalize(configured).map_err(|error| error.to_string())?;
+                    if requested != configured {
+                        return Err("install_process_state_root_mismatch".to_owned());
+                    }
+                }
+            }
+            Ok::<_, String>((program_root, config, installation))
+        })();
+        let (root, config, installation, location_error) = match located {
+            Ok((root, config, installation)) => (root, config, installation, None),
+            Err(error) => (None, None, None, Some(error)),
+        };
         Self {
             root,
+            config,
+            installation,
+            location_error,
             state_root,
             slot: Mutex::new(Slot::default()),
         }
@@ -58,12 +150,19 @@ impl RuntimeAccess {
     /// `--state-root`, or the absolute `state_root` of `<root>\actingd.config.json` (as the
     /// UI's setup reads it).
     pub(super) fn locate(&self) -> Location {
-        let root = self.root.clone().or_else(executable_install_root);
-        let state_root = match &self.state_root {
-            Some(state_root) => Ok(state_root.clone()),
-            None => configured_state_root(root.as_deref()),
+        let root = self.root.clone();
+        let state_root = match (&self.location_error, &self.state_root) {
+            (Some(error), _) => Err(error.clone()),
+            (None, Some(state_root)) => Ok(state_root.clone()),
+            (None, None) => configured_state_root(self.config.as_deref()),
         };
-        Location { root, state_root }
+        Location {
+            root,
+            state_root,
+            config: self.config.clone(),
+            installation: self.installation.clone(),
+            error: self.location_error.clone(),
+        }
     }
 
     pub(super) fn connect(&self) -> Result<Connected, ToolError> {
@@ -195,12 +294,11 @@ fn executable_install_root() -> Option<PathBuf> {
         .then_some(root)
 }
 
-fn configured_state_root(root: Option<&Path>) -> Result<PathBuf, String> {
-    let root = root.ok_or_else(|| {
+fn configured_state_root(config: Option<&Path>) -> Result<PathBuf, String> {
+    let config = config.ok_or_else(|| {
         "actingctl does not run from an install root (<root>\\runtime\\actingctl.exe beside <root>\\runtime\\BUILD-MANIFEST.json) and mcp-serve got neither --root nor --state-root".to_owned()
     })?;
-    let config = root.join("actingd.config.json");
-    let bytes = read_bounded(&config, MAX_CONFIG_BYTES)?;
+    let bytes = read_bounded(config, MAX_CONFIG_BYTES)?;
     let document = serde_json::from_slice::<Value>(&bytes)
         .map_err(|error| format!("{} is not JSON: {error}", config.display()))?;
     let state_root = document

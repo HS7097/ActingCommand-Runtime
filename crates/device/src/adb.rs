@@ -469,7 +469,7 @@ impl Adb {
 
     pub fn shell_spawn(&self, serial: &str, args: &[&str]) -> DeviceResult<Child> {
         validate_adb_path(&self.config.adb_path)?;
-        Command::new(&self.config.adb_path)
+        installation_adb_command(&self.config.adb_path)?
             .args(["-s", serial, "shell"])
             .args(args)
             .stdin(Stdio::null())
@@ -935,6 +935,16 @@ fn run_raw_with_timeout_in_directory(
     run_raw_with_boundary(program, program_path, args, timeout, directory, None)
 }
 
+pub(crate) fn installation_adb_command(program_path: &str) -> DeviceResult<Command> {
+    let mut command = Command::new(program_path);
+    if let Some(selected) = actingcommand_contract::process_installation()
+        .map_err(|error| DeviceError::fatal(format!("{} before adb spawn", error.code())))?
+    {
+        command.current_dir(selected.root());
+    }
+    Ok(command)
+}
+
 fn run_raw_with_boundary(
     program: CommandProgram,
     program_path: &str,
@@ -951,8 +961,14 @@ fn run_raw_with_boundary(
             "{name} command stopped or deadline expired before spawn"
         )));
     }
-    let mut command = Command::new(program_path);
-    if let Some(directory) = directory {
+    let mut command = if name == "adb" {
+        installation_adb_command(program_path)?
+    } else {
+        Command::new(program_path)
+    };
+    if command.get_current_dir().is_none()
+        && let Some(directory) = directory
+    {
         command.current_dir(directory);
     }
     command

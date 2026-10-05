@@ -10,7 +10,7 @@ use actingcommand_contract::FencedWrite;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -294,7 +294,7 @@ impl MaaTouchBackend {
         }
 
         self.input_parameters = None;
-        let child = Command::new(&self.adb_config.adb_path)
+        let child = crate::adb::installation_adb_command(&self.adb_config.adb_path)?
             .args([
                 "-s",
                 &self.serial,
