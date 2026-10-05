@@ -1696,6 +1696,7 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
                         | "actingcommand-actingd"
                         | "actingcommand-device-test"
                         | "actingcommand-lab"
+                        | "actingcommand-resource-tooling"
                 ),
                 "package {name} must not access execution-kernel"
             );
@@ -2600,8 +2601,6 @@ fn production_packages_cannot_reach_resource_tooling() {
         "actingcommand-lab",
         "actingcommand-runtime-host",
         "actingcommand-scheduler",
-        "actingcommand-execution-kernel",
-        "actingcommand-device",
     ] {
         let path = dependency_path(&metadata, "actingcommand-resource-tooling", forbidden);
         assert!(
@@ -2612,6 +2611,22 @@ fn production_packages_cannot_reach_resource_tooling() {
                 .unwrap_or_else(|| "no path".to_string())
         );
     }
+    // Workflow #349: resource generation shares kernel's offline admission/qualification.
+    // Device types are transitively present through that owner; tooling has no direct device
+    // dependency. Production-to-tooling removability above remains mandatory.
+    let tooling = document["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|package| package["name"] == "actingcommand-resource-tooling")
+        .unwrap();
+    assert!(
+        !tooling["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|dependency| dependency["name"] == "actingcommand-device")
+    );
 }
 
 // Workflow #310 work packages C and E in one slice (C+E, frozen model: the #310 coordinator
@@ -3581,6 +3596,7 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "RecordClientAction",
     "ReleaseLease",
     "RenewLease",
+    "ResourceTargetView",
     "RunContainedTask",
     "RuntimeFactSnapshot",
     "SafeReset",

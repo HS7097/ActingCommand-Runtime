@@ -119,6 +119,18 @@ named by a page gate (directly or as a member of a composite target), or is mark
 `target_in_page_gate`, `target_personal`). A program that violates the declaration rules is
 refused with the same code and the rule's reason as detail.
 
+For these three target qualification refusals, the kernel attaches the verified bundle's
+operation path and `/resource_readings/<index>/target_id` as a `ResourceDeclarationIssue`
+with the operation schema and `InvalidValue`. For a manual request, the Host's existing
+declaration rejection path records `runtime.failed` with the declared/verified package
+identity and request links, then records the original code and `<id>:<reason>` in its linked
+lifecycle failure. The ordinary receipt remains `PackageInvalid`, `Denied`, `fatal=false`
+and references that declaration rejection. This occurs before task/run identifiers, lease
+acquisition or input.
+The lifecycle native detail retains its existing sensitive classification; no OCR text,
+frame or observed amount is included. A failure to write either required ledger fact follows
+the existing fatal ledger path instead of returning an unrecorded ordinary refusal.
+
 ## Host
 
 Only the host writes readings, through `publish_facts`, the instance fact store's one

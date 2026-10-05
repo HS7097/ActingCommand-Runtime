@@ -4876,7 +4876,7 @@ impl HostShared {
         }
         // Workflow #335 S5b: a startup or return-home package writes no instance facts; one
         // that declares resource readings is refused before any lease and any input.
-        if prepared.has_resource_readings() {
+        if prepared.startup_incompatibility().is_some() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
                     "contained_task_resource_reading_run_kind_unsupported",

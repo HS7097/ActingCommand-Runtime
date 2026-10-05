@@ -4,8 +4,9 @@
 
 use crate::{CliError, CliOutcome, FlagArgs};
 use actingcommand_contract::{
-    LabErrorClass, ResourceDeclarationIssue, page_projection::ProjectionMetadata,
-    resource_declaration::ProcedureBindingConfigFile,
+    BundleMaintenance, LabErrorClass, ResourceDeclarationIssue,
+    page_projection::ProjectionMetadata, resource_declaration::ProcedureBindingConfigFile,
+    validate_bundle_maintenance_declarations,
 };
 use actingcommand_lab::{parse_environment_catalog_value, validate_control_declaration};
 use actingcommand_pack_containment::source::{
@@ -323,6 +324,12 @@ impl DeclarationReader {
         } else if is_applications_table(path) {
             self.applications(path, &bytes)?;
             "applications"
+        } else if path == Path::new("maintenance.json") {
+            let maintenance = serde_json::from_slice::<Vec<BundleMaintenance>>(&bytes)
+                .map_err(|error| invalid(path, &format!("maintenance declaration: {error}")))?;
+            validate_bundle_maintenance_declarations(&maintenance)
+                .map_err(|error| invalid(path, &error.to_string()))?;
+            "maintenance"
         } else if (name == "maa-semantic-mapping.json"
             && parent.file_name().is_some_and(|p| p == "tasks"))
             || (name == "maa.tasks.json"

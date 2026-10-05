@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+actingcommand-execution-kernel = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-selection-policy = { workspace = true }

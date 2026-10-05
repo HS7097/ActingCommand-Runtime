@@ -62,6 +62,21 @@ pub struct ExternallyVerifiedBundle {
 }
 
 impl ExternallyVerifiedBundle {
+    pub(crate) fn load_metadata_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        deadline: std::time::Instant,
+    ) -> Result<Self, ExecutionBundleError> {
+        let instance = InstanceId::new(instance_label)?;
+        let mut containment = Containment::for_metadata_validation();
+        containment.load_path(&instance, locator, expected, false, deadline)?;
+        let bundle = containment
+            .take_loaded(&instance)
+            .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
+        Ok(Self { bundle })
+    }
+
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
