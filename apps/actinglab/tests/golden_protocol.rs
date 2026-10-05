@@ -220,7 +220,24 @@ fn observe_success_projection_is_invariant_to_fixture_root_length() {
 }
 
 #[test]
-fn matrix_has_fifteen_commands_with_success_and_failure_paths() {
+fn matrix_covers_active_success_failure_and_retired_refusal_paths() {
+    let active = [
+        "recognize",
+        "detect-page",
+        "current-page",
+        "is-visible",
+        "tap-target",
+        "navigate",
+        "package validate",
+        "lab validate",
+        "lab run",
+        "detect",
+        "env resolve",
+        "env status",
+        "observe",
+        "do",
+    ];
+    let retired = ["package build-task", "package build-pack"];
     let mut commands = BTreeMap::<&str, Vec<ExpectedKind>>::new();
     for case in CASES {
         commands
@@ -229,8 +246,10 @@ fn matrix_has_fifteen_commands_with_success_and_failure_paths() {
             .push(case.expected_kind);
     }
 
-    assert_eq!(commands.len(), 15);
-    for (command, kinds) in commands {
+    for command in active {
+        let kinds = commands
+            .remove(command)
+            .unwrap_or_else(|| panic!("{command} is missing from the active inventory"));
         assert!(
             kinds.contains(&ExpectedKind::Success),
             "{command} is missing a success path"
@@ -240,6 +259,17 @@ fn matrix_has_fifteen_commands_with_success_and_failure_paths() {
             "{command} is missing a failure path"
         );
     }
+    for command in retired {
+        assert_eq!(
+            commands.remove(command),
+            Some(vec![ExpectedKind::Failure]),
+            "{command} must have its explicit refusal path"
+        );
+    }
+    assert!(
+        commands.is_empty(),
+        "unclassified matrix commands: {commands:?}"
+    );
 }
 
 #[test]
