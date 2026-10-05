@@ -522,14 +522,16 @@ mod oneoff_338s3 {
             "ac_lab_do",
             json!({"instance": ALIAS, "target": element, "capture": true, "zip": zip, "expected_sha256": sha, "projection_sequence": sequence, "projection_hash": hash, "verbose": true}),
         );
-        if acted["ok"] == true {
-            let req_id = acted["result"]["req_id"].as_str().expect("req_id").to_owned();
+        // A verbose do answer may exceed the output budget: the error still names its req_id.
+        let req_id = if acted["ok"] == true {
             println!("S3|DO|executed {} effect {}", acted["result"]["executed"], acted["result"]["effect"]);
-            provenance(&runtime_root, "ac_lab_do", &req_id, before);
+            acted["result"]["req_id"].as_str().expect("req_id").to_owned()
         } else {
-            println!("S3|DO|refused: {}", clip(&acted["error"].to_string()));
-            println!("S3|DO|client.action count {} -> {}", before, client_actions(&runtime_root, "ac_lab_do").len());
-        }
+            println!("S3|DO|answer: {}", clip(&acted["error"].to_string()));
+            acted["error"]["details"]["req_id"].as_str().expect("req_id in the error").to_owned()
+        };
+        println!("S3|DO|device taps {}", state.taps.load(Ordering::Acquire));
+        provenance(&runtime_root, "ac_lab_do", &req_id, before);
 
         // Offline observe on the captured frame: parity, and no client.action.
         let all_actions = |root: &Path| ledger(root).iter().filter(|row| row["event_type"] == "client.action").count();
