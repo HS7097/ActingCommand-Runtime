@@ -5,8 +5,10 @@
 //! Windows it opens no console window (`CREATE_NO_WINDOW` through std's `CommandExt`, no
 //! new dependency). A child still running at the caller's deadline is deliberately not
 //! killed (std's `Child::kill` could end it): Lab children are not killed by the model, and
-//! `actingd suspended` is a bounded batch job that ends on its own. Only children left behind
-//! when this server itself is killed would need a Job Object (a new dependency) to end.
+//! `actingd suspended` is a bounded batch job that ends on its own. A Lab call's background job
+//! waits for its child without any deadline; the child ends by its own time limits. Only
+//! children left behind when this server itself is killed would need a Job Object (a new
+//! dependency) to end.
 
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -33,10 +35,16 @@ pub(super) enum ChildFailure {
     StillRunning,
 }
 
-pub(super) fn run_captured(
-    mut command: Command,
-    deadline: Instant,
-) -> Result<Captured, ChildFailure> {
+pub(super) fn run_captured(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
+    run(command, Some(deadline))
+}
+
+/// Waits for the child however long it runs (a Lab call's background job).
+pub(super) fn run_to_end(command: Command) -> Result<Captured, ChildFailure> {
+    run(command, None)
+}
+
+fn run(mut command: Command, deadline: Option<Instant>) -> Result<Captured, ChildFailure> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -53,7 +61,10 @@ pub(super) fn run_captured(
     })
 }
 
-fn wait(child: &mut Child, deadline: Instant) -> Result<ExitStatus, ChildFailure> {
+fn wait(child: &mut Child, deadline: Option<Instant>) -> Result<ExitStatus, ChildFailure> {
+    let Some(deadline) = deadline else {
+        return child.wait().map_err(ChildFailure::Io);
+    };
     loop {
         if let Some(status) = child.try_wait().map_err(ChildFailure::Io)? {
             return Ok(status);

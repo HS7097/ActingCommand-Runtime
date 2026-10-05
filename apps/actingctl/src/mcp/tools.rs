@@ -6,6 +6,7 @@
 //! output budget (§四 结果形状 / 预算).
 
 use super::jobs::Jobs;
+use super::lab;
 use super::observer;
 use super::operator;
 use super::protocol::Era;
@@ -17,6 +18,27 @@ use std::time::{Duration, Instant};
 
 /// The `instructions` both clients read (§四 instructions).
 pub(super) const INSTRUCTIONS: &str = "ActingCommand local control (tools-only). Start with ac_overview. Long operations return a handle at once; a run's handle is its Runtime request_id and survives restarts, other job handles last only as long as this process; poll ac_get_run with wait_s. If an ac_run_pack call was interrupted before it returned, call ac_overview before submitting again. After an uncertain result call ac_get_run before anything else; never resend a write with new arguments. Approvals, actingd configuration edits and daemon restarts belong to the person. Tiers: observer (read), operator (device/scheduling), author (Lab recording); tools outside the enabled tiers answer tier_not_enabled. Manual: skill `actingcommand`.";
+
+/// The end of every Lab tool's description: its job handle lives in this process only.
+macro_rules! lab_job {
+    () => {
+        " Not done within the call budget, the answer is {handle, job_phase} for ac_get_run; actinglab keeps running and is never stopped from here. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the recording state with ac_record_status."
+    };
+}
+
+/// The end of every offline check's description.
+macro_rules! check_job {
+    () => {
+        " Not done within the call budget, the answer is {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards run the check again."
+    };
+}
+
+/// How a Lab tool reports actinglab's failures.
+macro_rules! lab_errors {
+    () => {
+        " Failures keep actinglab's class by its exit code (2 usage, 3 safety, 4 device, 5 runtime, 6 usage not_implemented) with its error verbatim in details.lab_error; any other exit, or no JSON envelope, is runtime lab_process_failed with the stderr tail. String arguments may not start with --."
+    };
+}
 
 /// The longest a tool call waits inside the server; Runtime IO itself is bounded at 5 s.
 pub(super) const CALL_BUDGET: Duration = Duration::from_secs(25);
@@ -321,7 +343,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_get_run",
         title: "Run status",
         tier: Tier::Observer,
-        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run. A submit refused before admission stays not_found with job.phase failed and the Runtime's error (for example LeaseBusy, class safety) in job.outcome.error.",
+        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run. A submit refused before admission stays not_found with job.phase failed and the Runtime's error (for example LeaseBusy, class safety) in job.outcome.error. Another job handle of this process (ac_pause, ac_resume, ac_emulator, ac_stop_run or a Lab tool) answers {handle, job {kind, phase, warnings, outcome}}; a job handle this process does not hold answers handle_unknown.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -364,6 +386,38 @@ pub(super) static TOOLS: &[ToolDef] = &[
         input_schema: instance_only_input,
         result_schema: targets_get_result,
         run: operator::targets_get,
+    },
+    ToolDef {
+        name: "ac_pack_check",
+        title: "Check a task package",
+        tier: Tier::Observer,
+        description: concat!(
+            "Checks one task package offline, as actinglab --json package digest and package preflight do, and answers both verbatim: {digest, preflight}. preflight runs with package_ref when it is given, otherwise with the digest's reference. With package_ref, package_ref_check {given, matches_digest} says whether it is the digest's reference, and preflight is actinglab's verdict on it. preflight's coverage says how far the check went: it neither recognizes nor executes anything. A failed preflight keeps the digest in details.digest.",
+            lab_errors!(),
+            check_job!()
+        ),
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: lab::pack_check_input,
+        result_schema: lab::pack_check_result,
+        run: lab::pack_check,
+    },
+    ToolDef {
+        name: "ac_catalog_check",
+        title: "Check a business catalog",
+        tier: Tier::Observer,
+        description: concat!(
+            "Compiles one business identity catalog offline, as actinglab --json resource catalog --repo <repo> --catalog <catalog> --catalog-server <server> [--field <field>] does, and answers its compile result verbatim. catalog is relative to repo; field defaults to business_id. It only reads the catalog file and writes nothing.",
+            lab_errors!(),
+            check_job!()
+        ),
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: lab::catalog_check_input,
+        result_schema: lab::lab_result,
+        run: lab::catalog_check,
     },
     ToolDef {
         name: "ac_run_pack",
@@ -436,6 +490,118 @@ pub(super) static TOOLS: &[ToolDef] = &[
         input_schema: targets_set_input,
         result_schema: targets_set_result,
         run: operator::targets_set,
+    },
+    ToolDef {
+        name: "ac_lab_observe",
+        title: "Lab observe",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json observe, one argument per flag, and answers its data verbatim. Offline (scene) it detects the page of a PNG scene with the package (package with package_ref, or zip with expected_sha256) and touches no Runtime. With capture the Runtime takes the instance's current frame (instance: its alias) and records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::observe_input,
+        result_schema: lab::lab_result,
+        run: lab::observe,
+    },
+    ToolDef {
+        name: "ac_lab_do",
+        title: "Lab do",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json do, one argument per flag, and answers its data verbatim. With capture it acts on the instance through the Runtime (target: a Runtime element id, or tap or swipe; instance: its alias), which records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Offline (scene) actinglab only plans, with dry_run, and touches no Runtime. Which actions count as destructive and need allow_destructive is actinglab's decision.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::do_input,
+        result_schema: lab::lab_result,
+        run: lab::act,
+    },
+    ToolDef {
+        name: "ac_record_start",
+        title: "Start a recording",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record start: starts a recording session and its Lab recording for task_id, kept in actinglab's state files (state_dir). It opens no Runtime connection and records no client.action. --force is never passed: an active recording is not overwritten from here; ending it is ac_record_stop, overwriting it is for the person on the CLI.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::record_start_input,
+        result_schema: lab::lab_result,
+        run: lab::record_start,
+    },
+    ToolDef {
+        name: "ac_record_mark",
+        title: "Mark a recording step",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record mark --request-json <request> with one actingcommand.lab-record-mark.v1 request (marks, a click, samples, a transition or a step action; contracts/lab-recording.md). actinglab self-tests every mark on the step's frames; dry_run only checks. It changes the recording's files only: no Runtime connection, no client.action.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::record_mark_input,
+        result_schema: lab::lab_result,
+        run: lab::record_mark,
+    },
+    ToolDef {
+        name: "ac_record_stop",
+        title: "Stop a recording",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. It opens no Runtime connection and records no client.action.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: lab::record_stop_input,
+        result_schema: lab::lab_result,
+        run: lab::record_stop,
+    },
+    ToolDef {
+        name: "ac_record_status",
+        title: "Recording status",
+        tier: Tier::Author,
+        description: concat!(
+            "Runs actinglab --json record status: the recording session and its Lab recording steps, verbatim. It only reads the recording.",
+            lab_errors!(),
+            lab_job!()
+        ),
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: lab::record_status_input,
+        result_schema: lab::lab_result,
+        run: lab::record_status,
+    },
+    ToolDef {
+        name: "ac_binding_draft",
+        title: "Binding draft",
+        tier: Tier::Author,
+        description: concat!(
+            "Turns an ac_record_stop result (record_stop) into a binding draft and changes nothing. binding_example, binding_requires, prerequisite_entry_example and catalog_on_failure_example come verbatim from it. admission: actinglab package preflight on the recorded package (binding_example.scheduled_execution.package_path with lab.package_ref); its coverage is the admission scope, preflight_error when it does not pass. check_config: the report of actingd check-config on the install's current actingd.config.json, which it only reads: the draft is not in it, and nothing is merged into any configuration or copy. manual_steps: binding_requires, then edit the configuration, approve in the UI, restart the daemon; all of them are the person's.",
+            lab_errors!(),
+            check_job!()
+        ),
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: lab::binding_draft_input,
+        result_schema: lab::binding_draft_result,
+        run: lab::binding_draft,
     },
 ];
 
@@ -888,7 +1054,7 @@ fn get_run_input() -> Value {
             "handle": {
                 "type": "string",
                 "minLength": 1,
-                "description": "The Runtime request_id of the run (an ac_run_pack handle).",
+                "description": "The Runtime request_id of the run (an ac_run_pack handle), or a job handle of this process.",
             },
             "run_id": {"type": "string", "minLength": 1, "description": "The run's run_id."},
             "wait_s": {"type": "integer", "minimum": 0, "maximum": 25, "default": 0},

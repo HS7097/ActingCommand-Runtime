@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Background jobs (#338 §四 线程 / 预算, R2): at most eight run at a time. A run job's handle
-//! is the Runtime request_id; the other jobs use the correlation of their write. Only the job
+//! is the Runtime request_id; the other jobs use the correlation of their write, and a Lab
+//! call's job a `lab_job_` handle of this process. Only the job
 //! phase and its outcome live here, in memory: the authoritative state of a run always comes
 //! from R1 (`ac_get_run`). A job runs to its end even after the call that started it returned;
 //! at stdin EOF the server stops waiting for jobs and exits.
@@ -19,6 +20,9 @@ use std::time::{Duration, Instant};
 const MAX_RUNNING: usize = 8;
 /// Finished jobs kept for `ac_get_run`; the oldest go first.
 const MAX_KEPT: usize = 64;
+
+/// How a noted job's body ends: its outcome and the warnings it found on the way.
+pub(super) type JobEnd = (Result<Value, ToolError>, Vec<Value>);
 
 pub(super) struct Jobs {
     table: Mutex<VecDeque<Arc<Job>>>,
@@ -81,6 +85,22 @@ impl Jobs {
         warnings: Vec<Value>,
         body: impl FnOnce() -> Result<Value, ToolError> + Send + 'static,
     ) -> Result<Arc<Job>, ToolError> {
+        self.start_noted(handle, kind, instance_alias, phase, warnings, move || {
+            (body(), Vec::new())
+        })
+    }
+
+    /// As `start`, for a body that also reports warnings found while it ran (a Lab call's
+    /// client.action); they join the job's warnings before it ends.
+    pub(super) fn start_noted(
+        &self,
+        handle: String,
+        kind: &'static str,
+        instance_alias: Option<String>,
+        phase: &'static str,
+        warnings: Vec<Value>,
+        body: impl FnOnce() -> JobEnd + Send + 'static,
+    ) -> Result<Arc<Job>, ToolError> {
         self.has_capacity()?;
         let job = Arc::new(Job {
             handle,
@@ -108,8 +128,9 @@ impl Jobs {
         thread::Builder::new()
             .name(format!("mcp-job-{kind}"))
             .spawn(move || {
-                let outcome = body();
+                let (outcome, notes) = body();
                 let mut state = lock(&running.state);
+                state.warnings.extend(notes);
                 match outcome {
                     Ok(value) => {
                         state.phase = "done";

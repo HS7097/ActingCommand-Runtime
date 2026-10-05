@@ -9,12 +9,13 @@
 //! Runtime's answer, passed on unchanged. Nothing here pauses implicitly (C1 甲).
 
 use super::child;
+use super::lab;
 use super::observer::select_instance;
 use super::runtime::client_error;
 use super::tools::{Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument};
 use actingcommand_contract::{
-    ClientActionKind, ClientActionRecord, ContainedTaskRecoveryBinding, ContainedTaskRequest,
-    EmulatorInstanceAction, EventActor, EventSource, GovernanceIdentityCard,
+    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
+    ContainedTaskRequest, EmulatorInstanceAction, EventActor, EventSource, GovernanceIdentityCard,
     MAX_RESOURCE_TARGETS_DOCUMENT_BYTES, OwnerEpoch, PackageRef, RequestId,
     SchedulingPauseExpectation, SchedulingPauseScope, validate_scheduling_pause_reason,
 };
@@ -39,13 +40,11 @@ const MAX_VALID_DAYS: u64 = 365;
 const ANSWER_RESERVE: Duration = Duration::from_secs(2);
 /// Time kept back from the call budget for an actinglab digest subprocess.
 const DIGEST_RESERVE: Duration = Duration::from_secs(10);
-/// The tail of a failed subprocess's stderr kept in the result.
-const MAX_STDERR_TAIL: usize = 2048;
 
 /// One write's connection after its provenance was recorded.
-struct Write {
-    client: RuntimeClient,
-    warnings: Vec<Value>,
+pub(super) struct Write {
+    pub(super) client: RuntimeClient,
+    pub(super) warnings: Vec<Value>,
 }
 
 /// Opens a connection with this origin and records the provenance of `tool`.
@@ -56,6 +55,18 @@ fn begin_write(
     origin: (EventActor, EventSource),
 ) -> Result<Write, ToolError> {
     let connection = context.runtime.connect_fresh(origin.0, origin.1)?;
+    record_provenance(connection, tool, instance_alias, origin, None)
+}
+
+/// On `connection`: `begin_interaction`, the identity card on (Cli, Cli), then the
+/// `client.action` of `tool`, carrying `value` when given (a Lab call's req_id).
+pub(super) fn record_provenance(
+    connection: RuntimeClient,
+    tool: &str,
+    instance_alias: Option<&str>,
+    origin: (EventActor, EventSource),
+    value: Option<ClientActionValue>,
+) -> Result<Write, ToolError> {
     let client = connection
         .begin_interaction()
         .map_err(|error| client_error(&error))?;
@@ -92,7 +103,7 @@ fn begin_write(
         tool,
         ClientActionKind::Command,
         instance_alias.map(str::to_owned),
-        None,
+        value,
     )
     .map_err(|error| {
         ToolError::new(
@@ -107,7 +118,7 @@ fn begin_write(
     Ok(Write { client, warnings })
 }
 
-const CLI: (EventActor, EventSource) = (EventActor::Cli, EventSource::Cli);
+pub(super) const CLI: (EventActor, EventSource) = (EventActor::Cli, EventSource::Cli);
 const AGENT: (EventActor, EventSource) = (EventActor::Agent, EventSource::Adapter);
 
 /// The alias of the instance an argument names.
@@ -130,7 +141,7 @@ fn text_of(value: Value) -> String {
 }
 
 /// Waits for `job` within the call budget; its outcome, or a handle while it still runs.
-fn job_answer(
+pub(super) fn job_answer(
     context: &ToolContext<'_>,
     job: &super::jobs::Job,
     wait_until: Instant,
@@ -141,8 +152,10 @@ fn job_answer(
             .checked_sub(ANSWER_RESERVE)
             .unwrap_or(context.deadline),
     );
+    let ended = job.wait_until(until, context.cancelled);
+    // Read after the wait: a body may add warnings as it ends.
     let warnings = job.warnings();
-    if job.wait_until(until, context.cancelled) {
+    if ended {
         let outcome = job.outcome().unwrap_or(Value::Null);
         if let Some(error) = outcome.get("error") {
             return Err(error_from_value(error));
@@ -306,55 +319,20 @@ fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, T
         .deadline
         .checked_sub(DIGEST_RESERVE)
         .unwrap_or(context.deadline);
-    let captured = child::run_captured(command, deadline).map_err(|failure| {
-        let (code, message) = match failure {
-            child::ChildFailure::Spawn(error) => ("lab_process_failed", error.to_string()),
-            child::ChildFailure::Io(error) => ("lab_process_failed", error.to_string()),
-            child::ChildFailure::StillRunning => (
-                "lab_process_timeout",
-                "actinglab package digest was still running at the end of the call budget"
-                    .to_owned(),
-            ),
-        };
-        ToolError::new("runtime", code, message)
-    })?;
-    let exit_code = captured.status.code();
-    let envelope = serde_json::from_slice::<Value>(captured.stdout.trim_ascii()).ok();
-    let reference = envelope
-        .as_ref()
-        .filter(|envelope| envelope.get("ok") == Some(&Value::Bool(true)))
-        .and_then(|envelope| envelope.get("data"))
-        .and_then(|data| data.get("reference"));
-    if let Some(reference) = reference {
-        return Ok(reference.to_string());
-    }
-    // cli_result.rs:93-100: 2 usage, 3 safety, 4 device, 5 runtime, 6 not implemented.
-    let class = match exit_code {
-        Some(2 | 6) => "usage",
-        Some(3) => "safety",
-        Some(4) => "device",
-        _ => "runtime",
-    };
-    let lab_error = envelope
-        .as_ref()
-        .and_then(|envelope| envelope.get("error"))
-        .cloned();
-    let code = lab_error
-        .as_ref()
-        .and_then(|error| error.get("code"))
-        .and_then(Value::as_str)
-        .unwrap_or("lab_process_failed")
-        .to_owned();
-    let tail_start = captured.stderr.len().saturating_sub(MAX_STDERR_TAIL);
-    let stderr_tail = String::from_utf8_lossy(&captured.stderr[tail_start..]).into_owned();
-    Err(ToolError::new(
-        class,
-        code,
-        "actinglab package digest did not give a package reference",
-    )
-    .with_detail("lab_exit_code", json!(exit_code))
-    .with_detail("lab_error", json!(lab_error))
-    .with_detail("stderr_tail", json!(stderr_tail)))
+    let captured = child::run_captured(command, deadline)
+        .map_err(|failure| lab::child_failure(&failure, "package digest"))?;
+    // The S3 runner's reading of the envelope: the exit code gives the class.
+    let digest = lab::interpret(&captured, "package digest").result?;
+    digest
+        .get("reference")
+        .map(Value::to_string)
+        .ok_or_else(|| {
+            ToolError::new(
+                "runtime",
+                "lab_process_failed",
+                "actinglab package digest answered without a package reference",
+            )
+        })
 }
 
 // ---------------------------------------------------------------- ac_stop_run
