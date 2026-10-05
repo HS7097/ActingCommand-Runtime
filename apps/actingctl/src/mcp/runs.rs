@@ -6,6 +6,7 @@
 //! output. Every `recent_runs` read gets a bounded window, which the result echoes.
 
 use super::child::{self, Captured, ChildFailure};
+use super::lab;
 use super::observer::{EVENTS_PROFILE, encode_cursor, event_row, select_instance};
 use super::runtime::Connected;
 use super::tools::{
@@ -98,7 +99,7 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
     let handle = arguments.string("handle")?;
     let job = handle.and_then(|handle| context.jobs.find(handle));
     // A job of this process that is not a run (a pause, a resume, an emulator control, a
-    // stop) has no run status: its phase and, once it ended, its outcome.
+    // stop, a Lab call) has no run status: its phase and, once it ended, its outcome.
     if let Some(job) = job.as_ref().filter(|job| job.kind != "run_pack") {
         if arguments.string("run_id")?.is_some() {
             return Err(invalid_argument(
@@ -114,7 +115,7 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
     let key = match (handle, arguments.string("run_id")?) {
         (Some(handle), None) => RunKey::RequestId(
             serde_json::from_value::<RequestId>(json!(handle)).map_err(|_| {
-                if handle.starts_with("correlation_") {
+                if handle.starts_with("correlation_") || handle.starts_with(lab::HANDLE_PREFIX) {
                     ToolError::usage(
                         "handle_unknown",
                         "this job handle is not held by this MCP process: the process that started it ended, or it is another one's",

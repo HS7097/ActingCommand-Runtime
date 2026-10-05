@@ -124,14 +124,24 @@ impl RuntimeAccess {
         actor: EventActor,
         source: EventSource,
     ) -> Result<RuntimeClient, ToolError> {
-        let state_root = self.locate().state_root.map_err(|reason| {
-            ToolError::usage("install_state_root_unresolved", reason).blocked_by(
-                "mcp-serve --state-root <dir>, or state_root in <root>\\actingd.config.json",
-            )
-        })?;
-        RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
-            .map_err(|error| unavailable(&error, &state_root))
+        connect_at(&self.locate().state_root, actor, source)
     }
+}
+
+/// A new connection with this origin to the Runtime of a state root found earlier; a Lab
+/// call's job connects this way once its child has returned.
+pub(super) fn connect_at(
+    state_root: &Result<PathBuf, String>,
+    actor: EventActor,
+    source: EventSource,
+) -> Result<RuntimeClient, ToolError> {
+    let state_root = state_root.as_ref().map_err(|reason| {
+        ToolError::usage("install_state_root_unresolved", reason.clone()).blocked_by(
+            "mcp-serve --state-root <dir>, or state_root in <root>\\actingd.config.json",
+        )
+    })?;
+    RuntimeClient::connect(RuntimeClientConfig::new(state_root, actor, source))
+        .map_err(|error| unavailable(&error, state_root))
 }
 
 /// A Runtime client failure as a tool error. Its class is the client's own

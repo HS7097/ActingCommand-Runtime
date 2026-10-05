@@ -7,6 +7,7 @@
 
 mod child;
 mod jobs;
+mod lab;
 mod observer;
 mod operator;
 mod protocol;

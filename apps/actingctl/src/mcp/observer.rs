@@ -21,7 +21,7 @@ use serde_json::{Map, Value, json};
 use std::env;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -771,6 +771,22 @@ fn material_unavailable(
 /// Writes the verified bytes to `%TEMP%\actingcommand-mcp\materials\<sha256>.<ext>`
 /// through a partial file moved into place.
 fn write_export(artifact: &ProjectedArtifactReference, bytes: &[u8]) -> ToolOutcome {
+    export_bytes(&artifact.sha256, artifact.kind.extension(), bytes).map(ToolSuccess::new)
+}
+
+/// Where every export of this server goes (ac_material export, Lab answers over budget).
+pub(super) fn export_directory() -> PathBuf {
+    env::temp_dir().join("actingcommand-mcp").join("materials")
+}
+
+/// The export writer: `bytes`, whose `sha256` (`sha256:<hex>`) the caller knows, to
+/// `<export directory>\<hex>.<extension>` through a partial file moved into place;
+/// `{path, sha256, size}`.
+pub(super) fn export_bytes(
+    sha256: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<Value, ToolError> {
     let failed = |action: &str, path: &Path, error: io::Error| {
         ToolError::new(
             "runtime",
@@ -779,12 +795,8 @@ fn write_export(artifact: &ProjectedArtifactReference, bytes: &[u8]) -> ToolOutc
         )
         .with_detail("path", json!(path.display().to_string()))
     };
-    let digest = artifact
-        .sha256
-        .strip_prefix("sha256:")
-        .unwrap_or(&artifact.sha256);
-    let extension = artifact.kind.extension();
-    let directory = env::temp_dir().join("actingcommand-mcp").join("materials");
+    let digest = sha256.strip_prefix("sha256:").unwrap_or(sha256);
+    let directory = export_directory();
     fs::create_dir_all(&directory)
         .map_err(|error| failed("cannot create", directory.as_path(), error))?;
     let path = directory.join(format!("{digest}.{extension}"));
@@ -798,9 +810,9 @@ fn write_export(artifact: &ProjectedArtifactReference, bytes: &[u8]) -> ToolOutc
         failed("cannot move into place", path.as_path(), error)
             .with_detail("partial", json!(partial.display().to_string()))
     })?;
-    Ok(ToolSuccess::new(json!({
+    Ok(json!({
         "path": path.display().to_string(),
-        "sha256": artifact.sha256,
+        "sha256": sha256,
         "size": bytes.len(),
-    })))
+    }))
 }
