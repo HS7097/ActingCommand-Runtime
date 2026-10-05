@@ -381,6 +381,35 @@ mod oneoff_338s3 {
         out
     }
 
+    /// ac_pack_check on a real package: digest and preflight verbatim, a given reference
+    /// checked, a wrong one refused as actinglab refuses it.
+    fn pack_check_evidence(env: &Env, server: &mut Server, package: &str) {
+        let (code, cli_digest) = env.cli(&["package", "digest", "--package", package]);
+        assert_eq!(code, Some(0));
+        let reference = cli_digest["data"]["reference"].to_string();
+        let cli_preflight = env.cli(&["package", "preflight", "--package", package, "--package-ref", &reference]);
+        let (checked, _) = server.tool("ac_pack_check", json!({"package": package}));
+        if checked["ok"] == true {
+            assert!(parity("package digest", &cli_digest["data"], &checked["result"]["digest"]).is_empty());
+            assert!(parity("package preflight", &cli_preflight.1["data"], &checked["result"]["preflight"]).is_empty());
+        } else {
+            let class = checked["error"]["class"].as_str().unwrap_or_default().to_owned();
+            error_parity("package preflight", &cli_preflight, &checked, &class);
+            assert!(parity("package digest (kept in details)", &cli_digest["data"], &checked["error"]["details"]["digest"]).is_empty());
+        }
+        let (given, _) = server.tool("ac_pack_check", json!({"package": package, "package_ref": reference}));
+        println!("S3|PACK|given the digest's reference -> ok {} package_ref_check {}", given["ok"], given["result"]["package_ref_check"]);
+        let wrong = "0".repeat(64);
+        let cli_wrong = env.cli(&["package", "preflight", "--package", package, "--package-ref", &wrong]);
+        let (mismatch, _) = server.tool("ac_pack_check", json!({"package": package, "package_ref": wrong}));
+        let check = if mismatch["ok"] == true { mismatch["result"]["package_ref_check"].clone() } else { mismatch["error"]["details"]["package_ref_check"].clone() };
+        println!("S3|PACK|another reference -> ok {} package_ref_check {check}", mismatch["ok"]);
+        if mismatch["ok"] == false {
+            let class = mismatch["error"]["class"].as_str().unwrap_or_default().to_owned();
+            error_parity("package preflight with a reference that is not the package's", &cli_wrong, &mismatch, &class);
+        }
+    }
+
     /// The fixture Runtime (FakeProvider "node.a") and its Lab paths: parity, provenance,
     /// recording, the binding draft, a long call and a dead handle.
     #[test]
@@ -468,7 +497,7 @@ mod oneoff_338s3 {
         // Runtime-backed observe: CLI and MCP, then the provenance of the MCP call.
         let frame = root.path().join("frame.png");
         let frame_text = frame.to_str().expect("utf-8").to_owned();
-        let (code, _) = env.cli(&["observe", "--instance", ALIAS, "--zip", &zip, "--expected-sha256", &sha, "--with-frame", &frame_text, "--capture"]);
+        let (code, _) = env.cli(&["observe", "--instance", ALIAS, "--zip", &zip, "--expected-sha256", &sha, "--with-frame", &frame_text, "--capture", "--verbose"]);
         assert_eq!(code, Some(0));
         let observe_args = ["observe", "--instance", ALIAS, "--zip", &zip, "--expected-sha256", &sha, "--capture", "--verbose"];
         let (code, cli_observe) = env.cli(&observe_args);
@@ -505,12 +534,12 @@ mod oneoff_338s3 {
         // Offline observe on the captured frame: parity, and no client.action.
         let all_actions = |root: &Path| ledger(root).iter().filter(|row| row["event_type"] == "client.action").count();
         let actions_before = all_actions(&runtime_root);
-        let offline_args = ["observe", "--instance", ALIAS, "--zip", &zip, "--expected-sha256", &sha, "--scene", &frame_text];
+        let offline_args = ["observe", "--instance", ALIAS, "--zip", &zip, "--expected-sha256", &sha, "--scene", &frame_text, "--verbose"];
         let (code, cli_offline) = env.cli(&offline_args);
         assert_eq!(code, Some(0));
         let (offline, _) = server.tool(
             "ac_lab_observe",
-            json!({"instance": ALIAS, "scene": frame_text, "zip": zip, "expected_sha256": sha}),
+            json!({"instance": ALIAS, "scene": frame_text, "zip": zip, "expected_sha256": sha, "verbose": true}),
         );
         assert_eq!(offline["ok"], true);
         parity("observe --scene (offline)", &cli_offline["data"], &offline["result"]);
@@ -585,6 +614,7 @@ mod oneoff_338s3 {
             let side = if cli_preflight["ok"] == true { &result["admission"]["preflight"] } else { &result["admission"]["preflight_error"]["details"]["lab_error"] };
             let other = if cli_preflight["ok"] == true { &cli_preflight["data"] } else { &cli_preflight["error"] };
             parity("binding draft admission = package preflight", other, side);
+            pack_check_evidence(&env, &mut server, &package);
         }
         let record_actions = ["ac_record_start", "ac_record_mark", "ac_record_stop", "ac_record_status", "ac_binding_draft"]
             .iter()
@@ -596,7 +626,7 @@ mod oneoff_338s3 {
         // A long call: the offline observe sleeps 30 s in actinglab (test delay) and becomes a job.
         let (long, elapsed) = server.tool(
             "ac_lab_observe",
-            json!({"instance": ALIAS, "scene": frame_text, "zip": zip, "expected_sha256": sha, "test_capture_delay_ms": 30000}),
+            json!({"instance": ALIAS, "scene": frame_text, "zip": zip, "expected_sha256": sha, "verbose": true, "test_capture_delay_ms": 30000}),
         );
         let handle = long["result"]["handle"].as_str().expect("a handle").to_owned();
         println!("S3|LONG|answered in {} ms with handle {handle} job_phase {}", elapsed.as_millis(), long["result"]["job_phase"]);
@@ -658,31 +688,13 @@ mod oneoff_338s3 {
         }
         assert_eq!(before, after, "ac_catalog_check wrote nothing");
 
-        // ac_pack_check: digest and preflight verbatim; a given reference checked.
+        // ac_pack_check on a directory that is no task pack: digest refuses it (exit 2).
         let task = root.path().join("neutral-task");
         write_task_directory(&task);
         let task_text = task.to_str().expect("utf-8").to_owned();
-        let (code, cli_digest) = env.cli(&["package", "digest", "--package", &task_text]);
-        assert_eq!(code, Some(0));
-        let reference = cli_digest["data"]["reference"].to_string();
-        let cli_preflight = env.cli(&["package", "preflight", "--package", &task_text, "--package-ref", &reference]);
+        let cli_digest = env.cli(&["package", "digest", "--package", &task_text]);
         let (checked, _) = server.tool("ac_pack_check", json!({"package": task_text}));
-        if checked["ok"] == true {
-            assert!(parity("package digest", &cli_digest["data"], &checked["result"]["digest"]).is_empty());
-            assert!(parity("package preflight", &cli_preflight.1["data"], &checked["result"]["preflight"]).is_empty());
-        } else {
-            error_parity("package preflight", &cli_preflight, &checked, checked["error"]["class"].as_str().unwrap_or_default());
-            assert!(parity("package digest (kept in details)", &cli_digest["data"], &checked["error"]["details"]["digest"]).is_empty());
-        }
-        let (given, _) = server.tool("ac_pack_check", json!({"package": task_text, "package_ref": reference}));
-        println!("S3|PACK|given digest reference -> package_ref_check {}", given["result"]["package_ref_check"]);
-        let wrong = "0".repeat(64);
-        let cli_wrong = env.cli(&["package", "preflight", "--package", &task_text, "--package-ref", &wrong]);
-        let (mismatch, _) = server.tool("ac_pack_check", json!({"package": task_text, "package_ref": wrong}));
-        println!("S3|PACK|wrong reference -> ok {} package_ref_check {}", mismatch["ok"], if mismatch["ok"] == true { mismatch["result"]["package_ref_check"].clone() } else { mismatch["error"]["details"]["package_ref_check"].clone() });
-        if mismatch["ok"] == false {
-            error_parity("package preflight with a reference that is not the package's", &cli_wrong, &mismatch, mismatch["error"]["class"].as_str().unwrap_or_default());
-        }
+        error_parity("package digest of a directory that is no task pack (2)", &cli_digest, &checked, "usage");
 
         // Exit 4: the Runtime is not running for a Runtime-backed observe.
         let zip = root.path().join("semantic.zip");
