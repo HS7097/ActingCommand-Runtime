@@ -19,14 +19,21 @@
 //! offline forms and the recording commands (start, mark, stop, status), which keep their
 //! state in files and open no Runtime connection, record nothing, nor do the read-only
 //! tools.
+//!
+//! One overflow rule for every answer that does not fit the output budget (review F2): the
+//! verbatim answer goes to the export directory of ac_material export, and the call answers
+//! `{req_id, export, overflowed: true}` (ac_record_stop keeps its binding parts inline), or,
+//! for an error, keeps class, code and message with a trimmed `lab_error`.
 
 use super::child::{self, Captured, ChildFailure};
 use super::jobs::JobEnd;
+use super::observer;
 use super::operator::{self, CLI};
 use super::runtime;
 use super::tools::{self, Arguments, ToolContext, ToolError, ToolOutcome, invalid_argument};
-use actingcommand_contract::{ClientActionValue, PackageRef};
+use actingcommand_contract::{ArtifactMaterialAccumulator, ClientActionValue, PackageRef};
 use serde_json::{Map, Value, json};
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,6 +50,16 @@ const NOT_A_FLAG: &str = "^([^-]|-([^-]|$))";
 /// Counts this process's Lab jobs.
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 const MANUAL_STEP: &str = "edit the configuration, approve in the UI, restart the daemon";
+/// The parts of an ac_record_stop answer kept inline when the whole answer is exported.
+const BINDING_PARTS: [&str; 5] = [
+    "binding_example",
+    "binding_requires",
+    "prerequisite_entry_example",
+    "catalog_on_failure_example",
+    "package_ref",
+];
+/// The largest exported answer ac_binding_draft reads back.
+const MAX_EXPORT_READ: u64 = 64 * 1024 * 1024;
 
 // ---------------------------------------------------------------- command tables
 
@@ -70,16 +87,29 @@ struct Flag {
     description: &'static str,
 }
 
+/// What a command may have changed, which words an answer over the budget (review F2).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Effect {
+    /// The device or the recording: performed or attempted; never to be run again.
+    Changed,
+    /// ac_lab_observe: the answer can be narrowed with fields.
+    Narrowable,
+    /// Nothing.
+    Unchanged,
+}
+
 /// One actinglab command and its flags (`lab2_cli.rs:1414-1667`, the package locator flags
-/// of `contained_resources.rs:125-216`, the global `--instance` of `cli_parse.rs`, and for
-/// `do` the `--verbose` / `--pretty` it reads at `lab2_cli/operation.rs:122` and
-/// `lab2_cli.rs:1373`).
+/// of `contained_resources.rs:125-216` and the global `--instance` of `cli_parse.rs`).
 struct LabCommand {
     words: &'static [&'static str],
     flags: &'static [Flag],
     required: &'static [&'static str],
     /// With `capture: true` the command is a Lab request the Runtime records.
     capture_is_lab_request: bool,
+    /// What the command changes; for `do` only with capture.
+    effect: Effect,
+    /// ac_record_stop: an exported answer keeps its binding parts inline.
+    keeps_binding: bool,
 }
 
 const fn flag(
@@ -100,13 +130,13 @@ const LAB2_INSTANCE: Flag = flag(
     "instance",
     "--instance",
     Kind::Text,
-    "actinglab --instance: with capture, the Runtime instance alias; without it actinglab uses its default instance.",
+    "actinglab --instance: the actinglab instance alias, passed through as the CLI takes it (with capture, the Runtime instance alias); without it actinglab uses its default instance.",
 );
 const RECORD_INSTANCE: Flag = flag(
     "instance",
     "--instance",
     Kind::Text,
-    "actinglab --instance: the recording's instance; without it actinglab resolves it from its configuration.",
+    "actinglab --instance: the actinglab instance alias of the recording, passed through as the CLI takes it; without it actinglab resolves it from its configuration.",
 );
 const SCENE: Flag = flag(
     "scene",
@@ -212,6 +242,8 @@ static OBSERVE: LabCommand = LabCommand {
     ],
     required: &[],
     capture_is_lab_request: true,
+    effect: Effect::Narrowable,
+    keeps_binding: false,
 };
 
 static DO: LabCommand = LabCommand {
@@ -282,8 +314,6 @@ static DO: LabCommand = LabCommand {
         ),
         LEASE_ID,
         FIELDS,
-        flag("verbose", "--verbose", Kind::Switch, "--verbose."),
-        flag("pretty", "--pretty", Kind::Switch, "--pretty."),
         flag("no_wait", "--no-wait", Kind::Switch, "--no-wait."),
         flag(
             "recovery_timeout_ms",
@@ -313,6 +343,8 @@ static DO: LabCommand = LabCommand {
     ],
     required: &[],
     capture_is_lab_request: true,
+    effect: Effect::Changed,
+    keeps_binding: false,
 };
 
 static RECORD_START: LabCommand = LabCommand {
@@ -340,6 +372,8 @@ static RECORD_START: LabCommand = LabCommand {
     ],
     required: &["task_id"],
     capture_is_lab_request: false,
+    effect: Effect::Changed,
+    keeps_binding: false,
 };
 
 static RECORD_MARK: LabCommand = LabCommand {
@@ -357,6 +391,8 @@ static RECORD_MARK: LabCommand = LabCommand {
     ],
     required: &["request"],
     capture_is_lab_request: false,
+    effect: Effect::Changed,
+    keeps_binding: false,
 };
 
 static RECORD_STOP: LabCommand = LabCommand {
@@ -397,6 +433,8 @@ static RECORD_STOP: LabCommand = LabCommand {
     ],
     required: &[],
     capture_is_lab_request: false,
+    effect: Effect::Changed,
+    keeps_binding: true,
 };
 
 static RECORD_STATUS: LabCommand = LabCommand {
@@ -404,6 +442,8 @@ static RECORD_STATUS: LabCommand = LabCommand {
     flags: &[RECORD_INSTANCE, STATE_DIR],
     required: &[],
     capture_is_lab_request: false,
+    effect: Effect::Unchanged,
+    keeps_binding: false,
 };
 
 /// The input schema of `command`: one property per flag, nothing else.
@@ -699,19 +739,178 @@ pub(super) fn interpret(captured: &Captured, what: &str) -> Answer {
     }
 }
 
-/// A Lab result that fits the output budget, or the error saying it does not.
-fn fitted(data: Value, what: &str, req_id: Option<&str>) -> Result<Value, ToolError> {
-    if tools::fits_success(&data) {
-        return Ok(data);
-    }
-    Err(ToolError::usage(
-        "output_budget_exceeded",
-        format!(
-            "actinglab {what} answered, but its result is larger than the 24 KiB tool output budget; what it did stands. Narrow it with fields where the command has them, or run actinglab --json {what} for the whole answer"
+/// `{path, sha256, size}` of `bytes` written by the export writer as `<sha256>.json`.
+fn export_hashed(bytes: &[u8]) -> Result<Value, ToolError> {
+    let mut material = ArtifactMaterialAccumulator::default();
+    material.update(bytes).map_err(|error| {
+        ToolError::new(
+            "runtime",
+            "material_export_failed",
+            format!("cannot hash the answer: {error}"),
+        )
+    })?;
+    observer::export_bytes(material.finish().sha256(), "json", bytes)
+}
+
+/// The verbatim JSON `value`, exported.
+fn export_json(value: &Value) -> Result<Value, ToolError> {
+    let bytes = serde_json::to_vec(value).map_err(|error| {
+        ToolError::new(
+            "runtime",
+            "material_export_failed",
+            format!("cannot encode the answer: {error}"),
+        )
+    })?;
+    export_hashed(&bytes)
+}
+
+/// The note on an answer over the budget, worded by what the command may have changed.
+fn exported_note(effect: Effect, what: &str, export: Option<&Value>) -> Value {
+    let place = match export
+        .and_then(|export| export.get("path"))
+        .and_then(Value::as_str)
+    {
+        Some(path) => format!("is whole in the exported file {path}"),
+        None => "could not be written to a file (see the export error)".to_owned(),
+    };
+    let message = match effect {
+        Effect::Changed => format!(
+            "actinglab {what} was performed or attempted as its answer reports; the answer is larger than the output budget and {place}. Do not run it again to see the answer."
         ),
-    )
-    .with_detail("payload_bytes", json!(data.to_string().len()))
-    .with_detail("req_id", json!(req_id)))
+        Effect::Narrowable => format!(
+            "the answer of actinglab {what} is larger than the output budget and {place}; narrow it with fields next time."
+        ),
+        Effect::Unchanged => {
+            format!("the answer is larger than the output budget and {place}.")
+        }
+    };
+    ToolError::new("runtime", "answer_exported", message)
+        .with_detail("export", json!(export))
+        .into_warning()
+}
+
+/// `{code, message, details}` of an envelope error, with only the top-level scalar members
+/// of its details.
+fn trimmed_lab_error(lab_error: &Value) -> Value {
+    let details = lab_error
+        .get("details")
+        .and_then(Value::as_object)
+        .map(|details| {
+            details
+                .iter()
+                .filter(|(_, value)| !value.is_array() && !value.is_object())
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Map<_, _>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "code": lab_error.get("code"),
+        "message": lab_error.get("message"),
+        "details": details,
+    })
+}
+
+/// Whether `outcome` with `warnings` fits the budget as `ac_get_run` returns the finished job,
+/// the larger of the two ways the answer is read.
+fn fits_as_job(handle: &str, outcome: &Value, warnings: &[Value]) -> bool {
+    tools::fits_success(&json!({
+        "handle": handle,
+        "job": {"kind": "lab", "phase": "failed", "warnings": warnings, "outcome": outcome},
+    }))
+}
+
+/// How one Lab job reports an answer over the budget.
+struct Overflow<'a> {
+    handle: &'a str,
+    what: &'a str,
+    effect: Effect,
+    keeps_binding: bool,
+}
+
+/// A Lab job's end under the one overflow rule (review F2).
+fn finish(
+    overflow: &Overflow<'_>,
+    result: Result<Value, ToolError>,
+    req_id: Option<&str>,
+    warnings: Vec<Value>,
+) -> JobEnd {
+    let handle = overflow.handle;
+    match result {
+        Ok(data) => {
+            if fits_as_job(handle, &data, &warnings) {
+                return (Ok(data), warnings);
+            }
+            let export = match export_json(&data) {
+                Ok(export) => export,
+                Err(error) => {
+                    let mut notes = vec![exported_note(overflow.effect, overflow.what, None)];
+                    notes.extend(warnings);
+                    let error = error
+                        .with_detail("req_id", json!(req_id))
+                        .with_detail("warnings", Value::Array(notes));
+                    return (Err(error), Vec::new());
+                }
+            };
+            let mut notes = vec![exported_note(overflow.effect, overflow.what, Some(&export))];
+            notes.extend(warnings);
+            let mut answer = json!({"req_id": req_id, "export": export, "overflowed": true});
+            if overflow.keeps_binding
+                && let Some(lab) = data.get("lab").and_then(Value::as_object)
+            {
+                let kept = BINDING_PARTS
+                    .iter()
+                    .filter_map(|key| lab.get(*key).map(|part| ((*key).to_owned(), part.clone())))
+                    .collect::<Map<_, _>>();
+                if !kept.is_empty() {
+                    answer["lab"] = Value::Object(kept);
+                    if !fits_as_job(handle, &answer, &notes)
+                        && let Some(object) = answer.as_object_mut()
+                    {
+                        object.remove("lab");
+                    }
+                }
+            }
+            (Ok(answer), notes)
+        }
+        Err(error) => {
+            let mut probe = error.to_value();
+            if !warnings.is_empty() {
+                probe["details"]["warnings"] = Value::Array(warnings.clone());
+            }
+            if fits_as_job(handle, &json!({"error": probe}), &[]) {
+                return ended(Err(error), warnings);
+            }
+            let lab_error = error
+                .detail("lab_error")
+                .filter(|value| !value.is_null())
+                .cloned();
+            let exported = lab_error.clone().unwrap_or_else(|| error.to_value());
+            let (export, export_error) = match export_json(&exported) {
+                Ok(export) => (Some(export), None),
+                Err(error) => (None, Some(error.into_value())),
+            };
+            let mut notes = vec![exported_note(
+                overflow.effect,
+                overflow.what,
+                export.as_ref(),
+            )];
+            notes.extend(warnings);
+            let mut error = error
+                .with_detail("lab_error_trimmed", json!(true))
+                .with_detail("req_id", json!(req_id))
+                .with_detail("export", json!(export));
+            if let Some(lab_error) = &lab_error {
+                error = error.with_detail("lab_error", trimmed_lab_error(lab_error));
+            }
+            if let Some(export_error) = export_error {
+                error = error.with_detail("export_error", export_error);
+            }
+            (
+                Err(error.with_detail("warnings", Value::Array(notes))),
+                Vec::new(),
+            )
+        }
+    }
 }
 
 /// A job's end: an error keeps the warnings found on the way in its details.
@@ -731,19 +930,19 @@ fn new_handle(context: &ToolContext<'_>) -> String {
     format!("{HANDLE_PREFIX}{:016x}_{number}", context.session)
 }
 
-/// Runs `body` as a Lab job and answers within the call budget, or with its handle.
+/// Runs `body` (given the job's handle) as a Lab job and answers within the call budget, or
+/// with its handle.
 fn run_job(
     context: &ToolContext<'_>,
-    body: impl FnOnce() -> JobEnd + Send + 'static,
+    body: impl FnOnce(&str) -> JobEnd + Send + 'static,
 ) -> ToolOutcome {
-    let job = context.jobs.start_noted(
-        new_handle(context),
-        "lab",
-        None,
-        "running",
-        Vec::new(),
-        body,
-    )?;
+    let handle = new_handle(context);
+    let own = handle.clone();
+    let job = context
+        .jobs
+        .start_noted(handle, "lab", None, "running", Vec::new(), move || {
+            body(&own)
+        })?;
     operator::job_answer(context, &job, context.deadline)
 }
 
@@ -792,15 +991,22 @@ fn author(
     tool: &'static str,
 ) -> ToolOutcome {
     let line = command_line(command, arguments)?;
-    let records =
-        command.capture_is_lab_request && arguments.get("capture") == Some(&Value::Bool(true));
+    let capture = arguments.get("capture") == Some(&Value::Bool(true));
+    let records = command.capture_is_lab_request && capture;
+    // `do` changes the device only with capture; offline it plans.
+    let effect = if command.capture_is_lab_request && !capture && command.effect == Effect::Changed
+    {
+        Effect::Unchanged
+    } else {
+        command.effect
+    };
     let instance = arguments
         .get("instance")
         .and_then(Value::as_str)
         .map(str::to_owned);
     let program = Program::locate(context)?;
     let what = command.words.join(" ");
-    run_job(context, move || {
+    run_job(context, move |handle| {
         let answer = program.call(&line, &what);
         let warnings = if records && answer.returned {
             record_action(
@@ -812,10 +1018,13 @@ fn author(
         } else {
             Vec::new()
         };
-        let result = answer
-            .result
-            .and_then(|data| fitted(data, &what, answer.req_id.as_deref()));
-        ended(result, warnings)
+        let overflow = Overflow {
+            handle,
+            what: &what,
+            effect,
+            keeps_binding: command.keeps_binding,
+        };
+        finish(&overflow, answer.result, answer.req_id.as_deref(), warnings)
     })
 }
 
@@ -857,6 +1066,16 @@ pub(super) fn record_status(
 
 // ---------------------------------------------------------------- checks
 
+/// The overflow of a check that changes nothing.
+fn unchanged<'a>(handle: &'a str, what: &'a str) -> Overflow<'a> {
+    Overflow {
+        handle,
+        what,
+        effect: Effect::Unchanged,
+        keeps_binding: false,
+    }
+}
+
 /// ac_pack_check: `package digest`, then `package preflight` with the given reference or,
 /// without one, the digest's; both answers verbatim.
 pub(super) fn pack_check(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
@@ -865,7 +1084,7 @@ pub(super) fn pack_check(context: &ToolContext<'_>, arguments: &Map<String, Valu
         .ok_or_else(|| invalid_argument("package", "is required"))?;
     let given = lab_string(&arguments, "package_ref")?;
     let program = Program::locate(context)?;
-    run_job(context, move || {
+    run_job(context, move |handle| {
         let result = (|| -> Result<Value, ToolError> {
             let mut line = words(&["package", "digest", "--package"]);
             line.push(package.clone());
@@ -898,14 +1117,19 @@ pub(super) fn pack_check(context: &ToolContext<'_>, arguments: &Map<String, Valu
                     if let Some(check) = check {
                         answer["package_ref_check"] = check;
                     }
-                    fitted(answer, "package digest/preflight", None)
+                    Ok(answer)
                 }
                 Err(error) => Err(error
                     .with_detail("digest", digest)
                     .with_detail("package_ref_check", json!(check))),
             }
         })();
-        (result, Vec::new())
+        finish(
+            &unchanged(handle, "package digest / preflight"),
+            result,
+            None,
+            Vec::new(),
+        )
     })
 }
 
@@ -929,13 +1153,72 @@ pub(super) fn catalog_check(
         line.extend(["--field".to_owned(), field]);
     }
     let program = Program::locate(context)?;
-    run_job(context, move || {
+    run_job(context, move |handle| {
         let answer = program.call(&line, "resource catalog");
-        let result = answer
-            .result
-            .and_then(|data| fitted(data, "resource catalog", None));
-        (result, Vec::new())
+        finish(
+            &unchanged(handle, "resource catalog"),
+            answer.result,
+            None,
+            Vec::new(),
+        )
     })
+}
+
+/// An ac_record_stop answer this server exported: read only from the export directory and
+/// only when its sha256 matches (review F2).
+fn read_export(export: &Value) -> Result<Value, ToolError> {
+    const FIELD: &str = "record_stop_export";
+    let object = export
+        .as_object()
+        .ok_or_else(|| invalid_argument(FIELD, "must be {path, sha256}"))?;
+    if let Some(unknown) = object
+        .keys()
+        .find(|key| !matches!(key.as_str(), "path" | "sha256" | "size"))
+    {
+        return Err(invalid_argument(
+            FIELD,
+            &format!("has a member {unknown}; it takes path and sha256"),
+        ));
+    }
+    let text = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| invalid_argument(FIELD, &format!("needs a {key} string")))
+    };
+    let path = text("path")?;
+    let sha256 = text("sha256")?;
+    let outside = || {
+        invalid_argument(
+            FIELD,
+            "must name a file this server exported, in %TEMP%\\actingcommand-mcp\\materials",
+        )
+    };
+    let directory = fs::canonicalize(observer::export_directory()).map_err(|_| outside())?;
+    let file = fs::canonicalize(path).map_err(|_| outside())?;
+    if file.parent() != Some(directory.as_path()) {
+        return Err(outside());
+    }
+    let bytes = runtime::read_bounded(&file, MAX_EXPORT_READ)
+        .map_err(|reason| invalid_argument(FIELD, &format!("cannot be read: {reason}")))?;
+    let mut material = ArtifactMaterialAccumulator::default();
+    material
+        .update(&bytes)
+        .map_err(|error| invalid_argument(FIELD, &format!("cannot be hashed: {error}")))?;
+    let expected = if sha256.starts_with("sha256:") {
+        sha256.to_owned()
+    } else {
+        format!("sha256:{sha256}")
+    };
+    if material.finish().sha256() != expected {
+        return Err(invalid_argument(
+            FIELD,
+            "has a sha256 that does not match the file's content",
+        ));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| invalid_argument(FIELD, "names a file that is not a JSON answer"))
 }
 
 /// ac_binding_draft: the binding parts of an ac_record_stop answer, verbatim; the package's
@@ -945,15 +1228,27 @@ pub(super) fn binding_draft(
     context: &ToolContext<'_>,
     arguments: &Map<String, Value>,
 ) -> ToolOutcome {
-    let arguments = Arguments::new(arguments, &["record_stop"])?;
-    let lab = arguments
-        .value("record_stop")
-        .and_then(|stop| stop.get("lab"))
+    let arguments = Arguments::new(arguments, &["record_stop", "record_stop_export"])?;
+    let record_stop = match (
+        arguments.value("record_stop"),
+        arguments.value("record_stop_export"),
+    ) {
+        (Some(record_stop), None) => record_stop.clone(),
+        (None, Some(export)) => read_export(export)?,
+        _ => {
+            return Err(invalid_argument(
+                "record_stop",
+                "or record_stop_export: give exactly one of them",
+            ));
+        }
+    };
+    let lab = record_stop
+        .get("lab")
         .and_then(Value::as_object)
         .ok_or_else(|| {
             invalid_argument(
                 "record_stop",
-                "must be the result of ac_record_stop, with its lab object",
+                "must be the result of ac_record_stop, with its lab object; an answer exported without it is passed as record_stop_export",
             )
         })?;
     let part = |key: &str| {
@@ -965,7 +1260,6 @@ pub(super) fn binding_draft(
         })
     };
     let binding_example = part("binding_example")?;
-    let binding_requires = part("binding_requires")?;
     let prerequisite_entry_example = part("prerequisite_entry_example")?;
     let catalog_on_failure_example = part("catalog_on_failure_example")?;
     let package_ref = part("package_ref")?.to_string();
@@ -981,16 +1275,34 @@ pub(super) fn binding_draft(
         })?
         .to_owned();
     not_a_flag("record_stop", &package)?;
-    let mut manual_steps = binding_requires.as_array().cloned().ok_or_else(|| {
-        invalid_argument(
-            "record_stop",
-            "has a lab.binding_requires that is not a list",
-        )
-    })?;
-    manual_steps.push(json!(MANUAL_STEP));
+    // Only the record stop that generated the package answers binding_requires (review F4).
+    let (binding_requires, manual_steps) = match lab.get("binding_requires") {
+        Some(Value::Array(items)) => {
+            let mut steps = items.clone();
+            steps.push(json!(MANUAL_STEP));
+            (Value::Array(items.clone()), steps)
+        }
+        None | Some(Value::Null) => (Value::Null, vec![json!(MANUAL_STEP)]),
+        Some(_) => {
+            return Err(invalid_argument(
+                "record_stop",
+                "has a lab.binding_requires that is not a list",
+            ));
+        }
+    };
     let program = Program::locate(context)?;
-    run_job(context, move || {
+    run_job(context, move |handle| {
         let mut warnings = Vec::new();
+        if binding_requires.is_null() {
+            warnings.push(
+                ToolError::new(
+                    "runtime",
+                    "binding_requires_unavailable",
+                    "actinglab gives binding_requires only in the answer of the record stop that generated the package; this answer has none, so manual_steps holds only the closing step",
+                )
+                .into_warning(),
+            );
+        }
         let mut line = words(&["package", "preflight", "--package"]);
         line.extend([package.clone(), "--package-ref".to_owned(), package_ref]);
         let preflight = program.call(&line, "package preflight").result;
@@ -1031,12 +1343,19 @@ pub(super) fn binding_draft(
             "check_config": config_report,
             "manual_steps": manual_steps,
         });
-        (fitted(answer, "binding draft", None), warnings)
+        finish(
+            &unchanged(handle, "binding draft"),
+            Ok(answer),
+            None,
+            warnings,
+        )
     })
 }
 
-/// `<root>\runtime\actingcommand-actingd.exe check-config --config <root>\actingd.config.json`:
-/// the report on the configuration in force, which it only reads (`check_config.rs:37-130`).
+/// `<root>\runtime\actingcommand-actingd.exe check-config --config <root>\actingd.config.json`
+/// on the configuration in force, which it only reads (`check_config.rs:37-130`). Its whole
+/// stdout is exported; inline stay `{config, exit_code, status?, error?, report_export}` with
+/// `status` and `error` copied from the report's top level (review F3).
 fn check_config(program: &Program) -> Result<Value, ToolError> {
     let config = program.root.join("actingd.config.json");
     let mut command = Command::new(
@@ -1058,6 +1377,7 @@ fn check_config(program: &Program) -> Result<Value, ToolError> {
             "actingd check-config was still running",
         ),
     })?;
+    let report_export = export_hashed(&captured.stdout)?;
     let report =
         serde_json::from_slice::<Value>(captured.stdout.trim_ascii()).map_err(|error| {
             ToolError::new(
@@ -1067,21 +1387,48 @@ fn check_config(program: &Program) -> Result<Value, ToolError> {
             )
             .with_detail("exit_code", json!(captured.status.code()))
             .with_detail("stderr_tail", json!(stderr_tail(&captured.stderr)))
+            .with_detail("report_export", report_export.clone())
         })?;
-    Ok(json!({
+    let mut inline = json!({
         "config": config.display().to_string(),
         "exit_code": captured.status.code(),
-        "report": report,
-    }))
+    });
+    for key in ["status", "error"] {
+        if let Some(value) = report.get(key) {
+            inline[key] = value.clone();
+        }
+    }
+    inline["report_export"] = report_export;
+    Ok(inline)
 }
 
 // ---------------------------------------------------------------- result schemas
 
-/// actinglab's answer verbatim, or a job handle.
+/// `{path, sha256, size}` of an exported answer.
+fn export_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "sha256": {"type": "string"},
+            "size": {"type": "integer"},
+        },
+        "required": ["path", "sha256", "size"],
+    })
+}
+
+/// actinglab's answer verbatim, or exported, or a job handle.
 pub(super) fn lab_result() -> Value {
     json!({
         "type": "object",
-        "description": "The actinglab envelope's data, unchanged; or {handle, job_phase} when the call outlives the budget.",
+        "description": "The actinglab envelope's data, unchanged. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} (ac_record_stop also keeps lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example, lab.catalog_on_failure_example and lab.package_ref when they fit). Beyond the call budget: {handle, job_phase}.",
+        "properties": {
+            "req_id": {"type": ["string", "null"]},
+            "export": export_schema(),
+            "overflowed": {"type": "boolean"},
+            "handle": {"type": "string"},
+            "job_phase": {"type": "string"},
+        },
     })
 }
 
@@ -1120,6 +1467,9 @@ pub(super) fn pack_check_result() -> Value {
                     "matches_digest": {"type": "boolean"},
                 },
             },
+            "req_id": {"type": ["string", "null"]},
+            "export": export_schema(),
+            "overflowed": {"type": "boolean"},
             "handle": {"type": "string"},
             "job_phase": {"type": "string"},
         },
@@ -1149,10 +1499,24 @@ pub(super) fn binding_draft_input() -> Value {
                 "type": "object",
                 "properties": {"lab": {"type": "object"}},
                 "required": ["lab"],
-                "description": "The result of ac_record_stop.",
+                "description": "The result of ac_record_stop (also an exported one that kept its lab parts).",
+            },
+            "record_stop_export": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "minLength": 1},
+                    "sha256": {"type": "string", "minLength": 1},
+                    "size": {"type": "integer"},
+                },
+                "required": ["path", "sha256"],
+                "additionalProperties": false,
+                "description": "The export of an ac_record_stop answer from this server: read only from %TEMP%\\actingcommand-mcp\\materials and only when its sha256 matches.",
             },
         },
-        "required": ["record_stop"],
+        "oneOf": [
+            {"required": ["record_stop"]},
+            {"required": ["record_stop_export"]},
+        ],
         "additionalProperties": false,
     })
 }
@@ -1162,12 +1526,24 @@ pub(super) fn binding_draft_result() -> Value {
         "type": "object",
         "properties": {
             "binding_example": {"type": "object"},
-            "binding_requires": {"type": "array"},
+            "binding_requires": {"type": ["array", "null"]},
             "prerequisite_entry_example": {"type": "object"},
             "catalog_on_failure_example": {"type": "object"},
             "admission": {"type": "object"},
-            "check_config": {"type": "object"},
+            "check_config": {
+                "type": "object",
+                "properties": {
+                    "config": {"type": "string"},
+                    "exit_code": {"type": ["integer", "null"]},
+                    "status": {"type": "string"},
+                    "error": {},
+                    "report_export": export_schema(),
+                },
+            },
             "manual_steps": {"type": "array"},
+            "req_id": {"type": ["string", "null"]},
+            "export": export_schema(),
+            "overflowed": {"type": "boolean"},
             "handle": {"type": "string"},
             "job_phase": {"type": "string"},
         },

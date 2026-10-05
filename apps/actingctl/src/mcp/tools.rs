@@ -36,7 +36,7 @@ macro_rules! check_job {
 /// How a Lab tool reports actinglab's failures.
 macro_rules! lab_errors {
     () => {
-        " Failures keep actinglab's class by its exit code (2 usage, 3 safety, 4 device, 5 runtime, 6 usage not_implemented) with its error verbatim in details.lab_error; any other exit, or no JSON envelope, is runtime lab_process_failed with the stderr tail. String arguments may not start with --."
+        " Failures keep actinglab's class by its exit code (2 usage, 3 safety, 4 device, 5 runtime, 6 usage not_implemented) with its error verbatim in details.lab_error; any other exit, or no JSON envelope, is runtime lab_process_failed with the stderr tail. String arguments may not start with --. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported; an error that large keeps its class, code and message, with lab_error trimmed to its code, message and scalar details, lab_error_trimmed, req_id and export."
     };
 }
 
@@ -185,6 +185,22 @@ impl ToolError {
 
     pub(super) fn code(&self) -> &str {
         &self.0.code
+    }
+
+    /// One member of the details, when present.
+    pub(super) fn detail(&self, key: &str) -> Option<&Value> {
+        self.0.details.get(key)
+    }
+
+    /// `{class, code, message, blocked_by, details}`, leaving the error in place.
+    pub(super) fn to_value(&self) -> Value {
+        json!({
+            "class": self.0.class,
+            "code": self.0.code,
+            "message": self.0.message,
+            "blocked_by": self.0.blocked_by,
+            "details": self.0.details,
+        })
     }
 
     pub(super) fn message(&self) -> &str {
@@ -512,7 +528,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Lab do",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json do, one argument per flag, and answers its data verbatim. With capture it acts on the instance through the Runtime (target: a Runtime element id, or tap or swipe; instance: its alias), which records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Offline (scene) actinglab only plans, with dry_run, and touches no Runtime. Which actions count as destructive and need allow_destructive is actinglab's decision.",
+            "Runs actinglab --json do, one argument per flag, and answers its data verbatim. With capture it acts on the instance through the Runtime (target: a Runtime element id, or tap or swipe; instance: its alias), which records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Offline (scene) actinglab only plans, with dry_run, and touches no Runtime. The destructive guard flags (destructive, allow_destructive) are not read on the capture path (with capture and without dry_run): that is actinglab's own behaviour, and this server adds no guard of its own.",
             lab_errors!(),
             lab_job!()
         ),
@@ -560,7 +576,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Stop a recording",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. It opens no Runtime connection and records no client.action.",
+            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. Only the stop that generates the package answers lab.binding_requires; a later one answers lab.status already_generated without it. An answer larger than the output budget still carries lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example, lab.catalog_on_failure_example and lab.package_ref inline when they fit. It opens no Runtime connection and records no client.action.",
             lab_errors!(),
             lab_job!()
         ),
@@ -576,7 +592,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Recording status",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record status: the recording session and its Lab recording steps, verbatim. It only reads the recording.",
+            "Runs actinglab --json record status: the recording session and its Lab recording steps, verbatim. It reads the recording; actinglab creates its recording state directory if it is missing.",
             lab_errors!(),
             lab_job!()
         ),
@@ -592,7 +608,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Binding draft",
         tier: Tier::Author,
         description: concat!(
-            "Turns an ac_record_stop result (record_stop) into a binding draft and changes nothing. binding_example, binding_requires, prerequisite_entry_example and catalog_on_failure_example come verbatim from it. admission: actinglab package preflight on the recorded package (binding_example.scheduled_execution.package_path with lab.package_ref); its coverage is the admission scope, preflight_error when it does not pass. check_config: the report of actingd check-config on the install's current actingd.config.json, which it only reads: the draft is not in it, and nothing is merged into any configuration or copy. manual_steps: binding_requires, then edit the configuration, approve in the UI, restart the daemon; all of them are the person's.",
+            "Turns an ac_record_stop answer into a binding draft and changes nothing. Give exactly one of record_stop (the answer itself, also an exported one that kept its lab parts) and record_stop_export {path, sha256} (the export of an ac_record_stop answer, read only from %TEMP%\\actingcommand-mcp\\materials and only when its sha256 matches). binding_example, binding_requires, prerequisite_entry_example and catalog_on_failure_example come verbatim from it; binding_requires is null, with the warning binding_requires_unavailable, when the answer has none (a record stop answering already_generated). admission: actinglab package preflight on the recorded package (binding_example.scheduled_execution.package_path with lab.package_ref); its coverage is the admission scope, preflight_error when it does not pass. check_config {config, exit_code, status, error, report_export}: actingd check-config on the install's current actingd.config.json, which it only reads; the whole report is exported, status and error are copied from it; the draft is not in it, and nothing is merged into any configuration or copy. manual_steps: binding_requires, then edit the configuration, approve in the UI, restart the daemon; all of them are the person's.",
             lab_errors!(),
             check_job!()
         ),
