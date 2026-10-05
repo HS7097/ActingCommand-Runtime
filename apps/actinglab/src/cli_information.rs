@@ -59,7 +59,8 @@ pub(super) fn help_data() -> Value {
             "package digest": ["--package <directory | .zip | .json container>"],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
-                "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>"
+                "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>",
+                "--maintenance <JSON array of package_id, server, uses; requests actingcommand.bundle.v3>"
             ],
             "session record build-task": [
                 "--locale <locale>"

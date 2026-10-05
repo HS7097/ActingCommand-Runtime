@@ -2,16 +2,18 @@
 
 //! Workflow #288 A2b: content-directory task packs for authors and resource pipelines.
 //! `package digest` names a directory by its content; `package bundle` lays out the standard
-//! package's resource section: one hash-named directory per task pack and the bundle index v2.
+//! package's resource section: one hash-named directory per task pack and its versioned index.
 //! Both read through the loader's own snapshot and admit every pack in full.
 
 use crate::{
     PackageBundleRequest, PackageBundleResponse, PackageDigestRequest, PackageDigestResponse,
 };
 use actingcommand_contract::{
-    BundleIndexV2, BundleIndexVersion, BundlePackV2, ContentDirectory, ContentDirectoryVersion,
-    LabError, LabErrorClass, LabResult, PackageRef, content_directory_digest,
+    BundleIndex, BundleIndexV2, BundleIndexV3, BundleIndexV3Version, BundleIndexVersion,
+    BundleMaintenance, BundlePackV2, ContentDirectory, ContentDirectoryVersion, LabError,
+    LabErrorClass, LabResult, PackageRef, content_directory_digest,
 };
+use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -97,6 +99,7 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
         &applications_bytes,
         &directories,
         request.source,
+        request.maintenance,
     )
     .and_then(|index| {
         fs::rename(&staging, &out).map_err(|error| write_error(&out, error))?;
@@ -122,11 +125,13 @@ fn write_bundle(
     applications_bytes: &[u8],
     directories: &[PathBuf],
     source: Option<actingcommand_contract::BundleSource>,
-) -> LabResult<BundleIndexV2> {
+    maintenance: Option<Vec<BundleMaintenance>>,
+) -> LabResult<BundleIndex> {
     let packs_dir = staging.join("packs");
     fs::create_dir(&packs_dir).map_err(|error| write_error(&packs_dir, error))?;
     let mut containment = Containment::for_metadata_validation();
     let mut packs = Vec::new();
+    let mut descriptors = Vec::new();
     for directory in directories {
         let snapshot = containment
             .snapshot_content_directory(directory, Instant::now() + PACK_DEADLINE)
@@ -158,13 +163,31 @@ fn write_bundle(
             schema_version: ContentDirectoryVersion::V1,
             sha256: digest.clone(),
         };
-        let identity = admit(
-            &mut containment,
-            &target,
-            &reference,
-            files.len(),
-            Instant::now() + PACK_DEADLINE,
-        )?;
+        let identity = if maintenance.is_some() {
+            let descriptor = PreparedContainedTask::describe_path(
+                "package-bundle",
+                &target,
+                &PackageRef::ContentDirectory(reference.clone()),
+                Instant::now() + PACK_DEADLINE,
+            )
+            .map_err(|error| LabError::package_invalid(format!("{}: {error}", target.display())))?;
+            let identity = PackIdentity {
+                game: descriptor.game().to_owned(),
+                package_id: descriptor.package_id().to_owned(),
+                server: descriptor.server().to_owned(),
+                entry_task_id: descriptor.entry_task_id().to_owned(),
+            };
+            descriptors.push(descriptor);
+            identity
+        } else {
+            admit(
+                &mut containment,
+                &target,
+                &reference,
+                files.len(),
+                Instant::now() + PACK_DEADLINE,
+            )?
+        };
         if identity.game != applications.game || !applications.servers.contains(&identity.server) {
             return Err(bundle_error(
                 "package_bundle_pack_mismatch",
@@ -203,11 +226,26 @@ fn write_bundle(
             ));
         }
     }
-    let index = BundleIndexV2 {
-        schema_version: BundleIndexVersion::V2,
-        game: applications.game.clone(),
-        source,
-        packs,
+    let index = match maintenance {
+        Some(maintenance) => {
+            let index = BundleIndexV3 {
+                schema_version: BundleIndexV3Version::V3,
+                game: applications.game.clone(),
+                source,
+                packs,
+                maintenance,
+            };
+            validate_bundle_maintenance(&index, &descriptors).map_err(|error| {
+                bundle_error("package_bundle_maintenance_invalid", error.to_string())
+            })?;
+            BundleIndex::V3(index)
+        }
+        None => BundleIndex::V2(BundleIndexV2 {
+            schema_version: BundleIndexVersion::V2,
+            game: applications.game.clone(),
+            source,
+            packs,
+        }),
     };
     index
         .validate()

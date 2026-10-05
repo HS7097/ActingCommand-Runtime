@@ -13,8 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::{
     FactScalar as ContractFactScalar, MAX_RESOURCE_TARGETS, MAX_RESOURCE_TARGETS_DOCUMENT_BYTES,
-    RESOURCE_TARGETS_FACT_KEY, ResourceTargetCondition, ResourceTargetConditionState,
-    ResourceTargetPendingReason, ResourceTargetsRejection, ResourceTargetsRejectionReason,
+    NotTargetableResource, RESOURCE_TARGETS_FACT_KEY, ResourceTargetCondition,
+    ResourceTargetConditionState, ResourceTargetObservation, ResourceTargetPendingReason,
+    ResourceTargetsRejection, ResourceTargetsRejectionReason, TargetableResource,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -1587,6 +1588,233 @@ fn stored_policy_state_v2(
             targets,
         }
     })
+}
+
+/// Every pool of `catalog` judged for `instance` with the predicates of a v2 target that names
+/// no tasks (Workflow #338 R5): a pool that does not resolve, is not observable or is out of the
+/// instance's scope ([`resolve_target_pool`]), or that no task of the instance produces, is not
+/// targetable with that reason; every other pool is, with its producing tasks, the defaults its
+/// valuation supplies (as [`target_terms`] reads them) and its inventory as the time-validity
+/// projection of `facts` shows it ([`observe_target`]). Pure.
+pub fn targetable_resources(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    instance: &InstanceSnapshot,
+    time: EvaluationTime,
+) -> Result<(Vec<TargetableResource>, Vec<NotTargetableResource>), ResourceTargetsError> {
+    let projected =
+        project_time_validity(catalog, facts, time).map_err(ResourceTargetsError::Evaluation)?;
+    let mut targetable = Vec::new();
+    let mut not_targetable = Vec::new();
+    for declared in &catalog.catalog().pools.pools {
+        let (pool, fact_key) = match resolve_target_pool(catalog, &declared.id, instance) {
+            Ok(resolved) => resolved,
+            Err((reason, _)) => {
+                not_targetable.push(NotTargetableResource {
+                    resource: declared.id.clone(),
+                    reason,
+                });
+                continue;
+            }
+        };
+        let producing_tasks = catalog
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .filter(|task| {
+                task_on_instance(task, instance).is_ok() && per_run_production(task, &pool.id) >= 1
+            })
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        if producing_tasks.is_empty() {
+            not_targetable.push(NotTargetableResource {
+                resource: pool.id.clone(),
+                reason: ResourceTargetsRejectionReason::UnmappedTask,
+            });
+            continue;
+        }
+        let valuation = pool.valuation.as_ref();
+        let default_scale = valuation.map(|valuation| valuation.scale);
+        let default_importance_milli = valuation
+            .and_then(|valuation| valuation.gap.as_ref())
+            .map(|gap| u64::from(gap.weight_milli));
+        let observation = match observe_target(&projected, instance, pool, &fact_key, time) {
+            TargetObservation::Known {
+                current,
+                observed_at_unix_ms,
+                ..
+            } => ResourceTargetObservation {
+                current: Some(current),
+                observed_at_unix_ms: Some(observed_at_unix_ms),
+                pending: None,
+            },
+            TargetObservation::Pending { reason } => ResourceTargetObservation {
+                current: None,
+                observed_at_unix_ms: None,
+                pending: Some(reason),
+            },
+        };
+        targetable.push(TargetableResource {
+            resource: pool.id.clone(),
+            fact_key,
+            producing_tasks,
+            default_scale,
+            default_importance_milli,
+            scale_required: default_scale.is_none(),
+            importance_required: default_importance_milli.is_none(),
+            observation,
+        });
+    }
+    Ok((targetable, not_targetable))
+}
+
+/// One instance's stored resource target policy as the evaluator reads it (Workflow #338 R5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredResourceTargets {
+    /// No instance-scoped policy, or a withdrawal (`targets: []`).
+    None,
+    /// The stored record cannot be read; `code` is the evaluator's degradation code.
+    Unreadable {
+        code: &'static str,
+    },
+    Policy(Box<StoredResourceTargetPolicy>),
+}
+
+/// A readable stored policy: its identity and lifetime, its targets in document form and, per
+/// target whose pool still resolves for the instance, what it observes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredResourceTargetPolicy {
+    pub policy_sha256: String,
+    pub schema_version: &'static str,
+    pub applied_at_unix_ms: u64,
+    pub valid_until_unix_ms: u64,
+    pub expired: bool,
+    pub targets: Vec<serde_json::Value>,
+    pub conditions: Vec<ResourceTargetCondition>,
+}
+
+/// One stored target as the view reads it: its document form, id, pool and `at_least` amount.
+type StoredTarget = (serde_json::Value, String, String, u64);
+
+/// Reads `instance`'s stored policy through [`instance_target_policies`] (the decoders and the
+/// active or expired state the evaluator uses), then, with an active `catalog`, the condition of
+/// every target whose pool still resolves, as `ApplyResourceTargets` reports it. Pure.
+pub fn active_resource_targets(
+    catalog: Option<&CompiledCatalog>,
+    facts: &EvaluationFacts,
+    instance: &InstanceSnapshot,
+    time: EvaluationTime,
+) -> Result<StoredResourceTargets, ResourceTargetsError> {
+    fn stored<T: Serialize>(
+        target: &T,
+        id: &str,
+        resource: &str,
+        condition: TargetCondition,
+    ) -> Result<StoredTarget, ResourceTargetsError> {
+        let TargetCondition::AtLeast { amount } = condition;
+        let document = serde_json::to_value(target)
+            .map_err(|_| ResourceTargetsError::Internal("resource_targets_view_encode_failed"))?;
+        Ok((document, id.to_owned(), resource.to_owned(), amount))
+    }
+    let state = instance_target_policies(facts, time)
+        .map_err(ResourceTargetsError::Evaluation)?
+        .remove(&instance.instance_id)
+        .and_then(|policy| policy.state);
+    let (policy_sha256, schema_version, applied_at_unix_ms, valid_until_unix_ms, targets) =
+        match state {
+            None => return Ok(StoredResourceTargets::None),
+            Some(TargetPolicyState::Unreadable { code }) => {
+                return Ok(StoredResourceTargets::Unreadable { code });
+            }
+            Some(
+                TargetPolicyState::Active {
+                    policy_sha256,
+                    applied_at_unix_ms,
+                    valid_until_unix_ms,
+                    targets,
+                }
+                | TargetPolicyState::Expired {
+                    policy_sha256,
+                    applied_at_unix_ms,
+                    valid_until_unix_ms,
+                    targets,
+                },
+            ) => (
+                policy_sha256,
+                RESOURCE_TARGETS_SCHEMA_VERSION,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                targets
+                    .iter()
+                    .map(|target| stored(target, &target.id, &target.resource, target.condition))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            Some(
+                TargetPolicyState::ActiveV2 {
+                    policy_sha256,
+                    applied_at_unix_ms,
+                    valid_until_unix_ms,
+                    targets,
+                }
+                | TargetPolicyState::ExpiredV2 {
+                    policy_sha256,
+                    applied_at_unix_ms,
+                    valid_until_unix_ms,
+                    targets,
+                },
+            ) => (
+                policy_sha256,
+                RESOURCE_TARGETS_SCHEMA_VERSION_V2,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                targets
+                    .iter()
+                    .map(|target| stored(target, &target.id, &target.resource, target.condition))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        };
+    let mut conditions = Vec::new();
+    if let Some(catalog) = catalog {
+        let projected = project_time_validity(catalog, facts, time)
+            .map_err(ResourceTargetsError::Evaluation)?;
+        for (_, target_id, resource, amount) in &targets {
+            let Ok((pool, fact_key)) = resolve_target_pool(catalog, resource, instance) else {
+                continue;
+            };
+            let state = match observe_target(&projected, instance, pool, &fact_key, time) {
+                TargetObservation::Known {
+                    current,
+                    observed_at_unix_ms,
+                    ..
+                } => ResourceTargetConditionState::Computed {
+                    current,
+                    observed_at_unix_ms,
+                    gap: amount.saturating_sub(current.unsigned_abs()),
+                },
+                TargetObservation::Pending { reason } => {
+                    ResourceTargetConditionState::AwaitingObservation { reason }
+                }
+            };
+            conditions.push(ResourceTargetCondition {
+                target_id: target_id.clone(),
+                resource: pool.id.clone(),
+                fact_key,
+                state,
+            });
+        }
+    }
+    Ok(StoredResourceTargets::Policy(Box::new(
+        StoredResourceTargetPolicy {
+            policy_sha256,
+            schema_version,
+            applied_at_unix_ms,
+            valid_until_unix_ms,
+            expired: time.unix_ms > valid_until_unix_ms,
+            targets: targets.into_iter().map(|(document, ..)| document).collect(),
+            conditions,
+        },
+    )))
 }
 
 /// What a stored policy does to one score-stage candidate (Workflow #308 RT-S1b).
