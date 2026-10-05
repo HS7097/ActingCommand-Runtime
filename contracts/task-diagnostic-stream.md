@@ -348,21 +348,37 @@ as an interrupted run recovered after restart, `task.terminal_committed` retains
 is inferred by counting ledger completion events, and original errors and
 committed effects remain unchanged.
 
-A direct contained run (no `policy.dispatch_intent` on its run or request) that the
-previous owner epoch admitted (`task.requested` with `package_admitted`) and never terminated
+A direct contained run (no `policy.dispatch_intent` on its run or request) whose first
+semantic task fact belongs to the previous owner epoch and which never terminated
 is settled when the next owner starts (Workflow #338 R3): after the scheduler chain's
 reconciliation, the start scans the events between the last two `runtime.started` /
 `runtime.takeover` events and writes, as Runtime/Runtime on the run's original links
 (request, correlation, causation, instance, lease, task, run), the same two events a
 resubmission of the original request writes: `task.terminal_intent` (cancelled) and
 `task.cancelled` with `failure_code: contained_task_recovered_after_restart`,
-`executed_steps: null`; a lease without `lease.released` / `lease.expired` then gets the
+`executed_steps: null`; an actually granted lease without `lease.released` / `lease.expired` gets the
 same `lease.released` (`not_performed`). A resubmission of the original request afterwards
 meets that terminal and answers `ContainedTaskCancelled(RecoveredAfterRestart)` unchanged.
 Only the previous epoch is scanned: a run left open two epochs back stays open (a run
 status reports it as interrupted), as does a run on an instance this start did not
 register. A run settled once lies outside every later start's scan. A failed settlement
 fails the start.
+
+The first fact is the earliest `TaskPayload::Semantic` under the original request
+with complete, consistent request/correlation/instance/task/run links. Home recovery
+and prerequisite facts count before the main package is admitted; they retain the
+business run's identity and original producer timing. Ordinary request audits and
+preparation rejections without a run do not create one. Host and runtime-client use
+the same in-memory identity extraction; nothing is migrated or backfilled.
+
+Replaying an active run remains denied as already running. An existing main-package
+fact still binds its original hash. A maintenance-only run with a committed terminal
+returns that original outcome; if it has no terminal and is no longer active, replay
+reports `contained_task_previous_attempt_incomplete`. The main package, label and
+deadline stay unknown when no main admission was recorded. Recovery-package count,
+uniqueness and binding checks still apply. The cancellation receipt omits
+`lease_terminal` when no release or expiry is known; recovery never fabricates a
+grant or a release. This nullable receipt field is not a ledger-schema change.
 
 Task-error terminals retain the optional typed `timing` observation from the
 Kernel's original decision. `scope` identifies the task budget, page-recognition
