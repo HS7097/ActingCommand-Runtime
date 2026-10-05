@@ -133,6 +133,47 @@ use std::fmt;
 
 pub const GLOBAL_EVENT_SCHEMA_VERSION: &str = "actingcommand.event.v2";
 
+/// The complete identity of an existing semantic run fact. This read-only value is neither
+/// persisted nor an event-producer capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskRunIdentity {
+    pub request_id: RequestId,
+    pub correlation_id: CorrelationId,
+    pub instance_id: InstanceId,
+    pub task_id: TaskId,
+    pub run_id: RunId,
+}
+
+impl TaskRunIdentity {
+    pub fn from_semantic_event(payload: &EventPayload, links: &EventLinks) -> Option<Self> {
+        if !matches!(payload, EventPayload::Task(TaskPayload::Semantic(_))) {
+            return None;
+        }
+        Some(Self {
+            request_id: *links.request_id()?,
+            correlation_id: *links.correlation_id()?,
+            instance_id: *links.instance_id()?,
+            task_id: *links.task_id()?,
+            run_id: *links.run_id()?,
+        })
+    }
+
+    /// Request audits may omit run links, but any identity they carry must agree with the run.
+    pub fn matches_links(&self, links: &EventLinks) -> bool {
+        links
+            .request_id()
+            .is_none_or(|value| *value == self.request_id)
+            && links
+                .correlation_id()
+                .is_none_or(|value| *value == self.correlation_id)
+            && links
+                .instance_id()
+                .is_none_or(|value| *value == self.instance_id)
+            && links.task_id().is_none_or(|value| *value == self.task_id)
+            && links.run_id().is_none_or(|value| *value == self.run_id)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventSeverity {

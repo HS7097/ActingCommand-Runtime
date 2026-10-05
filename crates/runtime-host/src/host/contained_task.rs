@@ -7,7 +7,7 @@ use actingcommand_contract::{
     CaptureBackendName, CaptureExtent, CaptureGeometryObservation,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
     TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation, TaskGeometryPhase,
-    TaskGeometryRecheckTrigger,
+    TaskGeometryRecheckTrigger, TaskRunIdentity,
 };
 use actingcommand_execution_kernel::{CaptureGeometrySessionRef, ResourceReadingValue};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,6 +18,52 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 pub(super) const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: &str = "settle_previous_epoch_contained_runs";
+
+/// Reads one original run identity without creating identifiers or producer authority.
+fn contained_task_recovery_identity(
+    events: &[PersistedEvent],
+    operation: &'static str,
+) -> Result<Option<(TaskRunIdentity, Option<LeaseId>)>, RequestFailure> {
+    let invalid = || {
+        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            "contained_task_recovery_identity_invalid",
+            operation,
+            RuntimeErrorCode::RuntimeFatal,
+        ))
+    };
+    let mut identity = None;
+    let mut lease_id = None;
+    for event in events {
+        if matches!(
+            event.payload(),
+            EventPayload::Task(TaskPayload::Semantic(_))
+        ) {
+            let found = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
+                .ok_or_else(invalid)?;
+            if identity.is_some_and(|previous| previous != found) {
+                return Err(invalid());
+            }
+            identity = Some(found);
+        }
+        if let Some(found) = event.links().lease_id().copied() {
+            if lease_id.is_some_and(|previous| previous != found) {
+                return Err(invalid());
+            }
+            lease_id = Some(found);
+        }
+    }
+    if let Some(identity) = identity {
+        if events
+            .iter()
+            .any(|event| !identity.matches_links(event.links()))
+        {
+            return Err(invalid());
+        }
+        Ok(Some((identity, lease_id)))
+    } else {
+        Ok(None)
+    }
+}
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ContainedTaskCheckpointIdentity {
@@ -5544,7 +5590,7 @@ impl HostShared {
                             task_request_id: original.request_id(),
                             response_deadline_monotonic_ms: Some(control.deadline()),
                             reason,
-                            lease_terminal: ContainedTaskLeaseTerminal::Released,
+                            lease_terminal: Some(ContainedTaskLeaseTerminal::Released),
                         },
                     });
                 }
@@ -6165,11 +6211,13 @@ impl HostShared {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if semantic.is_empty() {
+        let Some((identity, lease_id)) =
+            contained_task_recovery_identity(&events, "recover_contained_task")?
+        else {
             return Err(contained_task_replay_denied(
                 "contained_task_previous_attempt_incomplete",
             ));
-        }
+        };
         let packages = semantic
             .iter()
             .filter_map(|(event, fact)| match fact {
@@ -6181,7 +6229,11 @@ impl HostShared {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if packages.len() != 1 || packages[0].1 != task_request.expected_sha256() {
+        if packages.len() > 1
+            || packages
+                .first()
+                .is_some_and(|(_, package, _)| *package != task_request.expected_sha256())
+        {
             return Err(contained_task_replay_denied(
                 "contained_task_request_package_reused",
             ));
@@ -6218,29 +6270,9 @@ impl HostShared {
                 "contained_task_request_recovery_reused",
             ));
         }
-        let package_event = packages[0].0;
-        let deadline_monotonic_ms = packages[0].2;
-        let task_id = package_event.links().task_id().copied().ok_or_else(|| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_identity_missing",
-                "recover_contained_task",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
-        let run_id = package_event.links().run_id().copied().ok_or_else(|| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_identity_missing",
-                "recover_contained_task",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
-        let lease_id = package_event.links().lease_id().copied().ok_or_else(|| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_identity_missing",
-                "recover_contained_task",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
+        let deadline_monotonic_ms = packages.first().and_then(|(_, _, deadline)| *deadline);
+        let task_id = identity.task_id;
+        let run_id = identity.run_id;
         let mut terminals = semantic
             .iter()
             .filter_map(|(event, fact)| match fact {
@@ -6275,6 +6307,11 @@ impl HostShared {
                     "contained_task_already_running",
                 ));
             }
+            if packages.is_empty() {
+                return Err(contained_task_replay_denied(
+                    "contained_task_previous_attempt_incomplete",
+                ));
+            }
             let terminal_event = self.append_recovered_contained_task_terminal(
                 validated,
                 instance_id,
@@ -6290,56 +6327,66 @@ impl HostShared {
                 Some("contained_task_recovered_after_restart".to_owned()),
             ));
         }
-        let lease_events = self
-            .ledger
-            .query(EventQuery {
-                lease_id: Some(lease_id),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    "query_recovered_contained_task_lease_terminal",
-                ))
-            })?;
-        let lease_terminals = lease_events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.event_type(),
-                    EventType::LeaseReleased | EventType::LeaseExpired
-                ) && event.links().lease_id() == Some(&lease_id)
-            })
-            .collect::<Vec<_>>();
-        if lease_terminals.len() > 1 {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "contained_task_lease_terminal_state_inconsistent",
-                    "recover_contained_task",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        let lease_disposition = match lease_terminals.as_slice() {
-            [event] if event.event_type() == EventType::LeaseExpired => {
-                ContainedTaskLeaseTerminal::Expired
-            }
-            [_] => ContainedTaskLeaseTerminal::Released,
-            [] if active => {
-                return Err(contained_task_replay_denied(
-                    "contained_task_already_running",
+        let lease_disposition = if let Some(lease_id) = lease_id {
+            let lease_events = self
+                .ledger
+                .query(EventQuery {
+                    lease_id: Some(lease_id),
+                    ..EventQuery::default()
+                })
+                .map_err(|_| {
+                    RequestFailure::poison_without_terminal(ledger_error(
+                        "query_recovered_contained_task_lease_terminal",
+                    ))
+                })?;
+            let granted = lease_events.iter().any(|event| {
+                event.event_type() == EventType::LeaseGranted
+                    && event.links().instance_id() == Some(&identity.instance_id)
+                    && identity.matches_links(event.links())
+            });
+            let lease_terminals = lease_events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.event_type(),
+                        EventType::LeaseReleased | EventType::LeaseExpired
+                    ) && event.links().lease_id() == Some(&lease_id)
+                })
+                .collect::<Vec<_>>();
+            if lease_terminals.len() > 1 {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "contained_task_lease_terminal_state_inconsistent",
+                        "recover_contained_task",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
                 ));
             }
-            [] => {
-                self.append_recovered_contained_task_release(
-                    validated,
-                    instance_id,
-                    lease_id,
-                    task_id,
-                    run_id,
-                )?;
-                ContainedTaskLeaseTerminal::Released
+            match lease_terminals.as_slice() {
+                [event] if event.event_type() == EventType::LeaseExpired => {
+                    Some(ContainedTaskLeaseTerminal::Expired)
+                }
+                [_] => Some(ContainedTaskLeaseTerminal::Released),
+                [] if active => {
+                    return Err(contained_task_replay_denied(
+                        "contained_task_already_running",
+                    ));
+                }
+                [] if granted => {
+                    self.append_recovered_contained_task_release(
+                        validated,
+                        instance_id,
+                        lease_id,
+                        task_id,
+                        run_id,
+                    )?;
+                    Some(ContainedTaskLeaseTerminal::Released)
+                }
+                [] => None,
+                _ => unreachable!("lease terminal cardinality checked above"),
             }
-            _ => unreachable!("lease terminal cardinality checked above"),
+        } else {
+            None
         };
         let [(terminal_event, outcome, final_page, executed_steps, failure_code)] =
             terminals.as_slice()
@@ -6396,7 +6443,7 @@ impl HostShared {
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         instance_id: InstanceId,
-        lease_id: LeaseId,
+        lease_id: Option<LeaseId>,
         task_id: TaskId,
         run_id: RunId,
     ) -> Result<PersistedEvent, RequestFailure> {
@@ -6492,7 +6539,7 @@ impl HostShared {
             })?;
         let links = request.contained_task_recovery_event_links(
             instance_id,
-            lease_id,
+            Some(lease_id),
             task_id,
             run_id,
             Some(
@@ -6516,10 +6563,9 @@ impl HostShared {
     }
 
     /// Workflow #338 R3 (#343-1): at start, settles the direct contained runs the previous
-    /// owner epoch admitted and never terminated, exactly as a resubmission of the original
-    /// request would (`recover_contained_task`): `task.terminal_intent` and
+    /// owner epoch first recorded and never terminated: `task.terminal_intent` and
     /// `task.cancelled` (`contained_task_recovered_after_restart`) on the run's original links,
-    /// then a lease release when the lease has no terminal. The scan is bounded to the previous
+    /// then a lease release when an actual grant has no terminal. The scan is bounded to the previous
     /// epoch, the events between the last two `runtime.started` / `runtime.takeover` events
     /// (the later one is this start's); older epochs are not reached. A run of the scheduler
     /// chain (one with a `policy.dispatch_intent` on its run or request) keeps the policy dispatch
@@ -6547,23 +6593,34 @@ impl HostShared {
         if current.saturating_sub(*previous) < 2 {
             return Ok(());
         }
-        let admitted = self
+        let events = self
             .ledger
             .query(EventQuery {
-                event_type: Some(EventType::TaskRequested),
                 from_sequence: Some(previous + 1),
                 to_sequence: Some(current - 1),
                 ..EventQuery::default()
             })
             .map_err(|_| ledger_error(PREVIOUS_EPOCH_SETTLEMENT_OPERATION))?;
-        for package_event in &admitted {
-            let EventPayload::Task(TaskPayload::Semantic(payload)) = package_event.payload() else {
-                continue;
-            };
-            if !matches!(payload.fact(), TaskSemanticFact::PackageAdmitted { .. }) {
+        let mut requests = BTreeSet::new();
+        for event in &events {
+            if !matches!(
+                event.payload(),
+                EventPayload::Task(TaskPayload::Semantic(_))
+            ) {
                 continue;
             }
-            self.settle_previous_epoch_contained_run(package_event)
+            let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
+                .ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        "contained_task_identity_missing",
+                        PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+            if !requests.insert(identity.request_id) {
+                continue;
+            }
+            self.settle_previous_epoch_contained_run(event)
                 .map_err(|failure| *failure.error)?;
         }
         Ok(())
@@ -6571,7 +6628,7 @@ impl HostShared {
 
     fn settle_previous_epoch_contained_run(
         &self,
-        package_event: &PersistedEvent,
+        first_fact: &PersistedEvent,
     ) -> Result<(), RequestFailure> {
         let identity_missing = || {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -6580,11 +6637,10 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         };
-        let links = package_event.links();
+        let links = first_fact.links();
         let request_id = *links.request_id().ok_or_else(identity_missing)?;
         let correlation_id = *links.correlation_id().ok_or_else(identity_missing)?;
         let instance_id = *links.instance_id().ok_or_else(identity_missing)?;
-        let lease_id = *links.lease_id().ok_or_else(identity_missing)?;
         let task_id = *links.task_id().ok_or_else(identity_missing)?;
         let run_id = *links.run_id().ok_or_else(identity_missing)?;
         let events = self
@@ -6617,6 +6673,33 @@ impl HostShared {
                 .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
         {
             return Ok(());
+        }
+        let (run_identity, lease_id) =
+            contained_task_recovery_identity(&events, PREVIOUS_EPOCH_SETTLEMENT_OPERATION)?
+                .ok_or_else(identity_missing)?;
+        // Candidate discovery covers only the previous epoch. A later fact cannot move an
+        // older run's first fact into that epoch.
+        if events.iter().any(|event| {
+            event.sequence() < first_fact.sequence()
+                && TaskRunIdentity::from_semantic_event(event.payload(), event.links()).is_some()
+        }) {
+            return Ok(());
+        }
+        let packages = events
+            .iter()
+            .filter(|event| {
+                matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
+                if matches!(payload.fact(), TaskSemanticFact::PackageAdmitted { .. }))
+            })
+            .count();
+        if packages > 1 {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_request_package_reused",
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
         }
         let terminals = events
             .iter()
@@ -6704,7 +6787,10 @@ impl HostShared {
             task_id,
             run_id,
         )?;
-        let lease_terminals = self
+        let Some(lease_id) = lease_id else {
+            return Ok(());
+        };
+        let lease_events = self
             .ledger
             .query(EventQuery {
                 lease_id: Some(lease_id),
@@ -6714,7 +6800,13 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(ledger_error(
                     PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                 ))
-            })?
+            })?;
+        let granted = lease_events.iter().any(|event| {
+            event.event_type() == EventType::LeaseGranted
+                && event.links().instance_id() == Some(&run_identity.instance_id)
+                && run_identity.matches_links(event.links())
+        });
+        let lease_terminals = lease_events
             .iter()
             .filter(|event| {
                 matches!(
@@ -6724,7 +6816,7 @@ impl HostShared {
             })
             .count();
         match lease_terminals {
-            0 => {
+            0 if granted => {
                 self.append_recovered_contained_task_release(
                     &validated,
                     instance_id,
@@ -6734,7 +6826,7 @@ impl HostShared {
                 )?;
                 Ok(())
             }
-            1 => Ok(()),
+            0 | 1 => Ok(()),
             _ => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
                     "contained_task_lease_terminal_state_inconsistent",

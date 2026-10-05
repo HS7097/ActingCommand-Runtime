@@ -5,29 +5,14 @@
 
 use super::*;
 use actingcommand_contract::{
-    ContainedTaskLeaseTerminal, EventLinks, InstanceId, LeaseId, PackageRef,
+    ContainedTaskLeaseTerminal, EventLinks, InstanceId, LeaseId, PackageRef, TaskRunIdentity,
 };
-use std::collections::VecDeque;
 
 const RUN_STATUS_SCHEMA: &str = "actingcommand.run-status.v1";
 const RUN_STATUS_OPERATION: &str = "contained_run_status";
 const RECENT_RUNS_OPERATION: &str = "recent_runs";
 const MAX_RECENT_RUNS: usize = 10;
 const RECENT_RUNS_BUDGET: Duration = Duration::from_secs(20);
-
-/// The step-level task events a brief read leaves out (`EventQuery::exclude_event_types`).
-const BRIEF_EXCLUDED_EVENT_TYPES: [EventType; 10] = [
-    EventType::TaskStepStarted,
-    EventType::TaskStepFinished,
-    EventType::TaskEffectIntent,
-    EventType::TaskEffectCompleted,
-    EventType::TaskRecognitionStarted,
-    EventType::TaskRecognitionCompleted,
-    EventType::TaskSelectionEvaluated,
-    EventType::TaskEvidenceIndexed,
-    EventType::TaskGeometryObserved,
-    EventType::TaskEntryPreflight,
-];
 
 /// Selects one contained run by the request that submitted it or by its run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,8 +21,7 @@ pub enum RunKey {
     RunId(RunId),
 }
 
-/// `Full` reads every event of the run; `Brief` leaves the step-level events out and returns no
-/// progress.
+/// Both modes read the same bounded run facts; `Brief` returns no step progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatusMode {
     Full,
@@ -71,7 +55,7 @@ pub enum ContainedRunState {
     Succeeded,
     Failed,
     Cancelled,
-    /// Admitted before a later Runtime start or takeover and never terminated; uncertain.
+    /// A run fact precedes a later Runtime start or takeover without a terminal; uncertain.
     InterruptedUnterminated,
 }
 
@@ -158,9 +142,14 @@ struct StatusPages {
     complete: bool,
 }
 
+struct ReadRunStatus {
+    status: ContainedRunStatus,
+    first_fact_timestamp_unix_ms: Option<u64>,
+}
+
 impl RuntimeClient {
     /// Projects one contained run, manual or scheduled, from its ledger events (Workflow #338
-    /// R1). A run admitted before a later Runtime start or takeover without a terminal is
+    /// R1). A run with a fact before a later Runtime start or takeover without a terminal is
     /// `interrupted_unterminated`. Read-only.
     pub fn contained_run_status(
         &self,
@@ -168,10 +157,11 @@ impl RuntimeClient {
         mode: RunStatusMode,
     ) -> RuntimeClientResult<ContainedRunStatus> {
         self.read_contained_run_status(key, mode, None, None)?
+            .map(|read| read.status)
             .ok_or_else(|| status_error("run_status_read_incomplete"))
     }
 
-    /// The most recent `limit` (1-10) contained runs admitted on `instance` since
+    /// The most recent `limit` (1-10) contained runs first recorded on `instance` since
     /// `since_unix_ms`, each in brief mode. The whole read has a 20 s budget, checked between
     /// reads; when it ends the read early the result is `incomplete`. Read-only.
     pub fn recent_runs(
@@ -194,7 +184,6 @@ impl RuntimeClient {
         let listing = self.read_status_pages(
             EventQuery {
                 instance_id: Some(instance),
-                event_type: Some(EventType::TaskRequested),
                 from_timestamp_unix_ms: Some(since_unix_ms),
                 ..EventQuery::default()
             },
@@ -203,17 +192,25 @@ impl RuntimeClient {
             RECENT_RUNS_OPERATION,
         )?;
         let mut incomplete = !listing.complete;
-        let mut recent = VecDeque::with_capacity(limit);
+        let mut recent = Vec::new();
+        let mut requests = BTreeMap::new();
+        let mut runs_seen = BTreeSet::new();
         for event in &listing.events {
-            if package_admitted(event)?.is_none() {
+            let Some(identity) = run_fact_identity(event)? else {
+                continue;
+            };
+            if let Some(previous) = requests.insert(identity.request_id, identity) {
+                if previous != identity {
+                    return Err(status_error("run_status_identity_mismatch"));
+                }
                 continue;
             }
-            if recent.len() == limit {
-                recent.pop_front();
+            if !runs_seen.insert(identity.run_id) {
+                return Err(status_error("run_status_identity_ambiguous"));
             }
-            recent.push_back(admitted_request_id(event)?);
+            recent.push(identity.request_id);
         }
-        let mut runs = Vec::with_capacity(recent.len());
+        let mut runs = Vec::with_capacity(limit);
         for request_id in recent.into_iter().rev() {
             if Instant::now() >= deadline {
                 incomplete = true;
@@ -225,7 +222,18 @@ impl RuntimeClient {
                 Some(listing.snapshot),
                 Some(deadline),
             )? {
-                Some(status) => runs.push(status),
+                Some(read) => {
+                    // A later fact inside the window does not make an older run recent.
+                    if read
+                        .first_fact_timestamp_unix_ms
+                        .is_some_and(|first| first >= since_unix_ms)
+                    {
+                        runs.push(read.status);
+                        if runs.len() == limit {
+                            break;
+                        }
+                    }
+                }
                 None => {
                     incomplete = true;
                     break;
@@ -246,14 +254,13 @@ impl RuntimeClient {
         mode: RunStatusMode,
         snapshot: Option<u64>,
         deadline: Option<Instant>,
-    ) -> RuntimeClientResult<Option<ContainedRunStatus>> {
+    ) -> RuntimeClientResult<Option<ReadRunStatus>> {
         let (request_id, snapshot) = match key {
             RunKey::RequestId(request_id) => (request_id, snapshot),
             RunKey::RunId(run_id) => {
                 let read = self.read_status_pages(
                     EventQuery {
                         run_id: Some(run_id),
-                        event_type: Some(EventType::TaskRequested),
                         ..EventQuery::default()
                     },
                     snapshot,
@@ -265,8 +272,8 @@ impl RuntimeClient {
                 }
                 let mut request_ids = Vec::new();
                 for event in &read.events {
-                    if package_admitted(event)?.is_some() {
-                        let request_id = admitted_request_id(event)?;
+                    if let Some(identity) = run_fact_identity(event)? {
+                        let request_id = identity.request_id;
                         if !request_ids.contains(&request_id) {
                             request_ids.push(request_id);
                         }
@@ -274,24 +281,24 @@ impl RuntimeClient {
                 }
                 match request_ids.as_slice() {
                     [] => {
-                        return Ok(Some(ContainedRunStatus::not_found(
-                            None,
-                            Some(run_id),
-                            read.snapshot,
-                        )));
+                        return Ok(Some(ReadRunStatus {
+                            status: ContainedRunStatus::not_found(
+                                None,
+                                Some(run_id),
+                                read.snapshot,
+                            ),
+                            first_fact_timestamp_unix_ms: None,
+                        }));
                     }
                     [request_id] => (*request_id, Some(read.snapshot)),
                     _ => return Err(status_error("run_status_identity_ambiguous")),
                 }
             }
         };
-        let mut query = EventQuery {
+        let query = EventQuery {
             request_id: Some(request_id),
             ..EventQuery::default()
         };
-        if mode == RunStatusMode::Brief {
-            query.exclude_event_types = BRIEF_EXCLUDED_EVENT_TYPES.to_vec();
-        }
         let read = self.read_status_pages(query, snapshot, deadline, RUN_STATUS_OPERATION)?;
         if !read.complete {
             return Ok(None);
@@ -299,11 +306,10 @@ impl RuntimeClient {
         let snapshot = read.snapshot;
         let events = read.events;
         if events.is_empty() {
-            return Ok(Some(ContainedRunStatus::not_found(
-                Some(request_id),
-                None,
-                snapshot,
-            )));
+            return Ok(Some(ReadRunStatus {
+                status: ContainedRunStatus::not_found(Some(request_id), None, snapshot),
+                first_fact_timestamp_unix_ms: None,
+            }));
         }
 
         let mut origin = None;
@@ -312,6 +318,8 @@ impl RuntimeClient {
         let mut recovery_packages = Vec::new();
         let mut progress = None;
         let mut step_started = false;
+        let mut first_fact = None;
+        let mut first_fact_timestamp_unix_ms = None;
         for event in &events {
             if let Some(found) = request_origin(event)
                 && origin.replace(found).is_some()
@@ -321,6 +329,18 @@ impl RuntimeClient {
             let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
                 continue;
             };
+            let identity = run_fact_identity(event)?
+                .ok_or_else(|| status_error("run_status_identity_missing"))?;
+            match first_fact {
+                Some((_, previous)) if previous != identity => {
+                    return Err(status_error("run_status_identity_mismatch"));
+                }
+                None => {
+                    first_fact = Some((event.sequence, identity));
+                    first_fact_timestamp_unix_ms = Some(event.timestamp_unix_ms);
+                }
+                _ => {}
+            }
             match payload.fact() {
                 TaskSemanticFact::PackageAdmitted { package_sha256, .. } => {
                     let found = (
@@ -388,6 +408,14 @@ impl RuntimeClient {
             }
         }
 
+        if let Some((_, identity)) = first_fact
+            && (identity.request_id != request_id
+                || events
+                    .iter()
+                    .any(|event| !identity.matches_links(&event.links)))
+        {
+            return Err(status_error("run_status_identity_mismatch"));
+        }
         let run_id = single_link(&events, EventLinks::run_id)?;
         if let RunKey::RunId(expected) = key
             && run_id != Some(expected)
@@ -398,47 +426,19 @@ impl RuntimeClient {
         let instance_id = single_link(&events, EventLinks::instance_id)?;
         let correlation_id = single_link(&events, EventLinks::correlation_id)?;
         let admitted_sequence = admitted.as_ref().map(|(sequence, _, _)| *sequence);
-        let restarted_after_admission = match admitted_sequence {
-            Some(sequence) => self.runtime_restarted_since(sequence, snapshot)?,
+        let restarted_after_first_fact = match first_fact {
+            Some((sequence, _)) => self.runtime_restarted_since(sequence, snapshot)?,
             None => false,
         };
-        let open = terminal.is_none() && admitted_sequence.is_some();
-        if mode == RunStatusMode::Brief {
-            step_started = open
-                && !self
-                    .first_status_events(
-                        EventQuery {
-                            request_id: Some(request_id),
-                            event_type: Some(EventType::TaskStepStarted),
-                            ..EventQuery::default()
-                        },
-                        1,
-                        snapshot,
-                    )?
-                    .is_empty();
-            let entry = self.read_status_pages(
-                EventQuery {
-                    request_id: Some(request_id),
-                    event_type: Some(EventType::TaskEntryPreflight),
-                    ..EventQuery::default()
-                },
-                Some(snapshot),
-                deadline,
-                RUN_STATUS_OPERATION,
-            )?;
-            if !entry.complete {
-                return Ok(None);
+        let restarted_after_admission = match admitted_sequence {
+            Some(sequence) if restarted_after_first_fact => {
+                self.runtime_restarted_since(sequence, snapshot)?
             }
-            for event in &entry.events {
-                if let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)?
-                    && let TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 } =
-                        payload.fact()
-                {
-                    recovery_packages.push(package_sha256.clone());
-                }
-            }
-        }
-        let lease = match admitted.as_ref().and_then(|(_, _, lease_id)| *lease_id) {
+            Some(_) => false,
+            None => false,
+        };
+        let open = terminal.is_none() && first_fact.is_some();
+        let lease = match single_link(&events, EventLinks::lease_id)? {
             Some(lease_id) => Some(ContainedRunLease {
                 lease_id,
                 terminal: self.contained_run_lease_terminal(lease_id, &events, snapshot)?,
@@ -452,31 +452,38 @@ impl RuntimeClient {
                 TaskOutcome::Cancelled => ContainedRunState::Cancelled,
             },
             None if !open => ContainedRunState::NotFound,
-            None if restarted_after_admission => ContainedRunState::InterruptedUnterminated,
-            None if step_started => ContainedRunState::Running,
+            None if restarted_after_first_fact => ContainedRunState::InterruptedUnterminated,
+            None if step_started || admitted_sequence.is_none() => ContainedRunState::Running,
             None => ContainedRunState::Admitted,
         };
         let (dispatch, origin) = origin.unwrap_or((RunDispatch::Unknown, RunOrigin::Unknown));
-        Ok(Some(ContainedRunStatus {
-            schema_version: RUN_STATUS_SCHEMA,
-            request_id: Some(request_id),
-            correlation_id,
-            run_id,
-            task_id,
-            instance_id,
-            dispatch,
-            origin,
-            package_ref: admitted.map(|(_, package, _)| package),
-            recovery_packages,
-            state,
-            terminal,
-            lease,
-            progress,
-            evidence: ContainedRunEvidence {
-                snapshot_ledger_position: snapshot,
-                admitted_sequence,
-                restarted_after_admission,
+        Ok(Some(ReadRunStatus {
+            status: ContainedRunStatus {
+                schema_version: RUN_STATUS_SCHEMA,
+                request_id: Some(request_id),
+                correlation_id,
+                run_id,
+                task_id,
+                instance_id,
+                dispatch,
+                origin,
+                package_ref: admitted.map(|(_, package, _)| package),
+                recovery_packages,
+                state,
+                terminal,
+                lease,
+                progress: if mode == RunStatusMode::Full {
+                    progress
+                } else {
+                    None
+                },
+                evidence: ContainedRunEvidence {
+                    snapshot_ledger_position: snapshot,
+                    admitted_sequence,
+                    restarted_after_admission,
+                },
             },
+            first_fact_timestamp_unix_ms,
         }))
     }
 
@@ -672,25 +679,13 @@ fn request_origin(event: &ProjectedEvent) -> Option<(RunDispatch, RunOrigin)> {
     }
 }
 
-/// Only a `PackageAdmitted` payload admits a run; a `TaskPayload::Requested` does not.
-fn package_admitted(event: &ProjectedEvent) -> RuntimeClientResult<Option<&PackageRef>> {
-    if event.event_type != EventType::TaskRequested {
+fn run_fact_identity(event: &ProjectedEvent) -> RuntimeClientResult<Option<TaskRunIdentity>> {
+    let payload = full_payload(event)?;
+    if !matches!(payload, EventPayload::Task(TaskPayload::Semantic(_))) {
         return Ok(None);
     }
-    match full_payload(event)? {
-        EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
-            TaskSemanticFact::PackageAdmitted { package_sha256, .. } => Ok(Some(package_sha256)),
-            _ => Ok(None),
-        },
-        _ => Ok(None),
-    }
-}
-
-fn admitted_request_id(event: &ProjectedEvent) -> RuntimeClientResult<RequestId> {
-    event
-        .links
-        .request_id()
-        .copied()
+    TaskRunIdentity::from_semantic_event(payload, &event.links)
+        .map(Some)
         .ok_or_else(|| status_error("run_status_identity_missing"))
 }
 

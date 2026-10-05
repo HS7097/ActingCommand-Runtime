@@ -284,7 +284,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         Some(RuntimeResult::ContainedTaskCancelled {
             task_request_id,
             reason: actingcommand_contract::ContainedTaskCancellationReason::DeadlineExceeded,
-            lease_terminal: actingcommand_contract::ContainedTaskLeaseTerminal::Released,
+            lease_terminal: Some(actingcommand_contract::ContainedTaskLeaseTerminal::Released),
             ..
         }) if task_request_id == &request.request_id()
     ));
