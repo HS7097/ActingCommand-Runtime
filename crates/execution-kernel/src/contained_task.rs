@@ -1769,6 +1769,8 @@ pub struct ContainedTaskOutcome {
     pub outcome: TaskOutcome,
     pub final_page: Option<String>,
     pub executed_steps: u32,
+    /// A comparison-selected key for Host's consistency check. Field reports keep their
+    /// report key while Host derives the business disposition from effects and terminal page.
     pub selected_scheduling_outcome: Option<String>,
 }
 
@@ -1828,6 +1830,24 @@ enum PostAdmissionOcrExecution {
 }
 
 impl PreparedContainedTask {
+    /// Fully prepares verified material with the existing metadata-only vision capability,
+    /// then returns only its read-only description. No executable task or provider escapes.
+    pub fn describe_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        deadline: std::time::Instant,
+    ) -> Result<crate::TaskPackageDescriptor, ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_metadata_path(
+            instance_label,
+            locator,
+            expected,
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
+        Ok(Self::from_bundle(bundle)?.package_descriptor())
+    }
+
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
@@ -2037,6 +2057,11 @@ impl PreparedContainedTask {
     /// Whether the task declares `resource_readings`; offline simulation does not read them.
     pub const fn has_resource_readings(&self) -> bool {
         self.program.resource_readings.is_some()
+    }
+
+    /// A host-scheduled startup package publishes no instance resource facts.
+    pub fn startup_incompatibility(&self) -> Option<&'static str> {
+        self.has_resource_readings().then_some("resource_readings")
     }
 
     /// Whether the task has a select step (Workflow #308).
@@ -3385,7 +3410,6 @@ impl PreparedContainedTask {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let resource_readings = ocr_collector.resource_readings;
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
-            let outcome_key = report.declaration.outcome_key.clone();
             if report.frames_collected == 0 {
                 return Err(ContainedTaskError::new(
                     "contained_task_post_admission_ocr_observation_missing",
@@ -3396,7 +3420,7 @@ impl PreparedContainedTask {
                 .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
                 .map_err(ContainedTaskRunError::Boundary)?;
             ocr_collector.fields_report_recorded = true;
-            Some(outcome_key)
+            None
         } else {
             match std::mem::take(ocr_collector).finish()? {
                 Some(report) => {
@@ -5093,12 +5117,20 @@ impl TaskProgram {
         detector: &PageDetector,
         evaluator: &RecognitionEvaluator,
     ) -> Result<(), ContainedTaskError> {
-        for reading in self.resource_readings.iter().flatten() {
+        for (index, reading) in self.resource_readings.iter().flatten().enumerate() {
             let invalid = |reason: &str| {
-                ContainedTaskError::with_detail(
+                let mut error = ContainedTaskError::with_detail(
                     "contained_task_resource_reading_invalid",
                     format!("{}:{reason}", reading.id),
-                )
+                );
+                error.declaration_issue =
+                    Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                        declaration_file: bundle.operation_path().to_owned(),
+                        field_path: format!("/resource_readings/{index}/target_id"),
+                        schema_version: Some(self.schema_version.clone()),
+                        reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                    }));
+                error
             };
             let matching = evaluator
                 .pack()
@@ -5586,6 +5618,25 @@ fn manifest_entry_sha256(
     bundle: &LoadedBundle,
     relative_path: &str,
 ) -> Result<Sha256Hash, ContainedTaskError> {
+    // Content-directory admission generates the manifest's hashes map in memory from the
+    // verified snapshot. LoadedBundle has checked those hashes against these same bytes.
+    // A manifest with files retains the exact single-entry requirement below.
+    if bundle.manifest().get("files").is_none() {
+        return bundle
+            .manifest()
+            .get("hashes")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|hashes| hashes.get(relative_path))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+            })
+            .and_then(|value| {
+                Sha256Hash::parse_hex(value).map_err(|_| {
+                    ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+                })
+            });
+    }
     let files = bundle
         .manifest()
         .get("files")
@@ -8051,8 +8102,11 @@ mod post_admission_ocr_tests {
             );
             let outcome = outcome.unwrap();
             assert_eq!(
-                outcome.selected_scheduling_outcome.as_deref(),
-                Some("fields_recorded")
+                (
+                    report.declaration.outcome_key.as_str(),
+                    outcome.selected_scheduling_outcome.as_deref(),
+                ),
+                ("fields_recorded", None)
             );
             assert_eq!(outcome.executed_steps, 1);
             assert_eq!(outcome.outcome, TaskOutcome::Success);
