@@ -71,7 +71,9 @@ struct Flag {
 }
 
 /// One actinglab command and its flags (`lab2_cli.rs:1414-1667`, the package locator flags
-/// of `contained_resources.rs:125-216` and the global `--instance` of `cli_parse.rs`).
+/// of `contained_resources.rs:125-216`, the global `--instance` of `cli_parse.rs`, and for
+/// `do` the `--verbose` / `--pretty` it reads at `lab2_cli/operation.rs:122` and
+/// `lab2_cli.rs:1373`).
 struct LabCommand {
     words: &'static [&'static str],
     flags: &'static [Flag],
@@ -280,6 +282,8 @@ static DO: LabCommand = LabCommand {
         ),
         LEASE_ID,
         FIELDS,
+        flag("verbose", "--verbose", Kind::Switch, "--verbose."),
+        flag("pretty", "--pretty", Kind::Switch, "--pretty."),
         flag("no_wait", "--no-wait", Kind::Switch, "--no-wait."),
         flag(
             "recovery_timeout_ms",
