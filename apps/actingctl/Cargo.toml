@@ -12,6 +12,11 @@ publish = false
 name = "actingctl"
 path = "src/main.rs"
 
+[features]
+default = ["mcp"]
+# Workflow #338: `actingctl mcp-serve` / `mcp-config`. Without it the CLI is unchanged.
+mcp = []
+
 [dependencies]
 actingcommand-contract = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
