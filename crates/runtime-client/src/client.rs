@@ -9,19 +9,20 @@ use actingcommand_contract::{
     ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
     CorrelationId, EffectDisposition, EmulatorInstanceAction, EventActor, EventId, EventPayload,
     EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, GovernanceIdentityCard,
-    IdentifierIssuer, InputAction, InputFrameReference, InputPayload, IssuedCorrelationId,
-    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS,
-    OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason, OcrFieldResult, OcrFieldType,
-    OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport, OriginModule, OwnerEpoch,
-    PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
-    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
-    ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
-    RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
-    RuntimeEvidenceExportRequest, RuntimeFactSnapshot, RuntimeForwardProjectionRequest,
-    RuntimeInfo, RuntimeInstanceDiscovery, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus,
-    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
+    HolderId, IdentifierIssuer, InputAction, InputFrameReference, InputPayload,
+    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
+    OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
+    OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest,
+    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent,
+    ProjectionPayload, ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE,
+    RequestId, ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeFactSnapshot,
+    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceDiscovery,
+    RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
     RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseScope, TaskId, TaskOutcome, TaskPayload,
@@ -48,6 +49,12 @@ mod online_observation;
 pub use online_observation::VerifiedPageObservation;
 mod lab_operation;
 pub use lab_operation::VerifiedLabOperation;
+mod run_status;
+pub use run_status::{
+    ContainedRunEvidence, ContainedRunLease, ContainedRunProgress, ContainedRunState,
+    ContainedRunStatus, ContainedRunTerminal, RecentContainedRuns, RunDispatch, RunKey, RunOrigin,
+    RunStatusMode,
+};
 
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
@@ -221,6 +228,61 @@ pub struct RuntimeFlowOutput {
     official_ocr_projection: Option<RuntimeOfficialOcrProjection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     official_ocr_fields_projection: Option<RuntimeOfficialOcrFieldsProjection>,
+}
+
+/// One contained task whose identity exists before its frame is written (Workflow #338 R2).
+/// Only `submit_prepared` on the client handle that prepared it writes it, once.
+#[must_use = "a prepared contained task runs only through submit_prepared"]
+pub struct PreparedContainedTask {
+    shared: Arc<RuntimeClientShared>,
+    selected_correlation: Option<CorrelationId>,
+    instance_alias: String,
+    holder: HolderId,
+    response_timeout: Duration,
+    runtime_request: RuntimeRequest,
+}
+
+impl PreparedContainedTask {
+    pub const fn request_id(&self) -> RequestId {
+        self.runtime_request.request_id()
+    }
+
+    pub const fn correlation_id(&self) -> CorrelationId {
+        self.runtime_request.correlation_id()
+    }
+
+    pub const fn holder(&self) -> HolderId {
+        self.holder
+    }
+}
+
+impl fmt::Debug for PreparedContainedTask {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedContainedTask")
+            .field("request_id", &self.request_id())
+            .field("correlation_id", &self.correlation_id())
+            .finish()
+    }
+}
+
+/// The result of `cancel_contained_task_and_reset`: the last cancellation status observed and
+/// the reset, which is `None` while the run is still pending.
+#[must_use = "inspect the cancellation status and the reset"]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainedTaskCancelAndReset {
+    pub status: ContainedTaskCancellationStatus,
+    pub reset: Option<ContainedTaskResetOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainedTaskResetOutcome {
+    /// `safe_reset` completed after this call saw the run end cancelled by a client.
+    Done,
+    /// The run ended otherwise, or had ended before this call; no reset was sent.
+    NotNeeded,
+    /// The reset was sent and failed; the failure is kept, not retried.
+    Failed(RuntimeClientError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1366,12 +1428,24 @@ impl RuntimeClient {
         self.flow_output(receipt, correlation_id)
     }
 
+    /// Prepares and submits one contained task (`prepare_contained_task`, `submit_prepared`).
     pub fn run_contained_task(
         &self,
         instance_alias: &str,
         request: ContainedTaskRequest,
     ) -> RuntimeClientResult<RuntimeFlowOutput> {
-        let mut connection = self.connection("run_contained_task")?;
+        let prepared = self.prepare_contained_task(instance_alias, request)?;
+        self.submit_prepared(prepared)
+    }
+
+    /// Fixes one contained task's request, correlation and holder identity on this connection
+    /// without writing anything (Workflow #338 R2); `submit_prepared` writes it once.
+    pub fn prepare_contained_task(
+        &self,
+        instance_alias: &str,
+        request: ContainedTaskRequest,
+    ) -> RuntimeClientResult<PreparedContainedTask> {
+        let connection = self.connection("run_contained_task")?;
         let response_timeout = contained_task_response_timeout(
             connection.io_timeout,
             Duration::from_millis(request.response_deadline_ms()),
@@ -1380,13 +1454,43 @@ impl RuntimeClient {
         let holder = connection.ids.mint_holder_id().map_err(|_| {
             RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
         })?;
-        let correlation_id = *correlation.transport();
         let operation = RuntimeOperation::run_contained_task(instance_alias, holder, request);
-        let runtime_request = connection.request_with_correlation(
-            "run_contained_task",
-            operation.clone(),
-            correlation,
-        )?;
+        let runtime_request =
+            connection.request_with_correlation("run_contained_task", operation, correlation)?;
+        Ok(PreparedContainedTask {
+            shared: Arc::clone(&self.shared),
+            selected_correlation: self.correlation_id(),
+            instance_alias: instance_alias.to_owned(),
+            holder: *holder.transport(),
+            response_timeout,
+            runtime_request,
+        })
+    }
+
+    /// Writes one prepared contained task on the client handle that prepared it and waits for its
+    /// receipt, with the timeout recovery and the reset after a cancelled run.
+    pub fn submit_prepared(
+        &self,
+        prepared: PreparedContainedTask,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        if !Arc::ptr_eq(&self.shared, &prepared.shared)
+            || self.correlation_id() != prepared.selected_correlation
+        {
+            return Err(RuntimeClientError::fatal(
+                "runtime_contained_task_prepared_client_mismatch",
+                "run_contained_task",
+            ));
+        }
+        let PreparedContainedTask {
+            instance_alias,
+            response_timeout,
+            runtime_request,
+            ..
+        } = prepared;
+        let instance_alias = instance_alias.as_str();
+        let correlation_id = runtime_request.correlation_id();
+        let operation = runtime_request.operation().clone();
+        let mut connection = self.connection("run_contained_task")?;
         let receipt = match self.exchange_receipt(
             &mut connection,
             "run_contained_task",
@@ -1502,25 +1606,10 @@ impl RuntimeClient {
                 )
             })?;
         loop {
-            let status = self.execute(
-                "cancel_contained_task",
-                RuntimeOperation::CancelContainedTask {
-                    task_request_id: original.request_id(),
-                },
+            let status = self.contained_task_cancellation(
+                original.request_id(),
+                "recover_contained_task_timeout",
             )?;
-            let RuntimeResult::ContainedTaskCancellation {
-                task_request_id,
-                status,
-            } = status
-            else {
-                return Err(self.unexpected_result("cancel_contained_task"));
-            };
-            if task_request_id != original.request_id() {
-                return Err(RuntimeClientError::fatal(
-                    "runtime_contained_task_cancellation_identity_mismatch",
-                    "recover_contained_task_timeout",
-                ));
-            }
             match status {
                 ContainedTaskCancellationStatus::Terminal { .. } => break,
                 ContainedTaskCancellationStatus::RecoveryRequired { .. } => {
@@ -1567,6 +1656,100 @@ impl RuntimeClient {
                     .latch(error))
             }
         }
+    }
+
+    /// Sends `CancelContainedTask` once (Workflow #338 R2): it asks the run of `task_request_id`
+    /// to stop and returns the Runtime's cancellation status. It has an effect; it is not a query.
+    /// A scheduled run's refusal (`scheduled_contained_task_not_client_cancellable`) is returned
+    /// unchanged.
+    pub fn cancel_contained_task(
+        &self,
+        task_request_id: RequestId,
+    ) -> RuntimeClientResult<ContainedTaskCancellationStatus> {
+        self.contained_task_cancellation(task_request_id, "cancel_contained_task")
+    }
+
+    /// Stops a run another client may have submitted and lifts the touches it may still hold
+    /// (Workflow #338 R2). It sends `CancelContainedTask` while the run is `Pending` until it is
+    /// `Terminal` or `wait` has elapsed; a still pending run is returned with no reset. The
+    /// instance is reset (`safe_reset`) only when this call saw the run pending and it ended
+    /// cancelled by a client. `RecoveryRequired` is `runtime_contained_task_recovery_required`:
+    /// the original request belongs to another process and cannot be resubmitted here.
+    pub fn cancel_contained_task_and_reset(
+        &self,
+        instance_alias: &str,
+        task_request_id: RequestId,
+        wait: Duration,
+    ) -> RuntimeClientResult<ContainedTaskCancelAndReset> {
+        const OPERATION: &str = "cancel_contained_task_and_reset";
+        let deadline = Instant::now().checked_add(wait).ok_or_else(|| {
+            RuntimeClientError::fatal("runtime_contained_task_cancel_wait_invalid", OPERATION)
+        })?;
+        let mut saw_pending = false;
+        loop {
+            let status = self.contained_task_cancellation(task_request_id, OPERATION)?;
+            match status {
+                ContainedTaskCancellationStatus::Pending { .. } => {
+                    saw_pending = true;
+                    if Instant::now() >= deadline {
+                        return Ok(ContainedTaskCancelAndReset {
+                            status,
+                            reset: None,
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                ContainedTaskCancellationStatus::RecoveryRequired { .. } => {
+                    return Err(RuntimeClientError::fatal(
+                        "runtime_contained_task_recovery_required",
+                        OPERATION,
+                    ));
+                }
+                ContainedTaskCancellationStatus::Terminal {
+                    outcome, reason, ..
+                } => {
+                    let reset = if saw_pending
+                        && outcome == TaskOutcome::Cancelled
+                        && reason == Some(ContainedTaskCancellationReason::ClientRequested)
+                    {
+                        match self.safe_reset(instance_alias) {
+                            Ok(_) => ContainedTaskResetOutcome::Done,
+                            Err(error) => ContainedTaskResetOutcome::Failed(error),
+                        }
+                    } else {
+                        ContainedTaskResetOutcome::NotNeeded
+                    };
+                    return Ok(ContainedTaskCancelAndReset {
+                        status,
+                        reset: Some(reset),
+                    });
+                }
+            }
+        }
+    }
+
+    fn contained_task_cancellation(
+        &self,
+        task_request_id: RequestId,
+        operation: &'static str,
+    ) -> RuntimeClientResult<ContainedTaskCancellationStatus> {
+        let RuntimeResult::ContainedTaskCancellation {
+            task_request_id: cancelled_request_id,
+            status,
+        } = self.execute(
+            "cancel_contained_task",
+            RuntimeOperation::CancelContainedTask { task_request_id },
+        )?
+        else {
+            return Err(self.unexpected_result("cancel_contained_task"));
+        };
+        if cancelled_request_id != task_request_id {
+            return Err(RuntimeClientError::fatal(
+                "runtime_contained_task_cancellation_identity_mismatch",
+                operation,
+            ));
+        }
+        Ok(status)
     }
 
     pub fn input(

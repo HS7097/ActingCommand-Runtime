@@ -4,10 +4,103 @@ use actingcommand_contract::{
     CorrelationId, OwnerEpoch, RequestId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
     RuntimeReceipt, RuntimeRequest,
 };
+use serde::Serialize;
 use std::error::Error;
 use std::fmt;
 
 pub type RuntimeClientResult<T> = Result<T, RuntimeClientError>;
+
+/// The one result class of a failed client call (Workflow #338 R6), shared by every surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeClientErrorClass {
+    /// The request or its arguments were refused.
+    Usage,
+    /// A lease, queue, connection, instance or busy rule refused the request.
+    Safety,
+    /// Capture, recognition, a backend, or the contained run itself failed or stopped.
+    Device,
+    /// The Runtime, its ledger, its protocol, or the local transport failed.
+    Runtime,
+    /// The request may have been sent and its effect is unknown: read the run before anything else.
+    Uncertain,
+}
+
+impl RuntimeClientErrorClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Usage => "usage",
+            Self::Safety => "safety",
+            Self::Device => "device",
+            Self::Runtime => "runtime",
+            Self::Uncertain => "uncertain",
+        }
+    }
+}
+
+/// Client failures raised after the request frame was written, without an error projection:
+/// an unread, unconfirmed, or mismatched receipt.
+const UNCERTAIN_AFTER_SEND_CODES: &[&str] = &[
+    "runtime_receipt_header_failed",
+    "runtime_receipt_read_failed",
+    "runtime_receipt_frame_invalid",
+    "runtime_receipt_decode_failed",
+    "runtime_receipt_timeout",
+    "runtime_read_timeout_restore_failed",
+    "runtime_receipt_invalid",
+    "runtime_receipt_identity_mismatch",
+    "runtime_result_missing",
+    "runtime_result_unexpected",
+    "runtime_shutdown_receipt_unconfirmed",
+    "material_read_receipt_selection_mismatch",
+];
+
+/// The client codes of a contained run's own cancelled receipt (`run_contained_task`).
+const CONTAINED_TASK_STOPPED_CODES: &[&str] = &[
+    "runtime_contained_task_cancelled",
+    "runtime_contained_task_paused",
+    "runtime_contained_task_response_timeout",
+];
+
+const fn runtime_error_class(code: RuntimeErrorCode) -> RuntimeClientErrorClass {
+    use RuntimeClientErrorClass::{Device, Runtime, Safety, Usage};
+    match code {
+        RuntimeErrorCode::InvalidRequest
+        | RuntimeErrorCode::InstanceUnknown
+        | RuntimeErrorCode::PackageInvalid
+        | RuntimeErrorCode::ReadonlyCapabilityInvalid => Usage,
+        RuntimeErrorCode::LeaseBusy
+        | RuntimeErrorCode::LeaseCooldown
+        | RuntimeErrorCode::LeaseExpired
+        | RuntimeErrorCode::LeaseMissing
+        | RuntimeErrorCode::LeaseMismatch
+        | RuntimeErrorCode::HolderMismatch
+        | RuntimeErrorCode::ConnectionMismatch
+        | RuntimeErrorCode::InstanceMismatch
+        | RuntimeErrorCode::QueueFull
+        | RuntimeErrorCode::QueueExpired
+        | RuntimeErrorCode::QueueMissing
+        | RuntimeErrorCode::QueueConnectionMismatch
+        | RuntimeErrorCode::TransferNotSafe
+        | RuntimeErrorCode::ContainedTaskBusy
+        | RuntimeErrorCode::RuntimeBusy => Safety,
+        RuntimeErrorCode::CaptureFailed
+        | RuntimeErrorCode::RecognitionFailed
+        | RuntimeErrorCode::BackendOpenFailed
+        | RuntimeErrorCode::BackendOperationFailed
+        | RuntimeErrorCode::ContainedTaskDeadlineExceeded
+        | RuntimeErrorCode::ContainedTaskCancelled
+        | RuntimeErrorCode::ContainedTaskPaused => Device,
+        RuntimeErrorCode::RuntimeUnavailable
+        | RuntimeErrorCode::RuntimeFatal
+        | RuntimeErrorCode::OwnerConflict
+        | RuntimeErrorCode::StaleOwnerEpoch
+        | RuntimeErrorCode::LedgerFailure
+        | RuntimeErrorCode::RuntimeOwnerMismatch
+        | RuntimeErrorCode::ProtocolInvalid
+        | RuntimeErrorCode::EvidenceExportFailed => Runtime,
+    }
+}
 
 /// Direct I/O facts from the failed four-byte receipt-header read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +182,41 @@ impl RuntimeClientError {
 
     pub fn projection(&self) -> Option<&RuntimeErrorProjection> {
         self.projection.as_deref()
+    }
+
+    /// The result class of this failure (Workflow #338 R6). A failure after the request was sent
+    /// without an error projection anywhere in its chain (an unread or unconfirmed receipt, a
+    /// connection latched by it, an owner epoch change, `runtime_contained_task_recovery_*`) is
+    /// `Uncertain`; otherwise the Runtime's error code decides, and a client failure without a
+    /// projection is `Runtime`, except the contained run's own stopped receipt (`Device`).
+    pub fn disposition(&self) -> RuntimeClientErrorClass {
+        if self.is_uncertain() {
+            return RuntimeClientErrorClass::Uncertain;
+        }
+        match self.projection.as_deref() {
+            Some(projection) => runtime_error_class(projection.code),
+            None if CONTAINED_TASK_STOPPED_CODES.contains(&self.code) => {
+                RuntimeClientErrorClass::Device
+            }
+            None => RuntimeClientErrorClass::Runtime,
+        }
+    }
+
+    /// A committed terminal receipt settles its own request; a later related failure does not
+    /// make that request's effect unknown.
+    fn is_uncertain(&self) -> bool {
+        if self.committed_receipt.is_some() {
+            return false;
+        }
+        let own = self.projection.is_none()
+            && (UNCERTAIN_AFTER_SEND_CODES.contains(&self.code)
+                || self.code.starts_with("runtime_contained_task_recovery_")
+                || (self.code == "runtime_owner_epoch_changed"
+                    && self.operation != "connect_runtime"));
+        own || self
+            .related
+            .as_deref()
+            .is_some_and(RuntimeClientError::is_uncertain)
     }
 
     /// The Runtime's closed failure code and operation, when its receipt carried both.

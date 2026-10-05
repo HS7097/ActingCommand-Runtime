@@ -4456,18 +4456,9 @@ impl HostShared {
                 ));
             }
             if let [lease_terminal] = lease_terminals.as_slice() {
-                let reason = (*outcome == TaskOutcome::Cancelled).then_some(match *failure_code {
-                    Some("contained_task_deadline_exceeded") => {
-                        ContainedTaskCancellationReason::DeadlineExceeded
-                    }
-                    Some("contained_task_cancelled") => {
-                        ContainedTaskCancellationReason::ClientRequested
-                    }
-                    Some("contained_task_paused") => {
-                        ContainedTaskCancellationReason::PausedByOperator
-                    }
-                    _ => ContainedTaskCancellationReason::RecoveredAfterRestart,
-                });
+                let reason = (*outcome == TaskOutcome::Cancelled).then_some(
+                    ContainedTaskCancellationReason::from_failure_code(*failure_code),
+                );
                 return Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: Some(terminal(lease_terminal)),
@@ -6382,18 +6373,9 @@ impl HostShared {
                     task_id,
                     task_request_id: request.request_id(),
                     response_deadline_monotonic_ms: deadline_monotonic_ms,
-                    reason: match failure_code.as_deref() {
-                        Some("contained_task_deadline_exceeded") => {
-                            ContainedTaskCancellationReason::DeadlineExceeded
-                        }
-                        Some("contained_task_cancelled") => {
-                            ContainedTaskCancellationReason::ClientRequested
-                        }
-                        Some("contained_task_paused") => {
-                            ContainedTaskCancellationReason::PausedByOperator
-                        }
-                        _ => ContainedTaskCancellationReason::RecoveredAfterRestart,
-                    },
+                    reason: ContainedTaskCancellationReason::from_failure_code(
+                        failure_code.as_deref(),
+                    ),
                     lease_terminal: lease_disposition,
                 },
             })),
