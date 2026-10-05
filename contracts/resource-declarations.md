@@ -29,6 +29,7 @@ and `operation explain` keep their existing behavior.
 | `scheduling/procedure-manifest.*.json` | Shared `ProcedureBindingConfigFile` / `ScheduledExecutionConfigFile` serde declarations |
 | `control.json` | The source control declaration validator and production task-control parser |
 | `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
+| `maintenance.json` (repository root only) | Shared `Vec<BundleMaintenance>` decoding and `validate_bundle_maintenance_declarations`; reported with family `maintenance` |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
 A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
@@ -46,6 +47,15 @@ non-empty string of at most 128 bytes matching `^[a-z0-9]+(\.[a-z0-9_]+)+$`; whe
 absent the server declares no default package. The validator does not check it against
 sealed packs; the resource repository's bundle generator does and fails when the named
 package is not sealed.
+
+The source maintenance array uses exactly `package_id`, `server` and `uses`, with the
+shared bundle field types and identifier bounds. An empty array is valid. The contract
+owner checks nonempty, distinct supported uses, unique package/server entries and at
+most one startup and return-home entry per server. Unknown fields, uses and malformed
+values fail. This declaration read uses the existing path/document/aggregate budgets;
+it reads no packs. Bundle references, content digests, actual use eligibility and full
+prerequisite chains are checked by the formal bundle generator and execution kernel
+before generation, as specified in [package-reference.md](package-reference.md).
 
 Navigation declarations share the source validator's required fields, coordinate
 representations and click grammar. Drive navigation applies its static-region and

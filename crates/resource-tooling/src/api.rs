@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{BundleIndexV2, BundleSource, ContentDirectory};
+use actingcommand_contract::{BundleIndex, BundleMaintenance, BundleSource, ContentDirectory};
 use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use serde_json::Value;
@@ -141,13 +141,16 @@ pub struct PackageBundleRequest {
     pub packs_root: PathBuf,
     pub out: PathBuf,
     pub source: Option<BundleSource>,
+    /// Present (including an empty list) requests v3 and actual maintenance qualification.
+    /// Absent retains the v2 generation path.
+    pub maintenance: Option<Vec<BundleMaintenance>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageBundleResponse {
     pub status: String,
     pub out: String,
-    pub index: BundleIndexV2,
+    pub index: BundleIndex,
 }
 
 #[derive(Debug, Clone)]

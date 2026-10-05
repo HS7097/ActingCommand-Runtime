@@ -35,9 +35,14 @@ The following is the `post_admission_ocr` member of an operation, not a complete
 }
 ```
 
-`fields_recorded` is the fixed scheduling outcome key for this mode. Exactly one existing
-scheduling mapping must bind it. It also lets the existing terminal fact require the OCR
-artifacts without adding a Global event family or changing the Global event schema.
+`fields_recorded` is the fixed report key for this mode. Exactly one existing scheduling
+mapping must bind it at admission. Successful collection records the fields report under
+this key through the existing artifact facts. Host derives the task's scheduling disposition
+from its actual effect facts and terminal page's unique mapping: a run that observes an
+existing result can therefore have a different business outcome from a run that performed
+the designated operation. The 0.7 OCR comparison still selects its comparison outcome key,
+which Host checks against that same effect/page mapping. Missing or conflicting mappings
+and failed field collection retain their existing failures. No Global event shape changes.
 
 Fields are evidence only: no field value is written as an instance fact. A value the Runtime
 writes back as an instance fact is a resource reading (`resource-readings.md`), declared
@@ -195,6 +200,14 @@ one canonical item, preserving the item's declared spelling. Alias canonical ref
 must exactly name a declared item. Duplicate normalized items, duplicate/conflicting
 aliases and invalid canonical references fail admission as ambiguous. Unknown observations
 remain unresolved; no tolerant substitution or retry is applied to fields.
+
+Dictionary and post-admission truth-set preparation read the exact resource-relative
+path from the admitted bundle's manifest. A `files` manifest requires exactly one matching
+entry with `sha256`. Content-directory admission instead derives its `hashes` map from the
+verified in-memory snapshot; preparation reads that map when the manifest has no `files`
+member. Containment verifies every declared hash against the same contained bytes before
+issuing the bundle. Missing or malformed hashes still fail, and preparation compares the
+manifest digest with the task's declared digest under the existing dictionary/truth limits.
 
 A `dictionary_entry` field may explicitly declare `text_extraction`:
 
