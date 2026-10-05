@@ -157,6 +157,8 @@ pub struct InstalledProcess {
 }
 
 impl InstalledProcess {
+    /// Running consumers prefer the inherited snapshot and retain this result for their
+    /// lifetime. With no inherited snapshot, read the active selection once at startup.
     pub fn read(root: &Path) -> RuntimeContractResult<Option<Self>> {
         let root = std::fs::canonicalize(root)
             .map_err(|_| RuntimeContractError::new("install_root_unavailable"))?;
@@ -179,26 +181,40 @@ impl InstalledProcess {
                     })?
                     .into_bytes()
             }
-            (None, None) => {
-                let path = root.join(INSTALL_SELECTION_PATH);
-                match std::fs::File::open(path) {
-                    Ok(file) => read_install_input(file, MAX_INSTALL_SELECTION_BYTES)?,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                    Err(_) => {
-                        return Err(RuntimeContractError::new("install_selection_unavailable"));
-                    }
-                }
-            }
+            (None, None) => return Self::read_active(&root),
             _ => return Err(RuntimeContractError::new("install_environment_incomplete")),
         };
-        let selection = InstallSelection::from_json(&bytes)?;
+        Self::from_selection_bytes(&root, &bytes).map(Some)
+    }
+
+    /// acsetup's explicit current baseline for planning/CAS, independent of inherited
+    /// process inputs. Running UI/MCP/Tools consumers keep their original `read` result.
+    pub fn read_active(root: &Path) -> RuntimeContractResult<Option<Self>> {
+        let root = std::fs::canonicalize(root)
+            .map_err(|_| RuntimeContractError::new("install_root_unavailable"))?;
+        let file = match std::fs::File::open(root.join(INSTALL_SELECTION_PATH)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(RuntimeContractError::new("install_selection_unavailable")),
+        };
+        let bytes = read_install_input(file, MAX_INSTALL_SELECTION_BYTES)?;
+        Self::from_selection_bytes(&root, &bytes).map(Some)
+    }
+
+    /// Verifies an explicit candidate or returned selection through the same bounded
+    /// reader. The caller releases materialization's exclusive guard before this shared
+    /// acquisition, then retains this object through candidate checking and commit.
+    pub fn from_selection_bytes(root: &Path, bytes: &[u8]) -> RuntimeContractResult<Self> {
+        let root = std::fs::canonicalize(root)
+            .map_err(|_| RuntimeContractError::new("install_root_unavailable"))?;
+        let selection = InstallSelection::from_json(bytes)?;
         let slot_lock = Arc::new(InstallSlotLock::try_shared(&root, selection.slot)?);
-        let selection_json = String::from_utf8(bytes)
+        let selection_json = std::str::from_utf8(bytes)
             .map_err(|_| RuntimeContractError::new("install_selection_json_invalid"))?;
         let selected = Self {
             root,
             selection,
-            selection_json,
+            selection_json: selection_json.to_owned(),
             _slot_lock: slot_lock,
         };
         selected.read_reference(&selected.selection.members, 4 * 1024 * 1024)?;
@@ -206,7 +222,7 @@ impl InstalledProcess {
         if let Some(provider) = &selected.selection.provider {
             selected.read_reference(provider, 1024 * 1024)?;
         }
-        Ok(Some(selected))
+        Ok(selected)
     }
 
     pub fn root(&self) -> &Path {
