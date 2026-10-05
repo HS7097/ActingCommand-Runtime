@@ -3596,6 +3596,7 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "RecordClientAction",
     "ReleaseLease",
     "RenewLease",
+    "ResourceTargetView",
     "RunContainedTask",
     "RuntimeFactSnapshot",
     "SafeReset",

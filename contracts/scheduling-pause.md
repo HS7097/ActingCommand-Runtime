@@ -12,8 +12,9 @@ and an instance resume reconnects the device at once through the connection prep
 
 ```text
 PauseScheduling  { scope, reason_code, drain_timeout_ms }
-ResumeScheduling { scope }
+ResumeScheduling { scope, expected? }
 scope = { "kind": "global" } | { "kind": "instance", "instance_alias": "<alias>" }
+expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
 ```
 
 - `RuntimeRequest::validate` admits both only when `(actor, source)` is `(User, Ui)` or
@@ -167,6 +168,32 @@ client's receipt wait for an instance resume and for a self-check is the backend
 its IO timeout (Workflow #191 h2); a global resume keeps the IO timeout. A resume triggers no
 extra policy evaluation: the next cycle runs on its ordinary trigger.
 
+## Conditional resume (Workflow #338 R4)
+
+`ResumeScheduling` may carry `expected: { owner_epoch, revision }`, the owner epoch the caller
+saw the pause in and the revision of its scope then (a pause receipt's `revision`, or the
+`Status` pause's). The field is optional and absent from the wire when unset: a resume without
+it is unchanged. `revision` is at least 1 (`invalid_scheduling_pause_expectation`).
+
+With `expected`, the host compares while it holds the pause table's lock, before the state
+checks and the lift of the table below: an `owner_epoch` other than its own is
+`scheduling_pause_owner_epoch_mismatch`; a `revision` other than the scope's current revision
+(zero for an instance scope never paused in this epoch) is `scheduling_pause_revision_mismatch`.
+Both are refusals through the same `Denied` / `InvalidRequest` path as the other refusals. A
+match then behaves exactly as an unconditional resume. Revisions restart with every owner
+epoch, which is why the epoch is part of the condition.
+
+An older Runtime does not know the field: `RuntimeOperation` denies unknown fields, the frame
+fails to decode and the connection is dropped without a receipt (stage
+`runtime.ipc.request_decode`, effect not performed). Only when the call wrote its own frame
+and that connection then ended before the receipt header (end of stream, reset or abort) does
+the client (`RuntimeClient::resume_scheduling_expected`) reconnect and, when the same owner
+epoch answers, read `Status`; a connection already failed by an earlier call, a receipt
+timeout and every other failure are returned unchanged. After such a drop, the scope still
+paused at the expected revision means nothing was lifted and is reported as `runtime_operation_unsupported`; any other state, or a failed
+reconnect or another epoch, is the uncertain `runtime_scheduling_resume_unconfirmed` (or
+`runtime_owner_epoch_changed`). The client never falls back to an unconditional resume.
+
 ## Revisions and refusals
 
 The global pause and every instance pause hold their own revision, and neither implies the
@@ -179,6 +206,8 @@ stage changes `draining` to `paused` to `released` do not.
 | Resume of a scope that is not paused | `Denied`, `InvalidRequest` | `scheduling_not_paused` |
 | Resume of an instance whose pause is still draining | `Denied`, `InvalidRequest` | `scheduling_pause_draining` |
 | Resume of an instance whose pause is still handing its device back (`paused`) | `Denied`, `InvalidRequest` | `scheduling_pause_releasing` |
+| Conditional resume naming another owner epoch | `Denied`, `InvalidRequest` | `scheduling_pause_owner_epoch_mismatch` |
+| Conditional resume naming another revision of the scope | `Denied`, `InvalidRequest` | `scheduling_pause_revision_mismatch` |
 
 ## Status
 
