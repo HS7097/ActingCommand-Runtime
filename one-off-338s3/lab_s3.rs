@@ -310,18 +310,18 @@ mod oneoff_338s3 {
                 row["links"]["request_id"] == json!(req_id)
                     || row["links"]["correlation_id"] == json!(req_id)
             })
-            .map(|row| row["links"]["correlation_id"].clone())
+            .map(|row| row["links"]["correlation_id"].to_string())
             .collect::<BTreeSet<_>>();
         let lab_types = rows
             .iter()
-            .filter(|row| lab_correlations.contains(&row["links"]["correlation_id"]))
+            .filter(|row| lab_correlations.contains(&row["links"]["correlation_id"].to_string()))
             .map(|row| row["event_type"].as_str().unwrap_or_default().to_owned())
             .collect::<Vec<_>>();
         println!(
             "S3|PROVENANCE|{control}|req_id {req_id}; client.action correlation {action_correlation} holds {in_action:?}; Lab correlation(s) {lab_correlations:?} hold {lab_types:?}"
         );
         assert!(!lab_correlations.is_empty(), "the Lab request is in the ledger");
-        assert!(!lab_correlations.contains(&action_correlation), "no shared correlation");
+        assert!(!lab_correlations.contains(&action_correlation.to_string()), "no shared correlation");
         assert!(lab_types.iter().any(|kind| kind == "lab.request"), "lab.request written");
         assert!(!lab_types.iter().any(|kind| kind == "client.action"), "no client.action in the Lab correlation");
         assert!(in_action.iter().all(|kind| kind == "client.action" || kind == "governance.identity_declared"));
