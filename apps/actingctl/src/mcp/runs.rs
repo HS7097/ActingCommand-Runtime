@@ -63,7 +63,7 @@ pub(super) fn default_window() -> Result<u64, ToolError> {
     Ok(now_unix_ms()?.saturating_sub(DEFAULT_WINDOW_MS))
 }
 
-/// The newest run admitted on `instance` since `since_unix_ms`: one brief R1 read.
+/// The newest run first recorded on `instance` since `since_unix_ms`: one brief R1 read.
 pub(super) fn latest_run(
     context: &ToolContext<'_>,
     connected: &Connected,

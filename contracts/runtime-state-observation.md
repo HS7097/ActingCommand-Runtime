@@ -63,3 +63,26 @@ conflict or changed source fails explicitly. A failed import preserves the origi
 file and records the cause through the existing Runtime failure payload when the
 ledger remains writable; ledger failure propagates as fatal. The provider/startup,
 resource-close, fencing and committed-effect owners retain their existing roles.
+
+## Contained-run queries
+
+`contained_run_status` reads a request or reverses a RunId through the same complete
+semantic-fact identity used by Host recovery. A maintenance fact can be the run's
+first fact before the main `PackageAdmitted`. Full and Brief project the same bounded
+facts at one ledger snapshot; Brief omits step progress. Both retain the existing
+page, event, resident-memory and time limits. A partial timed read stays incomplete.
+
+A stored terminal has priority. Without one, a maintenance-only run in the current
+epoch is `running`; a later `runtime.started` or `runtime.takeover` makes it
+`interrupted_unterminated`. An actual main admission retains its admitted/running
+states. The internal first-fact sequence drives interruption classification;
+`admitted_sequence` and `restarted_after_admission` describe only the actual main
+admission. Main package metadata remains absent until recorded, and maintenance
+hashes belong only to `recovery_packages`.
+
+`recent_runs` discovers semantic facts, deduplicates their request/run identities
+before selecting the requested 1–10 runs, and orders them by their first fact,
+newest first. A later fact in the time window does not make an older run recent.
+The listing and each projection share one snapshot and the existing 20-second
+budget; reaching that budget returns `incomplete`. MCP `ac_get_run`, `ac_diagnose`
+and the latest-run lookup consume this projection directly.

@@ -3847,7 +3847,7 @@ impl ValidatedRuntimeRequest<'_> {
     pub fn contained_task_recovery_event_links(
         &self,
         instance_id: InstanceId,
-        lease_id: LeaseId,
+        lease_id: Option<LeaseId>,
         task_id: crate::TaskId,
         run_id: RunId,
         action_id: Option<ActionId>,
@@ -3857,7 +3857,7 @@ impl ValidatedRuntimeRequest<'_> {
             self.request.request_id,
             self.request.correlation_id,
             self.request.causation_id,
-            Some(lease_id),
+            lease_id,
             action_id,
         )
         .with_task_id(IssuedTaskId::from_verified_transport(task_id))
@@ -4312,7 +4312,8 @@ pub enum RuntimeResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         response_deadline_monotonic_ms: Option<u64>,
         reason: ContainedTaskCancellationReason,
-        lease_terminal: ContainedTaskLeaseTerminal,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lease_terminal: Option<ContainedTaskLeaseTerminal>,
     },
     ContainedTaskCancellation {
         task_request_id: RequestId,

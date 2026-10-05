@@ -62,7 +62,7 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
         recovered.result(),
         Some(RuntimeResult::ContainedTaskCancelled {
             reason: actingcommand_contract::ContainedTaskCancellationReason::RecoveredAfterRestart,
-            lease_terminal: actingcommand_contract::ContainedTaskLeaseTerminal::Expired,
+            lease_terminal: Some(actingcommand_contract::ContainedTaskLeaseTerminal::Expired),
             ..
         })
     ));
