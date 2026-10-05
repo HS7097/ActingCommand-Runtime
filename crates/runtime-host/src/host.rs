@@ -882,6 +882,7 @@ impl RuntimeHost {
         ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>>,
     ) -> RuntimeHostResult<Self> {
         config.validate()?;
+        let held_startup = config.install_held.is_some();
         let lifecycle_admission =
             installation::LifecycleAdmission::new(config.install_held.clone())?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
@@ -1173,7 +1174,6 @@ impl RuntimeHost {
                 )
             })?;
             let info_path = config.state_root.join(RUNTIME_INFO_FILE);
-            publish_runtime_info(&info_path, &info)?;
             Ok::<_, RuntimeHostError>((
                 facts,
                 performance,
@@ -1328,6 +1328,9 @@ impl RuntimeHost {
         let prepared = (|| {
             shared.synchronize_fact_store()?;
             shared.initialize_installation()?;
+            if held_startup {
+                publish_runtime_info(&host.info_path, &host.info)?;
+            }
             if let Some(released) = released_by_exit {
                 shared.append_lifecycle_observed(released.phase(), EventLinksDraft::default())?;
             }
@@ -1524,6 +1527,9 @@ impl RuntimeHost {
                 );
             }
             shared.finish_install_preparation()?;
+            if !held_startup {
+                publish_runtime_info(&host.info_path, &host.info)?;
+            }
             Ok::<_, RuntimeHostError>(())
         })();
         if let Err(mut original) = prepared {
