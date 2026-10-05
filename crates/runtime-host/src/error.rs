@@ -53,6 +53,7 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) installation_effect: Option<actingcommand_contract::EffectDisposition>,
     diagnostics: ExecutionFailureContext,
     pub(crate) failure_stage: Option<&'static str>,
     pub(crate) ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
@@ -87,6 +88,7 @@ impl PartialEq for RuntimeHostError {
             && self.projection == other.projection
             && self.lifecycle.complete_failure == other.lifecycle.complete_failure
             && self.lifecycle.failure_stage == other.lifecycle.failure_stage
+            && self.lifecycle.installation_effect == other.lifecycle.installation_effect
             && self.lifecycle.ppocr_message == other.lifecycle.ppocr_message
             && self.lifecycle.ppocr_source == other.lifecycle.ppocr_source
             && self.lifecycle.ppocr_diagnostics == other.lifecycle.ppocr_diagnostics

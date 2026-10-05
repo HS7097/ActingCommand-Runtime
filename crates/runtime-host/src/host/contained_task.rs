@@ -1083,7 +1083,7 @@ impl RuntimeContainedTask<'_> {
             .ok_or_else(|| task_geometry_error("contained_task_geometry_frame_unavailable"))?;
         // This checks the original session; it cannot create or reopen a producer.
         self.host
-            .execution
+            .execution()?
             .validate_capture_geometry_session(session, deadline)
             .map_err(|error| {
                 RuntimeHostError::execution("validate_task_geometry_session", &error)
@@ -1094,7 +1094,7 @@ impl RuntimeContainedTask<'_> {
             return Ok(frame.producer.clone());
         }
         self.host
-            .execution
+            .execution()?
             .observe_capture_geometry(session, deadline)
             .map_err(|error| RuntimeHostError::execution("observe_task_geometry", &error))
     }
@@ -1291,7 +1291,7 @@ impl RuntimeContainedTask<'_> {
             ));
         }
         self.host
-            .execution
+            .execution()?
             .validate_capture_geometry_session(session, self.geometry_deadline.ok_or_else(failure)?)
             .map_err(|error| {
                 task_geometry_request_failure(
@@ -1461,7 +1461,7 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), RequestFailure> {
         let resolved = self
             .host
-            .execution
+            .execution()?
             .resolve(self.instance_alias)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
@@ -2745,7 +2745,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 .begin_boundary(Boundary::CaptureBackend, identity);
             let captured = self
                 .host
-                .execution
+                .execution()?
                 .capture_frame_retained_with_geometry_session_and_registration_guard(
                     self.instance_alias,
                     Some(*frame_id.transport()),
@@ -2968,7 +2968,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         )
                     {
                         let host = self.host;
-                        let probe = host.execution.probe_adb_baseline_until(
+                        let probe = host.execution()?.probe_adb_baseline_until(
                             self.instance_alias,
                             self.geometry_operation_deadline()?,
                             &|| host.fatal.is_shutdown_requested(),
@@ -3126,7 +3126,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         reference: actingcommand_contract::InputFrameReference,
     ) -> Result<Option<InputFrameContext>, Self::Error> {
         self.host
-            .execution
+            .execution()?
             .resolve_input_frame(self.instance_alias, reference)
             .map(Some)
             .map_err(|error| {
@@ -3368,7 +3368,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         ),
                     )?;
                     self.host
-                        .execution
+                        .execution()?
                         .commit_input_frame(
                             self.instance_alias,
                             actingcommand_contract::InputFrameReference {
@@ -4590,7 +4590,7 @@ impl HostShared {
         let prepared = prepare_contained_task(
             instance_alias,
             task_request,
-            self.execution.vision_provider(),
+            self.execution()?.vision_provider(),
             self.package_material_deadline(active_run.control.deadline())?,
         )?;
         let prerequisites = self.resolve_prerequisite_chain(instance_alias, &prepared, || {
@@ -4854,7 +4854,7 @@ impl HostShared {
         let prepared = prepare_contained_task(
             instance_alias,
             task_request,
-            self.execution.vision_provider(),
+            self.execution()?.vision_provider(),
             material_deadline,
         )
         .map_err(|failure| match pending.run {
@@ -4894,7 +4894,7 @@ impl HostShared {
         // An application action needs ADB independently of input/capture. Other recovery
         // entries use their configured providers and let those owners establish channels.
         if (!pending.recovery_rung || prepared.has_application_effect())
-            && let Err(error) = self.execution.probe_adb_baseline_until(
+            && let Err(error) = self.execution()?.probe_adb_baseline_until(
                 instance_alias,
                 Instant::now() + Duration::from_secs(30),
                 &|| self.fatal.is_shutdown_requested(),
@@ -5001,7 +5001,7 @@ impl HostShared {
     ) -> Result<(RuntimeRequest, OperationSuccess), RequestFailure> {
         // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item).
         self.register_scheduled_resolution(context.decision_id())?;
-        lock(&self.policy, "validate_policy_run_context")?
+        lock(self.policy()?, "validate_policy_run_context")?
             .validate_run_context(context)
             .map_err(|error| {
                 if error.is_fatal() {
@@ -5179,7 +5179,7 @@ impl HostShared {
                 prerequisite_deadline,
             )?,
         };
-        let expected_outcome_keys = lock(&self.policy, "validate_policy_outcome_declaration")?
+        let expected_outcome_keys = lock(self.policy()?, "validate_policy_outcome_declaration")?
             .referenced_outcome_keys(context)
             .map_err(|error| {
                 if error.is_fatal() {
@@ -5930,7 +5930,9 @@ impl HostShared {
         let recovery = match prepare_contained_task(
             instance_alias,
             &recovery_request,
-            self.execution.vision_provider(),
+            self.execution()
+                .map_err(|error| ContainedTaskRunError::Boundary(RequestFailure::from(error)))?
+                .vision_provider(),
             self.package_material_deadline(runtime.control.deadline())
                 .map_err(ContainedTaskRunError::Boundary)?,
         ) {
@@ -7359,7 +7361,7 @@ impl HostShared {
         let scope = actingcommand_policy::ScopeSelector::Instance {
             instance_id: readings.instance_alias.clone(),
         };
-        let catalog = lock(&self.policy, "check_resource_reading_pools")
+        let catalog = lock(self.policy()?, "check_resource_reading_pools")
             .map_err(RequestFailure::poison_without_terminal)?
             .active_loaded();
         let live_pool = catalog.as_ref().and_then(|catalog| {

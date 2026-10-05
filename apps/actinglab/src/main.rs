@@ -213,6 +213,10 @@ const TRUSTED_REMOTE_TOKEN_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_TOKEN";
 const TRUSTED_REMOTE_CLIENT_CERT_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT";
 const ALLOW_PATH_ADB_FOR_MUMU_ENV: &str = "ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU";
 fn main() -> ExitCode {
+    if let Err(error) = actingcommand_contract::process_installation() {
+        eprintln!("FATAL actinglab: {error}");
+        return ExitCode::FAILURE;
+    }
     let json_default = !io::stdout().is_terminal();
     let result = run_cli(env::args().skip(1), json_default);
     let exit_code = result.exit_code();

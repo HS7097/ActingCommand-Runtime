@@ -90,7 +90,7 @@ impl HostShared {
         let prepared = prepare_contained_task(
             instance_alias,
             task_request,
-            self.execution.vision_provider(),
+            self.execution()?.vision_provider(),
             material_deadline,
         )?;
         let mut layers = Vec::new();
@@ -148,7 +148,7 @@ impl HostShared {
         };
         let decision_id = context.decision_id();
         let (recorded, previous) = {
-            let policy = lock(&self.policy, "read_policy_failure_identity")?;
+            let policy = lock(self.policy()?, "read_policy_failure_identity")?;
             (
                 policy.recorded_execution(decision_id).cloned(),
                 policy

@@ -1402,14 +1402,18 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
     );
     assert_eq!(
         internal_dependencies(app),
-        vec!["actingcommand-ledger-forensics".to_owned()],
-        "actingledger must depend on only the forensic leaf among internal packages"
+        vec![
+            "actingcommand-contract".to_owned(),
+            "actingcommand-ledger-forensics".to_owned()
+        ],
+        "actingledger consumes the shared installation occupancy and forensic leaf only"
     );
     // F2: the checker consumes B and retains mechanical artifact parsing only.
     // First red: https://github.com/HS7097/ActingCommand-Runtime/actions/runs/34145595031
     assert_eq!(
         internal_dependencies(checker),
         vec![
+            "actingcommand-contract".to_owned(),
             "actingcommand-ledger-forensics".to_owned(),
             "actingcommand-vision-ffi".to_owned(),
         ],
@@ -1613,7 +1617,7 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(registry.contains("prepare_completion"));
     assert!(registry.contains("prepare_failure"));
     assert!(registry.contains("MONITOR_FILE_NAME"));
-    assert!(host.contains("monitor_registry: Mutex<MonitorRegistry>"));
+    assert!(host.contains("monitor_registry: OnceLock<Mutex<MonitorRegistry>>"));
     // The monitor_control definitions, their visibility, callers and delegation (the probe's
     // artifact store, capture pipeline and frame persistence; the completed / recovery
     // payloads) are HOST_SPLIT entries; the probe's error mapping stays here.
@@ -3455,6 +3459,16 @@ fn b1_pure_decision_crates_ban_side_effects_in_clippy_and_name_every_escape() {
 /// a change to this table.
 const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
     (
+        &["InstallTransition"],
+        &["invalid_install_transition_origin"],
+        &[
+            "EventActor::Cli",
+            "EventActor::User",
+            "EventSource::Cli",
+            "EventSource::Ui",
+        ],
+    ),
+    (
         &[],
         &["unsupported_request_schema"],
         &["self.schema_version"],
@@ -3677,11 +3691,12 @@ fn b3_every_runtime_operation_has_an_explicit_origin_category() {
 
 /// Production accesses to the accepted governance connections in crates/runtime-host/src: the
 /// set grows only when `declare_governance_identity` accepts an identity card, the approval gate
-/// reads it, and connection cleanup shrinks it.
+/// and installation gate read it, and connection cleanup shrinks it.
 const GOVERNANCE_CONNECTION_ACCESSES: &[&str] = &[
     "crates/runtime-host/src/host/governance.rs::HostShared::declare_governance_identity -> governance_connections.contains",
     "crates/runtime-host/src/host/governance.rs::HostShared::declare_governance_identity -> governance_connections.insert",
     "crates/runtime-host/src/host/governance.rs::HostShared::record_approval_decision -> governance_connections.contains",
+    "crates/runtime-host/src/host/installation.rs::HostShared::install_transition -> governance_connections.contains",
     "crates/runtime-host/src/host/lease.rs::HostShared::cleanup_connection -> governance_connections.remove",
 ];
 
@@ -4912,6 +4927,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("governance", &["HostShared"]),
     host_module("input", &["HostShared"]),
     host_module("instance_discovery", &["HostShared"]),
+    host_module("installation", &["HostShared"]),
     host_module("lab_operation", &["HostShared"]),
     host_module("lease", &["HostShared"]),
     host_module("lifecycle", &["HostShared", "RuntimeLifecycleFailureStage"]),

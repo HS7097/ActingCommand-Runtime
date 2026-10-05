@@ -236,10 +236,22 @@ impl ExecutionKernel {
         registration_guard: G,
         memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
+        self.open_instance_backends_until(instance_alias, registration_guard, memory, None)
+    }
+
+    /// Startup preparation stops before its next backend open when the Host's release
+    /// deadline has elapsed. An in-flight native call retains its original result/cleanup.
+    pub fn open_instance_backends_until<G>(
+        &self,
+        instance_alias: &str,
+        registration_guard: G,
+        memory: actingcommand_device::FrameMemoryBudget,
+        deadline: Option<Instant>,
+    ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         session
-            .open_backends(memory)
+            .open_backends(memory, deadline)
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
     }
 

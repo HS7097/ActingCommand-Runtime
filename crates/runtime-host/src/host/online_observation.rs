@@ -118,7 +118,7 @@ impl HostShared {
                     path,
                     input.expected_sha256(),
                     input.targets(),
-                    self.execution.vision_provider(),
+                    self.execution()?.vision_provider(),
                     deadline,
                 )
                 .map_err(observation_kernel_error);
@@ -168,7 +168,7 @@ impl HostShared {
                 &bytes,
                 expected,
                 input.targets(),
-                self.execution.vision_provider(),
+                self.execution()?.vision_provider(),
             )
             .map_err(observation_kernel_error)
         })()

@@ -91,7 +91,7 @@ impl HostShared {
             ));
         }
         if let Some(reference) = input_frame {
-            self.execution
+            self.execution()?
                 .resolve_input_frame(&resolved.instance_alias, reference)
                 .map_err(|error| {
                     RequestFailure::request(
@@ -111,7 +111,7 @@ impl HostShared {
         self.require_foreground_application(request, token, &resolved, action, run_links)?;
         let before_frame_id = input_frame.map(|frame| frame.frame_id).or(before_frame_id);
         let prepared_action = self
-            .execution
+            .execution()?
             .prepare_input(action.clone())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
@@ -193,6 +193,7 @@ impl HostShared {
                 Err(actingcommand_contract::SanitizationError::fingerprinter_failure())
             }
         };
+        let execution = self.execution()?;
         let result = execute_critical(
             &self.ledger,
             self.events.fingerprinter(),
@@ -225,7 +226,7 @@ impl HostShared {
                         };
                     }
                 };
-                let backend_result = self.execution.input_prepared_in_frame(
+                let backend_result = execution.input_prepared_in_frame(
                     &instance_alias,
                     action_for_worker,
                     input_frame,
@@ -505,6 +506,7 @@ impl HostShared {
         let outcome_links = links.clone();
         let failure_links = links;
         let mut destructive_step = None;
+        let execution = self.execution()?;
         let result = execute_critical(
             &self.ledger,
             self.events.fingerprinter(),
@@ -574,14 +576,12 @@ impl HostShared {
                         };
                     }
                 };
-                match self
-                    .execution
-                    .control_application_retained_with_registration_guard(
-                        &instance_alias,
-                        action,
-                        witness,
-                        registration,
-                    ) {
+                match execution.control_application_retained_with_registration_guard(
+                    &instance_alias,
+                    action,
+                    witness,
+                    registration,
+                ) {
                     Ok(()) => CriticalActionReport::Succeeded {
                         value: (),
                         effect: DefiniteEffectDisposition::Performed,

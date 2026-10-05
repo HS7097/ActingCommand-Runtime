@@ -7,7 +7,7 @@ impl HostShared {
         if let Some(error) = self.fatal.current()? {
             return Err(error);
         }
-        Ok(lock(&self.policy, "read_active_policy_catalog")?.active_generation())
+        Ok(lock(self.policy()?, "read_active_policy_catalog")?.active_generation())
     }
 
     pub(super) fn activate_policy_catalog(
@@ -23,7 +23,7 @@ impl HostShared {
         promotion: Option<CatalogPromotionAuthorization>,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
-            let policy = lock(&self.policy, "stage_policy_catalog")?;
+            let policy = lock(self.policy()?, "stage_policy_catalog")?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -61,7 +61,7 @@ impl HostShared {
         catalog_hash: &str,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
-            let policy = lock(&self.policy, "load_policy_catalog_rollback")?;
+            let policy = lock(self.policy()?, "load_policy_catalog_rollback")?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -133,7 +133,7 @@ impl HostShared {
             let intent = self.events.sanitize(intent)?;
             let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
                 .map_err(|_| critical_plan_error())?;
-            let mut policy = lock(&self.policy, "switch_active_policy_catalog")?;
+            let mut policy = lock(self.policy()?, "switch_active_policy_catalog")?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }

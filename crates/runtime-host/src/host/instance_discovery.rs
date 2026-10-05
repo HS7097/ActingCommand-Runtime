@@ -24,7 +24,7 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let (state, source) = self.observe_runtime_state(validated, || {
-            let discovery = match self.execution.discover_instances() {
+            let discovery = match self.execution()?.discover_instances() {
                 Ok(discovery) => discovery,
                 Err(failure) => {
                     return Err(

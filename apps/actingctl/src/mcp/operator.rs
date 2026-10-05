@@ -302,13 +302,16 @@ fn parse_package_ref(text: &str, field: &str) -> Result<PackageRef, ToolError> {
 /// `<root>\tools\actinglab.exe --json package digest --package <path>`: the package's content
 /// reference, as actinglab computes it.
 fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, ToolError> {
-    let Some(root) = context.runtime.locate().root else {
+    let location = context.runtime.locate();
+    location.check()?;
+    let Some(root) = location.root else {
         return Err(ToolError::usage(
             "lab_tool_unavailable",
             "no install root, so actinglab cannot compute the package_ref; pass package_ref",
         ));
     };
     let mut command = Command::new(root.join("tools").join("actinglab.exe"));
+    super::runtime::pin_child(&mut command, location.installation.as_ref());
     command
         .arg("--json")
         .arg("package")

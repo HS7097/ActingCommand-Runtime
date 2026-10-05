@@ -47,7 +47,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let mut committed_signal = None;
         let result: RuntimeHostResult<()> = (|| {
-            let mut policy = lock(&self.policy, "record_policy_planning_signal")?;
+            let mut policy = lock(self.policy()?, "record_policy_planning_signal")?;
             policy.validate_planning_signal(&signal)?;
             if let Some(existing) = policy.planning_signal(&signal.signal_id)? {
                 return if existing == signal {
@@ -325,7 +325,7 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         self.verify_proposal_reports(proposal)?;
         let prepared = {
-            let policy = lock(&self.policy, "compile_proposal")?;
+            let policy = lock(self.policy()?, "compile_proposal")?;
             let generation = policy.active_generation().ok_or_else(|| {
                 proposal_request_failure(RuntimeHostError::request(
                     "proposal_base_catalog_unavailable",
@@ -359,7 +359,7 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         self.verify_proposal_reports(proposal)?;
         let (prepared, current) = {
-            let policy = lock(&self.policy, "prepare_proposal_promotion")?;
+            let policy = lock(self.policy()?, "prepare_proposal_promotion")?;
             let base = policy
                 .load_generation(proposal.base_catalog_hash())
                 .map_err(proposal_request_failure)?;
@@ -524,7 +524,7 @@ impl HostShared {
                     &self.policy_outcome_gate,
                     "snapshot_strategic_outcome_state",
                 )?;
-                let mut policy = lock(&self.policy, "read_strategic_outcome_keys")?;
+                let mut policy = lock(self.policy()?, "read_strategic_outcome_keys")?;
                 let outcome_keys = policy.outcome_key_snapshot()?;
                 let _fact_gate = lock(&self.fact_write_gate, "project_strategic_facts")?;
                 self.project_authoritative_policy_inputs_under_gate(
@@ -541,7 +541,7 @@ impl HostShared {
                     RuntimeErrorCode::InvalidRequest,
                 ));
             }
-            let loaded = lock(&self.policy, "prepare_strategic_report")?
+            let loaded = lock(self.policy()?, "prepare_strategic_report")?
                 .active_loaded()
                 .ok_or_else(|| {
                     RuntimeHostError::request(

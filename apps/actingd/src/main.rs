@@ -58,6 +58,22 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
+    let candidate = arguments
+        .first()
+        .is_some_and(|argument| argument == "check-config")
+        || (arguments
+            .first()
+            .is_some_and(|argument| argument == "ledger-maintenance")
+            && arguments
+                .get(1)
+                .is_some_and(|argument| argument == "verify"));
+    let purpose = if candidate {
+        actingcommand_contract::InstallConfigPurpose::CandidateCheck
+    } else {
+        actingcommand_contract::InstallConfigPurpose::Running
+    };
+    actingcommand_contract::process_installation_for(purpose)
+        .map_err(|error| ActingdError::config(error.code()))?;
     if arguments
         .first()
         .is_some_and(|argument| argument == "ledger-maintenance")
@@ -82,6 +98,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     {
         return suspended::run(arguments);
     }
+    let (arguments, install_held) = parse_install_held_arguments(arguments)?;
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {
         host,
@@ -103,6 +120,10 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
             ActingdError::config(rejection.code).with_detail(rejection.to_string())
         })?;
     let host = host.with_resource_packages(resource_packages);
+    let host = match install_held {
+        Some(held) => host.with_install_held(held),
+        None => host,
+    };
     let host =
         RuntimeHost::start_with_provider(host, |startup| provider.assemble_provider(startup))
             .map_err(ActingdError::runtime)?;
@@ -111,7 +132,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         println!("actingd {released}");
     }
     let initial_policy_cycle = (|| {
-        let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
+        let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
         };
         policy
@@ -487,7 +508,7 @@ fn monitor_policy(
     let policy = Arc::new(policy);
     let control = Arc::new(PolicyDriverControl::default());
     let setup = (|| {
-        let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
+        let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
         };
         let client = RuntimeClient::connect(
@@ -1260,7 +1281,7 @@ fn execute_ready_policy_trigger(
     recomputes: Vec<PolicyRecomputeWake>,
     now_unix_ms: u64,
 ) -> Result<(), ActingdError> {
-    let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
+    let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
         return Ok(());
     };
     apply_policy_cycle_result(
@@ -1329,6 +1350,31 @@ fn system_unix_ms() -> Result<u64, ActingdError> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| ActingdError::process("system_clock_invalid"))?;
     u64::try_from(elapsed.as_millis()).map_err(|_| ActingdError::process("system_clock_invalid"))
+}
+
+fn parse_install_held_arguments(
+    mut arguments: Vec<std::ffi::OsString>,
+) -> Result<
+    (
+        Vec<std::ffi::OsString>,
+        Option<actingcommand_contract::InstallHeldStartup>,
+    ),
+    ActingdError,
+> {
+    if arguments.len() == 4 && arguments[2] == "--install-held" {
+        let value = arguments[3]
+            .to_str()
+            .filter(|value| value.len() <= 4096)
+            .ok_or_else(|| ActingdError::config("install_held_input_invalid"))?;
+        let held: actingcommand_contract::InstallHeldStartup = serde_json::from_str(value)
+            .map_err(|_| ActingdError::config("install_held_input_invalid"))?;
+        held.validate()
+            .map_err(|error| ActingdError::config(error.code()))?;
+        arguments.truncate(2);
+        Ok((arguments, Some(held)))
+    } else {
+        Ok((arguments, None))
+    }
 }
 
 fn parse_arguments(arguments: Vec<std::ffi::OsString>) -> Result<PathBuf, ActingdError> {

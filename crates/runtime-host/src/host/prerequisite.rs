@@ -192,7 +192,7 @@ impl HostShared {
             let admitted = prepare_contained_task(
                 instance_alias,
                 &request,
-                self.execution.vision_provider(),
+                self.execution()?.vision_provider(),
                 deadline,
             )
             .map_err(|failure| prerequisite_admission_failure(failure, link.detail("")))?;

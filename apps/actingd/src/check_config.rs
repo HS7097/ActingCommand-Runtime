@@ -52,56 +52,59 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     }
     let config_path = config.ok_or_else(|| ActingdError::config("check_config_config_missing"))?;
     let mut rejection = None;
-    let checked = config::load(&config_path)
-        .map_err(|code| (code, "load"))
-        .and_then(|file| file.assemble().map_err(|code| (code, "assemble")))
-        .and_then(|assembly| {
-            let RuntimeAssembly {
-                host,
-                provider,
-                policy,
-                manifest,
-                resource_packages,
-                ignored_env_overrides,
-                adb_requirement,
-            } = assembly;
-            // Workflow #337: the install root's adb, checked exactly as at startup.
-            let adb_default = config::ac_adb::require(&adb_requirement).map_err(|refused| {
-                let code = refused.code();
-                rejection = Some(Rejection::AdbInstall(refused));
-                (code, "assemble")
+    let checked = config::load_for(
+        &config_path,
+        actingcommand_contract::InstallConfigPurpose::CandidateCheck,
+    )
+    .map_err(|code| (code, "load"))
+    .and_then(|file| file.assemble().map_err(|code| (code, "assemble")))
+    .and_then(|assembly| {
+        let RuntimeAssembly {
+            host,
+            provider,
+            policy,
+            manifest,
+            resource_packages,
+            ignored_env_overrides,
+            adb_requirement,
+        } = assembly;
+        // Workflow #337: the install root's adb, checked exactly as at startup.
+        let adb_default = config::ac_adb::require(&adb_requirement).map_err(|refused| {
+            let code = refused.code();
+            rejection = Some(Rejection::AdbInstall(refused));
+            (code, "assemble")
+        })?;
+        let modes = provider.modes();
+        let deferred = provider.deferred_bindings();
+        let mumu_root = provider.mumu_root().map(Path::to_path_buf);
+        let env_nemu_folder = provider.env_nemu_folder().map(Path::to_path_buf);
+        // Registered exactly as startup registers, short of discovery: the registry's own
+        // refusals (duplicate aliases or instance ids) carry the code startup would report.
+        let registry = provider
+            .into_registry()
+            .map_err(|error| (error.code(), "assemble"))?;
+        host.validate()
+            .map_err(|error| (error.code(), "validate"))?;
+        let resource_packages =
+            config::validate_resource_packages(&resource_packages).map_err(|refused| {
+                let code = refused.code;
+                rejection = Some(Rejection::ResourcePackage(refused));
+                (code, "resource_package")
             })?;
-            let modes = provider.modes();
-            let deferred = provider.deferred_bindings();
-            let mumu_root = provider.mumu_root().map(Path::to_path_buf);
-            let env_nemu_folder = provider.env_nemu_folder().map(Path::to_path_buf);
-            // Registered exactly as startup registers, short of discovery: the registry's own
-            // refusals (duplicate aliases or instance ids) carry the code startup would report.
-            let registry = provider
-                .into_registry()
-                .map_err(|error| (error.code(), "assemble"))?;
-            host.validate()
-                .map_err(|error| (error.code(), "validate"))?;
-            let resource_packages = config::validate_resource_packages(&resource_packages)
-                .map_err(|refused| {
-                    let code = refused.code;
-                    rejection = Some(Rejection::ResourcePackage(refused));
-                    (code, "resource_package")
-                })?;
-            let checked = CheckedAssembly {
-                host,
-                registry,
-                modes,
-                deferred,
-                mumu_root,
-                env_nemu_folder,
-                policy_configured: policy.is_some(),
-                manifest,
-                ignored_env_overrides,
-                adb_default,
-            };
-            summarize(&config_path, &checked, &resource_packages)
-        });
+        let checked = CheckedAssembly {
+            host,
+            registry,
+            modes,
+            deferred,
+            mumu_root,
+            env_nemu_folder,
+            policy_configured: policy.is_some(),
+            manifest,
+            ignored_env_overrides,
+            adb_default,
+        };
+        summarize(&config_path, &checked, &resource_packages)
+    });
     let (report, result) = match checked {
         Ok(report) => (report, Ok(())),
         Err((code, stage)) => {

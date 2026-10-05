@@ -2335,7 +2335,7 @@ impl HostShared {
         registered: &RegisteredInstance,
     ) -> Result<crate::ResolvedExecutionInstance, RequestFailure> {
         let resolved = self
-            .execution
+            .execution()?
             .resolve(&registered.instance_alias)
             .map_err(|error| {
                 if error.code() == "execution_instance_unknown" {

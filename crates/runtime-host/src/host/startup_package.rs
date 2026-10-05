@@ -121,13 +121,15 @@ pub(super) fn resolve_startup_packages(
 /// time under the work guard, like the monitor thread drains its probes.
 pub(super) fn startup_package_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     while !shared.fatal.is_shutdown_requested() {
-        let pending = lock(&shared.pending_host_work, "read_pending_host_work")?.pop_front();
-        let Some(pending) = pending else {
+        let Some(_work) = shared.begin_continuation()? else {
             thread::sleep(STARTUP_PACKAGE_POLL_INTERVAL);
             continue;
         };
-        let Some(_work) = shared.begin_work()? else {
-            return Ok(());
+        let pending = lock(&shared.pending_host_work, "read_pending_host_work")?.pop_front();
+        let Some(pending) = pending else {
+            drop(_work);
+            thread::sleep(STARTUP_PACKAGE_POLL_INTERVAL);
+            continue;
         };
         let result = match pending {
             PendingHostWork::StartupPackage(pending) => {
@@ -167,7 +169,7 @@ impl HostShared {
         control_request_id: RequestId,
     ) -> Result<Option<PendingStartupPackage>, RequestFailure> {
         let instance_id = resolved.instance_id();
-        let Some(request) = self.startup_packages.get(&instance_id) else {
+        let Some(request) = self.startup_packages()?.get(&instance_id) else {
             return Ok(None);
         };
         let causation_id = self

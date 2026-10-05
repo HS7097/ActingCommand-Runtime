@@ -191,7 +191,7 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
     };
     // The read-only `actingd suspended` runs beside the Runtime reads.
     let location = context.runtime.locate();
-    let suspension = start_suspension_report(context, location.root.as_deref());
+    let suspension = start_suspension_report(context, &location);
     let connected = context.runtime.connect()?;
     let status = connected
         .client
@@ -427,9 +427,10 @@ fn list_into(result: &mut Map<String, Value>, name: &str, items: &[Value], kept:
 /// <root>\actingd.config.json`, read-only beside a running daemon.
 fn start_suspension_report(
     context: &ToolContext<'_>,
-    root: Option<&Path>,
+    location: &super::runtime::Location,
 ) -> Result<SuspensionChild, Value> {
-    let Some(root) = root else {
+    location.check().map_err(|_| json!({ "status": "unavailable", "code": "install_selection_unavailable", "message": location.state_root.as_ref().err() }))?;
+    let Some(root) = location.root.as_deref() else {
         return Err(json!({
             "status": "unavailable",
             "code": "install_root_unresolved",
@@ -437,10 +438,13 @@ fn start_suspension_report(
         }));
     };
     let mut command = Command::new(root.join("runtime").join("actingcommand-actingd.exe"));
-    command
-        .arg("suspended")
-        .arg("--config")
-        .arg(root.join("actingd.config.json"));
+    command.arg("suspended").arg("--config").arg(
+        location
+            .config
+            .clone()
+            .unwrap_or_else(|| root.join("actingd.config.json")),
+    );
+    super::runtime::pin_child(&mut command, location.installation.as_ref());
     let deadline = context
         .deadline
         .checked_sub(READ_RESERVE)

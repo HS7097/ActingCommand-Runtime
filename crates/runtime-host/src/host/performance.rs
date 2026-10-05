@@ -178,7 +178,7 @@ impl HostShared {
         observation: crate::PerformanceControlObservation,
     ) -> RuntimeHostResult<()> {
         let workloads =
-            lock(&self.policy, "read_performance_workloads")?.active_performance_workloads()?;
+            lock(self.policy()?, "read_performance_workloads")?.active_performance_workloads()?;
         let control_events = lock(&self.performance_control, "reconcile_performance_control")?
             .observe(observation, &workloads)?
             .into_iter()
@@ -205,7 +205,7 @@ impl HostShared {
                 .is_empty();
         }
         if raised && !owned_work {
-            owned_work = !lock(&self.policy, "read_performance_workloads")?
+            owned_work = !lock(self.policy()?, "read_performance_workloads")?
                 .active_performance_workloads()?
                 .is_empty();
         }
@@ -422,7 +422,7 @@ pub(super) fn performance_monitor_loop(
             break;
         }
         let Some(_work) = shared.begin_work()? else {
-            break;
+            continue;
         };
         let observed_at_unix_ms = unix_ms_now()?;
         let stop_sampling = match shared.sample_performance(observed_at_unix_ms) {

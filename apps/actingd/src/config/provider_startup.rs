@@ -757,6 +757,54 @@ fn binding(
     base: &Path,
     resolved: &Path,
 ) -> RuntimeHostResult<()> {
+    if field.contains("library_path") {
+        let selected = actingcommand_contract::process_installation().map_err(|error| {
+            startup.failed(
+                backend,
+                Stage::PathBinding,
+                error.code(),
+                ProviderNativeFailure {
+                    module: "actingd.config".into(),
+                    code: error.code().into(),
+                    severity: "fatal".into(),
+                    message: "installation input selection could not be read".into(),
+                },
+            )
+        })?;
+        if let Some(selected) = selected {
+            let path = fs::canonicalize(resolved).map_err(|error| {
+                startup.failed(
+                    backend,
+                    Stage::PathBinding,
+                    "install_provider_library_unavailable",
+                    ProviderNativeFailure {
+                        module: "actingd.config".into(),
+                        code: "install_provider_library_unavailable".into(),
+                        severity: "fatal".into(),
+                        message: error.to_string(),
+                    },
+                )
+            })?;
+            let in_slot = path.starts_with(selected.root().join("A"))
+                || path.starts_with(selected.root().join("B"));
+            if (in_slot && !path.starts_with(selected.program_root()))
+                || (field == "provider_library_path"
+                    && !path.starts_with(selected.program_root().join("tools")))
+            {
+                return Err(startup.failed(
+                    backend,
+                    Stage::PathBinding,
+                    "install_provider_slot_mismatch",
+                    ProviderNativeFailure {
+                        module: "actingd.config".into(),
+                        code: "install_provider_slot_mismatch".into(),
+                        severity: "fatal".into(),
+                        message: format!("{field}={path:?}"),
+                    },
+                ));
+            }
+        }
+    }
     let path = |value: &Path| {
         value.to_str().map(str::to_owned).ok_or_else(|| {
             startup.failed(

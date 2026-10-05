@@ -37,7 +37,12 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         return Err(ActingdError::config("maintenance_option_invalid"));
     }
     let config = config.ok_or_else(|| ActingdError::config("maintenance_config_missing"))?;
-    let config = config::load(&config)
+    let purpose = if matches!(operation, LedgerMaintenanceOperation::Verify) {
+        actingcommand_contract::InstallConfigPurpose::CandidateCheck
+    } else {
+        actingcommand_contract::InstallConfigPurpose::Running
+    };
+    let config = config::load_for(&config, purpose)
         .and_then(config::ActingdConfigFile::maintenance_config)
         .map_err(ActingdError::config)?;
     let request = LedgerMaintenanceRequest {

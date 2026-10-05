@@ -75,6 +75,12 @@ pub(super) struct RecoveryLadderWindow {
     pub(super) preparation: Option<TerminalEvent>,
 }
 
+impl RecoveryLadderWindow {
+    pub(super) fn is_running(&self) -> bool {
+        self.running
+    }
+}
+
 enum RungAttempt {
     Recovered {
         run_id: RunId,
@@ -206,7 +212,7 @@ impl HostShared {
             return Ok(event);
         };
         let settings = self
-            .stuck_recovery
+            .stuck_recovery()?
             .get(&instance_id)
             .copied()
             .unwrap_or_default();
@@ -293,7 +299,7 @@ impl HostShared {
         };
         let instance_id = resolved.instance_id();
         let settings = self
-            .stuck_recovery
+            .stuck_recovery()?
             .get(&instance_id)
             .copied()
             .unwrap_or_default();
@@ -453,12 +459,12 @@ impl HostShared {
         let mut effective = pending.clone();
         let mut recovery_resolution_error = None;
         if pending.trigger.preparation.is_some()
-            && let Some(startup) = self.startup_packages.get(&pending.instance_id)
+            && let Some(startup) = self.startup_packages()?.get(&pending.instance_id)
         {
             match super::contained_task::prepare_contained_task(
                 &pending.instance_alias,
                 startup,
-                self.execution.vision_provider(),
+                self.execution()?.vision_provider(),
                 Instant::now() + Duration::from_millis(startup.response_deadline_ms()),
             ) {
                 Ok(prepared) => {
@@ -486,7 +492,7 @@ impl HostShared {
             }
         }
         let pending = &effective;
-        let startup_package = self.startup_packages.contains_key(&pending.instance_id);
+        let startup_package = self.startup_packages()?.contains_key(&pending.instance_id);
         let emulator_control = resolved
             .adb_endpoint
             .as_ref()

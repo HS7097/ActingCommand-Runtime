@@ -52,7 +52,7 @@ impl HostShared {
         let instance_id = resolved.instance_id();
         let alias = resolved.instance_alias.as_str();
         let observation = match self
-            .execution
+            .execution()?
             .observe_foreground_application(&resolved.instance_alias)
         {
             Ok(observation) => observation,

@@ -203,6 +203,7 @@ enum SessionCommand {
         response: SyncSender<ExecutionKernelResult<Frame>>,
     },
     OpenBackends {
+        deadline: Option<Instant>,
         memory: actingcommand_device::FrameMemoryBudget,
         response:
             SyncSender<ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>>>,
@@ -532,6 +533,7 @@ impl ExecutionSession {
     pub(crate) fn open_backends(
         &self,
         memory: actingcommand_device::FrameMemoryBudget,
+        deadline: Option<Instant>,
     ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
@@ -540,7 +542,11 @@ impl ExecutionSession {
             .sender
             .as_ref()
             .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
-            .send(SessionCommand::OpenBackends { memory, response })
+            .send(SessionCommand::OpenBackends {
+                memory,
+                deadline,
+                response,
+            })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
@@ -1055,7 +1061,11 @@ fn run_session(
                     }
                 }
             }
-            SessionCommand::OpenBackends { memory, response } => {
+            SessionCommand::OpenBackends {
+                memory,
+                deadline,
+                response,
+            } => {
                 let capture_opens = matches!(
                     backends,
                     SessionBackends::Pending | SessionBackends::Independent { capture: None, .. }
@@ -1064,14 +1074,20 @@ fn run_session(
                     pending_frame = None;
                     committed_frame = None;
                 }
-                let result = open_backends(provider.as_ref(), &instance_alias, backends, &memory)
-                    .map(|mut observations| {
-                        for observation in &mut observations {
-                            observation.report.session_generation = generation;
-                        }
-                        observations
-                    })
-                    .map_err(|error| error.with_backend_session_generation(generation));
+                let result = open_backends(
+                    provider.as_ref(),
+                    &instance_alias,
+                    backends,
+                    &memory,
+                    deadline,
+                )
+                .map(|mut observations| {
+                    for observation in &mut observations {
+                        observation.report.session_generation = generation;
+                    }
+                    observations
+                })
+                .map_err(|error| error.with_backend_session_generation(generation));
                 match result {
                     Ok(observations) => response.send(Ok(observations)).map_err(|_| {
                         close_after_failure(
@@ -1739,7 +1755,17 @@ fn open_backends(
     instance_alias: &str,
     backends: &mut SessionBackends,
     memory: &actingcommand_device::FrameMemoryBudget,
+    deadline: Option<Instant>,
 ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
+    let before_open = |observations: &[actingcommand_device::BackendOpenObservation]| {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            Err(ExecutionKernelError::fatal("preparation_deadline_exceeded")
+                .with_backend_open_observations(observations))
+        } else {
+            Ok(())
+        }
+    };
+    before_open(&[])?;
     let capture_opens = matches!(
         backends,
         SessionBackends::Pending | SessionBackends::Independent { capture: None, .. }
@@ -1748,6 +1774,7 @@ fn open_backends(
     if let SessionBackends::Independent { input, .. } = backends
         && input.is_none()
     {
+        before_open(&observations)?;
         match provider.open_input(instance_alias) {
             Ok(opened) => {
                 observations.push(opened.observation);
@@ -1764,6 +1791,7 @@ fn open_backends(
         }
     }
     if capture_opens {
+        before_open(&observations)?;
         match execute_capture(provider, instance_alias, backends, Some(memory)) {
             Ok(mut frame) => observations.append(&mut frame.backend_open_observations),
             Err(error) => return Err(error.with_backend_open_observations(&observations)),

@@ -254,7 +254,7 @@ impl HostShared {
             .mark_resources_in_use()
             .map_err(RequestFailure::poison_without_terminal)?;
         let captured = self
-            .execution
+            .execution()?
             .capture_frame_retained_with_registration_guard(
                 instance_alias,
                 links.frame_id().copied(),
@@ -452,7 +452,7 @@ impl HostShared {
         let verified = terminal(&sink.verified.ok_or_else(|| {
             online_observation::observation_integrity_failure("observation_verified_event_missing")
         })?);
-        self.execution
+        self.execution()?
             .commit_input_frame(
                 instance_alias,
                 actingcommand_contract::InputFrameReference {

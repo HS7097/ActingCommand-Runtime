@@ -159,6 +159,10 @@ enum CliTargetKind {
 }
 
 fn main() {
+    if let Err(error) = actingcommand_contract::process_installation() {
+        eprintln!("FATAL device-test: {error}");
+        std::process::exit(1);
+    }
     if let Err(err) = run() {
         eprintln!("FATAL: {err}");
         std::process::exit(1);

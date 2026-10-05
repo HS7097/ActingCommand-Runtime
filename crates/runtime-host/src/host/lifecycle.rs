@@ -5,6 +5,9 @@ use super::*;
 impl RuntimeLifecycleFailureStage {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
+            Self::InstallDrain => "drain",
+            Self::InstallHeld => "startup_held",
+            Self::InstallRelease => "release",
             Self::PolicyInitialization => "runtime.lifecycle.policy_initialization",
             Self::PolicyMonitor => "runtime.lifecycle.policy_monitor",
             Self::PolicyForward => "runtime.lifecycle.policy_forward",
@@ -314,11 +317,13 @@ impl HostShared {
                         } else {
                             DiagnosticCode::RuntimeDiagnostic
                         },
-                        if decision_id.is_some() {
-                            EffectDisposition::NotPerformed
-                        } else {
-                            EffectDisposition::Indeterminate
-                        },
+                        host_error
+                            .and_then(|error| error.lifecycle.installation_effect)
+                            .unwrap_or(if decision_id.is_some() {
+                                EffectDisposition::NotPerformed
+                            } else {
+                                EffectDisposition::Indeterminate
+                            }),
                         DiagnosticDetailDraft::new(
                             "runtime_lifecycle",
                             failure_stage,

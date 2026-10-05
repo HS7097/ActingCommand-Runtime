@@ -33,6 +33,10 @@ const DEFAULT_PAUSE_REASON: &str = "operator";
 const DEFAULT_PAUSE_DRAIN_TIMEOUT_MS: u64 = 60_000;
 
 fn main() -> ExitCode {
+    if let Err(error) = actingcommand_contract::process_installation() {
+        eprintln!("FATAL actingctl: {error}");
+        return ExitCode::FAILURE;
+    }
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     // Workflow #338: `mcp-serve` and `mcp-config` take their own flags, so they leave before
     // `Invocation::parse`, which requires `--state-root`.
@@ -209,6 +213,21 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 Ok(serde_json::json!({ "receipt": receipt, "shutdown": shutdown }))
             }
         },
+        Command::InstallTransition { action } => {
+            client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
+                client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
+            }).map_err(ActingctlError::runtime)?;
+            let receipt = client.install_transition(action).map_err(ActingctlError::runtime)?;
+            match shutdown_wait {
+                Some(wait) => {
+                    let target = client.runtime_info().shutdown_target();
+                    drop(client);
+                    let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
+                    Ok(serde_json::json!({ "receipt": receipt, "shutdown": shutdown }))
+                }
+                None => Ok(serde_json::json!({ "receipt": receipt })),
+            }
+        }
         Command::Reset => serde_json::to_value(
             client
                 .safe_reset(instance()?)
@@ -396,6 +415,9 @@ enum Command {
         offset_milli: i64,
     },
     RequestShutdown,
+    InstallTransition {
+        action: actingcommand_contract::InstallTransitionAction,
+    },
     Observe,
     Reset,
     Status,
@@ -465,6 +487,7 @@ impl Invocation {
         let mut record_file = None;
         let mut policy_file = None;
         let mut shutdown_wait = None;
+        let mut install_action = None;
         let mut pause_reason = None;
         let mut drain_timeout_ms = None;
         // `task-offset` takes the task and the offset as the second and third tokens.
@@ -514,7 +537,20 @@ impl Invocation {
                 {
                     policy_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
-                "--wait" if command == "request-shutdown" && shutdown_wait.is_none() => {
+                "--action-json" if command == "install-transition" && install_action.is_none() => {
+                    let json = require_text(&arguments, &mut index)?;
+                    if json.len() > 4096 {
+                        return Err(ActingctlError::Usage);
+                    }
+                    let action: actingcommand_contract::InstallTransitionAction =
+                        serde_json::from_str(&json).map_err(|_| ActingctlError::Usage)?;
+                    action.validate().map_err(|_| ActingctlError::Usage)?;
+                    install_action = Some(action);
+                }
+                "--wait"
+                    if matches!(command, "request-shutdown" | "install-transition")
+                        && shutdown_wait.is_none() =>
+                {
                     let seconds = require_u64(&arguments, &mut index)?;
                     if !(1..=MAX_SHUTDOWN_WAIT_SECONDS).contains(&seconds) {
                         return Err(ActingctlError::Usage);
@@ -631,6 +667,18 @@ impl Invocation {
                 }
             }
             "request-shutdown" => Command::RequestShutdown,
+            "install-transition" => {
+                let action = install_action.ok_or(ActingctlError::Usage)?;
+                if shutdown_wait.is_some()
+                    && !matches!(
+                        action,
+                        actingcommand_contract::InstallTransitionAction::CommitShutdown { .. }
+                    )
+                {
+                    return Err(ActingctlError::Usage);
+                }
+                Command::InstallTransition { action }
+            }
             "reset" => Command::Reset,
             "observe" => Command::Observe,
             "status" if config => Command::StatusConfig,
@@ -733,6 +781,7 @@ impl Command {
                 | Self::MonitorStatus
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
+                | Self::InstallTransition { .. }
                 | Self::AgentPublishFacts { .. }
                 | Self::AgentApplyResourceTargets { .. }
                 | Self::SelfCheck { .. }
@@ -800,7 +849,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),

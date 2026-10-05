@@ -430,6 +430,7 @@ dependencies = [
 name = "actingcommand-vision-provider-check"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "actingcommand-ledger-forensics",
  "actingcommand-vision-ffi",
  "serde",

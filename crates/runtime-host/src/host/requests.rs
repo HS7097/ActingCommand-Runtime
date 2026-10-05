@@ -38,7 +38,20 @@ impl HostShared {
         }
         let validated = match request.validate() {
             Ok(validated) => validated,
-            Err(_) => {
+            Err(error) => {
+                if let RuntimeOperation::InstallTransition { action, .. } = request.operation() {
+                    let failure = self.invalid_install_request(action, error.code())?;
+                    return runtime_error_receipt(
+                        request,
+                        failure.state,
+                        failure.terminal,
+                        failure
+                            .error
+                            .projection()
+                            .clone()
+                            .with_host_failure(failure.error.code(), failure.error.operation()),
+                    );
+                }
                 return runtime_error_receipt(
                     request,
                     RuntimeReceiptState::Denied,
@@ -47,13 +60,10 @@ impl HostShared {
                 );
             }
         };
-        let _work = if matches!(
-            request.operation(),
-            RuntimeOperation::RequestShutdown { .. }
-        ) {
+        let _work = if Self::request_is_lifecycle_control(request.operation()) {
             None
         } else {
-            match self.begin_work()? {
+            match self.begin_request(request.operation(), connection_id)? {
                 Some(work) => Some(work),
                 None => {
                     return runtime_error_receipt(
@@ -154,6 +164,9 @@ impl HostShared {
             ),
             RuntimeOperation::RequestShutdown { target } => {
                 self.request_shutdown(validated, *target)
+            }
+            RuntimeOperation::InstallTransition { target, action } => {
+                self.install_transition(validated, *target, action, connection_id)
             }
             RuntimeOperation::Health => Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
@@ -984,14 +997,7 @@ fn connection_loop(
         context.request_decoded = true;
         let material_context = MaterialReadContext::for_request(&request, maximum_frame_bytes)?;
         // Idle sockets hold no admission. A decoded request remains in flight through its reply.
-        let _work = if matches!(
-            request.operation(),
-            RuntimeOperation::RequestShutdown { .. }
-        ) {
-            None
-        } else {
-            shared.begin_work()?
-        };
+        let _work = shared.begin_request(request.operation(), connection_id)?;
         if let Ok(validated) = request.validate() {
             context.links = validated.event_links(None, None, None);
         }
