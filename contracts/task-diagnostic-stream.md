@@ -348,6 +348,22 @@ as an interrupted run recovered after restart, `task.terminal_committed` retains
 is inferred by counting ledger completion events, and original errors and
 committed effects remain unchanged.
 
+A direct contained run (no `policy.dispatch_intent` on its run or request) that the
+previous owner epoch admitted (`task.requested` with `package_admitted`) and never terminated
+is settled when the next owner starts (Workflow #338 R3): after the scheduler chain's
+reconciliation, the start scans the events between the last two `runtime.started` /
+`runtime.takeover` events and writes, as Runtime/Runtime on the run's original links
+(request, correlation, causation, instance, lease, task, run), the same two events a
+resubmission of the original request writes: `task.terminal_intent` (cancelled) and
+`task.cancelled` with `failure_code: contained_task_recovered_after_restart`,
+`executed_steps: null`; a lease without `lease.released` / `lease.expired` then gets the
+same `lease.released` (`not_performed`). A resubmission of the original request afterwards
+meets that terminal and answers `ContainedTaskCancelled(RecoveredAfterRestart)` unchanged.
+Only the previous epoch is scanned: a run left open two epochs back stays open (a run
+status reports it as interrupted), as does a run on an instance this start did not
+register. A run settled once lies outside every later start's scan. A failed settlement
+fails the start.
+
 Task-error terminals retain the optional typed `timing` observation from the
 Kernel's original decision. `scope` identifies the task budget, page-recognition
 wait or postcondition wait; `stage` identifies the decision point. `elapsed_ms`

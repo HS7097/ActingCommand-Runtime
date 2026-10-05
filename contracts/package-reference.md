@@ -306,6 +306,76 @@ version or tag. It names no default package: the applications table beside it do
 version 1 index (`actingcommand.bundle.v1`, ZIP packs and `default_packs`) is a separate
 shape; its readers are unchanged.
 
+### Maintenance declarations (bundle v3)
+
+`package bundle --maintenance <file>` requests `actingcommand.bundle.v3`. The file is
+a JSON array of the shared `BundleMaintenance` entries, for example:
+
+```json
+[{"package_id":"neutral.test.start","server":"test","uses":["startup"]},
+ {"package_id":"neutral.test.home","server":"test","uses":["prerequisite","return_home"]}]
+```
+
+The resulting `BundleIndexV3` retains v2's `game`, optional `source`, `packs` and
+content-directory identities and adds the required `maintenance` array. An explicitly
+empty array still requests v3. Without the flag, generation retains v2 behavior. The
+input is bounded by the existing package input byte limit (32 MiB). The output contains
+the declaration only in `bundle.json`; the source declaration file is not copied.
+
+Resource repositories name the source input `maintenance.json` at their root. The existing
+`resource validate` declaration reader decodes this shared array and calls
+`validate_bundle_maintenance_declarations` for its source-only structural rules, under
+the declaration reader's own 16 MiB document / 64 MiB total read bounds. It does not load
+pack material. The bundle index validator reuses those same rules and adds index closure;
+generation then checks actual material and full chains through the kernel.
+
+Each entry has exactly `package_id`, `server` and `uses`. Uses are a nonempty set of at
+most the three values `startup`, `prerequisite`, `return_home`. A reference must name a
+pack in this index with the same server; the package/server pair is unique. Each server
+has at most one startup and one return-home entry. Unknown versions, fields or uses,
+duplicate uses or roles and missing references fail explicitly. There are at most as
+many entries as packs. `BundleIndex::validate()` dispatches the version-specific
+structural validation; the v2 type continues to reject v3.
+
+`PreparedContainedTask::describe_path(instance_label, locator, expected, deadline)` in
+execution-kernel admits actual material through hash verification and Containment's
+metadata-only capability, performs the same task preparation as Runtime and returns a
+read-only `TaskPackageDescriptor`. It returns no runnable task and performs no provider
+inference. The descriptor exposes the actual package/task identity, package reference,
+mode, game, server, resolution, declared prerequisite, resolved linear entry page,
+maximum step count and use qualification. Insufficient material fails preparation;
+callers must treat its identity/qualification as unknown, never infer it from paths,
+application names or index labels. This does not prove execution or recognition results.
+
+`validate_bundle_maintenance(&index, &descriptors)` checks that the admitted material set
+matches every indexed identity, task, server and content digest, then checks each use and
+complete prerequisite chain against the bindings supplied by the declaration. Startup
+uses ordinary task admission and rejects resource readings through
+`PreparedContainedTask::startup_incompatibility`, the same predicate used by Host before
+its startup lease. Prerequisites retain the existing exclusions for
+recognize-only, stability termination, post-admission OCR/fields, resource readings and
+designated operations. Return-home packages additionally declare no prerequisite of
+their own. The shared `PrerequisiteChain` predicate owns game/server/resolution
+compatibility, cycle detection, three declared layers and the 1,000-step aggregate bound.
+A return-home fallback is outside the three declared layers. Only a linear package with
+a resolved first-step page and no declared prerequisite selects that fallback; an
+application entry or page-graph package does not. Host retains loading, deadlines,
+failure facts and execution, consuming this same predicate incrementally.
+
+Consumers validate structure and actual material before deriving bindings: `startup`
+supplies the instance's existing `startup_package`; `prerequisite` supplies a
+`prerequisite_packages` entry without editing business control; `return_home` supplies
+both the package binding and the shared game/server return-home mapping. Configuration
+conflict handling and application belong to the installer. No declaration triggers a
+task directly or adds a Runtime execution mode, ledger field or persistent authority.
+
+Publication callers requesting maintenance must require the machine-readable result's
+`index.schema_version` **and the written `bundle.json` schema_version** to equal
+`actingcommand.bundle.v3`, and read back its validated maintenance declarations. A zero
+exit status from a tool that ignored an unknown flag is insufficient. Existing consumers
+that do not understand v3 must reject it before deriving bindings; v1/v2, ZIP and content
+container handling continue through their existing paths.
+
 ## Consumers
 
 `actingctl task-run` accepts `--package <directory> --package-ref <JSON>` and optional

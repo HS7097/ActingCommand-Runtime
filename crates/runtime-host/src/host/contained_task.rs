@@ -17,6 +17,7 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 /// (c), its lease and owed client resets).
 pub(super) const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
+const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: &str = "settle_previous_epoch_contained_runs";
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ContainedTaskCheckpointIdentity {
@@ -4875,7 +4876,7 @@ impl HostShared {
         }
         // Workflow #335 S5b: a startup or return-home package writes no instance facts; one
         // that declares resource readings is refused before any lease and any input.
-        if prepared.has_resource_readings() {
+        if prepared.startup_incompatibility().is_some() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
                     "contained_task_resource_reading_run_kind_unsupported",
@@ -6512,6 +6513,236 @@ impl HostShared {
                 audit_endpoint(resolved.audit_endpoint()),
             ),
         )
+    }
+
+    /// Workflow #338 R3 (#343-1): at start, settles the direct contained runs the previous
+    /// owner epoch admitted and never terminated, exactly as a resubmission of the original
+    /// request would (`recover_contained_task`): `task.terminal_intent` and
+    /// `task.cancelled` (`contained_task_recovered_after_restart`) on the run's original links,
+    /// then a lease release when the lease has no terminal. The scan is bounded to the previous
+    /// epoch, the events between the last two `runtime.started` / `runtime.takeover` events
+    /// (the later one is this start's); older epochs are not reached. A run of the scheduler
+    /// chain (one with a `policy.dispatch_intent` on its run or request) keeps the policy dispatch
+    /// reconciliation, and a run of an instance this start did not register stays open. A run
+    /// settled once has its terminal and lies before the next start's previous epoch, so no
+    /// restart settles it again. Any failure fails the start.
+    pub(super) fn settle_previous_epoch_contained_runs(&self) -> RuntimeHostResult<()> {
+        let mut starts = Vec::new();
+        for event_type in [EventType::RuntimeStarted, EventType::RuntimeTakeover] {
+            starts.extend(
+                self.ledger
+                    .query(EventQuery {
+                        event_type: Some(event_type),
+                        ..EventQuery::default()
+                    })
+                    .map_err(|_| ledger_error(PREVIOUS_EPOCH_SETTLEMENT_OPERATION))?
+                    .iter()
+                    .map(PersistedEvent::sequence),
+            );
+        }
+        starts.sort_unstable();
+        let [.., previous, current] = starts.as_slice() else {
+            return Ok(());
+        };
+        if current.saturating_sub(*previous) < 2 {
+            return Ok(());
+        }
+        let admitted = self
+            .ledger
+            .query(EventQuery {
+                event_type: Some(EventType::TaskRequested),
+                from_sequence: Some(previous + 1),
+                to_sequence: Some(current - 1),
+                ..EventQuery::default()
+            })
+            .map_err(|_| ledger_error(PREVIOUS_EPOCH_SETTLEMENT_OPERATION))?;
+        for package_event in &admitted {
+            let EventPayload::Task(TaskPayload::Semantic(payload)) = package_event.payload() else {
+                continue;
+            };
+            if !matches!(payload.fact(), TaskSemanticFact::PackageAdmitted { .. }) {
+                continue;
+            }
+            self.settle_previous_epoch_contained_run(package_event)
+                .map_err(|failure| *failure.error)?;
+        }
+        Ok(())
+    }
+
+    fn settle_previous_epoch_contained_run(
+        &self,
+        package_event: &PersistedEvent,
+    ) -> Result<(), RequestFailure> {
+        let identity_missing = || {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_identity_missing",
+                PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        };
+        let links = package_event.links();
+        let request_id = *links.request_id().ok_or_else(identity_missing)?;
+        let correlation_id = *links.correlation_id().ok_or_else(identity_missing)?;
+        let instance_id = *links.instance_id().ok_or_else(identity_missing)?;
+        let lease_id = *links.lease_id().ok_or_else(identity_missing)?;
+        let task_id = *links.task_id().ok_or_else(identity_missing)?;
+        let run_id = *links.run_id().ok_or_else(identity_missing)?;
+        let events = self
+            .ledger
+            .query(EventQuery {
+                request_id: Some(request_id),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error(
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                ))
+            })?;
+        // The scheduler chain: the run of a policy dispatch keeps `reconcile_policy_dispatches`.
+        let policy_intents = self
+            .ledger
+            .query(EventQuery {
+                run_id: Some(run_id),
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error(
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                ))
+            })?;
+        if !policy_intents.is_empty()
+            || events
+                .iter()
+                .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
+        {
+            return Ok(());
+        }
+        let terminals = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Task(TaskPayload::Semantic(payload))
+                        if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { .. })
+                )
+            })
+            .count();
+        if terminals > 1 {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_terminal_state_inconsistent",
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        if terminals == 1
+            || !lock(&self.registered_instances, "read_instance_registry")?
+                .contains_key(&instance_id)
+        {
+            return Ok(());
+        }
+        // The original request's identity, as a resubmission of it would arrive: only its
+        // request, correlation and causation reach the recovery links.
+        let identity_invalid = || {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_recovery_identity_invalid",
+                PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        };
+        let encode =
+            |value: serde_json::Result<serde_json::Value>| value.map_err(|_| identity_invalid());
+        let submitted_at_unix_ms = self
+            .runtime_clock_sample()
+            .map_err(RequestFailure::poison_without_terminal)?
+            .unix_ms;
+        let mut identity = serde_json::Map::new();
+        identity.insert(
+            "schema_version".to_owned(),
+            serde_json::Value::from(actingcommand_contract::RUNTIME_REQUEST_SCHEMA_VERSION),
+        );
+        identity.insert(
+            "request_id".to_owned(),
+            encode(serde_json::to_value(request_id))?,
+        );
+        identity.insert(
+            "correlation_id".to_owned(),
+            encode(serde_json::to_value(correlation_id))?,
+        );
+        if let Some(causation_id) = links.causation_id() {
+            identity.insert(
+                "causation_id".to_owned(),
+                encode(serde_json::to_value(causation_id))?,
+            );
+        }
+        identity.insert(
+            "actor".to_owned(),
+            encode(serde_json::to_value(EventActor::Cli))?,
+        );
+        identity.insert(
+            "source".to_owned(),
+            encode(serde_json::to_value(EventSource::Cli))?,
+        );
+        identity.insert(
+            "submitted_at_unix_ms".to_owned(),
+            serde_json::Value::from(submitted_at_unix_ms),
+        );
+        identity.insert(
+            "operation".to_owned(),
+            encode(serde_json::to_value(RuntimeOperation::Health))?,
+        );
+        let original =
+            serde_json::from_value::<RuntimeRequest>(serde_json::Value::Object(identity))
+                .map_err(|_| identity_invalid())?;
+        let validated = original.validate().map_err(|_| identity_invalid())?;
+        self.append_recovered_contained_task_terminal(
+            &validated,
+            instance_id,
+            lease_id,
+            task_id,
+            run_id,
+        )?;
+        let lease_terminals = self
+            .ledger
+            .query(EventQuery {
+                lease_id: Some(lease_id),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error(
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                ))
+            })?
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type(),
+                    EventType::LeaseReleased | EventType::LeaseExpired
+                ) && event.links().lease_id() == Some(&lease_id)
+            })
+            .count();
+        match lease_terminals {
+            0 => {
+                self.append_recovered_contained_task_release(
+                    &validated,
+                    instance_id,
+                    lease_id,
+                    task_id,
+                    run_id,
+                )?;
+                Ok(())
+            }
+            1 => Ok(()),
+            _ => Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_lease_terminal_state_inconsistent",
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            )),
+        }
     }
 
     fn begin_contained_run(
