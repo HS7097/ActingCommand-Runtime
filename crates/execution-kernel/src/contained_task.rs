@@ -5117,12 +5117,20 @@ impl TaskProgram {
         detector: &PageDetector,
         evaluator: &RecognitionEvaluator,
     ) -> Result<(), ContainedTaskError> {
-        for reading in self.resource_readings.iter().flatten() {
+        for (index, reading) in self.resource_readings.iter().flatten().enumerate() {
             let invalid = |reason: &str| {
-                ContainedTaskError::with_detail(
+                let mut error = ContainedTaskError::with_detail(
                     "contained_task_resource_reading_invalid",
                     format!("{}:{reason}", reading.id),
-                )
+                );
+                error.declaration_issue =
+                    Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                        declaration_file: bundle.operation_path().to_owned(),
+                        field_path: format!("/resource_readings/{index}/target_id"),
+                        schema_version: Some(self.schema_version.clone()),
+                        reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                    }));
+                error
             };
             let matching = evaluator
                 .pack()
