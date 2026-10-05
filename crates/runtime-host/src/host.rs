@@ -1414,6 +1414,13 @@ impl RuntimeHost {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
+        // Workflow #338 R3 (#343-1): the direct contained runs the previous owner epoch admitted
+        // and never terminated are settled as their resubmission would settle them; the
+        // scheduler chain was reconciled above (`reconcile_policy_dispatches`).
+        if let Err(original) = shared.settle_previous_epoch_contained_runs() {
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
+            return Err(original);
+        }
         if let Err(original) = shared.expire_agent_sessions() {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
