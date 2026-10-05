@@ -7,23 +7,22 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use actingcommand_actinglab_architecture::{
-    DeclaredVisibility, FunctionFacts, FunctionReference, GlueCaller, GlueDeclaration,
-    GlueInvariant, GlueText, GlueTolerance, LedgerOwnerModule, OwnerSymbol, RefusalBranch,
-    SourceFacts, SymbolKind, contract_dependency_violations, discover_ledger_owners,
-    extract_command_inventory, function_source, inspect_admission_handle_uses,
-    inspect_artifact_byte_writes, inspect_call_sites, inspect_contract_fact_matching,
-    inspect_disallowed_lint_escapes, inspect_dispatch_arm_calls, inspect_enum_variants,
-    inspect_envelope_sites, inspect_field_accesses, inspect_function_origin_terms,
-    inspect_generic_authoring_identity, inspect_generic_runtime_identity,
-    inspect_glue_declarations, inspect_lab_source, inspect_ledger_append_ingress,
-    inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_non_reexport_items,
-    inspect_persisted_event_ownership, inspect_producer_event_capabilities,
-    inspect_provider_symbol_literals, inspect_public_api, inspect_pure_decision_source,
-    inspect_refusal_branches, inspect_source_facts, inspect_stderr_writes, inspect_store_write_api,
-    inspect_store_writes, inspect_type_constructions, lab_removability_violations,
-    ledger_owns_query_matching, reference_calls, reference_matches,
-    resource_tooling_removability_violations, workspace_dependency_allow_list_violations,
-    workspace_dependency_violations,
+    DeclaredVisibility, FunctionReference, GlueCaller, GlueDeclaration, GlueInvariant, GlueText,
+    LedgerOwnerModule, OwnerSymbol, RefusalBranch, SourceFacts, SymbolKind,
+    contract_dependency_violations, discover_ledger_owners, extract_command_inventory,
+    function_source, inspect_admission_handle_uses, inspect_artifact_byte_writes,
+    inspect_call_sites, inspect_contract_fact_matching, inspect_disallowed_lint_escapes,
+    inspect_dispatch_arm_calls, inspect_enum_variants, inspect_envelope_sites,
+    inspect_field_accesses, inspect_function_origin_terms, inspect_generic_authoring_identity,
+    inspect_generic_runtime_identity, inspect_glue_declarations, inspect_lab_source,
+    inspect_ledger_append_ingress, inspect_ledger_forbidden_sources, inspect_ledger_public_api,
+    inspect_non_reexport_items, inspect_persisted_event_ownership,
+    inspect_producer_event_capabilities, inspect_provider_symbol_literals, inspect_public_api,
+    inspect_pure_decision_source, inspect_refusal_branches, inspect_source_facts,
+    inspect_stderr_writes, inspect_store_write_api, inspect_store_writes,
+    inspect_type_constructions, lab_removability_violations, ledger_owns_query_matching,
+    reference_calls, reference_matches, resource_tooling_removability_violations,
+    workspace_dependency_allow_list_violations, workspace_dependency_violations,
 };
 
 fn workspace_root() -> PathBuf {
@@ -2649,7 +2648,7 @@ struct BridgeDefinition {
     /// For a Lab bridge, its resource-tooling entry: the reference its body must make, as
     /// `reference_matches` reads it once the file's `use` bindings resolve the paths.
     /// `self.inner.<method>` is the wrapped resource-tooling catalog, which only
-    /// `PackageBuildCatalog::open` builds, from its own resource-tooling entry. Owner definitions
+    /// each Lab forwarding method reaches its resource-tooling entry. Owner definitions
     /// have no entry.
     entry: Option<&'static str>,
 }
@@ -2665,18 +2664,15 @@ const fn lab_bridge(name: &'static str, entry: &'static str) -> BridgeDefinition
     }
 }
 
-/// C1: one owner module of the Lab bridge chain and the production file holding its definitions.
+/// C1: one owner module of the Lab bridge chain and its production definitions.
 struct BridgeOwner {
     module: &'static str,
     file: &'static str,
     definitions: &'static [BridgeDefinition],
 }
 
-/// C1: the owner table. pack-containment owns the pure source-parsing core (the entries
-/// resource-tooling parses through); resource-tooling owns the package build, the
-/// content-directory digest and bundle (Workflow #288 A2b) and the MAA task graph compiler;
-/// Lab's package_build.rs defines exactly the environment bridge listed here, each bridge
-/// calling its resource-tooling entry and nothing of pack-containment.
+/// pack-containment owns pure source parsing; resource-tooling owns content-directory
+/// digest/bundle and MAA compilation. Lab forwards to its declared resource-tooling entry.
 const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "pack-containment",
@@ -2692,13 +2688,8 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     },
     BridgeOwner {
         module: "resource-tooling",
-        file: "crates/resource-tooling/src/package_build.rs",
-        definitions: &[
-            owner_entry("prepare_package_build_task"),
-            owner_entry("PackageBuildCatalog::build_task_archive"),
-            owner_entry("PackageBuildCatalog::build_task_archive_staged"),
-            owner_entry("PackageBuildCatalog::build_full_archive"),
-        ],
+        file: "crates/resource-tooling/src/package_directory.rs",
+        definitions: &[owner_entry("package_digest"), owner_entry("package_bundle")],
     },
     BridgeOwner {
         module: "resource-tooling",
@@ -2710,10 +2701,6 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
         file: "crates/lab/src/package_build.rs",
         definitions: &[
             lab_bridge(
-                "Lab::package_build_task",
-                "actingcommand_resource_tooling::prepare_package_build_task",
-            ),
-            lab_bridge(
                 "Lab::package_digest",
                 "actingcommand_resource_tooling::package_digest",
             ),
@@ -2721,37 +2708,9 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
                 "Lab::package_bundle",
                 "actingcommand_resource_tooling::package_bundle",
             ),
-            lab_bridge(
-                "PackageBuildCatalog::open",
-                "actingcommand_resource_tooling::PackageBuildCatalog::open",
-            ),
-            lab_bridge("PackageBuildCatalog::metadata", "self.inner.metadata"),
-            lab_bridge("PackageBuildCatalog::task_ids", "self.inner.task_ids"),
-            lab_bridge(
-                "PackageBuildCatalog::default_entry_task",
-                "self.inner.default_entry_task",
-            ),
-            lab_bridge(
-                "PackageBuildCatalog::build_task_archive",
-                "self.inner.build_task_archive",
-            ),
-            lab_bridge(
-                "PackageBuildCatalog::build_task_archive_staged",
-                "self.inner.build_task_archive_staged",
-            ),
-            lab_bridge(
-                "PackageBuildCatalog::build_full_archive",
-                "self.inner.build_full_archive",
-            ),
-            lab_bridge("PackageBuildCatalog::cleanup", "self.inner.cleanup"),
-            lab_bridge(
-                "resolve_environment_snapshot",
-                "actingcommand_resource_tooling::AuthoringEnvironmentSnapshot::from_resolved",
-            ),
         ],
     },
 ];
-
 /// C1: Lab's re-export module holds only `pub use` items, each from resource-tooling, and
 /// re-exports these names.
 const LAB_REEXPORT_MODULE: (&str, &[&str]) = (
@@ -2791,9 +2750,7 @@ fn resolved_reference(source: &SourceFacts, reference: &FunctionReference) -> Fu
     }
 }
 
-/// C1: the Lab bridge name a resolved path reaches: a path into Lab (`actingcommand_lab::…`;
-/// inside crates/lab/src also `crate` / `super` / `self` and the bridge names themselves) that
-/// names `compile_maa_task_graph`, the Lab `PackageBuildCatalog` or `Lab::package_build_task`.
+/// C1: resolves the typed digest/bundle and MAA compilation bridges into Lab.
 fn lab_bridge_path(source: &SourceFacts, path: &[String]) -> Option<String> {
     let names = path.iter().map(String::as_str).collect::<Vec<_>>();
     let first = *names.first()?;
@@ -2801,45 +2758,31 @@ fn lab_bridge_path(source: &SourceFacts, path: &[String]) -> Option<String> {
         || (source.path.starts_with("crates/lab/src/")
             && matches!(
                 first,
-                "crate"
-                    | "super"
-                    | "self"
-                    | "Lab"
-                    | "PackageBuildCatalog"
-                    | "compile_maa_task_graph"
+                "crate" | "super" | "self" | "Lab" | "compile_maa_task_graph"
             ));
     if !into_lab {
         return None;
     }
     match names.as_slice() {
         [.., "compile_maa_task_graph"] => Some("compile_maa_task_graph".to_string()),
-        [.., "PackageBuildCatalog", member] => Some(format!("PackageBuildCatalog::{member}")),
-        [.., "PackageBuildCatalog"] => Some("PackageBuildCatalog".to_string()),
-        [.., "Lab", "package_build_task"] => Some("Lab::package_build_task".to_string()),
+        [.., "Lab", method @ ("package_digest" | "package_bundle")] => {
+            Some(format!("Lab::{method}"))
+        }
         _ => None,
     }
 }
 
-/// C1: the Lab bridge name one production reference of `source` reaches: the Lab method
-/// `package_build_task` on any receiver, or a path `lab_bridge_path` accepts.
 fn lab_bridge_reference(source: &SourceFacts, reference: &FunctionReference) -> Option<String> {
     if let FunctionReference::Method(_, method) = reference {
-        return (method == "package_build_task").then(|| "Lab::package_build_task".to_string());
+        return (matches!(method.as_str(), "package_digest" | "package_bundle")
+            && source
+                .uses
+                .iter()
+                .any(|binding| binding.path.first().map(String::as_str) == Some(LAB_CRATE)))
+        .then(|| format!("Lab::{method}"));
     }
     lab_bridge_path(source, &source.resolved_path(reference_path(reference)?))
 }
-
-/// C1: whether a production function receives or returns the Lab `PackageBuildCatalog`.
-fn lab_catalog_in_signature(source: &SourceFacts, function: &FunctionFacts) -> bool {
-    function.signature_types.contains("PackageBuildCatalog")
-        && (function.signature_types.contains(LAB_CRATE)
-            || lab_bridge_path(
-                source,
-                &source.resolved_path(&["PackageBuildCatalog".to_string()]),
-            )
-            .is_some())
-}
-
 /// C1: whether a resolved reference of a Lab bridge reaches pack-containment directly: a path
 /// into that crate, or a call of one of its source-parsing core entries.
 fn reaches_pack_containment(reference: &FunctionReference, core_entries: &[&str]) -> bool {
@@ -2979,32 +2922,14 @@ fn c1_lab_bridge_and_reexport_follow_their_owner_and_call_table() {
                 ));
             }
         }
-        if facts.types != BTreeSet::from(["PackageBuildCatalog".to_string()]) {
+        if !facts.types.is_empty() || !facts.fields.is_empty() {
             problems.push(bridge_problem(
                 owner.module,
                 rule,
                 owner.file,
                 format!(
-                    "defines the types {:?}; the bridge table allows only PackageBuildCatalog",
-                    facts.types
-                ),
-            ));
-        }
-        if facts.fields
-            != [(
-                "PackageBuildCatalog".to_string(),
-                "inner".to_string(),
-                DeclaredVisibility::Private,
-            )]
-        {
-            problems.push(bridge_problem(
-                owner.module,
-                rule,
-                owner.file,
-                format!(
-                    "PackageBuildCatalog must wrap only the private resource-tooling catalog \
-                     `inner`, found {:?}",
-                    facts.fields
+                    "the forwarding bridge must not own state: types {:?}, fields {:?}",
+                    facts.types, facts.fields
                 ),
             ));
         }
@@ -3113,16 +3038,6 @@ fn c1_lab_bridge_and_reexport_follow_their_owner_and_call_table() {
                         .or_default()
                         .push(format!("{}:{line} -> {symbol}", function.site()));
                 }
-            }
-            if lab_catalog_in_signature(source, function) {
-                callers
-                    .entry(source.path.clone())
-                    .or_default()
-                    .push(format!(
-                        "{}:{} -> PackageBuildCatalog in its signature",
-                        function.site(),
-                        function.line
-                    ));
             }
         }
     }
@@ -6141,16 +6056,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
         ],
         invariants: &[],
         required_tests: &[],
-        tolerated_elsewhere: &[GlueTolerance {
-            file: "apps/actinglab/src/resource_authoring.rs",
-            symbol: "file_sha256",
-            kind: SymbolKind::Fn,
-            visibility: DeclaredVisibility::Private,
-            reason: "resource_authoring.rs keeps one private production file_sha256 of its own (its \
-                     read error names the authoring source), called only inside that file; it \
-                     predates D-1, whose product code is unchanged, and is reported for the owner \
-                     to route through sha256.rs or keep",
-        }],
+        tolerated_elsewhere: &[],
         reason: "file and byte SHA-256 hashing is owned by sha256.rs; main.rs imports it \
                  privately",
     },
@@ -6274,7 +6180,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
     // actinglab_parse_match_metric_flag_glue_stays_out_of_main,
     // actinglab_record_candidates_step_id_glue_stays_out_of_main,
     // actinglab_stream_input_relay_action_glue_stays_out_of_main,
-    // actinglab_parse_record_build_resolution_glue_stays_out_of_main,
     // actinglab_parse_session_record_region_glue_stays_out_of_main,
     // actinglab_parse_session_record_rect_glue_stays_out_of_main,
     // actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main,
@@ -6297,7 +6202,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_fn("session_record_drift_diagnostics_path"),
             glue_fn("parse_touch_backend_override"),
             glue_fn("parse_match_metric_flag"),
-            glue_fn("parse_record_build_resolution"),
             glue_fn("parse_session_record_region"),
             glue_fn("parse_session_record_rect"),
             glue_fn("parse_session_record_swipe_rects"),
@@ -6309,7 +6213,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_caller("apps/actinglab/src/cli_parse.rs", 1),
             glue_caller(DEVICE_COMMANDS, 4),
             glue_caller("apps/actinglab/src/commands/navigation_recovery.rs", 8),
-            glue_caller(SESSION_RECORD, 28),
+            glue_caller(SESSION_RECORD, 26),
             glue_caller("apps/actinglab/src/commands/session_transport.rs", 1),
             glue_caller("apps/actinglab/src/drive_cli.rs", 3),
             glue_caller("apps/actinglab/src/env_detection.rs", 1),
@@ -6360,11 +6264,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             exact(
                 SESSION_RECORD,
                 "let from = required_non_empty_flag(flags, \"--from\")?;",
-                1,
-            ),
-            exact(
-                SESSION_RECORD,
-                "\"template_threshold\": parse_optional_unit_f64(flags, \"--default-threshold\")?.unwrap_or(0.95),",
                 1,
             ),
             exact(
@@ -6433,11 +6332,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             exact(
                 DEVICE_COMMANDS,
                 "if let Some((action, action_args)) = stream_input_relay_action(flags)? {",
-                1,
-            ),
-            exact(
-                SESSION_RECORD,
-                "let mut resolution = parse_record_build_resolution(flags)?;",
                 1,
             ),
             exact(
@@ -6595,43 +6489,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "stream_input_relay_action",
                 "Ok(Some((value, flags.positionals.clone())))",
             ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                concat!(
-                    ".optional(\"--resolution\")\n",
-                    "        .filter(|value| value != \"true\")"
-                ),
-            ),
-            glue_invariant("parse_record_build_resolution", "return Ok(None);"),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "value.replace(['X', '*'], \"x\")",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "normalized.split_once('x')",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "--resolution must use <width>x<height>, got {value}",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "failed to parse --resolution width '{width}': {err}",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "failed to parse --resolution height '{height}': {err}",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "if width == 0 || height == 0",
-            ),
-            glue_invariant(
-                "parse_record_build_resolution",
-                "--resolution width and height must be non-zero",
-            ),
-            glue_invariant("parse_record_build_resolution", "Ok(Some((width, height)))"),
             glue_invariant("parse_session_record_region", "if value == \"auto\""),
             glue_invariant(
                 "parse_session_record_region",
@@ -6717,7 +6574,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             "match_metric_flag_preserves_default_values_and_rejection",
             "record_candidates_step_id_preserves_precedence_fallback_errors_and_original_value",
             "stream_input_relay_action_preserves_precedence_fallback_absence_literal_true_errors_and_arguments",
-            "parse_record_build_resolution_preserves_absence_bare_true_normalization_parsing_errors_and_valid_values",
+            "retired_record_production_refuses_all_resolution_forms",
             "parse_session_record_region_preserves_auto_rect_whitespace_parse_errors_and_positive_dimensions",
             "parse_session_record_rect_preserves_whitespace_parse_order_labels_errors_and_positive_dimensions",
             "parse_session_record_swipe_rects_preserves_first_arrow_order_labels_and_tuple",

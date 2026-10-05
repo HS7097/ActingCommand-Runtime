@@ -591,64 +591,7 @@
     }
   },
   {
-    "name": "package_build_task_success",
-    "command": "package build-task",
-    "exit_code": 0,
-    "envelope": {
-      "cli_version": "0.1.0",
-      "command": "package build-task",
-      "data": {
-        "dry_run": true,
-        "execution_mode": "navigable_route",
-        "from_remote": null,
-        "game": "arknights",
-        "included_tasks": [
-          "operator_task"
-        ],
-        "mode": "build-task",
-        "out": null,
-        "package_id": "arknights.cn.operator_task",
-        "repo": "<PATH>",
-        "resource_layout": "direct",
-        "resource_root": "<PATH>",
-        "server": "cn",
-        "status": "validated",
-        "task_id": "<TASK_ID>",
-        "validation": {
-          "control": {
-            "entry_task_id": "operator_task",
-            "execution_mode": "navigable_route",
-            "game": "arknights",
-            "package_id": "arknights.cn.operator_task",
-            "resolution": {
-              "height": 720,
-              "width": 1280
-            },
-            "server": "cn"
-          },
-          "entry_count": 10,
-          "resources": {
-            "manifest": "resources/manifest.json",
-            "navigation": "resources/navigation/arknights.cn.navigation.json",
-            "operation": "resources/operations/operator_task/task.json",
-            "operation_count": 1,
-            "pack": "resources/recognition/arknights.cn.pack.json",
-            "pages": "resources/recognition/arknights.cn.pages.json",
-            "recognition_unsupported_target_count": 0,
-            "recognition_unsupported_targets": [],
-            "resource_root": "resources"
-          },
-          "status": "valid",
-          "zip": "<PATH>"
-        }
-      },
-      "ok": true,
-      "runtime_version": "runtime-embedded-p1g",
-      "schema_version": "0.2"
-    }
-  },
-  {
-    "name": "package_build_task_failure",
+    "name": "package_build_task_retired",
     "command": "package build-task",
     "exit_code": 2,
     "envelope": {
@@ -656,8 +599,25 @@
       "command": "package build-task",
       "error": {
         "blocked_by": [],
-        "code": "package_invalid",
-        "message": "none of the selected tasks exist: missing_task"
+        "code": "resource_production_retired",
+        "message": "package build-task is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package digest/bundle"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "package_build_pack_retired",
+    "command": "package build-pack",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "package build-pack",
+      "error": {
+        "blocked_by": [],
+        "code": "resource_production_retired",
+        "message": "package build-pack is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package digest/bundle"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",

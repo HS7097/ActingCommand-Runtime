@@ -86,13 +86,13 @@ const CASES: &[CaseSpec] = &[
         ExpectedKind::Failure,
     ),
     case(
-        "package_build_task_success",
+        "package_build_task_retired",
         "package build-task",
-        ExpectedKind::Success,
+        ExpectedKind::Failure,
     ),
     case(
-        "package_build_task_failure",
-        "package build-task",
+        "package_build_pack_retired",
+        "package build-pack",
         ExpectedKind::Failure,
     ),
     case(
@@ -1223,14 +1223,14 @@ impl Fixture {
                 args.extend([os("package"), os("validate"), os("--zip")]);
                 args.push(self.bad_hash_package.clone().into_os_string());
             }
-            "package_build_task_success" => {
+            "package_build_task_retired" => {
                 args.extend([os("--dry-run"), os("package"), os("build-task")]);
                 args.extend([os("--repo"), self.package_repo.clone().into_os_string()]);
                 args.extend([os("--task"), os("operator_task")]);
                 args.extend([os("--out"), self.root().join("task.zip").into_os_string()]);
             }
-            "package_build_task_failure" => {
-                args.extend([os("--dry-run"), os("package"), os("build-task")]);
+            "package_build_pack_retired" => {
+                args.extend([os("--dry-run"), os("package"), os("build-pack")]);
                 args.extend([os("--repo"), self.package_repo.clone().into_os_string()]);
                 args.extend([os("--task"), os("missing_task")]);
                 args.extend([os("--out"), self.root().join("task.zip").into_os_string()]);

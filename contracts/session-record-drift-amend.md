@@ -29,4 +29,4 @@ If `--step-id` or one positional selector is provided, it must select the same s
 - The selected step threshold is replaced only when `proposed_changes.threshold` is present.
 - The step artifact and evaluation are refreshed through the existing frame-backed amend path when frame provenance is available.
 - The session record is updated atomically after the amend succeeds.
-- `session record build-task` remains the authority for materializing the amended bundle.
+- The result's `authoring_next` directs the author to review and manually transfer the amended declarations into a content directory, then use `package digest/bundle`.

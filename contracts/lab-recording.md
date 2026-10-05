@@ -27,8 +27,8 @@ Runtime and recorded there as any `do --capture` or `session app` is.
 `<instance>` and `<record_id>` use the file-stem rule of the `record` command: ASCII
 letters, digits, `-`, `_` and `.` are kept, every other character becomes `_`.
 
-The `record` command file is never written by the Lab recording; the old actions (`step`,
-`candidates`, `amend`, `build-task`, `promote`) keep their behaviour. The Lab recording
+The `record` command file is never written by the Lab recording; the step actions (`step`,
+`candidates`, `amend`) keep their behaviour. The Lab recording
 reads its `record_id`, `task_id`, `instance`, `status` and `started_at_unix_ms`, and
 `recording.json` stores the first four (`record_started_at_unix_ms` for the last). Every
 command compares them; a difference makes the Lab part unavailable
@@ -557,8 +557,8 @@ offline from frames kept with the earlier recording.
 
 ## Recording lock
 
-Every state-writing command (`record start`, `mark`, `stop` including `--dry-run`, the old
-`step`, `amend`, `build-task`, `promote`/`publish`, and `capture`/`observe`/`do --record`)
+Every state-writing command (`record start`, `mark`, `stop` including `--dry-run`,
+`step`, `amend`, and `capture`/`observe`/`do --record`)
 takes `<state>/record-<instance>.lock` (`session app … --record` too, from before its
 Runtime request until the result is recorded) with an exclusive operating-system lock without
 waiting, holds it until its output is printed (`do --record` holds it across the device

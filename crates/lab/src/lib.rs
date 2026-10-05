@@ -31,7 +31,6 @@ mod readonly;
 mod readonly_api;
 mod recording;
 mod recording_api;
-mod resource_convert;
 mod scheduling;
 mod state;
 
@@ -48,7 +47,6 @@ pub use maa_task_graph::{
     MaaTaskGraphStats, compile_maa_task_graph,
 };
 pub use package_api::*;
-pub use package_build::PackageBuildCatalog;
 pub use ports::*;
 pub use projection::*;
 pub use readonly_api::*;

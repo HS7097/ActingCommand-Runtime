@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_policy::{CatalogDocumentSource, CatalogSources, compile_catalog};
-use actingcommand_resource_tooling::{
-    AuthoringEnvironmentSnapshot, DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PackageBuildTaskRequest,
-    PackageEnvOptions, PackageSource, ResourceConvertRequest, open_published_package,
-    prepare_package_build_task, resource_convert,
-};
+use actingcommand_resource_tooling::OperationParser;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -16,61 +12,27 @@ const SERVER: &str = "test-shard";
 const LOCALE: &str = "x-fixture";
 
 #[test]
-fn external_neutral_game_metadata_converts_schedules_and_packages() {
+fn external_neutral_game_metadata_parses_and_schedules() {
     let temp = TempDir::new().expect("temp dir");
     let resource_root = temp.path().join("external-resources");
     write_external_resource_fixture(&resource_root);
 
-    let converted = resource_convert(ResourceConvertRequest {
-        repo: resource_root.clone(),
-        game: None,
-        server: None,
-        locale: None,
-        maa_tasks_root: None,
-        dry_run: false,
-    })
-    .expect("convert external neutral-game metadata");
-    assert_eq!(converted.game, GAME);
-    assert_eq!(converted.server, SERVER);
-    assert_eq!(converted.locale, LOCALE);
+    let parser = OperationParser::load(&resource_root, None, None, None).unwrap();
+    assert_eq!(parser.game, GAME);
+    assert_eq!(parser.server, SERVER);
+    assert_eq!(parser.locale, LOCALE);
+    let outputs = parser.build_all().unwrap();
+    assert_eq!(outputs.pack["game"], GAME);
+    assert_eq!(outputs.pack["server"], SERVER);
 
     let catalog = compile_catalog(&neutral_catalog_sources())
         .expect("compile scheduling catalog for external neutral game");
     assert!(catalog.summary().counts.tasks > 0);
-
-    let out = temp.path().join("neutral-game.zip");
-    let prepared = prepare_package_build_task(PackageBuildTaskRequest {
-        source: PackageSource::Local(resource_root),
-        temporary_root: temp.path().join("remote-source"),
-        task_id: "return_home".to_string(),
-        game: None,
-        server: None,
-        locale: None,
-        package_id: None,
-        execution_mode: None,
-        resolution: None,
-        include_recovery: false,
-        out: out.clone(),
-        dry_run: false,
-        max_buffered_payload_bytes: DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
-        env: PackageEnvOptions::default(),
-    })
-    .expect("prepare neutral-game package from external metadata");
-    assert_eq!(prepared.game(), GAME);
-    assert_eq!(prepared.server(), SERVER);
-    let package = prepared
-        .build(&AuthoringEnvironmentSnapshot::default())
-        .expect("build neutral-game package");
-    assert_eq!(package.game, GAME);
-    assert_eq!(package.server, SERVER);
-    let published = open_published_package(&out).expect("open published neutral-game package");
-    assert!(published.path().is_file());
-    published.close().expect("close published package");
 }
 
 // Specification 1: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
 #[test]
-fn fields_v1_neutral_declaration_and_package_closure() {
+fn fields_v1_neutral_declaration_and_reference_closure() {
     use sha2::{Digest, Sha256};
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("resources");
@@ -100,15 +62,10 @@ fn fields_v1_neutral_declaration_and_package_closure() {
         "outcome_key":"fields_recorded"});
     let convert = |value: &serde_json::Value| {
         fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
-        resource_convert(ResourceConvertRequest {
-            repo: root.clone(),
-            game: None,
-            server: None,
-            locale: None,
-            maa_tasks_root: None,
-            dry_run: true,
-        })
-        .map_err(Box::new)
+        OperationParser::load(&root, None, None, None)
+            .map_err(Box::new)
+            .and_then(|parser| parser.build_all().map_err(Box::new))
+            .map_err(Box::new)
     };
     convert(&task).expect("0.8 source declaration");
     for case in 0..9 {
@@ -144,45 +101,27 @@ fn fields_v1_neutral_declaration_and_package_closure() {
         "comparison":"exact_set_v1","limits":task["post_admission_ocr"]["limits"],"outcome_key":"fields_recorded"});
     convert(&legacy).expect("0.7 set remains accepted");
     fs::write(&path, serde_json::to_vec(&task).unwrap()).unwrap();
-    resource_convert(ResourceConvertRequest {
-        repo: root.clone(),
-        game: None,
-        server: None,
-        locale: None,
-        maa_tasks_root: None,
-        dry_run: false,
-    })
-    .unwrap();
-    let out = temp.path().join("fields.zip");
-    let prepared = prepare_package_build_task(PackageBuildTaskRequest {
-        source: PackageSource::Local(root),
-        temporary_root: temp.path().join("source"),
-        task_id: "return_home".into(),
-        game: None,
-        server: None,
-        locale: None,
-        package_id: None,
-        execution_mode: None,
-        resolution: None,
-        include_recovery: false,
-        out: out.clone(),
-        dry_run: false,
-        max_buffered_payload_bytes: DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
-        env: PackageEnvOptions::default(),
-    })
-    .unwrap();
-    prepared
-        .build(&AuthoringEnvironmentSnapshot::default())
-        .expect("hash-bound fields package closure");
-    let published = open_published_package(&out).unwrap();
-    assert!(published.path().is_file());
-    published.close().unwrap();
+    let outputs = OperationParser::load(&root, None, None, None)
+        .unwrap()
+        .build_all()
+        .unwrap();
+    assert!(
+        outputs.pack["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|target| target["id"] == "ocr/name")
+    );
 }
 
 // Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553542252
 #[test]
-fn zero_input_fields_build_and_declaration_boundaries() {
+fn zero_input_fields_source_and_admission_boundaries() {
+    use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
+    use actingcommand_pack_containment::Sha256Hash;
     use actingcommand_resource_tooling::{PackageValidateRequest, validate_package};
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::FileOptions};
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("resources");
     write_external_resource_fixture(&root);
@@ -202,38 +141,42 @@ fn zero_input_fields_build_and_declaration_boundaries() {
         "outcome_key":"fields_recorded"});
     let build = |value: &serde_json::Value, mode: &str, name: &str| {
         fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
-        resource_convert(ResourceConvertRequest {
-            repo: root.clone(),
-            game: None,
-            server: None,
-            locale: None,
-            maa_tasks_root: None,
-            dry_run: false,
-        })?;
-        prepare_package_build_task(PackageBuildTaskRequest {
-            source: PackageSource::Local(root.clone()),
-            temporary_root: temp.path().join("source"),
-            task_id: "return_home".into(),
-            game: None,
-            server: None,
-            locale: None,
-            package_id: None,
-            execution_mode: Some(mode.into()),
-            resolution: None,
-            include_recovery: false,
-            out: temp.path().join(format!("{name}.zip")),
-            dry_run: false,
-            max_buffered_payload_bytes: DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
-            env: PackageEnvOptions::default(),
-        })?
-        .build(&AuthoringEnvironmentSnapshot::default())
-        .map_err(Box::new)
+        let outputs = OperationParser::load(&root, None, None, None)?.build_all()?;
+        let mut entries = std::collections::BTreeMap::from([
+            ("control.json", serde_json::to_vec(&json!({"schema_version":"Lab-1y.control.v1","package_id":"neutral.fields","execution_mode":mode,
+                "game":GAME,"server":SERVER,"resolution":{"width":1280,"height":720},"entry_task_id":"return_home"})).unwrap()),
+            ("resources/operations/return_home/task.json", serde_json::to_vec(value).unwrap()),
+            ("resources/operations/return_home/assets/HOME.png", one_pixel_png().to_vec()),
+            ("resources/operations/resources.json", fs::read(root.join("operations/resources.json")).unwrap()),
+            ("resources/recognition/fourth-game.test-shard.pack.json", serde_json::to_vec(&outputs.pack).unwrap()),
+            ("resources/recognition/fourth-game.test-shard.pages.json", serde_json::to_vec(&outputs.pages).unwrap()),
+            ("resources/navigation/fourth-game.test-shard.navigation.json", serde_json::to_vec(&outputs.navigation).unwrap()),
+        ]);
+        let files = entries.iter().filter_map(|(path, bytes)| path.strip_prefix("resources/").map(|path| json!({"path":path,"sha256":format!("sha256:{}", Sha256Hash::digest(bytes))}))).collect::<Vec<_>>();
+        entries.insert(
+            "resources/manifest.json",
+            serde_json::to_vec(
+                &json!({"schema_version":"0.3","entry_task_id":"return_home","files":files}),
+            )
+            .unwrap(),
+        );
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, bytes) in entries {
+            writer.start_file(path, FileOptions::default()).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        PreparedContainedTask::load(
+            "neutral-fields",
+            &bytes,
+            ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string()).unwrap(),
+        )
+        .map_err(|error| actingcommand_contract::LabError::package_invalid(error.to_string()))?;
+        fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();
+        Ok::<_, Box<actingcommand_contract::LabError>>(())
     };
-    build(&task, "navigable_route", "fields").expect("official zero-input build-task");
-    let bytes = open_published_package(&temp.path().join("fields.zip"))
-        .unwrap()
-        .read_all()
-        .unwrap();
+    build(&task, "navigable_route", "fields").expect("zero-input source and Runtime admission");
+    let bytes = fs::read(temp.path().join("fields.zip")).unwrap();
     let validated = validate_package(PackageValidateRequest {
         zip_path: temp.path().join("fields.zip"),
         include_entries: true,

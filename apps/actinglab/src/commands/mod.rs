@@ -55,11 +55,9 @@ pub(crate) use session_contracts::{
 };
 #[cfg(test)]
 pub(crate) use session_record::{
-    SessionRecordAnchorArtifact, SessionRecordAnchorBacktest, SessionRecordAnchorRegionResolution,
-    SessionRecordContext, SessionRecordFrameProvenance, SessionRecordSourceFrame,
-    SessionRecordStep, SessionRecordStepData, SessionRecordStepEvaluation, find_drift_amend_step,
-    materialize_anchor_artifact_from_source, parse_session_record_drift_diagnostics,
-    session_record_build_draft,
+    SessionRecordAnchorRegionResolution, SessionRecordContext, SessionRecordSourceFrame,
+    find_drift_amend_step, materialize_anchor_artifact_from_source,
+    parse_session_record_drift_diagnostics,
 };
 pub(crate) use session_record::{
     SessionRecordRect, SessionRecordRegion, parse_record_mark_rect, record_flag_begin,

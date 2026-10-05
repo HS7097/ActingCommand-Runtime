@@ -2,7 +2,6 @@
 
 //! Convert verified Lab records and admitted source declarations into an authoring draft.
 
-use crate::package_build::canonical_page_anchor;
 use crate::{
     AuthoringDraft, AuthoringFile, AuthoringProvenance, AuthoringWriteMode,
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, canonical_game, canonical_locale, canonical_server,
@@ -13,6 +12,7 @@ use actingcommand_contract::{
     LabOperationStage, LabResult, TerminalEvent,
 };
 use actingcommand_pack_containment::LoadedBundle;
+use actingcommand_recognition_pack::PackRect;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -369,11 +369,9 @@ pub fn restore_authoring_draft(
         {
             let from = &before.projection.page;
             let to = &after.projection.page;
-            if let Err(error) = crate::package_build::validate_restored_geometry(
-                geometry,
-                before.frame.width(),
-                before.frame.height(),
-            ) {
+            if let Err(error) =
+                validate_restored_geometry(geometry, before.frame.width(), before.frame.height())
+            {
                 record_gaps.push("action_not_representable_by_bundle");
                 record_source["bundle_geometry_error"] = json!(error.message);
             }
@@ -736,4 +734,107 @@ fn text_value(value: &Value) -> LabResult<&str> {
 }
 fn invalid(message: &str) -> LabError {
     LabError::package_invalid(format!("resource restore: {message}"))
+}
+
+struct Resolution {
+    width: u32,
+    height: u32,
+}
+
+fn canonical_page_anchor(game: &str, page_id: &str) -> String {
+    let prefix = format!("{game}/");
+    page_id.strip_prefix(&prefix).unwrap_or(page_id).to_string()
+}
+
+fn validate_restored_geometry(
+    geometry: &actingcommand_contract::page_projection::Geometry,
+    width: u32,
+    height: u32,
+) -> LabResult<()> {
+    let coordinate = |value: u32| {
+        i32::try_from(value).map_err(|_| {
+            LabError::package_invalid("restored geometry exceeds existing coordinate range")
+        })
+    };
+    coordinate(width)?;
+    coordinate(height)?;
+    let resolution = Resolution { width, height };
+    match geometry {
+        actingcommand_contract::page_projection::Geometry::Tap { point, .. } => {
+            validate_click_point(
+                coordinate(point.x)?,
+                coordinate(point.y)?,
+                &resolution,
+                false,
+            )
+        }
+        actingcommand_contract::page_projection::Geometry::Drag {
+            from_rect, to_rect, ..
+        } => {
+            for rect in [from_rect, to_rect] {
+                validate_click_rect(
+                    PackRect {
+                        x: coordinate(rect.x)?,
+                        y: coordinate(rect.y)?,
+                        width: coordinate(rect.width)?,
+                        height: coordinate(rect.height)?,
+                    },
+                    &resolution,
+                    false,
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_click_rect(
+    rect: PackRect,
+    resolution: &Resolution,
+    allow_placeholder: bool,
+) -> LabResult<()> {
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(LabError::package_invalid(format!(
+            "click rect dimensions must be positive: {}x{}",
+            rect.width, rect.height
+        )));
+    }
+    validate_click_point(rect.x, rect.y, resolution, allow_placeholder)?;
+    validate_click_point(
+        rect.x + rect.width - 1,
+        rect.y + rect.height - 1,
+        resolution,
+        allow_placeholder,
+    )?;
+    if !allow_placeholder
+        && rect.x == 0
+        && rect.y == 0
+        && rect.width as u32 == resolution.width
+        && rect.height as u32 == resolution.height
+    {
+        return Err(LabError::package_invalid(
+            "full-screen click rect is treated as unresolved coordinates",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_click_point(
+    x: i32,
+    y: i32,
+    resolution: &Resolution,
+    allow_placeholder: bool,
+) -> LabResult<()> {
+    if x < 0 || y < 0 || x >= resolution.width as i32 || y >= resolution.height as i32 {
+        return Err(LabError::package_invalid(format!(
+            "click point {x},{y} is outside {}x{}",
+            resolution.width, resolution.height
+        )));
+    }
+    if !allow_placeholder && x == 0 && y == 0 {
+        return Err(LabError::package_invalid(
+            "click point 0,0 is treated as unresolved coordinates",
+        ));
+    }
+    Ok(())
 }

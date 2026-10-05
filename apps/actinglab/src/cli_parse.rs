@@ -1,6 +1,7 @@
 use crate::flag_values::split_csv;
 use crate::{
-    CaptureBackendChoice, CliError, GlobalOptions, Invocation, TouchBackendChoice, package_cli,
+    CaptureBackendChoice, CliError, ErrorKind, GlobalOptions, Invocation, TouchBackendChoice,
+    package_cli,
 };
 use std::path::PathBuf;
 
@@ -97,15 +98,50 @@ where
         index += 1;
     }
 
+    let (command, args) = if rest.is_empty() {
+        (vec!["help".to_string()], Vec::new())
+    } else {
+        command_path_and_args(rest.clone())
+    };
+    let command_name = match command.as_slice() {
+        [group, action]
+            if group == "package" && matches!(action.as_str(), "build-task" | "build-pack") =>
+        {
+            Some(command.join(" "))
+        }
+        [group, action] if group == "resource" && action == "convert" => Some(command.join(" ")),
+        [group] if group == "record" => args
+            .first()
+            .filter(|action| matches!(action.as_str(), "build-task" | "promote" | "publish"))
+            .map(|action| format!("record {action}")),
+        [group, action] if group == "session" && action == "record" => args
+            .first()
+            .filter(|action| matches!(action.as_str(), "build-task" | "promote" | "publish"))
+            .map(|action| format!("session record {action}")),
+        _ => None,
+    };
+    if let Some(command_name) = command_name {
+        return Err((
+            command_name.clone(),
+            global.json,
+            CliError::new(
+                ErrorKind::UsageValidation,
+                "resource_production_retired",
+                format!(
+                    "{command_name} is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package digest/bundle"
+                ),
+                &[],
+            ),
+        ));
+    }
+
     let (command, args) = if global.version
         && !package_cli::is_offline_command(&rest)
         && rest.first().is_none_or(|group| group != "scheduling")
     {
         (vec!["version".to_string()], rest)
-    } else if rest.is_empty() {
-        (vec!["help".to_string()], Vec::new())
     } else {
-        command_path_and_args(rest)
+        (command, args)
     };
     let command_name = command.join(" ");
     Ok(Invocation {
