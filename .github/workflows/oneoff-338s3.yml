@@ -1,0 +1,87 @@
+name: one-off 338 S3 evidence (to be reverted)
+
+# One-off evidence for Workflow #338 S3 on the product commit, with the actingctl.exe,
+# actinglab.exe and actingcommand-actingd.exe of its Windows exact-SHA build: CLI/MCP parity of
+# the Lab commands, the exit-code classes, the `--` refusal, the client.action provenance of the
+# Runtime-backed Lab requests, a long call as a job and a handle from an ended process, and the
+# catalog check writing nothing. The source lives in one-off-338s3/ and is appended to a copy of
+# apps/actinglab/tests/runtime_input_proxy.rs only inside this job. Reverted right after its run;
+# the PR's final diff contains neither this file nor one-off-338s3/.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  s3:
+    name: S3 evidence on the exact-SHA build
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      PRODUCT_SHA: 842cf5f2f07b71392feed9a65df511023920a060
+      BUILD_RUN_ID: "37251366683"
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Scope (product files equal the product commit)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $head = (& git rev-parse HEAD).Trim()
+          Write-Host "S3|SCOPE|head $head product $env:PRODUCT_SHA"
+          $diff = @(& git diff --name-only $env:PRODUCT_SHA HEAD -- . ':(exclude)one-off-338s3' ':(exclude).github/workflows/oneoff-338s3.yml' | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "git diff failed with exit code $LASTEXITCODE" }
+          if ($diff.Count -ne 0) { throw "product files differ from ${env:PRODUCT_SHA}: $($diff -join ', ')" }
+      - name: Download the exact-SHA build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          foreach ($kind in @('runtime', 'tools')) {
+            $dir = Join-Path $env:RUNNER_TEMP "s3-$kind"
+            & gh run download $env:BUILD_RUN_ID -R $env:GITHUB_REPOSITORY -n "actingcommand-$kind-$env:PRODUCT_SHA" -D $dir
+            if ($LASTEXITCODE -ne 0) { throw "$kind artifact download failed with exit code $LASTEXITCODE" }
+            $manifest = Get-Content -LiteralPath (Join-Path $dir 'BUILD-MANIFEST.json') -Raw | ConvertFrom-Json
+            if ($manifest.commit_sha -ne $env:PRODUCT_SHA) { throw "$kind build is of $($manifest.commit_sha)" }
+            $names = if ($kind -eq 'runtime') { @('actingctl.exe', 'actingcommand-actingd.exe', 'actingd.config.example.json') } else { @('actinglab.exe') }
+            foreach ($name in $names) {
+              $listed = $manifest.files | Where-Object { $_.path -eq $name }
+              $hash = (Get-FileHash -LiteralPath (Join-Path $dir $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+              Write-Host "S3|BUILD|run $env:BUILD_RUN_ID commit_sha $($manifest.commit_sha) $name $hash manifest $($listed.sha256)"
+              if ($hash -ne $listed.sha256) { throw "$name does not match its manifest" }
+            }
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ONEOFF_ACTINGCTL=$(Join-Path $env:RUNNER_TEMP 's3-runtime\actingctl.exe')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ONEOFF_ACTINGD=$(Join-Path $env:RUNNER_TEMP 's3-runtime\actingcommand-actingd.exe')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ONEOFF_ACTINGD_CONFIG=$(Join-Path $env:RUNNER_TEMP 's3-runtime\actingd.config.example.json')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ONEOFF_ACTINGLAB=$(Join-Path $env:RUNNER_TEMP 's3-tools\actinglab.exe')"
+      - name: S3 evidence
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $source = (Get-Content -LiteralPath 'apps/actinglab/tests/runtime_input_proxy.rs' -Raw) + (Get-Content -LiteralPath 'one-off-338s3/lab_s3.rs' -Raw)
+          [IO.File]::WriteAllText((Join-Path $PWD 'apps/actinglab/tests/oneoff_338s3.rs'), $source, [Text.UTF8Encoding]::new($false))
+          $log = Join-Path $env:RUNNER_TEMP 's3.log'
+          $ErrorActionPreference = 'Continue'
+          & cargo test --locked -p actingcommand-actinglab --test oneoff_338s3 oneoff_338s3:: -- --nocapture --test-threads=1 *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log | Where-Object { $_ -match 'S3\||^test |test result|panicked|error(\[|:)' } | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            Get-Content -LiteralPath $log -Tail 300 | ForEach-Object { Write-Host $_ }
+            throw "S3 evidence failed with exit code $code"
+          }
