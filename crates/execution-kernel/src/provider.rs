@@ -433,7 +433,7 @@ impl VisionFfiProvider {
         cell: &mut SlotCell<dyn NnEngine + Send>,
         model_sha256: &str,
         deadline: Instant,
-    ) -> Result<(), VisionProviderError> {
+    ) -> Result<Duration, VisionProviderError> {
         let (Some(spec), Some(loader)) = (slot.spec.as_ref(), self.loader.as_ref()) else {
             return Err(unavailable("NN"));
         };
@@ -442,6 +442,7 @@ impl VisionFfiProvider {
             Ok(NnModelLoad::Loaded {
                 engine,
                 model_sha256: actual,
+                waited_on_others,
             }) => {
                 if !slot.verify(&actual) {
                     self.release_loaded_model();
@@ -449,7 +450,7 @@ impl VisionFfiProvider {
                 }
                 cell.engine = Some(engine);
                 cell.counted = true;
-                Ok(())
+                Ok(waited_on_others)
             }
             Ok(NnModelLoad::Mismatch {
                 model_sha256: actual,
@@ -669,7 +670,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         let started = Instant::now();
         let deadline = deadline_after(started, request.timeout_ms, "NN")?;
         let mut cell = lock_until(&slot.cell, deadline, "NN", request.model_ref)?;
-        let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut waited = started.elapsed();
         if let Some(reason) = &cell.retired {
             return Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -677,8 +678,9 @@ impl RecognitionVisionProvider for VisionFfiProvider {
             ));
         }
         if cell.engine.is_none() {
-            self.load_nn(slot, &mut cell, request.model_sha256, deadline)?;
+            waited += self.load_nn(slot, &mut cell, request.model_sha256, deadline)?;
         }
+        let waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
         slot.require(request.model_sha256, "NN")?;
         let timeout_ms = request.timeout_ms.saturating_sub(waited_ms);
         if timeout_ms == 0 {

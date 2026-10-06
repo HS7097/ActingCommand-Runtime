@@ -471,6 +471,8 @@ pub enum NnModelLoad {
     Loaded {
         engine: Box<dyn NnEngine + Send>,
         model_sha256: String,
+        /// How long the load waited for locks held by other requests; charged to the budget.
+        waited_on_others: Duration,
     },
     /// The file hashes to a different content identity; no session was built.
     Mismatch { model_sha256: String },

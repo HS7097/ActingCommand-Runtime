@@ -423,7 +423,7 @@ impl VisionModelLoader for PpocrCtcLoader {
         if model_sha256 != expected_model_sha256 {
             return Ok(NnModelLoad::Mismatch { model_sha256 });
         }
-        let facts = runtime_facts(&self.runtime, wait_deadline)?;
+        let (facts, waited_on_others) = runtime_facts(&self.runtime, wait_deadline)?;
         let cuda_ordinal = facts
             .resolved_cuda_device
             .as_ref()
@@ -436,6 +436,7 @@ impl VisionModelLoader for PpocrCtcLoader {
         Ok(NnModelLoad::Loaded {
             engine: Box::new(nn::OnnxClassifyModel::new(session)),
             model_sha256,
+            waited_on_others,
         })
     }
 }
