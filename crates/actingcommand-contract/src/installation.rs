@@ -311,7 +311,9 @@ pub fn process_installation() -> RuntimeContractResult<Option<&'static Installed
         let executable =
             std::fs::canonicalize(executable).map_err(|_| "install_executable_unavailable")?;
         let program_root = executable.parent().and_then(Path::parent);
-        let root = if let Some(root) = std::env::var_os(INSTALL_ROOT_ENV) {
+        let inherited_root = std::env::var_os(INSTALL_ROOT_ENV);
+        let inherited = inherited_root.is_some();
+        let root = if let Some(root) = inherited_root {
             Some(PathBuf::from(root))
         } else if std::env::var_os(INSTALL_SELECTION_ENV).is_some() {
             return Err("install_environment_incomplete");
@@ -338,8 +340,12 @@ pub fn process_installation() -> RuntimeContractResult<Option<&'static Installed
         if own_slot.is_some() && selected.is_none() {
             return Err("install_selection_unavailable");
         }
+        // Workflow #359: the tools sit beside the slots in `<root>\tools`, admitted with an
+        // inherited selection only. Started directly they find no selection, unless
+        // `<root>\runtime\BUILD-MANIFEST.json` exists; then active.json is read and refused here.
         if let Some(selected) = &selected
             && !executable.starts_with(selected.program_root())
+            && !(inherited && executable.starts_with(selected.root().join("tools")))
         {
             return Err("install_process_slot_mismatch");
         }

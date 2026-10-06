@@ -594,14 +594,14 @@ impl Program {
     fn locate(context: &ToolContext<'_>) -> Result<Self, ToolError> {
         let location = context.runtime.locate();
         location.check()?;
-        let Some(root) = location.root else {
+        let (Some(root), Some(install_root)) = (location.root, location.install_root) else {
             return Err(ToolError::usage(
                 "lab_tool_unavailable",
                 "actingctl does not run from an install root and mcp-serve got no --root, so tools\\actinglab.exe cannot be found",
             )
             .blocked_by("mcp-serve --root <install root>"));
         };
-        let actinglab = root.join("tools").join("actinglab.exe");
+        let actinglab = install_root.join("tools").join("actinglab.exe");
         if !actinglab.is_file() {
             return Err(ToolError::usage(
                 "lab_tool_unavailable",

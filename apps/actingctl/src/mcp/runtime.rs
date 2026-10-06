@@ -20,6 +20,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 pub(super) struct RuntimeAccess {
     root: Option<PathBuf>,
+    install_root: Option<PathBuf>,
     config: Option<PathBuf>,
     installation: Option<actingcommand_contract::InstalledProcess>,
     location_error: Option<String>,
@@ -37,7 +38,11 @@ struct Slot {
 /// Where the install and the Runtime state live, as found at one call.
 #[derive(Clone)]
 pub(super) struct Location {
+    /// The program root: the selected slot `<root>\<A|B>`, or the install root of a
+    /// layout without slots.
     pub(super) root: Option<PathBuf>,
+    /// The install root that holds `tools\` (Workflow #359); the program root without slots.
+    pub(super) install_root: Option<PathBuf>,
     pub(super) config: Option<PathBuf>,
     pub(super) installation: Option<actingcommand_contract::InstalledProcess>,
     error: Option<String>,
@@ -107,6 +112,10 @@ impl RuntimeAccess {
                 .map(|selected| selected.program_root())
                 .or(root)
                 .or_else(executable_install_root);
+            let install_root = installation
+                .as_ref()
+                .map(|selected| selected.root().to_path_buf())
+                .or_else(|| program_root.clone());
             let config = installation
                 .as_ref()
                 .map(|selected| selected.config_path())
@@ -129,14 +138,17 @@ impl RuntimeAccess {
                     }
                 }
             }
-            Ok::<_, String>((program_root, config, installation))
+            Ok::<_, String>((program_root, install_root, config, installation))
         })();
-        let (root, config, installation, location_error) = match located {
-            Ok((root, config, installation)) => (root, config, installation, None),
-            Err(error) => (None, None, None, Some(error)),
+        let (root, install_root, config, installation, location_error) = match located {
+            Ok((root, install_root, config, installation)) => {
+                (root, install_root, config, installation, None)
+            }
+            Err(error) => (None, None, None, None, Some(error)),
         };
         Self {
             root,
+            install_root,
             config,
             installation,
             location_error,
@@ -158,6 +170,7 @@ impl RuntimeAccess {
         };
         Location {
             root,
+            install_root: self.install_root.clone(),
             state_root,
             config: self.config.clone(),
             installation: self.installation.clone(),
