@@ -12,6 +12,9 @@
 
 use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer};
 use actingcommand_vision_ffi::{
+    ChannelOrder, DetectorResize, NnModelLoad, NnModelSpec, PpocrCtcParams, SpaceClass,
+};
+use actingcommand_vision_ffi::{
     CudaDeviceIdentity, OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrEngine,
     OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
     OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrModelLoad, OcrModelSpec,
@@ -22,7 +25,6 @@ use actingcommand_vision_ffi::{
     establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
     onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex, sha256_hex,
 };
-use actingcommand_vision_ffi::{NnModelLoad, NnModelSpec};
 use actingcommand_vision_ffi::{
     PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
     PpocrDiagnostics, PpocrNodePlacementDiagnostic as NodePlacementDiagnostic,
@@ -39,15 +41,6 @@ use std::time::{Duration, Instant};
 
 mod nn;
 
-const DEFAULT_REC_HEIGHT: usize = 48;
-const DEFAULT_DYNAMIC_REC_WIDTH: usize = 320;
-const DETECTOR_DYNAMIC_MAX_SIDE: usize = 960;
-const DETECTOR_MIN_SIDE: usize = 32;
-const DETECTOR_MULTIPLE: usize = 32;
-const DETECTION_THRESHOLD: f32 = 0.30;
-const DETECTION_MIN_AREA: usize = 4;
-const DETECTION_BOX_PADDING: i32 = 16;
-const MAX_DETECTED_TEXT_BOXES: usize = 64;
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
 const MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES: usize = 4_096;
 const MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES: usize = 4_096;
@@ -55,6 +48,9 @@ const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
 const ENGINE_MODULE: &str = "ppocr-ctc-engine";
 /// Recorded as the execution attestation's provider implementation.
 const ENGINE_IMPLEMENTATION: &str = "actingcommand-ocr-engine/ppocr-ctc";
+/// The default recognizer width cap; a dynamic width above it is sized with floor, as the
+/// official PP-OCR pipeline sizes wide crops.
+const OFFICIAL_FLOOR_WIDTH_ABOVE: usize = 320;
 
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
 static RUNTIME_FACTS: OnceLock<RuntimeFacts> = OnceLock::new();
@@ -400,6 +396,7 @@ impl VisionModelLoader for PpocrCtcLoader {
                 plan,
                 cuda_driver_version: facts.cuda_driver_version,
                 dictionary,
+                params: model.description.ppocr_params(),
                 recognizer,
                 detector: None,
                 detector_path: model.detector_path.clone(),
@@ -483,6 +480,8 @@ struct PpocrCtcModel {
     plan: ProviderSessionPlan,
     cuda_driver_version: Option<u32>,
     dictionary: Vec<String>,
+    /// The effective preprocessing and decoding parameters of the model's description.
+    params: PpocrCtcParams,
     recognizer: Session,
     detector: Option<Session>,
     detector_path: Option<PathBuf>,
@@ -565,6 +564,7 @@ impl PpocrCtcModel {
             let decoded = recognize_region(
                 &mut self.recognizer,
                 &self.dictionary,
+                &self.params,
                 frame,
                 request.region,
                 remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
@@ -580,15 +580,20 @@ impl PpocrCtcModel {
             .ok_or_else(|| "PPOCR detector session is unavailable".to_string())?;
         let detected = detect_text_regions(
             detector,
+            &self.params,
             frame,
             request.region,
             remaining_inference_budget(inference_deadline, "PPOCR detector")?,
         )?;
         let mut blocks = Vec::new();
-        for detected_box in detected.iter().take(MAX_DETECTED_TEXT_BOXES) {
+        for detected_box in detected
+            .iter()
+            .take(self.params.detector.max_boxes as usize)
+        {
             let decoded = recognize_region(
                 &mut self.recognizer,
                 &self.dictionary,
+                &self.params,
                 frame,
                 detected_box.rect,
                 remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
@@ -990,12 +995,13 @@ fn capture_cuda_node_placement(
 fn recognize_region(
     session: &mut Session,
     dictionary: &[String],
+    params: &PpocrCtcParams,
     frame: &VisionFrameView<'_>,
     region: VisionRect,
     timeout: Duration,
 ) -> Result<DecodedText, ProviderInvokeError> {
-    let input_shape = select_recognition_input_shape(session, region)?;
-    let input_data = frame_region_to_recognition_tensor(frame, region, &input_shape)?;
+    let input_shape = select_recognition_input_shape(session, region, params)?;
+    let input_data = frame_region_to_recognition_tensor(frame, region, &input_shape, params)?;
     let input = Tensor::from_array((input_shape.to_ort_shape(), input_data.into_boxed_slice()))
         .map_err(|err| format!("failed to create PPOCR recognizer input tensor: {err}"))?;
     let run_options = Arc::new(
@@ -1019,6 +1025,7 @@ fn recognize_region(
         output_shape.as_ref(),
         scores,
         dictionary,
+        params,
     )?)
 }
 
@@ -1030,12 +1037,13 @@ struct DetectedTextBox {
 
 fn detect_text_regions(
     session: &mut Session,
+    params: &PpocrCtcParams,
     frame: &VisionFrameView<'_>,
     region: VisionRect,
     timeout: Duration,
 ) -> Result<Vec<DetectedTextBox>, ProviderInvokeError> {
-    let input_shape = select_detection_input_shape(session, region)?;
-    let input_data = frame_region_to_detection_tensor(frame, region, &input_shape)?;
+    let input_shape = select_detection_input_shape(session, region, params)?;
+    let input_data = frame_region_to_detection_tensor(frame, region, &input_shape, params)?;
     let input = Tensor::from_array((input_shape.to_ort_shape(), input_data.into_boxed_slice()))
         .map_err(|err| format!("failed to create PPOCR detector input tensor: {err}"))?;
     let run_options = Arc::new(
@@ -1056,8 +1064,14 @@ fn detect_text_regions(
         .try_extract_tensor::<f32>()
         .map_err(|err| format!("PPOCR detector first output is not an f32 tensor: {err}"))?;
     let map = detector_probability_map(output_shape.as_ref(), scores)?;
-    let boxes = detect_text_boxes_from_probability_map(&map, region, frame.width, frame.height)?;
-    Ok(merge_detected_text_boxes(boxes, frame.width, frame.height))
+    let boxes =
+        detect_text_boxes_from_probability_map(&map, region, frame.width, frame.height, params)?;
+    Ok(merge_detected_text_boxes(
+        boxes,
+        frame.width,
+        frame.height,
+        params,
+    ))
 }
 
 fn remaining_inference_budget(
@@ -1089,6 +1103,7 @@ impl RecognitionInputShape {
 fn select_recognition_input_shape(
     session: &Session,
     region: VisionRect,
+    params: &PpocrCtcParams,
 ) -> Result<RecognitionInputShape, String> {
     let input = session
         .inputs()
@@ -1118,11 +1133,18 @@ fn select_recognition_input_shape(
             input.name()
         ));
     }
-    let height = positive_or_default(shape[2], DEFAULT_REC_HEIGHT, "recognizer height")?;
+    let input_height = params.recognizer.input_height as usize;
+    let height = positive_or_default(shape[2], input_height, "recognizer height")?;
+    if height != input_height {
+        return Err(format!(
+            "PPOCR recognizer input {} has the static height {height}, but the model description's recognizer.input_height is {input_height}",
+            input.name()
+        ));
+    }
     let width = if shape[3] > 0 {
         usize::try_from(shape[3]).map_err(|err| format!("invalid recognizer width: {err}"))?
     } else {
-        dynamic_width_for_region(region, height)?
+        dynamic_width_for_region(region, height, params)?
     };
     Ok(RecognitionInputShape { height, width })
 }
@@ -1142,6 +1164,7 @@ impl DetectionInputShape {
 fn select_detection_input_shape(
     session: &Session,
     region: VisionRect,
+    params: &PpocrCtcParams,
 ) -> Result<DetectionInputShape, String> {
     let input = session
         .inputs()
@@ -1181,7 +1204,7 @@ fn select_detection_input_shape(
         }
         return Ok(DetectionInputShape { height, width });
     }
-    dynamic_detection_shape_for_region(region)
+    dynamic_detection_shape_for_region(region, params)
 }
 
 fn dimension_matches(expected: i64, actual: i64) -> bool {
@@ -1199,29 +1222,56 @@ fn positive_or_default(value: i64, default: usize, label: &str) -> Result<usize,
     Ok(value)
 }
 
-fn dynamic_width_for_region(region: VisionRect, height: usize) -> Result<usize, String> {
+/// The tensor width of a dynamic-width recognizer: the region's aspect at the tensor height,
+/// clamped to the description's `min_width..=max_width`; narrower content is zero-padded.
+fn dynamic_width_for_region(
+    region: VisionRect,
+    height: usize,
+    params: &PpocrCtcParams,
+) -> Result<usize, String> {
     if region.height <= 0 {
         return Err("OCR region height must be non-zero".to_string());
     }
-    let scaled = ((region.width as f32 / region.height as f32) * height as f32).ceil() as usize;
-    Ok(scaled.clamp(32, DEFAULT_DYNAMIC_REC_WIDTH))
+    let exact = (region.width as f32 / region.height as f32) * height as f32;
+    // Up to the default 320 the content keeps its ceil width, exactly as before; the official
+    // pipeline does the same inside its tensor of at least 320. Above 320 the official pipeline
+    // sizes the tensor, and with it the content, as int(height * w / h), so a description that
+    // raises max_width gets that floor width (review O3-1). Every default path is unchanged:
+    // the 320 cap hides the difference.
+    let ceil = exact.ceil() as usize;
+    let scaled = if ceil > OFFICIAL_FLOOR_WIDTH_ABOVE {
+        exact.floor() as usize
+    } else {
+        ceil
+    };
+    Ok(scaled.clamp(
+        params.recognizer.min_width as usize,
+        params.recognizer.max_width as usize,
+    ))
 }
 
-fn dynamic_detection_shape_for_region(region: VisionRect) -> Result<DetectionInputShape, String> {
+fn dynamic_detection_shape_for_region(
+    region: VisionRect,
+    params: &PpocrCtcParams,
+) -> Result<DetectionInputShape, String> {
+    let detector = &params.detector;
+    let max_side = detector.max_side as usize;
+    let min_side = detector.min_side as usize;
+    let multiple = detector.multiple as usize;
     let rect = RectUsize::from_vision_rect(region)?;
     let longest = rect.width.max(rect.height);
-    let scale = if longest > DETECTOR_DYNAMIC_MAX_SIDE {
-        DETECTOR_DYNAMIC_MAX_SIDE as f32 / longest as f32
+    let scale = if longest > max_side {
+        max_side as f32 / longest as f32
     } else {
         1.0
     };
     let width = round_up_to_multiple(
-        ((rect.width as f32 * scale).ceil() as usize).max(DETECTOR_MIN_SIDE),
-        DETECTOR_MULTIPLE,
+        ((rect.width as f32 * scale).ceil() as usize).max(min_side),
+        multiple,
     );
     let height = round_up_to_multiple(
-        ((rect.height as f32 * scale).ceil() as usize).max(DETECTOR_MIN_SIDE),
-        DETECTOR_MULTIPLE,
+        ((rect.height as f32 * scale).ceil() as usize).max(min_side),
+        multiple,
     );
     Ok(DetectionInputShape { height, width })
 }
@@ -1234,6 +1284,7 @@ fn frame_region_to_recognition_tensor(
     frame: &VisionFrameView<'_>,
     region: VisionRect,
     input_shape: &RecognitionInputShape,
+    params: &PpocrCtcParams,
 ) -> Result<Vec<f32>, String> {
     let rect = RectUsize::from_vision_rect(region)?;
     let frame_width =
@@ -1277,15 +1328,15 @@ fn frame_region_to_recognition_tensor(
             let bl = read(bottom, left)?;
             let br = read(bottom, right)?;
             let dst = out_y * input_shape.width + out_x;
-            // The frame remains RGB; RecResizeImg's internal NCHW input is BGR.
-            for (channel, samples) in [
-                [tl.2, tr.2, bl.2, br.2],
-                [tl.1, tr.1, bl.1, br.1],
-                [tl.0, tr.0, bl.0, br.0],
-            ]
-            .into_iter()
-            .enumerate()
-            {
+            let red = [tl.0, tr.0, bl.0, br.0];
+            let green = [tl.1, tr.1, bl.1, br.1];
+            let blue = [tl.2, tr.2, bl.2, br.2];
+            // The frame remains RGB; RecResizeImg's internal NCHW input is BGR by default.
+            let planes = match params.recognizer.channel_order {
+                ChannelOrder::Bgr => [blue, green, red],
+                ChannelOrder::Rgb => [red, green, blue],
+            };
+            for (channel, samples) in planes.into_iter().enumerate() {
                 tensor[channel * plane_size + dst] =
                     normalize_rec_pixel(rec_linear_pixel(samples, x_weights, y_weights));
             }
@@ -1321,6 +1372,7 @@ fn frame_region_to_detection_tensor(
     frame: &VisionFrameView<'_>,
     region: VisionRect,
     input_shape: &DetectionInputShape,
+    params: &PpocrCtcParams,
 ) -> Result<Vec<f32>, String> {
     let rect = RectUsize::from_vision_rect(region)?;
     let frame_width =
@@ -1334,16 +1386,66 @@ fn frame_region_to_detection_tensor(
     let plane_size = input_shape.height * input_shape.width;
     let mut tensor = vec![0.0_f32; plane_size * 3];
 
+    let read = |y: usize, x: usize| {
+        read_rgb_pixel(
+            frame.pixels,
+            frame.pixel_format,
+            (y * frame_width + x) * channels,
+        )
+    };
     for out_y in 0..input_shape.height {
-        let src_y = rect.y + (out_y * rect.height / input_shape.height).min(rect.height - 1);
+        let rows = match params.detector.resize {
+            DetectorResize::Nearest => {
+                let src_y =
+                    rect.y + (out_y * rect.height / input_shape.height).min(rect.height - 1);
+                (src_y, src_y, [2048, 0])
+            }
+            DetectorResize::Linear => {
+                let (src_y, fy) = rec_resize_coordinate(out_y, rect.height, input_shape.height);
+                (
+                    rect.y + src_y.clamp(0, rect.height as isize - 1) as usize,
+                    rect.y + (src_y + 1).clamp(0, rect.height as isize - 1) as usize,
+                    rec_linear_weights(fy),
+                )
+            }
+        };
         for out_x in 0..input_shape.width {
-            let src_x = rect.x + (out_x * rect.width / input_shape.width).min(rect.width - 1);
-            let pixel_offset = (src_y * frame_width + src_x) * channels;
-            let (r, g, b) = read_rgb_pixel(frame.pixels, frame.pixel_format, pixel_offset)?;
+            let (r, g, b) = match params.detector.resize {
+                DetectorResize::Nearest => {
+                    let src_x =
+                        rect.x + (out_x * rect.width / input_shape.width).min(rect.width - 1);
+                    read(rows.0, src_x)?
+                }
+                DetectorResize::Linear => {
+                    let (src_x, mut fx) =
+                        rec_resize_coordinate(out_x, rect.width, input_shape.width);
+                    if src_x < 0 || src_x >= rect.width as isize - 1 {
+                        fx = 0.0;
+                    }
+                    let left = src_x.clamp(0, rect.width as isize - 1) as usize;
+                    let right = (left + 1).min(rect.width - 1);
+                    let x_weights = rec_linear_weights(fx);
+                    let tl = read(rows.0, rect.x + left)?;
+                    let tr = read(rows.0, rect.x + right)?;
+                    let bl = read(rows.1, rect.x + left)?;
+                    let br = read(rows.1, rect.x + right)?;
+                    let sample = |samples| rec_linear_pixel(samples, x_weights, rows.2);
+                    (
+                        sample([tl.0, tr.0, bl.0, br.0]),
+                        sample([tl.1, tr.1, bl.1, br.1]),
+                        sample([tl.2, tr.2, bl.2, br.2]),
+                    )
+                }
+            };
             let dst = out_y * input_shape.width + out_x;
-            tensor[dst] = normalize_det_pixel(r, 0);
-            tensor[plane_size + dst] = normalize_det_pixel(g, 1);
-            tensor[plane_size * 2 + dst] = normalize_det_pixel(b, 2);
+            // The ImageNet mean and deviation are indexed by plane, whatever its colour.
+            let planes = match params.detector.channel_order {
+                ChannelOrder::Rgb => [r, g, b],
+                ChannelOrder::Bgr => [b, g, r],
+            };
+            for (plane, value) in planes.into_iter().enumerate() {
+                tensor[plane * plane_size + dst] = normalize_det_pixel(value, plane);
+            }
         }
     }
     Ok(tensor)
@@ -1474,18 +1576,22 @@ fn detect_text_boxes_from_probability_map(
     region: VisionRect,
     frame_width: u32,
     frame_height: u32,
+    params: &PpocrCtcParams,
 ) -> Result<Vec<DetectedTextBox>, String> {
+    let threshold = params.detector.threshold;
+    let padding = params.detector.box_padding as i32;
     let mut visited = vec![false; map.values.len()];
     let mut boxes = Vec::new();
     for index in 0..map.values.len() {
-        if visited[index] || map.values[index] < DETECTION_THRESHOLD {
+        if visited[index] || map.values[index] < threshold {
             continue;
         }
-        let component = collect_component(map, index, &mut visited);
-        if component.area < DETECTION_MIN_AREA {
+        let component = collect_component(map, index, &mut visited, threshold);
+        if component.area < params.detector.min_area as usize {
             continue;
         }
-        let rect = component_to_vision_rect(&component, map, region, frame_width, frame_height)?;
+        let rect =
+            component_to_vision_rect(&component, map, region, frame_width, frame_height, padding)?;
         boxes.push(DetectedTextBox {
             rect,
             confidence: component.max_score,
@@ -1509,6 +1615,7 @@ fn collect_component(
     map: &ProbabilityMap,
     start_index: usize,
     visited: &mut [bool],
+    threshold: f32,
 ) -> MapComponent {
     let mut queue = VecDeque::from([start_index]);
     visited[start_index] = true;
@@ -1533,7 +1640,7 @@ fn collect_component(
 
         for (next_x, next_y) in neighbors4(x, y, map.width, map.height) {
             let next_index = next_y * map.width + next_x;
-            if visited[next_index] || map.values[next_index] < DETECTION_THRESHOLD {
+            if visited[next_index] || map.values[next_index] < threshold {
                 continue;
             }
             visited[next_index] = true;
@@ -1566,6 +1673,7 @@ fn component_to_vision_rect(
     region: VisionRect,
     frame_width: u32,
     frame_height: u32,
+    padding: i32,
 ) -> Result<VisionRect, String> {
     let scale_x = region.width as f32 / map.width as f32;
     let scale_y = region.height as f32 / map.height as f32;
@@ -1573,7 +1681,7 @@ fn component_to_vision_rect(
     let top = region.y + (component.min_y as f32 * scale_y).floor() as i32;
     let right = region.x + ((component.max_x + 1) as f32 * scale_x).ceil() as i32;
     let bottom = region.y + ((component.max_y + 1) as f32 * scale_y).ceil() as i32;
-    padded_rect(left, top, right, bottom, frame_width, frame_height)
+    padded_rect(left, top, right, bottom, frame_width, frame_height, padding)
 }
 
 fn padded_rect(
@@ -1583,15 +1691,16 @@ fn padded_rect(
     bottom: i32,
     frame_width: u32,
     frame_height: u32,
+    padding: i32,
 ) -> Result<VisionRect, String> {
     let frame_width =
         i32::try_from(frame_width).map_err(|err| format!("invalid frame width: {err}"))?;
     let frame_height =
         i32::try_from(frame_height).map_err(|err| format!("invalid frame height: {err}"))?;
-    let x = (left - DETECTION_BOX_PADDING).max(0);
-    let y = (top - DETECTION_BOX_PADDING).max(0);
-    let right = (right + DETECTION_BOX_PADDING).min(frame_width);
-    let bottom = (bottom + DETECTION_BOX_PADDING).min(frame_height);
+    let x = (left - padding).max(0);
+    let y = (top - padding).max(0);
+    let right = (right + padding).min(frame_width);
+    let bottom = (bottom + padding).min(frame_height);
     if right <= x || bottom <= y {
         return Err("detected OCR box collapsed after clamping".to_string());
     }
@@ -1607,13 +1716,20 @@ fn merge_detected_text_boxes(
     mut boxes: Vec<DetectedTextBox>,
     frame_width: u32,
     frame_height: u32,
+    params: &PpocrCtcParams,
 ) -> Vec<DetectedTextBox> {
     boxes.sort_by_key(|text_box| (rect_center_y(text_box.rect), text_box.rect.x));
     let mut merged: Vec<DetectedTextBox> = Vec::new();
     for text_box in boxes {
         if let Some(last) = merged.last_mut()
-            && should_merge_text_boxes(last.rect, text_box.rect)
-            && let Ok(rect) = union_rect(last.rect, text_box.rect, frame_width, frame_height)
+            && should_merge_text_boxes(last.rect, text_box.rect, params)
+            && let Ok(rect) = union_rect(
+                last.rect,
+                text_box.rect,
+                frame_width,
+                frame_height,
+                params.detector.box_padding as i32,
+            )
         {
             last.rect = rect;
             last.confidence = last.confidence.max(text_box.confidence);
@@ -1625,7 +1741,8 @@ fn merge_detected_text_boxes(
     merged
 }
 
-fn should_merge_text_boxes(left: VisionRect, right: VisionRect) -> bool {
+fn should_merge_text_boxes(left: VisionRect, right: VisionRect, params: &PpocrCtcParams) -> bool {
+    let detector = &params.detector;
     let vertical_overlap = (rect_bottom(left).min(rect_bottom(right)) - left.y.max(right.y)).max(0);
     let min_height = left.height.min(right.height).max(1);
     let horizontal_gap = if right.x >= rect_right(left) {
@@ -1635,8 +1752,13 @@ fn should_merge_text_boxes(left: VisionRect, right: VisionRect) -> bool {
     } else {
         0
     };
-    vertical_overlap * 100 >= min_height * 35
-        && horizontal_gap <= left.height.max(right.height).max(24) * 3
+    vertical_overlap * 100 >= min_height * detector.merge_min_overlap_percent as i32
+        && horizontal_gap
+            <= left
+                .height
+                .max(right.height)
+                .max(detector.merge_min_height as i32)
+                * detector.merge_gap_factor as i32
 }
 
 fn union_rect(
@@ -1644,6 +1766,7 @@ fn union_rect(
     right: VisionRect,
     frame_width: u32,
     frame_height: u32,
+    padding: i32,
 ) -> Result<VisionRect, String> {
     padded_rect(
         left.x.min(right.x),
@@ -1652,6 +1775,7 @@ fn union_rect(
         rect_bottom(left).max(rect_bottom(right)),
         frame_width,
         frame_height,
+        padding,
     )
 }
 
@@ -1698,6 +1822,7 @@ fn decode_ctc_output(
     shape: &[i64],
     scores: &[f32],
     dictionary: &[String],
+    params: &PpocrCtcParams,
 ) -> Result<DecodedText, String> {
     let (steps, class_count) = output_layout(shape, scores.len())?;
     if class_count < 2 {
@@ -1712,15 +1837,22 @@ fn decode_ctc_output(
     for step in 0..steps {
         let row = &scores[step * class_count..(step + 1) * class_count];
         let (index, confidence) = argmax_with_softmax_confidence(row)?;
-        if index == 0 || index > dictionary.len() {
+        // The class after the dictionary is the space class of a keys+2 recognizer.
+        let space =
+            index == dictionary.len() + 1 && params.decoder.space_class == SpaceClass::Space;
+        if index == 0 || (index > dictionary.len() && !space) {
             previous_index = 0;
             continue;
         }
         if index != previous_index {
-            let label = dictionary
-                .get(index - 1)
-                .ok_or_else(|| format!("PPOCR recognizer class {index} has no dictionary entry"))?;
-            text.push_str(label);
+            if space {
+                text.push(' ');
+            } else {
+                let label = dictionary.get(index - 1).ok_or_else(|| {
+                    format!("PPOCR recognizer class {index} has no dictionary entry")
+                })?;
+                text.push_str(label);
+            }
             confidences.push(confidence);
         }
         previous_index = index;
@@ -1812,6 +1944,10 @@ impl From<String> for ProviderInvokeError {
 mod tests {
     use super::*;
     use actingcommand_vision_ffi::{CudaDeviceSelector, VisionFrame, ppocr_model_content_sha256};
+
+    fn default_params() -> PpocrCtcParams {
+        PpocrCtcParams::default()
+    }
 
     #[test]
     fn session_plan_keeps_cpu_and_cuda_provider_registration_disjoint() {
@@ -1948,7 +2084,8 @@ mod tests {
             0.0, 0.0, 5.0, //
         ];
 
-        let decoded = decode_ctc_output(&[1, 5, 3], &scores, &dictionary).expect("decode");
+        let decoded =
+            decode_ctc_output(&[1, 5, 3], &scores, &dictionary, &default_params()).expect("decode");
 
         assert_eq!(decoded.text, "AB");
         assert!(decoded.confidence.expect("confidence") > 0.9);
@@ -1959,8 +2096,8 @@ mod tests {
         let dictionary = vec!["A".to_string()];
         let scores = vec![0.0; 8];
 
-        let err =
-            decode_ctc_output(&[1, 2, 4], &scores, &dictionary).expect_err("too many classes");
+        let err = decode_ctc_output(&[1, 2, 4], &scores, &dictionary, &default_params())
+            .expect_err("too many classes");
 
         assert!(err.contains("dictionary"));
     }
@@ -1974,7 +2111,8 @@ mod tests {
             0.0, 5.0, 0.0, //
         ];
 
-        let decoded = decode_ctc_output(&[1, 3, 3], &scores, &dictionary).expect("decode");
+        let decoded =
+            decode_ctc_output(&[1, 3, 3], &scores, &dictionary, &default_params()).expect("decode");
 
         assert_eq!(decoded.text, "AA");
     }
@@ -2010,6 +2148,7 @@ mod tests {
                 height: 1,
             },
             &shape,
+            &default_params(),
         )
         .expect("tensor");
 
@@ -2053,7 +2192,8 @@ mod tests {
             width: 7,
         };
         let tensor =
-            frame_region_to_recognition_tensor(&frame.view(), region, &shape).expect("tensor");
+            frame_region_to_recognition_tensor(&frame.view(), region, &shape, &default_params())
+                .expect("tensor");
         // ceil(3 / 2 * 3) = 5 columns. Half-pixel positions are -0.2, 0.4,
         // 1, 1.6, 2.2 horizontally and -1/6, 1/2, 7/6 vertically.
         let expected_bgr: [[u8; 15]; 3] = [
@@ -2082,9 +2222,13 @@ mod tests {
             }
         }
         assert_eq!(frame.pixels, original_pixels);
-        assert_eq!(dynamic_width_for_region(region, 48).expect("width"), 72);
         assert_eq!(
-            dynamic_width_for_region(VisionRect { width: 1, ..region }, 48).expect("minimum"),
+            dynamic_width_for_region(region, 48, &default_params()).expect("width"),
+            72
+        );
+        assert_eq!(
+            dynamic_width_for_region(VisionRect { width: 1, ..region }, 48, &default_params())
+                .expect("minimum"),
             32
         );
         assert_eq!(
@@ -2093,7 +2237,8 @@ mod tests {
                     width: 100,
                     ..region
                 },
-                48
+                48,
+                &default_params()
             )
             .expect("maximum"),
             320
@@ -2104,7 +2249,8 @@ mod tests {
                     height: 0,
                     ..region
                 },
-                48
+                48,
+                &default_params()
             )
             .is_err()
         );
@@ -2121,11 +2267,20 @@ mod tests {
                 ..region
             },
         ] {
-            assert!(frame_region_to_recognition_tensor(&frame.view(), invalid, &shape).is_err());
+            assert!(
+                frame_region_to_recognition_tensor(
+                    &frame.view(),
+                    invalid,
+                    &shape,
+                    &default_params()
+                )
+                .is_err()
+            );
         }
         frame.pixels.truncate(3);
-        let error = frame_region_to_recognition_tensor(&frame.view(), region, &shape)
-            .expect_err("short pixels");
+        let error =
+            frame_region_to_recognition_tensor(&frame.view(), region, &shape, &default_params())
+                .expect_err("short pixels");
         assert!(error.contains("pixel buffer ended"));
     }
 
@@ -2163,8 +2318,13 @@ mod tests {
                 pixel_format,
                 pixels,
             };
-            let tensor =
-                frame_region_to_recognition_tensor(&frame.view(), region, &shape).expect("tensor");
+            let tensor = frame_region_to_recognition_tensor(
+                &frame.view(),
+                region,
+                &shape,
+                &default_params(),
+            )
+            .expect("tensor");
             // Aspect width 4 caps to 3. The middle uint8 sample is 0: retaining
             // the clamped row weights 1/4 and 3/4 gives (0 + 1 + 2) >> 2.
             assert_eq!(tensor.len(), 18);
@@ -2212,9 +2372,10 @@ mod tests {
             },
             80,
             30,
+            &default_params(),
         )
         .expect("boxes");
-        let merged = merge_detected_text_boxes(boxes, 80, 30);
+        let merged = merge_detected_text_boxes(boxes, 80, 30, &default_params());
 
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].rect.x, 0);
