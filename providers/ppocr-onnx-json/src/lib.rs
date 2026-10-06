@@ -48,6 +48,9 @@ const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
 const ENGINE_MODULE: &str = "ppocr-ctc-engine";
 /// Recorded as the execution attestation's provider implementation.
 const ENGINE_IMPLEMENTATION: &str = "actingcommand-ocr-engine/ppocr-ctc";
+/// The default recognizer width cap; a dynamic width above it is sized with floor, as the
+/// official PP-OCR pipeline sizes wide crops.
+const OFFICIAL_FLOOR_WIDTH_ABOVE: usize = 320;
 
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
 static RUNTIME_FACTS: OnceLock<RuntimeFacts> = OnceLock::new();
@@ -1229,7 +1232,18 @@ fn dynamic_width_for_region(
     if region.height <= 0 {
         return Err("OCR region height must be non-zero".to_string());
     }
-    let scaled = ((region.width as f32 / region.height as f32) * height as f32).ceil() as usize;
+    let exact = (region.width as f32 / region.height as f32) * height as f32;
+    // Up to the default 320 the content keeps its ceil width, exactly as before; the official
+    // pipeline does the same inside its tensor of at least 320. Above 320 the official pipeline
+    // sizes the tensor, and with it the content, as int(height * w / h), so a description that
+    // raises max_width gets that floor width (review O3-1). Every default path is unchanged:
+    // the 320 cap hides the difference.
+    let ceil = exact.ceil() as usize;
+    let scaled = if ceil > OFFICIAL_FLOOR_WIDTH_ABOVE {
+        exact.floor() as usize
+    } else {
+        ceil
+    };
     Ok(scaled.clamp(
         params.recognizer.min_width as usize,
         params.recognizer.max_width as usize,

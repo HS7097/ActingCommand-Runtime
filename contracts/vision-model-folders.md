@@ -67,7 +67,7 @@ built-in behaviour, so a model without `model.json` reads exactly as before.
 |---|---|---|---|
 | `recognizer.input_height` | 48 | 8..=256 | tensor height; a static model height must equal it |
 | `recognizer.min_width` | 32 | 8..=`max_width` | narrowest tensor width; narrower content is zero-padded |
-| `recognizer.max_width` | 320 | ..=4096 | widest tensor width; wider content is squeezed |
+| `recognizer.max_width` | 320 | ..=4096 | widest tensor width; wider content is squeezed; a dynamic width above 320 is `floor(height * w / h)`, as the official pipeline sizes wide crops (up to 320 the content keeps its `ceil` width) |
 | `recognizer.channel_order` | `bgr` | `bgr`, `rgb` | plane order of the recognizer input |
 | `detector.max_side` | 960 | >= `multiple` | longest side of a dynamic detector input |
 | `detector.min_side` | 32 | >= 1 | shortest side |
