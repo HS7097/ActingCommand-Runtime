@@ -288,9 +288,15 @@ host-owned; report frame indices resolve only to that run's verified observation
 
 `RuntimeClient::run_contained_task` and `actingctl task-run` expose
 `official_ocr_fields_projection` with schema
-`actingcommand.runtime.official-ocr-fields-projection.v1`. It contains the declaration,
+`actingcommand.runtime.official-ocr-fields-projection.v2`. It contains the declaration,
 ordered records, each record's FrameId and observation artifact, report artifact lifecycle
-references, provider evidence and explicit failure. The client validates the ledger
+references, provider evidence and explicit failure. Provider evidence is
+`provider_executions`, one entry per provider binding with its evidence list: a run may
+read different targets with different models, but each target keeps one binding (one
+model and session) for the whole run, and a target found under two bindings fails with
+`runtime_official_ocr_provider_evidence_mismatch` (Workflow #360). The collection-mode
+projection (`actingcommand.runtime.official-ocr-projection.v3`) carries
+`provider_executions` the same way. The client validates the ledger
 created/verified lifecycle, hashes, run/task/frame identity, complete field grouping, raw
 observation binding and budgets before projecting. The collection-mode output key and
 shape remain unchanged.

@@ -30,7 +30,6 @@ members = [
     "crates/scheduler",
     "crates/selection-policy",
     "crates/vision-ffi",
-    "providers/onnxruntime-json",
     "providers/ppocr-onnx-json",
     "tools/actinglab-architecture",
 ]

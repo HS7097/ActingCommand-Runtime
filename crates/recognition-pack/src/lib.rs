@@ -49,7 +49,6 @@ const MAX_OCR_TEXT_BYTES: usize = 64 * 1024;
 const MAX_OCR_BLOCKS: usize = 1_024;
 const MAX_VISION_RESULTS: usize = 1_024;
 const MAX_TEMPLATE_REGION_EVALUATIONS: usize = 64;
-const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
 /// The only schema that declares `color_digest` and `composite` targets, a per-target color
 /// `max_distance` and `candidate_layouts`. Every other construct keeps its schema 0.6 rules.
 const SCHEMA_0_7: &str = "0.7";
@@ -2609,11 +2608,6 @@ fn validate_pack(
                     &format!("target[{index}].minimum_confidence"),
                     errors,
                 );
-                if target.model_ref != PPOCR_V6_MEDIUM_MODEL_REF {
-                    errors.push(format!(
-                        "target[{index}].model_ref must be '{PPOCR_V6_MEDIUM_MODEL_REF}' for OCR production targets"
-                    ));
-                }
                 validate_model_reference(&target.model_ref, &target.model_sha256, index, errors);
                 if let Some(click) = target.click {
                     validate_rect_shape(click, &format!("target[{index}].click"), errors);
@@ -3409,6 +3403,8 @@ fn default_match_metric() -> RecognitionMatchMetric {
 
 #[cfg(test)]
 mod tests {
+    const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
+
     use super::*;
     use std::io;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

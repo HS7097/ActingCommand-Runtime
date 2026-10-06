@@ -11,15 +11,11 @@ use actingcommand_device::{
     MumuEmulatorCapabilityBackend,
 };
 use actingcommand_execution_kernel::InstanceDiscoveryFailure;
-use actingcommand_execution_kernel::LazyOcrModel;
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_runtime_host::{
     DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
 };
-use actingcommand_vision_ffi::{
-    OcrModelSpec, OnnxRuntimeBackend, VisionFfiError, VisionFfiErrorCode, VisionRuntimeSpec,
-};
-use std::io;
+use actingcommand_vision_ffi::{ONNXRUNTIME_LIBRARY, VISION_RUNTIME_DIRECTORY};
 
 impl ConfiguredProvider {
     /// Provider startup: completes the discovery-bound instances, constructs the vision
@@ -33,7 +29,7 @@ impl ConfiguredProvider {
         let Self {
             mut instances,
             deferred,
-            vision_manifest,
+            vision,
             env_overrides,
             ..
         } = self;
@@ -45,19 +41,16 @@ impl ConfiguredProvider {
         let node_placement_diagnostic = env_overrides
             .ppocr_node_placement_diagnostic
             .map(|value| value.to_string_lossy().into_owned());
-        let vision = match vision_manifest {
+        let vision = match vision {
             None => {
                 startup.record(ProviderBackend::Configured, Observation::NotConfigured)?;
                 None
             }
-            Some((source_root, configured_path)) => {
-                Some(VisionSpec::new(assemble_vision_provider(
-                    startup,
-                    &source_root,
-                    &configured_path,
-                    node_placement_diagnostic,
-                )?))
-            }
+            Some(vision) => Some(VisionSpec::new(assemble_vision_provider(
+                startup,
+                &vision,
+                node_placement_diagnostic,
+            )?)),
         };
         let vision_configured = vision.is_some();
         let registry = ExecutionBackendRegistry::from_assembly(ProviderAssembly {
@@ -428,364 +421,159 @@ fn resolve_deferred_instance(
     Ok((instance.instance_index, InstanceSpec::real(registration)))
 }
 
+/// Workflow #360: lists the vision root and builds the provider over its model folders. Only
+/// directory entries, file metadata and model descriptions are read; each model is read,
+/// hashed and loaded, and ONNX Runtime initialised, on first use. A folder that breaks the
+/// folder rule is recorded with its reason and fails only the requests that name it.
 fn assemble_vision_provider(
     startup: &mut ProviderStartup<'_>,
-    source_root: &Path,
-    configured_path: &Path,
+    vision: &ConfiguredVision,
     node_placement_diagnostic: Option<String>,
 ) -> RuntimeHostResult<Arc<dyn RecognitionVisionProvider>> {
     let backend = ProviderBackend::Configured;
-    startup.record(
-        backend,
-        Observation::Started {
-            stage: Stage::ManifestRead,
-        },
-    )?;
-    let read = || -> Result<_, (String, String)> {
-        if configured_path.as_os_str().is_empty() {
-            return Err(("invalid_path".into(), "empty provider manifest path".into()));
-        }
-        let path = if configured_path.is_absolute() {
-            configured_path.to_path_buf()
-        } else {
-            source_root.join(configured_path)
-        };
-        let io_error = |error: io::Error| (format!("{:?}", error.kind()), error.to_string());
-        let path = fs::canonicalize(path).map_err(io_error)?;
-        let metadata = fs::metadata(&path).map_err(io_error)?;
-        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_VISION_MANIFEST_BYTES
-        {
-            return Err((
-                "invalid_size".into(),
-                format!("manifest bytes: {}", metadata.len()),
-            ));
-        }
-        let bytes = fs::read(&path).map_err(io_error)?;
-        if bytes.is_empty() || bytes.len() as u64 > MAX_VISION_MANIFEST_BYTES {
-            return Err((
-                "invalid_size".into(),
-                format!("manifest bytes: {}", bytes.len()),
-            ));
-        }
-        Ok((path, bytes))
-    };
-    let (manifest_path, bytes) = read().map_err(|(code, message)| {
-        let classification = match code.as_str() {
-            "invalid_path" => "vision_provider_manifest_invalid",
-            "invalid_size" => "vision_provider_manifest_size_invalid",
-            _ => "vision_provider_manifest_unavailable",
-        };
+    let stage = Stage::PathBinding;
+    startup.record(backend, Observation::Started { stage })?;
+    let inventory = vision.inspect().map_err(|refusal| {
         startup.failed(
             backend,
-            Stage::ManifestRead,
-            classification,
+            stage,
+            refusal.code,
             ProviderNativeFailure {
                 module: "actingd.config".into(),
-                code,
+                code: refusal.code.into(),
                 severity: "fatal".into(),
-                message: format!(
-                    "manifest={configured_path:?}; source_root={source_root:?}; {message}"
-                ),
+                message: refusal.message,
             },
         )
     })?;
-    startup.record(
+    binding(
+        startup,
         backend,
-        Observation::Completed {
-            stage: Stage::ManifestRead,
-        },
+        "vision_root",
+        vision.configured(),
+        vision.base(),
+        &inventory.root,
     )?;
     binding(
         startup,
         backend,
-        "manifest",
-        configured_path,
-        source_root,
-        &manifest_path,
+        "onnxruntime_library",
+        &Path::new(VISION_RUNTIME_DIRECTORY).join(ONNXRUNTIME_LIBRARY),
+        &inventory.root,
+        &inventory.runtime.onnxruntime_library,
     )?;
-    startup.record(
-        backend,
-        Observation::Started {
-            stage: Stage::ManifestParse,
-        },
-    )?;
-    let mut manifest =
-        VisionProviderArtifactManifest::from_json_slice(&bytes).map_err(|error| {
-            ffi_failure(
-                startup,
-                backend,
-                Stage::ManifestParse,
-                "vision_provider_manifest_invalid",
-                error,
-            )
-        })?;
-    if manifest.schema_version != VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION {
-        return Err(startup.failed(
-            backend,
-            Stage::ManifestParse,
-            "vision_provider_manifest_invalid",
-            ProviderNativeFailure {
-                module: "actingd.config".into(),
-                code: "schema_mismatch".into(),
-                severity: "fatal".into(),
-                message: manifest.schema_version,
-            },
-        ));
-    }
-    startup.record(
-        backend,
-        Observation::Completed {
-            stage: Stage::ManifestParse,
-        },
-    )?;
-    // Canonical file paths always have a parent. Preserve explicit failure if this invariant fails.
-    let artifact_root = manifest_path.parent().ok_or_else(|| {
-        startup.failed(
-            backend,
-            Stage::PathBinding,
-            "vision_provider_manifest_invalid",
-            ProviderNativeFailure {
-                module: "actingd.config".into(),
-                code: "manifest_parent_missing".into(),
-                severity: "fatal".into(),
-                message: format!("{manifest_path:?}"),
-            },
-        )
-    })?;
-    let configured = manifest.clone();
-    resolve_vision_artifact_paths(&mut manifest, artifact_root);
-    record_bindings(startup, &configured, &manifest, artifact_root)?;
-
-    if manifest.fastdeploy_ppocr.is_none() {
-        startup.record(ProviderBackend::FastdeployPpocr, Observation::NotConfigured)?;
-    }
-    if manifest.onnxruntime.is_none() {
-        startup.record(ProviderBackend::Onnxruntime, Observation::NotConfigured)?;
-    }
-
-    let ocr = manifest
-        .fastdeploy_ppocr
-        .take()
-        .map(|artifacts| {
-            let backend = ProviderBackend::FastdeployPpocr;
-            startup.record(
-                backend,
-                Observation::Started {
-                    stage: Stage::ModelIdentity,
-                },
-            )?;
-            let (model_ref, model_sha256) =
-                artifacts.production_model_identity().map_err(|error| {
-                    ffi_failure(
-                        startup,
-                        backend,
-                        Stage::ModelIdentity,
-                        "vision_provider_manifest_invalid",
-                        error,
-                    )
-                })?;
-            startup.record(
-                backend,
-                Observation::ModelBinding {
-                    model_ref: model_ref.into(),
-                    model_sha256: model_sha256.into(),
-                },
-            )?;
-            let identity = VisionModelIdentity::new(model_ref, model_sha256).map_err(|error| {
-                kernel_failure(
-                    startup,
-                    backend,
-                    Stage::ModelIdentity,
-                    (format!("{:?}", error.code()), error.message().into()),
-                )
-            })?;
-            startup.record(
-                backend,
-                Observation::Completed {
-                    stage: Stage::ModelIdentity,
-                },
-            )?;
-            startup.record(
-                backend,
-                Observation::Started {
-                    stage: Stage::BackendConstruction,
-                },
-            )?;
-            // Workflow #360: startup only checks that the files exist. The engine reads,
-            // hashes and loads them, and initialises ONNX Runtime, on the first OCR use.
-            let runtime = ocr_runtime_spec(&artifacts).map_err(|error| {
-                ffi_failure(
-                    startup,
-                    backend,
-                    Stage::BackendConstruction,
-                    "vision_provider_unavailable",
-                    error,
-                )
-            })?;
-            let model = LazyOcrModel {
-                spec: OcrModelSpec {
-                    model_ref: identity.model_ref().to_string(),
-                    detector_path: artifacts.detector_model_path.clone(),
-                    recognizer_path: artifacts.recognizer_model_path.clone(),
-                    dictionary_path: artifacts.dictionary_path.clone(),
-                },
-                admitted: Some(identity),
-            };
-            startup.record(
-                backend,
-                Observation::Completed {
-                    stage: Stage::BackendConstruction,
-                },
-            )?;
-            Ok::<_, actingcommand_runtime_host::RuntimeHostError>((model, runtime))
-        })
-        .transpose()?;
-    let nn = manifest
-        .onnxruntime
-        .take()
-        .map(|artifacts| {
-            let backend = ProviderBackend::Onnxruntime;
-            startup.record(
-                backend,
-                Observation::Started {
-                    stage: Stage::ModelIdentity,
-                },
-            )?;
-            let (model_ref, model_sha256) =
-                artifacts.production_model_identity().map_err(|error| {
-                    ffi_failure(
-                        startup,
-                        backend,
-                        Stage::ModelIdentity,
-                        "vision_provider_manifest_invalid",
-                        error,
-                    )
-                })?;
-            startup.record(
-                backend,
-                Observation::ModelBinding {
-                    model_ref: model_ref.into(),
-                    model_sha256: model_sha256.into(),
-                },
-            )?;
-            let identity = VisionModelIdentity::new(model_ref, model_sha256).map_err(|error| {
-                kernel_failure(
-                    startup,
-                    backend,
-                    Stage::ModelIdentity,
-                    (format!("{:?}", error.code()), error.message().into()),
-                )
-            })?;
-            startup.record(
-                backend,
-                Observation::Completed {
-                    stage: Stage::ModelIdentity,
-                },
-            )?;
-            startup.record(
-                backend,
-                Observation::Started {
-                    stage: Stage::BackendConstruction,
-                },
-            )?;
-            let engine = OnnxRuntimeBackend::from_artifacts(artifacts).map_err(|error| {
-                ffi_failure(
-                    startup,
-                    backend,
-                    Stage::BackendConstruction,
-                    "vision_provider_unavailable",
-                    error,
-                )
-            })?;
-            startup.record(
-                backend,
-                Observation::Completed {
-                    stage: Stage::BackendConstruction,
-                },
-            )?;
-            Ok::<_, actingcommand_runtime_host::RuntimeHostError>((
-                Box::new(engine) as Box<dyn NnEngine + Send>,
-                identity,
-            ))
-        })
-        .transpose()?;
-    let provider = match ocr {
-        Some((model, runtime)) => VisionFfiProvider::with_loader(
-            vec![model],
-            nn,
-            Arc::new(PpocrCtcLoader::new(runtime, node_placement_diagnostic)),
-        ),
-        None => VisionFfiProvider::new(None, nn),
-    }
-    .map_err(|error| {
-        kernel_failure(
+    for (index, library) in inventory.runtime.runtime_library_closure.iter().enumerate() {
+        binding(
             startup,
             backend,
-            Stage::RegistryBinding,
-            (format!("{:?}", error.code()), error.message().into()),
+            &format!("runtime_library_paths[{index}]"),
+            library,
+            &inventory.root,
+            library,
+        )?;
+    }
+    let models_dir = text(startup, backend, &inventory.models_dir)?;
+    for spec in &inventory.listing.ocr {
+        let folder = inventory.models_dir.join(&spec.model_ref);
+        let folder = text(startup, ProviderBackend::FastdeployPpocr, &folder)?;
+        startup.record(
+            ProviderBackend::FastdeployPpocr,
+            Observation::Binding {
+                field: format!("ocr_model:{}", spec.model_ref),
+                configured: format!(
+                    "layout={}; family={}; detector={}; description_sha256={}; languages={:?}",
+                    spec.layout.as_str(),
+                    spec.description.family,
+                    if spec.detector_path.is_some() {
+                        "present"
+                    } else {
+                        "absent"
+                    },
+                    spec.description_sha256,
+                    spec.description.languages
+                ),
+                base: models_dir.clone(),
+                resolved: folder,
+            },
+        )?;
+    }
+    for spec in &inventory.listing.nn {
+        let folder = inventory.models_dir.join(&spec.model_ref);
+        let folder = text(startup, ProviderBackend::Onnxruntime, &folder)?;
+        startup.record(
+            ProviderBackend::Onnxruntime,
+            Observation::Binding {
+                field: format!("nn_model:{}", spec.model_ref),
+                configured: format!(
+                    "family={}; description_sha256={}; languages={:?}",
+                    spec.description.family, spec.description_sha256, spec.description.languages
+                ),
+                base: models_dir.clone(),
+                resolved: folder,
+            },
+        )?;
+    }
+    // An invalid folder's name or path may not be UTF-8; its fact carries the lossy form.
+    for folder in &inventory.listing.invalid {
+        startup.record(
+            backend,
+            Observation::Binding {
+                field: format!("invalid_model:{}", folder.name),
+                configured: format!("invalid: {}", folder.reason),
+                base: models_dir.clone(),
+                resolved: folder.path.to_string_lossy().into_owned(),
+            },
+        )?;
+    }
+    if inventory.listing.ocr.is_empty() {
+        startup.record(ProviderBackend::FastdeployPpocr, Observation::NotConfigured)?;
+    }
+    if inventory.listing.nn.is_empty() {
+        startup.record(ProviderBackend::Onnxruntime, Observation::NotConfigured)?;
+    }
+    startup.record(backend, Observation::Completed { stage })?;
+    let stage = Stage::BackendConstruction;
+    startup.record(backend, Observation::Started { stage })?;
+    let loader = Arc::new(PpocrCtcLoader::new(
+        inventory.runtime,
+        node_placement_diagnostic,
+    ));
+    let provider = VisionFfiProvider::from_listing(inventory.listing, loader).map_err(|error| {
+        startup.failed(
+            backend,
+            stage,
+            "vision_provider_unavailable",
+            ProviderNativeFailure {
+                module: "execution-kernel".into(),
+                code: format!("{:?}", error.code()),
+                severity: "fatal".into(),
+                message: error.message().into(),
+            },
         )
     })?;
+    startup.record(backend, Observation::Completed { stage })?;
     Ok(Arc::new(provider))
 }
 
-/// The OCR runtime of a v0.3 manifest section; every file must exist, none is read.
-fn ocr_runtime_spec(
-    artifacts: &actingcommand_vision_ffi::FastDeployPpocrArtifacts,
-) -> Result<VisionRuntimeSpec, VisionFfiError> {
-    artifacts.validate_existing_files()?;
-    let execution_provider = artifacts.execution_provider.ok_or_else(|| {
-        VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidRequest,
-            "fastdeploy-ppocr",
-            "production OCR execution_provider must be explicitly cpu or cuda",
+/// A path as recorded text; a path that is not UTF-8 is refused before it is recorded.
+fn text(
+    startup: &mut ProviderStartup<'_>,
+    backend: ProviderBackend,
+    value: &Path,
+) -> RuntimeHostResult<String> {
+    value.to_str().map(str::to_owned).ok_or_else(|| {
+        startup.failed(
+            backend,
+            Stage::PathBinding,
+            "vision_provider_path_encoding_invalid",
+            ProviderNativeFailure {
+                module: "actingd.config".into(),
+                code: "path_encoding_invalid".into(),
+                severity: "fatal".into(),
+                message: format!("{value:?}"),
+            },
         )
-    })?;
-    Ok(VisionRuntimeSpec {
-        onnxruntime_library: artifacts.onnxruntime_library_path()?.to_path_buf(),
-        runtime_library_closure: artifacts.runtime_library_paths.clone(),
-        expected_onnxruntime_sha256: artifacts.runtime_library_sha256.clone(),
-        execution_provider,
-        cuda_device: artifacts.cuda_device.clone(),
     })
-}
-
-fn ffi_failure(
-    startup: &mut ProviderStartup<'_>,
-    backend: ProviderBackend,
-    stage: Stage,
-    code: &'static str,
-    error: VisionFfiError,
-) -> actingcommand_runtime_host::RuntimeHostError {
-    startup.failed(
-        backend,
-        stage,
-        code,
-        ProviderNativeFailure {
-            module: error.module().into(),
-            code: format!("{:?}", error.code()),
-            severity: format!("{:?}", error.severity()),
-            message: error.message().into(),
-        },
-    )
-}
-
-fn kernel_failure(
-    startup: &mut ProviderStartup<'_>,
-    backend: ProviderBackend,
-    stage: Stage,
-    error: (String, String),
-) -> actingcommand_runtime_host::RuntimeHostError {
-    startup.failed(
-        backend,
-        stage,
-        "vision_provider_manifest_invalid",
-        ProviderNativeFailure {
-            module: "execution-kernel".into(),
-            code: error.0,
-            severity: "fatal".into(),
-            message: error.1,
-        },
-    )
 }
 
 fn binding(
@@ -796,73 +584,9 @@ fn binding(
     base: &Path,
     resolved: &Path,
 ) -> RuntimeHostResult<()> {
-    if field.contains("library_path") {
-        let selected = actingcommand_contract::process_installation().map_err(|error| {
-            startup.failed(
-                backend,
-                Stage::PathBinding,
-                error.code(),
-                ProviderNativeFailure {
-                    module: "actingd.config".into(),
-                    code: error.code().into(),
-                    severity: "fatal".into(),
-                    message: "installation input selection could not be read".into(),
-                },
-            )
-        })?;
-        if let Some(selected) = selected {
-            let path = fs::canonicalize(resolved).map_err(|error| {
-                startup.failed(
-                    backend,
-                    Stage::PathBinding,
-                    "install_provider_library_unavailable",
-                    ProviderNativeFailure {
-                        module: "actingd.config".into(),
-                        code: "install_provider_library_unavailable".into(),
-                        severity: "fatal".into(),
-                        message: error.to_string(),
-                    },
-                )
-            })?;
-            let in_slot = path.starts_with(selected.root().join("A"))
-                || path.starts_with(selected.root().join("B"));
-            if (in_slot && !path.starts_with(selected.program_root()))
-                || (field == "provider_library_path"
-                    && !path.starts_with(selected.program_root().join("tools")))
-            {
-                return Err(startup.failed(
-                    backend,
-                    Stage::PathBinding,
-                    "install_provider_slot_mismatch",
-                    ProviderNativeFailure {
-                        module: "actingd.config".into(),
-                        code: "install_provider_slot_mismatch".into(),
-                        severity: "fatal".into(),
-                        message: format!("{field}={path:?}"),
-                    },
-                ));
-            }
-        }
-    }
-    let path = |value: &Path| {
-        value.to_str().map(str::to_owned).ok_or_else(|| {
-            startup.failed(
-                backend,
-                Stage::PathBinding,
-                "vision_provider_path_encoding_invalid",
-                ProviderNativeFailure {
-                    module: "actingd.config".into(),
-                    code: "path_encoding_invalid".into(),
-                    severity: "fatal".into(),
-                    message: format!("{value:?}"),
-                },
-            )
-        })
-    };
-    let mut path = path;
-    let configured = path(configured)?;
-    let base = path(base)?;
-    let resolved = path(resolved)?;
+    let configured = text(startup, backend, configured)?;
+    let base = text(startup, backend, base)?;
+    let resolved = text(startup, backend, resolved)?;
     startup.record(
         backend,
         Observation::Binding {
@@ -872,92 +596,4 @@ fn binding(
             resolved,
         },
     )
-}
-
-fn record_bindings(
-    startup: &mut ProviderStartup<'_>,
-    configured: &VisionProviderArtifactManifest,
-    resolved: &VisionProviderArtifactManifest,
-    base: &Path,
-) -> RuntimeHostResult<()> {
-    if let (Some(a), Some(b)) = (&configured.fastdeploy_ppocr, &resolved.fastdeploy_ppocr) {
-        let backend = ProviderBackend::FastdeployPpocr;
-        for (field, a, b) in [
-            (
-                "provider_library_path",
-                &a.provider_library_path,
-                &b.provider_library_path,
-            ),
-            (
-                "detector_model_path",
-                &a.detector_model_path,
-                &b.detector_model_path,
-            ),
-            (
-                "recognizer_model_path",
-                &a.recognizer_model_path,
-                &b.recognizer_model_path,
-            ),
-            ("dictionary_path", &a.dictionary_path, &b.dictionary_path),
-        ] {
-            binding(startup, backend, field, a, base, b)?;
-        }
-        for (index, (a, b)) in a
-            .runtime_library_paths
-            .iter()
-            .zip(&b.runtime_library_paths)
-            .enumerate()
-        {
-            binding(
-                startup,
-                backend,
-                &format!("runtime_library_paths[{index}]"),
-                a,
-                base,
-                b,
-            )?;
-        }
-        for (field, a, b) in [
-            (
-                "runtime_library_path",
-                &a.runtime_library_path,
-                &b.runtime_library_path,
-            ),
-            (
-                "classifier_model_path",
-                &a.classifier_model_path,
-                &b.classifier_model_path,
-            ),
-        ] {
-            if let (Some(a), Some(b)) = (a, b) {
-                binding(startup, backend, field, a, base, b)?;
-            }
-        }
-    }
-    if let (Some(a), Some(b)) = (&configured.onnxruntime, &resolved.onnxruntime) {
-        let backend = ProviderBackend::Onnxruntime;
-        for (field, a, b) in [
-            (
-                "provider_library_path",
-                &a.provider_library_path,
-                &b.provider_library_path,
-            ),
-            ("model_path", &a.model_path, &b.model_path),
-        ] {
-            binding(startup, backend, field, a, base, b)?;
-        }
-        for (field, a, b) in [
-            (
-                "runtime_library_path",
-                &a.runtime_library_path,
-                &b.runtime_library_path,
-            ),
-            ("labels_path", &a.labels_path, &b.labels_path),
-        ] {
-            if let (Some(a), Some(b)) = (a, b) {
-                binding(startup, backend, field, a, base, b)?;
-            }
-        }
-    }
-    Ok(())
 }

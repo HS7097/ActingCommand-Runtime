@@ -20,11 +20,11 @@ use actingcommand_recognition_pack::{
     VisionProviderFrame,
 };
 use actingcommand_vision_ffi::{
-    NnClassificationResult, NnEngine, NnInferenceRequest, OcrEngine, OcrExecutionAttestation,
-    OcrFallbackPolicy, OcrInferenceRequestView, OcrInferenceResult, OcrModelLoad, OcrModelSpec,
-    OcrSessionId, OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode,
-    VisionFfiResult, VisionFrame, VisionFrameView, VisionModelLoader, VisionPixelFormat,
-    VisionRect, next_ocr_session_id,
+    NnClassificationResult, NnEngine, NnInferenceRequest, NnModelLoad, NnModelSpec, OcrEngine,
+    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceRequestView, OcrInferenceResult,
+    OcrModelLoad, OcrModelSpec, OcrSessionId, OnnxExecutionProvider, VisionBackendKind,
+    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrame, VisionFrameView,
+    VisionModelListing, VisionModelLoader, VisionPixelFormat, VisionRect, next_ocr_session_id,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -90,15 +90,6 @@ pub const MAX_LOADED_VISION_MODELS: usize = 4;
 
 static NEXT_MODEL_USE: AtomicU64 = AtomicU64::new(1);
 
-/// One OCR model the provider builds through its loader on first use.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LazyOcrModel {
-    pub spec: OcrModelSpec,
-    /// The identity the configuration admits for this model, when it declares one; a request
-    /// naming another identity fails before anything is read.
-    pub admitted: Option<VisionModelIdentity>,
-}
-
 struct SlotCell<E: ?Sized> {
     engine: Option<Box<E>>,
     retired: Option<String>,
@@ -119,7 +110,7 @@ struct ModelSlot<E: ?Sized, S> {
 }
 
 type OcrSlot = ModelSlot<dyn OcrEngine + Send, OcrModelSpec>;
-type NnSlot = ModelSlot<dyn NnEngine + Send, ()>;
+type NnSlot = ModelSlot<dyn NnEngine + Send, NnModelSpec>;
 
 impl<E: ?Sized, S> ModelSlot<E, S> {
     fn built(engine: Box<E>, identity: VisionModelIdentity) -> Self {
@@ -140,11 +131,11 @@ impl<E: ?Sized, S> ModelSlot<E, S> {
         }
     }
 
-    fn lazy(model_ref: String, spec: S, admitted_sha256: Option<String>) -> Self {
+    fn lazy(model_ref: String, spec: S) -> Self {
         Self {
             model_ref,
             spec: Some(spec),
-            admitted_sha256,
+            admitted_sha256: None,
             verified_sha256: OnceLock::new(),
             cell: Mutex::new(SlotCell {
                 engine: None,
@@ -209,6 +200,9 @@ impl<E: ?Sized, S> ModelSlot<E, S> {
 pub struct VisionFfiProvider {
     ocr: BTreeMap<String, OcrSlot>,
     nn: BTreeMap<String, NnSlot>,
+    /// Model folders that break the folder rule, with the reason; only requests naming them
+    /// fail.
+    invalid: BTreeMap<String, String>,
     loader: Option<Arc<dyn VisionModelLoader>>,
     loaded: Mutex<usize>,
 }
@@ -241,55 +235,49 @@ impl VisionFfiProvider {
                     )
                 })
                 .collect(),
+            invalid: BTreeMap::new(),
             loader: None,
             loaded: Mutex::new(0),
         })
     }
 
-    /// A provider whose OCR models are built through `loader` on first use.
-    pub fn with_loader(
-        ocr: Vec<LazyOcrModel>,
-        nn: Option<(Box<dyn NnEngine + Send>, VisionModelIdentity)>,
+    /// A provider over the model folders of one vision root, each built through `loader` on
+    /// first use. Invalid folders are kept with their reason: only requests naming them fail.
+    pub fn from_listing(
+        listing: VisionModelListing,
         loader: Arc<dyn VisionModelLoader>,
     ) -> Result<Self, VisionProviderError> {
-        if ocr.is_empty() && nn.is_none() {
-            return Err(no_capability());
-        }
-        let mut slots = BTreeMap::new();
-        for model in ocr {
-            let model_ref = model.spec.model_ref.clone();
-            if let Some(admitted) = &model.admitted
-                && admitted.model_ref() != model_ref
-            {
-                return Err(VisionProviderError::new(
-                    VisionProviderErrorCode::ModelMismatch,
-                    format!(
-                        "OCR model '{model_ref}' is admitted under model_ref '{}'",
-                        admitted.model_ref()
-                    ),
-                ));
-            }
-            let admitted_sha256 = model
-                .admitted
-                .map(|admitted| admitted.model_sha256().to_string());
-            let slot = ModelSlot::lazy(model_ref.clone(), model.spec, admitted_sha256);
-            if slots.insert(model_ref.clone(), slot).is_some() {
-                return Err(VisionProviderError::new(
-                    VisionProviderErrorCode::ModelMismatch,
-                    format!("OCR model '{model_ref}' is declared more than once"),
-                ));
-            }
+        if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
+            return Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "the vision models folder holds no model folder",
+            ));
         }
         Ok(Self {
-            ocr: slots,
-            nn: nn
+            ocr: listing
+                .ocr
                 .into_iter()
-                .map(|(engine, identity)| {
+                .map(|spec| {
                     (
-                        identity.model_ref().to_string(),
-                        ModelSlot::built(engine, identity),
+                        spec.model_ref.clone(),
+                        ModelSlot::lazy(spec.model_ref.clone(), spec),
                     )
                 })
+                .collect(),
+            nn: listing
+                .nn
+                .into_iter()
+                .map(|spec| {
+                    (
+                        spec.model_ref.clone(),
+                        ModelSlot::lazy(spec.model_ref.clone(), spec),
+                    )
+                })
+                .collect(),
+            invalid: listing
+                .invalid
+                .into_iter()
+                .map(|folder| (folder.name, folder.reason))
                 .collect(),
             loader: Some(loader),
             loaded: Mutex::new(0),
@@ -297,21 +285,35 @@ impl VisionFfiProvider {
     }
 
     fn ocr_slot(&self, model_ref: &str) -> Result<&OcrSlot, VisionProviderError> {
-        if self.ocr.is_empty() {
+        if let Some(slot) = self.ocr.get(model_ref) {
+            return Ok(slot);
+        }
+        if let Some(reason) = self.invalid.get(model_ref) {
+            return Err(invalid_folder(model_ref, reason));
+        }
+        if self.nn.contains_key(model_ref) {
+            return Err(wrong_kind(model_ref, "an NN classification", "OCR"));
+        }
+        if self.ocr.is_empty() && self.loader.is_none() {
             return Err(unavailable("OCR"));
         }
-        self.ocr
-            .get(model_ref)
-            .ok_or_else(|| not_installed("OCR", model_ref, self.ocr.keys()))
+        Err(not_installed("OCR", model_ref, self.ocr.keys()))
     }
 
     fn nn_slot(&self, model_ref: &str) -> Result<&NnSlot, VisionProviderError> {
-        if self.nn.is_empty() {
+        if let Some(slot) = self.nn.get(model_ref) {
+            return Ok(slot);
+        }
+        if let Some(reason) = self.invalid.get(model_ref) {
+            return Err(invalid_folder(model_ref, reason));
+        }
+        if self.ocr.contains_key(model_ref) {
+            return Err(wrong_kind(model_ref, "an OCR", "NN"));
+        }
+        if self.nn.is_empty() && self.loader.is_none() {
             return Err(unavailable("NN"));
         }
-        self.nn
-            .get(model_ref)
-            .ok_or_else(|| not_installed("NN", model_ref, self.nn.keys()))
+        Err(not_installed("NN", model_ref, self.nn.keys()))
     }
 
     /// Runs `call` on the model's engine, building it first when needed. Waiting for the
@@ -425,6 +427,53 @@ impl VisionFfiProvider {
         }
     }
 
+    fn load_nn(
+        &self,
+        slot: &NnSlot,
+        cell: &mut SlotCell<dyn NnEngine + Send>,
+        model_sha256: &str,
+        deadline: Instant,
+    ) -> Result<Duration, VisionProviderError> {
+        let (Some(spec), Some(loader)) = (slot.spec.as_ref(), self.loader.as_ref()) else {
+            return Err(unavailable("NN"));
+        };
+        self.reserve_loaded_model()?;
+        match loader.load_nn(spec, model_sha256, deadline) {
+            Ok(NnModelLoad::Loaded {
+                engine,
+                model_sha256: actual,
+                waited_on_others,
+            }) => {
+                if !slot.verify(&actual) {
+                    self.release_loaded_model();
+                    return Err(self.changed_on_disk(slot, cell, &actual));
+                }
+                cell.engine = Some(engine);
+                cell.counted = true;
+                Ok(waited_on_others)
+            }
+            Ok(NnModelLoad::Mismatch {
+                model_sha256: actual,
+            }) => {
+                self.release_loaded_model();
+                if !slot.verify(&actual) {
+                    return Err(self.changed_on_disk(slot, cell, &actual));
+                }
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    format!(
+                        "NN model '{}' content is {actual}; the target requires {model_sha256}",
+                        slot.model_ref
+                    ),
+                ))
+            }
+            Err(error) => {
+                self.release_loaded_model();
+                Err(map_ffi_error(error))
+            }
+        }
+    }
+
     fn changed_on_disk<E: ?Sized, S>(
         &self,
         slot: &ModelSlot<E, S>,
@@ -477,29 +526,43 @@ impl VisionFfiProvider {
     /// Unloads the idle loaded model used least recently; a model whose lock is held is in use
     /// and never chosen.
     fn evict_idle_model(&self) -> bool {
-        let mut victim: Option<MutexGuard<'_, SlotCell<dyn OcrEngine + Send>>> = None;
-        let mut victim_use = u64::MAX;
-        for slot in self.ocr.values() {
-            let used = slot.last_used.load(Ordering::Relaxed);
-            if used >= victim_use {
-                continue;
-            }
-            if let Ok(cell) = slot.cell.try_lock()
-                && cell.counted
-                && cell.engine.is_some()
+        let mut victim: Option<(u64, bool, &str)> = None;
+        for (name, slot) in &self.ocr {
+            if let Some(used) = idle_since(slot)
+                && victim.is_none_or(|(best, _, _)| used < best)
             {
-                victim = Some(cell);
-                victim_use = used;
+                victim = Some((used, true, name));
+            }
+        }
+        for (name, slot) in &self.nn {
+            if let Some(used) = idle_since(slot)
+                && victim.is_none_or(|(best, _, _)| used < best)
+            {
+                victim = Some((used, false, name));
             }
         }
         match victim {
-            Some(mut cell) => {
-                cell.engine = None;
-                cell.counted = false;
-                true
-            }
+            Some((_, true, name)) => self.ocr.get(name).is_some_and(unload_if_idle),
+            Some((_, false, name)) => self.nn.get(name).is_some_and(unload_if_idle),
             None => false,
         }
+    }
+}
+
+/// When the slot holds a loaded, idle engine: its last use.
+fn idle_since<E: ?Sized, S>(slot: &ModelSlot<E, S>) -> Option<u64> {
+    let cell = slot.cell.try_lock().ok()?;
+    (cell.counted && cell.engine.is_some()).then(|| slot.last_used.load(Ordering::Relaxed))
+}
+
+fn unload_if_idle<E: ?Sized, S>(slot: &ModelSlot<E, S>) -> bool {
+    match slot.cell.try_lock() {
+        Ok(mut cell) if cell.counted && cell.engine.is_some() => {
+            cell.engine = None;
+            cell.counted = false;
+            true
+        }
+        _ => false,
     }
 }
 
@@ -509,6 +572,7 @@ impl fmt::Debug for VisionFfiProvider {
             .debug_struct("VisionFfiProvider")
             .field("ocr_models", &self.ocr.keys().collect::<Vec<_>>())
             .field("nn_models", &self.nn.keys().collect::<Vec<_>>())
+            .field("invalid_models", &self.invalid.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -606,13 +670,18 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         let started = Instant::now();
         let deadline = deadline_after(started, request.timeout_ms, "NN")?;
         let mut cell = lock_until(&slot.cell, deadline, "NN", request.model_ref)?;
-        let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut waited = started.elapsed();
         if let Some(reason) = &cell.retired {
             return Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
                 reason.clone(),
             ));
         }
+        if cell.engine.is_none() {
+            waited += self.load_nn(slot, &mut cell, request.model_sha256, deadline)?;
+        }
+        let waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
+        slot.require(request.model_sha256, "NN")?;
         let timeout_ms = request.timeout_ms.saturating_sub(waited_ms);
         if timeout_ms == 0 {
             return Err(VisionProviderError::new(
@@ -712,6 +781,20 @@ fn lock_until<'a, T>(
             }
         }
     }
+}
+
+fn invalid_folder(model_ref: &str, reason: &str) -> VisionProviderError {
+    VisionProviderError::new(
+        VisionProviderErrorCode::Unavailable,
+        format!("vision model folder '{model_ref}' is invalid: {reason}"),
+    )
+}
+
+fn wrong_kind(model_ref: &str, actual: &str, requested: &str) -> VisionProviderError {
+    VisionProviderError::new(
+        VisionProviderErrorCode::ModelMismatch,
+        format!("vision model '{model_ref}' is {actual} model, not an {requested} model"),
+    )
 }
 
 fn no_capability() -> VisionProviderError {

@@ -25,10 +25,11 @@ use actingcommand_runtime_host::{
     ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy, InstanceMode, InstanceSpec,
     PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
     ProcedureManifest, ProviderAssembly, RecognitionVisionProvider, RuntimeHostConfig,
-    RuntimeHostError, VisionFfiProvider, VisionModelIdentity, VisionSpec,
+    RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
-    NnEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
+    CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionModelListing,
+    VisionRuntimeSpec, list_vision_models,
 };
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
@@ -46,7 +47,6 @@ mod provider_startup;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-const MAX_VISION_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 120_000;
 const MAX_FIXTURE_FRAMES: usize = 32;
 const MAX_FIXTURE_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -56,6 +56,9 @@ const MAX_FIXTURE_INPUTS: u16 = 32;
 const MAX_GOVERNANCE_ALLOWED_CLIENTS: usize = 32;
 /// Workflow #288: the admission deadline of one digest-named `resource_package` directory.
 const RESOURCE_PACKAGE_DIRECTORY_DEADLINE: Duration = Duration::from_secs(60);
+/// Workflow #360: the vision root's default name under the install root or the configuration
+/// file's directory.
+const DEFAULT_VISION_ROOT: &str = "vision";
 /// The governance identity card `client` of the daemon's own policy driver connection; it is
 /// always allowed, whatever `governance.allowed_clients` names.
 pub(super) const GOVERNANCE_POLICY_DRIVER_CLIENT: &str = "actingd-policy-driver";
@@ -97,8 +100,18 @@ pub(super) struct ActingdConfigFile {
     agent_dispatcher: Option<AgentDispatcherConfigFile>,
     #[serde(default)]
     policy: Option<PolicyConfigFile>,
+    /// Workflow #360: the retired v0.3 provider manifest. Kept only so a file that still
+    /// names the key, whatever its value, is refused with `vision_provider_manifest_retired`;
+    /// the `vision` section replaces it.
+    #[serde(
+        default,
+        rename = "vision_provider_manifest",
+        deserialize_with = "retired_key_present"
+    )]
+    vision_provider_manifest_retired: bool,
+    /// Workflow #360: the vision root and execution provider; absent means no vision.
     #[serde(default)]
-    vision_provider_manifest: Option<PathBuf>,
+    vision: Option<VisionConfigFile>,
     /// Explicit MuMu install root: the highest-priority `MuMuManager.exe` discovery source.
     #[serde(default)]
     mumu_root: Option<PathBuf>,
@@ -128,6 +141,9 @@ pub(super) struct ActingdConfigFile {
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
+    /// The install root the daemon runs from, when it runs from one (set by `load_for`).
+    #[serde(skip)]
+    install_root: Option<PathBuf>,
 }
 
 /// One `prerequisite_packages` entry (Workflow #336 L2b): the package id a `linear_steps`
@@ -326,6 +342,155 @@ impl GovernanceConfigFile {
 fn retired_key_present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     serde::de::IgnoredAny::deserialize(deserializer)?;
     Ok(true)
+}
+
+/// Workflow #360: the `vision` section. The vision root holds `ort\` (ONNX Runtime) and
+/// `models\<name>\`, one folder per model; models are listed at startup and each is read,
+/// hashed and loaded on its first use.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisionConfigFile {
+    /// `cpu` or `cuda`, for every OCR and NN model of the process.
+    execution_provider: OnnxExecutionProvider,
+    /// Required for `cuda`, refused for `cpu`.
+    #[serde(default)]
+    cuda_device: Option<CudaDeviceSelector>,
+    /// Overrides the default root (`<install root>\vision`, else `<config dir>\vision`); a
+    /// relative path resolves against the configuration file's directory.
+    #[serde(default)]
+    root: Option<PathBuf>,
+}
+
+impl VisionConfigFile {
+    fn assemble(
+        self,
+        source_root: &Path,
+        install_root: Option<&Path>,
+    ) -> Result<ConfiguredVision, &'static str> {
+        match (self.execution_provider, &self.cuda_device) {
+            (OnnxExecutionProvider::Cpu, None) => {}
+            (OnnxExecutionProvider::Cuda, Some(selector)) if selector.validate().is_ok() => {}
+            _ => return Err("vision_config_invalid"),
+        }
+        let (configured, base) = match self.root {
+            Some(root) if root.as_os_str().is_empty() => return Err("vision_config_invalid"),
+            Some(root) => (root, source_root.to_path_buf()),
+            None => (
+                PathBuf::from(DEFAULT_VISION_ROOT),
+                install_root.unwrap_or(source_root).to_path_buf(),
+            ),
+        };
+        Ok(ConfiguredVision {
+            configured,
+            base,
+            install_root: install_root.map(Path::to_path_buf),
+            execution_provider: self.execution_provider,
+            cuda_device: self.cuda_device,
+        })
+    }
+}
+
+/// The assembled `vision` section: where the vision root is and how it was chosen. Nothing
+/// is read until provider startup or `check-config` inspects it.
+pub(super) struct ConfiguredVision {
+    /// The configured root, or `vision` for the default.
+    configured: PathBuf,
+    /// What a relative `configured` resolves against: the configuration file's directory, or
+    /// the install root for the default when the daemon runs from one.
+    base: PathBuf,
+    /// The install root; a vision root inside one of its program slots is refused.
+    install_root: Option<PathBuf>,
+    execution_provider: OnnxExecutionProvider,
+    cuda_device: Option<CudaDeviceSelector>,
+}
+
+/// What one inspection of the vision root found: the cheap listing startup and
+/// `check-config` share. No model file is read and no library is loaded.
+pub(super) struct VisionInventory {
+    /// The canonical vision root.
+    pub(super) root: PathBuf,
+    pub(super) models_dir: PathBuf,
+    pub(super) runtime: VisionRuntimeSpec,
+    pub(super) listing: VisionModelListing,
+}
+
+/// Why a vision root cannot be used: the classification and its message.
+pub(super) struct VisionRefusal {
+    pub(super) code: &'static str,
+    pub(super) message: String,
+}
+
+impl ConfiguredVision {
+    pub(super) fn configured(&self) -> &Path {
+        &self.configured
+    }
+
+    pub(super) fn base(&self) -> &Path {
+        &self.base
+    }
+
+    pub(super) const fn execution_provider(&self) -> OnnxExecutionProvider {
+        self.execution_provider
+    }
+
+    /// Lists the vision root: the root must exist outside the install root's program slots,
+    /// `models\` must be readable and hold at least one folder, and `ort\onnxruntime.dll` must
+    /// be present (with the CUDA provider library for `cuda`). A folder that breaks the
+    /// folder rule is listed as invalid, not refused.
+    pub(super) fn inspect(&self) -> Result<VisionInventory, VisionRefusal> {
+        let configured = if self.configured.is_absolute() {
+            self.configured.clone()
+        } else {
+            self.base.join(&self.configured)
+        };
+        let root = fs::canonicalize(&configured).map_err(|error| VisionRefusal {
+            code: "vision_root_unavailable",
+            message: format!(
+                "vision root {} is unavailable: {error}",
+                configured.display()
+            ),
+        })?;
+        if let Some(install_root) = &self.install_root
+            && ["A", "B"]
+                .into_iter()
+                .any(|slot| root.starts_with(install_root.join(slot)))
+        {
+            return Err(VisionRefusal {
+                code: "vision_root_in_program_slot",
+                message: format!(
+                    "vision root {} lies inside a program slot of the install root {}; keep it outside A and B",
+                    root.display(),
+                    install_root.display()
+                ),
+            });
+        }
+        let models_dir = root.join(VISION_MODELS_DIRECTORY);
+        let listing = list_vision_models(&models_dir).map_err(|error| VisionRefusal {
+            code: "vision_root_unavailable",
+            message: error.message().to_owned(),
+        })?;
+        let runtime = VisionRuntimeSpec::from_vision_root(
+            &root,
+            self.execution_provider,
+            self.cuda_device.clone(),
+        )
+        .map_err(|error| VisionRefusal {
+            code: "vision_runtime_unavailable",
+            message: error.message().to_owned(),
+        })?;
+        if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
+            return Err(VisionRefusal {
+                code: "vision_models_empty",
+                message: format!("{} holds no model folder", models_dir.display()),
+            });
+        }
+        Ok(VisionInventory {
+            root,
+            models_dir,
+            runtime,
+            listing,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -619,7 +784,7 @@ pub(super) struct PolicyBootstrap {
 }
 
 /// The parsed provider configuration: the typed instance specs the registry consumes plus
-/// what provider startup still resolves (discovery-bound instances, the vision manifest).
+/// what provider startup still resolves (discovery-bound instances, the vision root).
 /// `assemble` registers nothing and spawns nothing; `ExecutionBackendRegistry::from_assembly`
 /// is the one place instances are registered.
 pub(super) struct ConfiguredProvider {
@@ -628,8 +793,8 @@ pub(super) struct ConfiguredProvider {
     /// Instances bound by `instance_index`/`instance_name` after one `MuMuManager` discovery
     /// run at provider startup.
     deferred: Vec<DeferredInstance>,
-    /// `(source_root, configured manifest path)` of the vision provider, read at startup.
-    vision_manifest: Option<(PathBuf, PathBuf)>,
+    /// The `vision` section, listed at startup (Workflow #360).
+    vision: Option<ConfiguredVision>,
     mumu_root: Option<PathBuf>,
     /// The injected environment fallbacks for discovery and the vision provider.
     env_overrides: EnvOverrides,
@@ -726,33 +891,19 @@ pub(super) fn load_for(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    if let Some(selected) = installation {
-        match (
-            &selected.selection().provider,
-            &config.vision_provider_manifest,
-        ) {
-            (None, None) => {}
-            (Some(reference), Some(configured)) => {
-                let configured = if configured.is_absolute() {
-                    configured.clone()
-                } else {
-                    config.source_root.join(configured)
-                };
-                let expected = fs::canonicalize(
-                    reference
-                        .resolve(selected.root())
-                        .map_err(|error| error.code())?,
-                )
-                .map_err(|_| "install_provider_unavailable")?;
-                if fs::canonicalize(configured).map_err(|_| "install_provider_unavailable")?
-                    != expected
-                {
-                    return Err("install_provider_selection_mismatch");
-                }
-            }
-            _ => return Err("install_provider_selection_mismatch"),
-        }
+    // Workflow #360: the vision provider is no installed file any more; a selection that
+    // still names one predates the vision root and is refused.
+    if installation.is_some_and(|selected| selected.selection().provider.is_some()) {
+        return Err("install_provider_retired");
     }
+    // The install root a running daemon's selection names, or, for a candidate check, the
+    // root its slot lock names (the same root).
+    config.install_root = match installation {
+        Some(selected) => Some(selected.root().to_path_buf()),
+        None => actingcommand_contract::process_slot_lock()
+            .map_err(|error| error.code())?
+            .map(|lock| lock.root().to_path_buf()),
+    };
     Ok(config)
 }
 
@@ -773,6 +924,9 @@ impl ActingdConfigFile {
     pub(super) fn assemble(self) -> Result<RuntimeAssembly, &'static str> {
         if self.governance_capability_retired {
             return Err("governance_capability_retired");
+        }
+        if self.vision_provider_manifest_retired {
+            return Err("vision_provider_manifest_retired");
         }
         if self.schema_version != CONFIG_SCHEMA_VERSION
             || self.state_root.as_os_str().is_empty()
@@ -903,13 +1057,11 @@ impl ActingdConfigFile {
             .into_iter()
             .map(InstanceConfig::backend)
             .collect::<Result<Vec<_>, _>>()?;
-        let provider = ConfiguredProvider::new(
-            instances,
-            self.mumu_root,
-            self.vision_provider_manifest
-                .map(|path| (self.source_root.clone(), path)),
-            env_overrides,
-        );
+        let vision = self
+            .vision
+            .map(|vision| vision.assemble(&self.source_root, self.install_root.as_deref()))
+            .transpose()?;
+        let provider = ConfiguredProvider::new(instances, self.mumu_root, vision, env_overrides);
         let policy = self
             .policy
             .map(|policy| policy.assemble(&self.source_root))
@@ -974,7 +1126,7 @@ impl ActingdConfigFile {
             governance_allowed_clients_explicit: self.governance.is_some(),
             agent_dispatcher: agent_dispatcher_budget,
             policy_configured: policy.is_some(),
-            vision_provider_configured: provider.vision_manifest.is_some(),
+            vision_provider_configured: provider.vision.is_some(),
             instances_count: provider.instance_count(),
             instances_deferred_count: provider.deferred.len(),
             instances_startup_package_count,
@@ -1622,7 +1774,7 @@ impl ConfiguredProvider {
     fn new(
         instances: Vec<ConfiguredInstance>,
         mumu_root: Option<PathBuf>,
-        vision_manifest: Option<(PathBuf, PathBuf)>,
+        vision: Option<ConfiguredVision>,
         env_overrides: EnvOverrides,
     ) -> Self {
         let mut specs = Vec::new();
@@ -1636,10 +1788,15 @@ impl ConfiguredProvider {
         Self {
             instances: specs,
             deferred,
-            vision_manifest,
+            vision,
             mumu_root,
             env_overrides,
         }
+    }
+
+    /// The `vision` section, when configured (`check-config` lists it as startup does).
+    pub(super) fn vision(&self) -> Option<&ConfiguredVision> {
+        self.vision.as_ref()
     }
 
     /// The scheduled-execution mode of a configured alias; a discovery-bound instance is a
@@ -1730,43 +1887,6 @@ fn spec_mode(spec: &InstanceSpec) -> ScheduledExecutionMode {
     }
 }
 
-fn resolve_vision_artifact_paths(
-    manifest: &mut VisionProviderArtifactManifest,
-    artifact_root: &Path,
-) {
-    if let Some(artifacts) = &mut manifest.fastdeploy_ppocr {
-        resolve_relative_path(artifact_root, &mut artifacts.provider_library_path);
-        for path in &mut artifacts.runtime_library_paths {
-            resolve_relative_path(artifact_root, path);
-        }
-        if let Some(path) = &mut artifacts.runtime_library_path {
-            resolve_relative_path(artifact_root, path);
-        }
-        resolve_relative_path(artifact_root, &mut artifacts.detector_model_path);
-        resolve_relative_path(artifact_root, &mut artifacts.recognizer_model_path);
-        resolve_relative_path(artifact_root, &mut artifacts.dictionary_path);
-        if let Some(path) = &mut artifacts.classifier_model_path {
-            resolve_relative_path(artifact_root, path);
-        }
-    }
-    if let Some(artifacts) = &mut manifest.onnxruntime {
-        resolve_relative_path(artifact_root, &mut artifacts.provider_library_path);
-        if let Some(path) = &mut artifacts.runtime_library_path {
-            resolve_relative_path(artifact_root, path);
-        }
-        resolve_relative_path(artifact_root, &mut artifacts.model_path);
-        if let Some(path) = &mut artifacts.labels_path {
-            resolve_relative_path(artifact_root, path);
-        }
-    }
-}
-
-fn resolve_relative_path(root: &Path, path: &mut PathBuf) {
-    if path.is_relative() {
-        *path = root.join(&*path);
-    }
-}
-
 fn bounded_duration(value: Option<u64>) -> Result<Option<Duration>, &'static str> {
     match value {
         Some(value) if value == 0 || value > MAX_TIMEOUT_MS => Err("timeout_invalid"),
@@ -1792,7 +1912,6 @@ mod tests {
     use super::*;
     use actingcommand_contract::{ConfigParameterSource, FactScalar, IdentifierIssuer};
     use actingcommand_device::DeviceError;
-    use actingcommand_vision_ffi::{FastDeployPpocrArtifacts, OnnxExecutionProvider};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -2355,40 +2474,39 @@ mod tests {
             .expect("issuer")
             .mint_instance_id()
             .expect("instance id");
-        fs::write(root.path().join("invalid.json"), b"{}").expect("invalid manifest fixture");
+        // Workflow #360: a vision root without ONNX Runtime, and one whose models folder is
+        // empty. Nothing is loaded at startup, so the library is an empty placeholder.
+        let model = root
+            .path()
+            .join("no-runtime")
+            .join("models")
+            .join("neutral.model");
+        fs::create_dir_all(&model).expect("model folder fixture");
+        fs::write(model.join("rec.onnx"), b"model").expect("recognizer fixture");
+        fs::write(model.join("keys.txt"), b"a").expect("dictionary fixture");
+        fs::create_dir_all(root.path().join("no-models").join("models")).expect("models fixture");
+        fs::create_dir_all(root.path().join("no-models").join("ort")).expect("runtime fixture");
         fs::write(
-            root.path().join("missing-backend.json"),
-            serde_json::to_vec(&json!({
-                "schema_version": VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION,
-                "onnxruntime": {
-                    "provider_library_path": "missing-provider.dll",
-                    "model_path": "model.onnx",
-                    "model_ref": "neutral.model",
-                "execution_provider": "cpu",
-                    "model_sha256": "a".repeat(64),
-                    "labels": ["neutral"],
-                    "default_timeout_ms": 1000
-                }
-            }))
-            .expect("manifest JSON"),
+            root.path()
+                .join("no-models")
+                .join("ort")
+                .join("onnxruntime.dll"),
+            b"",
         )
-        .expect("missing backend manifest");
-        for (index, manifest, expected) in [
+        .expect("runtime placeholder");
+        let vision = |root: &str| json!({"execution_provider": "cpu", "root": root});
+        for (index, vision, expected) in [
             (
                 0,
-                Some("missing.json"),
-                Some("vision_provider_manifest_unavailable"),
+                Some(vision("missing-root")),
+                Some("vision_root_unavailable"),
             ),
             (
                 1,
-                Some("invalid.json"),
-                Some("vision_provider_manifest_invalid"),
+                Some(vision("no-runtime")),
+                Some("vision_runtime_unavailable"),
             ),
-            (
-                2,
-                Some("missing-backend.json"),
-                Some("vision_provider_unavailable"),
-            ),
+            (2, Some(vision("no-models")), Some("vision_models_empty")),
             (3, None, None),
         ] {
             let state_root = root.path().join(format!("state-{index}"));
@@ -2397,7 +2515,7 @@ mod tests {
                 "state_root": state_root,
                 "bind_host": "127.0.0.1",
                 "secret_fingerprint_salt": "0123456789abcdef",
-                "vision_provider_manifest": manifest,
+                "vision": vision,
                 "instances": [{
                     "alias": "neutral.fixture",
                     "instance_id": id.transport(),
@@ -2502,125 +2620,6 @@ mod tests {
             assert_eq!(page.next_after_sequence.is_some(), observations.len() > 2);
         }
     }
-    fn absolute_artifact_root(label: &str) -> PathBuf {
-        #[cfg(windows)]
-        {
-            PathBuf::from(format!(r"C:\synthetic-artifact-root\{label}"))
-        }
-        #[cfg(not(windows))]
-        {
-            PathBuf::from(format!("/synthetic-artifact-root/{label}"))
-        }
-    }
-
-    fn fastdeploy_manifest(
-        runtime_library_paths: Vec<PathBuf>,
-        runtime_library_path: PathBuf,
-    ) -> VisionProviderArtifactManifest {
-        VisionProviderArtifactManifest {
-            schema_version: VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION.to_string(),
-            fastdeploy_ppocr: Some(FastDeployPpocrArtifacts {
-                provider_library_path: PathBuf::from("provider.dll"),
-                provider_library_sha256: None,
-                runtime_library_paths,
-                runtime_library_path: Some(runtime_library_path),
-                runtime_library_sha256: None,
-                detector_model_path: PathBuf::from("detector.onnx"),
-                recognizer_model_path: PathBuf::from("recognizer.onnx"),
-                dictionary_path: PathBuf::from("dictionary.txt"),
-                classifier_model_path: None,
-                model_ref: None,
-                model_sha256: None,
-                detector_model_sha256: None,
-                recognizer_model_sha256: None,
-                dictionary_sha256: None,
-                classifier_model_sha256: None,
-                execution_provider: Some(OnnxExecutionProvider::Cpu),
-                cuda_device: None,
-                strict_no_fallback: Some(true),
-                supported_languages: vec!["neutral".to_string()],
-                default_timeout_ms: 1_000,
-            }),
-            onnxruntime: None,
-        }
-    }
-
-    #[test]
-    fn fastdeploy_selected_runtime_identity_resolves_with_relative_closure() {
-        let artifact_root = absolute_artifact_root("relative");
-        let mut manifest = fastdeploy_manifest(
-            vec![
-                PathBuf::from("runtime/companion.dll"),
-                PathBuf::from("runtime/onnxruntime.dll"),
-            ],
-            PathBuf::from("runtime/onnxruntime.dll"),
-        );
-
-        resolve_vision_artifact_paths(&mut manifest, &artifact_root);
-
-        let artifacts = manifest.fastdeploy_ppocr.as_ref().expect("OCR artifacts");
-        assert_eq!(
-            artifacts.runtime_library_paths,
-            [
-                artifact_root.join("runtime/companion.dll"),
-                artifact_root.join("runtime/onnxruntime.dll"),
-            ]
-        );
-        assert_eq!(
-            artifacts
-                .onnxruntime_library_path()
-                .expect("selected runtime identity"),
-            artifact_root.join("runtime/onnxruntime.dll")
-        );
-    }
-
-    #[test]
-    fn fastdeploy_absolute_runtime_identity_and_closure_remain_unchanged() {
-        let artifact_root = absolute_artifact_root("unused");
-        let runtime_root = absolute_artifact_root("runtime");
-        let runtime_paths = vec![
-            runtime_root.join("companion.dll"),
-            runtime_root.join("onnxruntime.dll"),
-        ];
-        let selected = runtime_paths[1].clone();
-        let mut manifest = fastdeploy_manifest(runtime_paths.clone(), selected.clone());
-
-        resolve_vision_artifact_paths(&mut manifest, &artifact_root);
-
-        let artifacts = manifest.fastdeploy_ppocr.as_ref().expect("OCR artifacts");
-        assert_eq!(artifacts.runtime_library_paths, runtime_paths);
-        assert_eq!(artifacts.runtime_library_path.as_ref(), Some(&selected));
-        assert_eq!(
-            artifacts
-                .onnxruntime_library_path()
-                .expect("selected runtime identity"),
-            selected
-        );
-    }
-
-    #[test]
-    fn fastdeploy_runtime_identity_mismatch_remains_fail_closed() {
-        let artifact_root = absolute_artifact_root("mismatch");
-        let mut manifest = fastdeploy_manifest(
-            vec![PathBuf::from("runtime/companion.dll")],
-            PathBuf::from("runtime/onnxruntime.dll"),
-        );
-
-        resolve_vision_artifact_paths(&mut manifest, &artifact_root);
-
-        let error = manifest
-            .fastdeploy_ppocr
-            .as_ref()
-            .expect("OCR artifacts")
-            .onnxruntime_library_path()
-            .expect_err("selected runtime outside closure rejected");
-        assert!(
-            error
-                .message()
-                .contains("runtime_library_path must occur exactly once")
-        );
-    }
-
     #[test]
     fn fixture_backend_rejects_device_fields() {
         let id = IdentifierIssuer::new()

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{NnInferenceRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult};
+use crate::{VisionFfiError, VisionFfiErrorCode, VisionFfiResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -1205,43 +1205,52 @@ pub enum OnnxExecutionProvider {
     Cuda,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OnnxRuntimeInvokeRequest {
-    pub request: NnInferenceRequest,
-    pub artifacts: OnnxRuntimeArtifacts,
-}
-
 pub fn ppocr_model_content_sha256(
     detector_model_sha256: &str,
     recognizer_model_sha256: &str,
     dictionary_sha256: &str,
     classifier_model_sha256: Option<&str>,
 ) -> VisionFfiResult<String> {
+    ppocr_model_set_sha256(
+        Some(detector_model_sha256),
+        recognizer_model_sha256,
+        dictionary_sha256,
+        classifier_model_sha256,
+    )
+}
+
+/// The composite content identity of one PP-OCR model set. A set without a detector hashes
+/// `none` in its place, as an absent classifier always did; with a detector the bytes equal
+/// `ppocr_model_content_sha256`.
+pub fn ppocr_model_set_sha256(
+    detector_model_sha256: Option<&str>,
+    recognizer_model_sha256: &str,
+    dictionary_sha256: &str,
+    classifier_model_sha256: Option<&str>,
+) -> VisionFfiResult<String> {
     for (field, hash) in [
         ("detector_model_sha256", detector_model_sha256),
-        ("recognizer_model_sha256", recognizer_model_sha256),
-        ("dictionary_sha256", dictionary_sha256),
+        ("recognizer_model_sha256", Some(recognizer_model_sha256)),
+        ("dictionary_sha256", Some(dictionary_sha256)),
+        ("classifier_model_sha256", classifier_model_sha256),
     ] {
-        validate_sha256("fastdeploy-ppocr", field, hash)?;
-    }
-    if let Some(hash) = classifier_model_sha256 {
-        validate_sha256("fastdeploy-ppocr", "classifier_model_sha256", hash)?;
+        if let Some(hash) = hash {
+            validate_sha256("fastdeploy-ppocr", field, hash)?;
+        }
     }
     let mut hasher = Sha256::new();
     hasher.update(b"actingcommand.ppocr-model-set.v1\0");
     for (label, hash) in [
         ("detector", detector_model_sha256),
-        ("recognizer", recognizer_model_sha256),
-        ("dictionary", dictionary_sha256),
+        ("recognizer", Some(recognizer_model_sha256)),
+        ("dictionary", Some(dictionary_sha256)),
+        ("classifier", classifier_model_sha256),
     ] {
         hasher.update(label.as_bytes());
         hasher.update(b"\0");
-        hasher.update(hash.as_bytes());
+        hasher.update(hash.unwrap_or("none").as_bytes());
         hasher.update(b"\0");
     }
-    hasher.update(b"classifier\0");
-    hasher.update(classifier_model_sha256.unwrap_or("none").as_bytes());
-    hasher.update(b"\0");
     Ok(lower_hex(&hasher.finalize()))
 }
 

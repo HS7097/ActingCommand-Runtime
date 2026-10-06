@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    CudaDeviceIdentity, CudaDeviceInventory, NnClassificationResult, NnEngine, NnInferenceRequest,
-    OcrInvocationId, OcrSessionId, OnnxRuntimeArtifacts, OnnxRuntimeInvokeRequest, VisionFfiError,
-    VisionFfiErrorCode, VisionFfiResult, VisionProviderArtifactManifest,
+    CudaDeviceIdentity, CudaDeviceInventory, OcrInvocationId, OcrSessionId, VisionFfiError,
+    VisionFfiErrorCode, VisionFfiResult,
 };
 use libloading::Library;
-use serde::{Serialize, de::DeserializeOwned};
 use std::ffi::{CStr, OsStr, c_char, c_void};
-use std::slice;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -22,7 +19,6 @@ use std::{
 pub const OCR_READ_TEXT_SYMBOL: &[u8] = b"ac_fastdeploy_ppocr_read_text_json\0";
 pub const NN_CLASSIFY_SYMBOL: &[u8] = b"ac_onnxruntime_classify_json\0";
 pub const FREE_BUFFER_SYMBOL: &[u8] = b"ac_vision_free_buffer\0";
-const MAX_FFI_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 const CUDA_SUCCESS: i32 = 0;
 const CUDA_PCI_BUS_ID_BYTES: usize = 64;
 const MAX_ONNXRUNTIME_VERSION_BYTES: usize = 256;
@@ -67,30 +63,6 @@ pub struct VisionFfiOwnedBuffer {
     pub data: *mut u8,
     pub len: usize,
     pub capacity: usize,
-}
-
-impl VisionFfiOwnedBuffer {
-    /// Reports whether this metadata can be passed to the paired provider deallocator.
-    ///
-    /// This validates ownership metadata only. Pointer provenance remains an ABI
-    /// invariant between the caller and the provider that allocated the buffer.
-    pub fn has_releasable_metadata(&self) -> bool {
-        !self.data.is_null()
-            && self.capacity > 0
-            && self.len <= self.capacity
-            && self.len <= MAX_FFI_RESPONSE_BYTES
-            && self.capacity <= MAX_FFI_RESPONSE_BYTES
-    }
-}
-
-impl Default for VisionFfiOwnedBuffer {
-    fn default() -> Self {
-        Self {
-            data: std::ptr::null_mut(),
-            len: 0,
-            capacity: 0,
-        }
-    }
 }
 
 #[cfg(any(windows, test))]
@@ -549,80 +521,6 @@ pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> Vision
     Ok(())
 }
 
-pub struct OnnxRuntimeBackend {
-    _library: Option<Arc<Library>>,
-    classify_json: VisionFfiInvokeJson,
-    free_buffer: VisionFfiFreeBuffer,
-    artifacts: Option<OnnxRuntimeArtifacts>,
-}
-
-impl OnnxRuntimeBackend {
-    pub fn from_library_path(path: impl AsRef<OsStr>) -> VisionFfiResult<Self> {
-        let library = load_library("onnxruntime", path)?;
-        let classify_json = load_symbol(&library, "onnxruntime", NN_CLASSIFY_SYMBOL)?;
-        let free_buffer = load_symbol(&library, "onnxruntime", FREE_BUFFER_SYMBOL)?;
-        Ok(Self {
-            _library: Some(library),
-            classify_json,
-            free_buffer,
-            artifacts: None,
-        })
-    }
-
-    pub fn from_artifacts(artifacts: OnnxRuntimeArtifacts) -> VisionFfiResult<Self> {
-        artifacts.validate_production_existing_files()?;
-        let library = load_library("onnxruntime", &artifacts.provider_library_path)?;
-        let classify_json = load_symbol(&library, "onnxruntime", NN_CLASSIFY_SYMBOL)?;
-        let free_buffer = load_symbol(&library, "onnxruntime", FREE_BUFFER_SYMBOL)?;
-        Ok(Self {
-            _library: Some(library),
-            classify_json,
-            free_buffer,
-            artifacts: Some(artifacts),
-        })
-    }
-
-    pub fn from_manifest(manifest: &VisionProviderArtifactManifest) -> VisionFfiResult<Self> {
-        Self::from_artifacts(manifest.require_production_onnxruntime()?.clone())
-    }
-
-    /// # Safety
-    ///
-    /// The function pointers must follow the ActingCommand NN JSON ABI and the
-    /// free function must be able to release every buffer returned by the invoke
-    /// function for the lifetime of this backend.
-    pub unsafe fn from_raw_functions(
-        classify_json: VisionFfiInvokeJson,
-        free_buffer: VisionFfiFreeBuffer,
-    ) -> Self {
-        Self {
-            _library: None,
-            classify_json,
-            free_buffer,
-            artifacts: None,
-        }
-    }
-
-    /// # Safety
-    ///
-    /// The function pointers must follow the ActingCommand NN JSON envelope ABI
-    /// and the free function must be able to release every buffer returned by
-    /// the invoke function for the lifetime of this backend.
-    pub unsafe fn from_raw_functions_with_artifacts(
-        classify_json: VisionFfiInvokeJson,
-        free_buffer: VisionFfiFreeBuffer,
-        artifacts: OnnxRuntimeArtifacts,
-    ) -> VisionFfiResult<Self> {
-        artifacts.validate_production_model()?;
-        Ok(Self {
-            _library: None,
-            classify_json,
-            free_buffer,
-            artifacts: Some(artifacts),
-        })
-    }
-}
-
 pub fn validate_onnxruntime_provider_abi(path: impl AsRef<OsStr>) -> VisionFfiResult<()> {
     let library = load_library("onnxruntime", path)?;
     let _: VisionFfiInvokeJson = load_symbol(&library, "onnxruntime", NN_CLASSIFY_SYMBOL)?;
@@ -635,32 +533,6 @@ pub fn validate_runtime_library_loadable(
     path: impl AsRef<OsStr>,
 ) -> VisionFfiResult<()> {
     load_library(module, path).map(|_| ())
-}
-
-impl NnEngine for OnnxRuntimeBackend {
-    fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult> {
-        request.validate()?;
-        let result: NnClassificationResult = if let Some(artifacts) = &self.artifacts {
-            invoke_json(
-                "onnxruntime",
-                self.classify_json,
-                self.free_buffer,
-                &OnnxRuntimeInvokeRequest {
-                    request,
-                    artifacts: artifacts.clone(),
-                },
-            )
-        } else {
-            invoke_json(
-                "onnxruntime",
-                self.classify_json,
-                self.free_buffer,
-                &request,
-            )
-        }?;
-        result.validate()?;
-        Ok(result)
-    }
 }
 
 fn load_library(module: &'static str, path: impl AsRef<OsStr>) -> VisionFfiResult<Arc<Library>> {
@@ -692,134 +564,6 @@ where
     Ok(*symbol)
 }
 
-fn invoke_json<I, O>(
-    module: &'static str,
-    invoke: VisionFfiInvokeJson,
-    free_buffer: VisionFfiFreeBuffer,
-    request: &I,
-) -> VisionFfiResult<O>
-where
-    I: Serialize,
-    O: DeserializeOwned,
-{
-    let request_json = serde_json::to_vec(request).map_err(|err| {
-        VisionFfiError::fatal(module, format!("failed to serialize FFI request: {err}"))
-    })?;
-    let mut response = VisionFfiOwnedBuffer::default();
-    // SAFETY: the request slice remains alive for the call, response_out points
-    // to valid storage, and the callee must follow the documented JSON ABI.
-    let status = unsafe {
-        invoke(
-            request_json.as_ptr(),
-            request_json.len(),
-            &mut response as *mut VisionFfiOwnedBuffer,
-        )
-    };
-    let response_bytes = take_owned_buffer(module, response, free_buffer)?;
-    if status != 0 {
-        let response_text = String::from_utf8_lossy(&response_bytes);
-        let code = match status {
-            2 => VisionFfiErrorCode::ProviderPanic,
-            3 => VisionFfiErrorCode::Timeout,
-            _ => VisionFfiErrorCode::ProviderFailure,
-        };
-        return Err(VisionFfiError::fatal_with_code(
-            code,
-            module,
-            format!("FFI backend returned status {status}: {response_text}"),
-        ));
-    }
-    if response_bytes.is_empty() {
-        return Err(VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidResponse,
-            module,
-            "FFI backend returned an empty response",
-        ));
-    }
-    serde_json::from_slice(&response_bytes).map_err(|err| {
-        VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidResponse,
-            module,
-            format!("failed to parse FFI response JSON: {err}"),
-        )
-    })
-}
-
-fn take_owned_buffer(
-    module: &'static str,
-    buffer: VisionFfiOwnedBuffer,
-    free_buffer: VisionFfiFreeBuffer,
-) -> VisionFfiResult<Vec<u8>> {
-    if buffer.len == 0 && buffer.capacity == 0 {
-        return Ok(Vec::new());
-    }
-    if buffer.data.is_null() {
-        return Err(invalid_owned_buffer(
-            module,
-            "null data pointer with owned buffer metadata",
-            buffer,
-        ));
-    }
-    if buffer.capacity < buffer.len {
-        return Err(invalid_owned_buffer(
-            module,
-            "buffer capacity smaller than its length",
-            buffer,
-        ));
-    }
-    if buffer.capacity == 0 {
-        return Err(invalid_owned_buffer(
-            module,
-            "non-null data pointer with zero capacity",
-            buffer,
-        ));
-    }
-    if buffer.len > MAX_FFI_RESPONSE_BYTES || buffer.capacity > MAX_FFI_RESPONSE_BYTES {
-        return Err(invalid_owned_buffer(
-            module,
-            "oversized response buffer metadata",
-            buffer,
-        ));
-    }
-
-    debug_assert!(buffer.has_releasable_metadata());
-    if buffer.len == 0 {
-        // SAFETY: all ownership metadata was validated before the provider
-        // deallocator receives it.
-        unsafe {
-            free_buffer(buffer);
-        }
-        return Ok(Vec::new());
-    }
-
-    // SAFETY: the FFI provider returned a non-null pointer and length; this
-    // copies the bytes before returning ownership to the paired free function.
-    let bytes = unsafe { slice::from_raw_parts(buffer.data, buffer.len) }.to_vec();
-    // SAFETY: each successful buffer must be released exactly once through the
-    // free function supplied by the same provider.
-    unsafe {
-        free_buffer(buffer);
-    }
-    Ok(bytes)
-}
-
-fn invalid_owned_buffer(
-    module: &'static str,
-    reason: &str,
-    buffer: VisionFfiOwnedBuffer,
-) -> VisionFfiError {
-    VisionFfiError::fatal_with_code(
-        VisionFfiErrorCode::InvalidResponse,
-        module,
-        format!(
-            "FFI backend returned invalid owned buffer metadata: reason={reason}; data_is_null={}; len={}; capacity={}; limit={MAX_FFI_RESPONSE_BYTES}; action=not_read_not_released",
-            buffer.data.is_null(),
-            buffer.len,
-            buffer.capacity
-        ),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -827,97 +571,6 @@ mod tests {
         Mutex,
         atomic::{AtomicUsize, Ordering},
     };
-
-    static FREE_CALLS: AtomicUsize = AtomicUsize::new(0);
-    static FREE_CALLS_LOCK: Mutex<()> = Mutex::new(());
-
-    #[test]
-    fn take_owned_buffer_rejects_oversized_response_before_copy() {
-        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
-        let buffer = VisionFfiOwnedBuffer {
-            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
-            len: MAX_FFI_RESPONSE_BYTES + 1,
-            capacity: MAX_FFI_RESPONSE_BYTES + 1,
-        };
-
-        FREE_CALLS.store(0, Ordering::SeqCst);
-        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
-            .expect_err("oversized buffer must be rejected");
-
-        assert!(err.message().contains("oversized response buffer"));
-        assert!(err.message().contains("action=not_read_not_released"));
-        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn take_owned_buffer_rejects_null_data_with_nonzero_length() {
-        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
-        let buffer = VisionFfiOwnedBuffer {
-            data: std::ptr::null_mut(),
-            len: 1,
-            capacity: 1,
-        };
-
-        FREE_CALLS.store(0, Ordering::SeqCst);
-        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
-            .expect_err("null data with non-zero length must be rejected");
-
-        assert!(err.message().contains("null data pointer"));
-        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn take_owned_buffer_rejects_capacity_smaller_than_length() {
-        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
-        let buffer = VisionFfiOwnedBuffer {
-            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
-            len: 2,
-            capacity: 1,
-        };
-
-        FREE_CALLS.store(0, Ordering::SeqCst);
-        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
-            .expect_err("capacity smaller than length must be rejected");
-
-        assert!(err.message().contains("capacity smaller than its length"));
-        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn take_owned_buffer_rejects_oversized_capacity_without_deallocation() {
-        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
-        let buffer = VisionFfiOwnedBuffer {
-            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
-            len: 1,
-            capacity: MAX_FFI_RESPONSE_BYTES + 1,
-        };
-
-        FREE_CALLS.store(0, Ordering::SeqCst);
-        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
-            .expect_err("oversized capacity must be rejected");
-
-        assert!(err.message().contains("oversized response buffer"));
-        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn take_owned_buffer_releases_valid_buffer_once() {
-        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
-        let mut bytes = b"valid".to_vec();
-        let buffer = VisionFfiOwnedBuffer {
-            data: bytes.as_mut_ptr(),
-            len: bytes.len(),
-            capacity: bytes.capacity(),
-        };
-        std::mem::forget(bytes);
-
-        FREE_CALLS.store(0, Ordering::SeqCst);
-        let copied =
-            take_owned_buffer("test", buffer, counting_free_buffer).expect("valid buffer accepted");
-
-        assert_eq!(copied, b"valid");
-        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 1);
-    }
 
     #[test]
     fn cuda_stable_identity_uses_pci_only_when_uuid_api_is_absent() {
@@ -1188,23 +841,6 @@ mod tests {
         #[cfg(not(windows))]
         {
             PathBuf::from(format!("/synthetic-runtime/{name}"))
-        }
-    }
-
-    unsafe extern "C" fn counting_noop_free_buffer(_buffer: VisionFfiOwnedBuffer) {
-        FREE_CALLS.fetch_add(1, Ordering::SeqCst);
-    }
-
-    unsafe extern "C" fn counting_free_buffer(buffer: VisionFfiOwnedBuffer) {
-        FREE_CALLS.fetch_add(1, Ordering::SeqCst);
-        // SAFETY: this test function receives the exact metadata from the Vec
-        // intentionally transferred by take_owned_buffer_releases_valid_buffer_once.
-        unsafe {
-            drop(Vec::from_raw_parts(
-                buffer.data,
-                buffer.len,
-                buffer.capacity,
-            ));
         }
     }
 }

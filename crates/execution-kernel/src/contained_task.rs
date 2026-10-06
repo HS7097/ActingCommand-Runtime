@@ -629,7 +629,9 @@ struct PostAdmissionOcrCollector<'a> {
     tolerant_candidate_checks: u64,
     tolerant_scalar_comparisons: u64,
     invocation_ids: BTreeSet<String>,
-    stream_binding: Option<OcrProviderExecutionEvidence>,
+    /// Workflow #360: each target keeps one provider stream (one model) for the whole read;
+    /// different targets may use different models.
+    stream_bindings: BTreeMap<String, OcrProviderExecutionEvidence>,
     /// Readings taken on the successful terminal frame; `None` when the run does not read them
     /// (offline simulation, bound recovery entry).
     resource_readings: Option<&'a [ResourceReadingDeclaration]>,
@@ -690,7 +692,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             return Ok(None);
         }
         let mut invocation_ids = self.invocation_ids.clone();
-        let mut stream_binding = self.stream_binding.clone();
+        let mut stream_bindings = self.stream_bindings.clone();
         let mut values = self.values.clone();
         let mut mapping_evidence = self.mapping_evidence.clone();
         let mut tolerant_candidate_checks = self.tolerant_candidate_checks;
@@ -721,7 +723,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 })?;
                 if evaluated.target_id != *target_id
                     || !invocation_ids.insert(evaluated.execution.invocation_id.clone())
-                    || stream_binding.as_ref().is_some_and(|binding| {
+                    || stream_bindings.get(target_id).is_some_and(|binding| {
                         !same_ocr_stream_binding(binding, &evaluated.execution)
                     })
                 {
@@ -729,9 +731,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                         "contained_task_post_admission_ocr_evidence_mismatch",
                     ));
                 }
-                if stream_binding.is_none() {
-                    stream_binding = Some(evaluated.execution.clone());
-                }
+                stream_bindings
+                    .entry(target_id.clone())
+                    .or_insert_with(|| evaluated.execution.clone());
                 let block_count = u32::try_from(evaluated.blocks.len()).map_err(|_| {
                     ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
                 })?;
@@ -931,7 +933,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
         })?;
         self.invocation_ids = invocation_ids;
-        self.stream_binding = stream_binding;
+        self.stream_bindings = stream_bindings;
         self.values = values;
         self.mapping_evidence = mapping_evidence;
         self.tolerant_candidate_checks = tolerant_candidate_checks;
@@ -1024,17 +1026,19 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                                 || !self
                                     .invocation_ids
                                     .insert(evaluated.execution.invocation_id.clone())
-                                || self.stream_binding.as_ref().is_some_and(|binding| {
-                                    !same_ocr_stream_binding(binding, &evaluated.execution)
-                                })
+                                || self.stream_bindings.get(&field.target_id).is_some_and(
+                                    |binding| {
+                                        !same_ocr_stream_binding(binding, &evaluated.execution)
+                                    },
+                                )
                             {
                                 return Err(ContainedTaskError::new(
                                     "contained_task_post_admission_ocr_evidence_mismatch",
                                 ));
                             }
-                            if self.stream_binding.is_none() {
-                                self.stream_binding = Some(evaluated.execution.clone());
-                            }
+                            self.stream_bindings
+                                .entry(field.target_id.clone())
+                                .or_insert_with(|| evaluated.execution.clone());
                             self.items_collected += 1;
                             let remaining = declaration
                                 .limits
@@ -1192,7 +1196,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let Some(prepared) = self.prepared else {
             return Ok(None);
         };
-        if self.frames_collected == 0 || self.stream_binding.is_none() {
+        if self.frames_collected == 0 || self.stream_bindings.is_empty() {
             return Err(ContainedTaskError::new(
                 "contained_task_post_admission_ocr_observation_missing",
             ));

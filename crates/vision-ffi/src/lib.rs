@@ -2,10 +2,11 @@
 
 //! Safe Rust boundary between the Runtime and its OCR and NN engines.
 //!
-//! The OCR engine runs in-process (Workflow #360): this crate defines the borrowed request
-//! views, results and execution attestation it exchanges with the Runtime, and the loader
-//! contract through which the Runtime builds one engine per model on first use. Runtime
-//! callers cannot substitute mock recognition for production OCR or NN results.
+//! The OCR and NN engines run in-process (Workflow #360): this crate defines the borrowed
+//! request views, results and execution attestation they exchange with the Runtime, the model
+//! folder rule, and the loader contract through which the Runtime builds one engine per model
+//! on first use. Runtime callers cannot substitute mock recognition for production OCR or NN
+//! results.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -153,12 +154,11 @@ impl VisionPixelFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisionFrame {
     pub width: u32,
     pub height: u32,
     pub pixel_format: VisionPixelFormat,
-    #[serde(with = "base64_pixels")]
     pub pixels: Vec<u8>,
 }
 
@@ -197,13 +197,12 @@ impl VisionFrame {
     }
 }
 
-/// Borrowed `VisionFrame`; serializes to the same bytes (same field names and order).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Borrowed `VisionFrame`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VisionFrameView<'a> {
     pub width: u32,
     pub height: u32,
     pub pixel_format: VisionPixelFormat,
-    #[serde(serialize_with = "base64_pixels::serialize")]
     pub pixels: &'a [u8],
 }
 
@@ -256,7 +255,7 @@ impl VisionRect {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OcrInferenceRequest {
     pub frame: VisionFrame,
     pub region: VisionRect,
@@ -279,8 +278,8 @@ impl OcrInferenceRequest {
     }
 }
 
-/// Borrowed `OcrInferenceRequest`; serializes to the same bytes (same field names and order).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+/// Borrowed `OcrInferenceRequest`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OcrInferenceRequestView<'a> {
     pub frame: VisionFrameView<'a>,
     pub region: VisionRect,
@@ -432,7 +431,7 @@ pub trait OcrEngine {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NnInferenceRequest {
     pub frame: VisionFrame,
     pub model_id: String,
@@ -525,29 +524,6 @@ pub trait NnEngine {
     fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisionFfiRouteDecision {
-    pub route: &'static str,
-    pub ocr_backend: VisionBackendKind,
-    pub nn_backend: VisionBackendKind,
-    pub gpu_enabled: bool,
-    pub directml_enabled: bool,
-    pub bundled_artifacts: bool,
-    pub expected_size_delta_mb: (u16, u16),
-}
-
-pub fn r1_r3_route_decision() -> VisionFfiRouteDecision {
-    VisionFfiRouteDecision {
-        route: "ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime",
-        ocr_backend: VisionBackendKind::FastDeployPpocr,
-        nn_backend: VisionBackendKind::OnnxRuntime,
-        gpu_enabled: true,
-        directml_enabled: false,
-        bundled_artifacts: false,
-        expected_size_delta_mb: (150, 250),
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct UnavailableOcrBackend;
 
@@ -573,37 +549,6 @@ impl NnEngine for UnavailableNnBackend {
             "nn",
             "ONNXRuntime backend is not linked or configured",
         ))
-    }
-}
-
-pub struct VisionFfiBoundary<O, N> {
-    ocr: O,
-    nn: N,
-}
-
-impl<O, N> VisionFfiBoundary<O, N> {
-    pub fn new(ocr: O, nn: N) -> Self {
-        Self { ocr, nn }
-    }
-}
-
-impl<O, N> VisionFfiBoundary<O, N>
-where
-    O: OcrEngine,
-    N: NnEngine,
-{
-    pub fn read_text(
-        &mut self,
-        request: OcrInferenceRequest,
-    ) -> VisionFfiResult<OcrInferenceResult> {
-        self.ocr.read_text(request)
-    }
-
-    pub fn classify(
-        &mut self,
-        request: NnInferenceRequest,
-    ) -> VisionFfiResult<NnClassificationResult> {
-        self.nn.classify(request)
     }
 }
 
@@ -642,98 +587,6 @@ fn validate_frame_pixels(
         ));
     }
     Ok(())
-}
-
-mod base64_pixels {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
-
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    pub fn serialize<S>(pixels: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded =
-            String::from_utf8(encode(pixels)).map_err(<S::Error as serde::ser::Error>::custom)?;
-        serializer.serialize_str(&encoded)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let encoded = String::deserialize(deserializer)?;
-        decode(&encoded).map_err(D::Error::custom)
-    }
-
-    fn encode(bytes: &[u8]) -> Vec<u8> {
-        let mut output = vec![b'='; bytes.len().div_ceil(3) * 4];
-        let (whole, tail) = bytes.as_chunks::<3>();
-        for (&[b0, b1, b2], out) in whole.iter().zip(output.as_chunks_mut::<4>().0) {
-            *out = [
-                TABLE[(b0 >> 2) as usize],
-                TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize],
-                TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize],
-                TABLE[(b2 & 0b0011_1111) as usize],
-            ];
-        }
-        // The tail quartet keeps its '=' padding after the 2 or 3 encoded positions.
-        let out = &mut output[whole.len() * 4..];
-        if let [b0] = tail {
-            out[0] = TABLE[(b0 >> 2) as usize];
-            out[1] = TABLE[((b0 & 0b0000_0011) << 4) as usize];
-        } else if let [b0, b1] = tail {
-            out[0] = TABLE[(b0 >> 2) as usize];
-            out[1] = TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize];
-            out[2] = TABLE[((b1 & 0b0000_1111) << 2) as usize];
-        }
-        output
-    }
-
-    fn decode(encoded: &str) -> Result<Vec<u8>, String> {
-        if !encoded.len().is_multiple_of(4) {
-            return Err("base64 pixel payload length must be a multiple of 4".to_string());
-        }
-        let bytes = encoded.as_bytes();
-        let mut output = Vec::with_capacity(encoded.len() / 4 * 3);
-        for quartet in bytes.chunks(4) {
-            let v0 = decode_value(quartet[0])?;
-            let v1 = decode_value(quartet[1])?;
-            let pad2 = quartet[2] == b'=';
-            let pad3 = quartet[3] == b'=';
-            let v2 = if pad2 { 0 } else { decode_value(quartet[2])? };
-            let v3 = if pad3 { 0 } else { decode_value(quartet[3])? };
-            if pad2 && !pad3 {
-                return Err("base64 pixel payload has invalid padding".to_string());
-            }
-            output.push((v0 << 2) | (v1 >> 4));
-            if !pad2 {
-                output.push(((v1 & 0b0000_1111) << 4) | (v2 >> 2));
-            }
-            if !pad3 {
-                output.push(((v2 & 0b0000_0011) << 6) | v3);
-            }
-        }
-        Ok(output)
-    }
-
-    fn decode_value(byte: u8) -> Result<u8, String> {
-        match byte {
-            b'A'..=b'Z' => Ok(byte - b'A'),
-            b'a'..=b'z' => Ok(byte - b'a' + 26),
-            b'0'..=b'9' => Ok(byte - b'0' + 52),
-            b'+' => Ok(62),
-            b'/' => Ok(63),
-            _ => Err(format!(
-                "base64 pixel payload contains invalid byte 0x{byte:02x}"
-            )),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn encoded_len(bytes: &[u8]) -> usize {
-        encode(bytes).len()
-    }
 }
 
 fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> VisionFfiResult<()> {
@@ -825,8 +678,6 @@ fn rect_contains(outer: VisionRect, inner: VisionRect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::slice;
 
     #[test]
     fn invalid_frame_size_is_fatal() {
@@ -892,21 +743,6 @@ mod tests {
     }
 
     #[test]
-    fn route_decision_requires_gpu_and_disables_directml() {
-        let decision = r1_r3_route_decision();
-
-        assert_eq!(
-            decision.route,
-            "ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime"
-        );
-        assert_eq!(decision.ocr_backend, VisionBackendKind::FastDeployPpocr);
-        assert_eq!(decision.nn_backend, VisionBackendKind::OnnxRuntime);
-        assert!(decision.gpu_enabled);
-        assert!(!decision.directml_enabled);
-        assert_eq!(decision.expected_size_delta_mb, (150, 250));
-    }
-
-    #[test]
     fn nan_confidence_is_typed_invalid_response() {
         let frame = test_frame();
         let request = OcrInferenceRequest {
@@ -935,185 +771,7 @@ mod tests {
         assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse);
     }
 
-    #[test]
-    fn backend_from_manifest_requires_backend_section() {
-        let manifest = VisionProviderArtifactManifest {
-            schema_version: VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION.to_string(),
-            fastdeploy_ppocr: None,
-            onnxruntime: None,
-        };
-
-        let err = match OnnxRuntimeBackend::from_manifest(&manifest) {
-            Ok(_) => panic!("missing NN section was accepted"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
-        assert!(err.message().contains("onnxruntime"));
-    }
-
-    #[test]
-    fn nn_artifact_envelope_classifies_frame() {
-        let request = NnInferenceRequest {
-            frame: test_frame(),
-            model_id: "page-classifier".to_string(),
-            labels: vec!["home".to_string(), "unknown".to_string()],
-            timeout_ms: 1_000,
-        };
-        let mut backend = unsafe {
-            OnnxRuntimeBackend::from_raw_functions_with_artifacts(
-                fake_nn_envelope_json,
-                fake_free_buffer,
-                test_nn_artifacts(),
-            )
-            .expect("test artifact backend")
-        };
-
-        let result = backend.classify(request).expect("nn result");
-
-        assert_eq!(result.backend, VisionBackendKind::OnnxRuntime);
-        assert_eq!(result.labels[0].label, "home");
-    }
-
-    #[test]
-    fn vision_frame_serializes_pixels_as_base64_not_number_array() {
-        let frame =
-            VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, (0_u8..12).collect()).expect("frame");
-
-        let json = serde_json::to_string(&frame).expect("serialize");
-        let decoded: VisionFrame = serde_json::from_str(&json).expect("deserialize");
-
-        assert!(json.contains(r#""pixels":"AAECAwQFBgcICQoL""#));
-        assert_eq!(decoded, frame);
-    }
-
-    #[test]
-    fn vision_frame_rejects_invalid_base64_pixel_payloads() {
-        let cases = [
-            (
-                "length-not-multiple-of-four",
-                r#"{"width":1,"height":1,"pixel_format":"gray8","pixels":"AAA"}"#,
-                "multiple of 4",
-            ),
-            (
-                "invalid-byte",
-                r#"{"width":1,"height":1,"pixel_format":"gray8","pixels":"AA?="}"#,
-                "invalid byte",
-            ),
-            (
-                "invalid-padding",
-                r#"{"width":1,"height":1,"pixel_format":"gray8","pixels":"AA=A"}"#,
-                "invalid padding",
-            ),
-        ];
-
-        for (name, json, expected) in cases {
-            let err: serde_json::Error = serde_json::from_str::<VisionFrame>(json).expect_err(name);
-            assert!(err.to_string().contains(expected), "{name} produced {err}");
-        }
-    }
-
-    #[test]
-    fn vision_frame_round_trips_base64_padding_payload() {
-        let frame = VisionFrame::new(1, 1, VisionPixelFormat::Gray8, vec![42]).expect("frame");
-
-        let json = serde_json::to_string(&frame).expect("serialize");
-        let decoded: VisionFrame = serde_json::from_str(&json).expect("deserialize");
-
-        assert!(json.contains(r#""pixels":"Kg==""#));
-        assert_eq!(decoded, frame);
-    }
-
-    #[test]
-    fn base64_pixel_payload_stays_near_raw_frame_size() {
-        let pixels = vec![7_u8; 1920 * 1080 * 3];
-
-        let encoded_len = base64_pixels::encoded_len(&pixels);
-
-        assert!(encoded_len <= pixels.len() * 3 / 2);
-    }
-
     fn test_frame() -> VisionFrame {
         VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, vec![0; 12]).expect("test frame")
-    }
-
-    unsafe extern "C" fn fake_nn_envelope_json(
-        request_ptr: *const u8,
-        request_len: usize,
-        response_out: *mut VisionFfiOwnedBuffer,
-    ) -> i32 {
-        let envelope = read_ffi_request::<OnnxRuntimeInvokeRequest>(request_ptr, request_len);
-        write_ffi_response(
-            response_out,
-            &NnClassificationResult {
-                labels: vec![NnLabel {
-                    label: envelope.artifacts.labels[0].clone(),
-                    score: 0.96,
-                }],
-                backend: VisionBackendKind::OnnxRuntime,
-            },
-        )
-    }
-
-    unsafe extern "C" fn fake_free_buffer(buffer: VisionFfiOwnedBuffer) {
-        if !buffer.data.is_null() {
-            // SAFETY: test fake backends allocate every returned buffer from a Vec<u8>
-            // and transfer its original length/capacity through VisionFfiOwnedBuffer.
-            unsafe {
-                drop(Vec::from_raw_parts(
-                    buffer.data,
-                    buffer.len,
-                    buffer.capacity,
-                ));
-            }
-        }
-    }
-
-    fn read_ffi_request<T>(request_ptr: *const u8, request_len: usize) -> T
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        // SAFETY: test callers pass a non-null request pointer and exact length
-        // produced by the production FFI adapter serialization path.
-        let bytes = unsafe { slice::from_raw_parts(request_ptr, request_len) };
-        serde_json::from_slice(bytes).expect("decode fake FFI request")
-    }
-
-    fn write_ffi_response<T>(response_out: *mut VisionFfiOwnedBuffer, response: &T) -> i32
-    where
-        T: Serialize + ?Sized,
-    {
-        let mut bytes = serde_json::to_vec(response).expect("encode fake FFI response");
-        let buffer = VisionFfiOwnedBuffer {
-            data: bytes.as_mut_ptr(),
-            len: bytes.len(),
-            capacity: bytes.capacity(),
-        };
-        std::mem::forget(bytes);
-        // SAFETY: test callers pass a valid output pointer owned by the FFI adapter.
-        unsafe {
-            response_out.write(buffer);
-        }
-        0
-    }
-
-    fn test_nn_artifacts() -> OnnxRuntimeArtifacts {
-        OnnxRuntimeArtifacts {
-            provider_library_path: PathBuf::from(
-                "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
-            ),
-            runtime_library_path: Some(PathBuf::from(
-                "external-tools/vision/onnxruntime/onnxruntime.dll",
-            )),
-            model_path: PathBuf::from(
-                "external-tools/vision/onnxruntime/models/page_classifier.onnx",
-            ),
-            model_ref: Some("page-classifier".to_string()),
-            model_sha256: Some("d".repeat(64)),
-            labels: vec!["home".to_string(), "unknown".to_string()],
-            labels_path: None,
-            execution_provider: OnnxExecutionProvider::Cpu,
-            default_timeout_ms: 1_000,
-        }
     }
 }
