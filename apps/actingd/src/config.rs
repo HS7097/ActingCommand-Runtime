@@ -28,7 +28,7 @@ use actingcommand_runtime_host::{
     RuntimeHostError, VisionFfiProvider, VisionModelIdentity, VisionSpec,
 };
 use actingcommand_vision_ffi::{
-    NnEngine, OcrEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
+    NnEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
 };
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};

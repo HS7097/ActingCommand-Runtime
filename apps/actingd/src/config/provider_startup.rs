@@ -11,10 +11,14 @@ use actingcommand_device::{
     MumuEmulatorCapabilityBackend,
 };
 use actingcommand_execution_kernel::InstanceDiscoveryFailure;
+use actingcommand_execution_kernel::LazyOcrModel;
+use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_runtime_host::{
     DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
 };
-use actingcommand_vision_ffi::{FastDeployPpocrBackend, OnnxRuntimeBackend, VisionFfiError};
+use actingcommand_vision_ffi::{
+    OcrModelSpec, OnnxRuntimeBackend, VisionFfiError, VisionFfiErrorCode, VisionRuntimeSpec,
+};
 use std::io;
 
 impl ConfiguredProvider {
@@ -607,27 +611,33 @@ fn assemble_vision_provider(
                     stage: Stage::BackendConstruction,
                 },
             )?;
-            let engine = FastDeployPpocrBackend::from_artifacts(artifacts)
-                .map_err(|error| {
-                    ffi_failure(
-                        startup,
-                        backend,
-                        Stage::BackendConstruction,
-                        "vision_provider_unavailable",
-                        error,
-                    )
-                })?
-                .with_node_placement_diagnostic(node_placement_diagnostic);
+            // Workflow #360: startup only checks that the files exist. The engine reads,
+            // hashes and loads them, and initialises ONNX Runtime, on the first OCR use.
+            let runtime = ocr_runtime_spec(&artifacts).map_err(|error| {
+                ffi_failure(
+                    startup,
+                    backend,
+                    Stage::BackendConstruction,
+                    "vision_provider_unavailable",
+                    error,
+                )
+            })?;
+            let model = LazyOcrModel {
+                spec: OcrModelSpec {
+                    model_ref: identity.model_ref().to_string(),
+                    detector_path: artifacts.detector_model_path.clone(),
+                    recognizer_path: artifacts.recognizer_model_path.clone(),
+                    dictionary_path: artifacts.dictionary_path.clone(),
+                },
+                admitted: Some(identity),
+            };
             startup.record(
                 backend,
                 Observation::Completed {
                     stage: Stage::BackendConstruction,
                 },
             )?;
-            Ok::<_, actingcommand_runtime_host::RuntimeHostError>((
-                Box::new(engine) as Box<dyn OcrEngine + Send>,
-                identity,
-            ))
+            Ok::<_, actingcommand_runtime_host::RuntimeHostError>((model, runtime))
         })
         .transpose()?;
     let nn = manifest
@@ -699,7 +709,15 @@ fn assemble_vision_provider(
             ))
         })
         .transpose()?;
-    let provider = VisionFfiProvider::new(ocr, nn).map_err(|error| {
+    let provider = match ocr {
+        Some((model, runtime)) => VisionFfiProvider::with_loader(
+            vec![model],
+            nn,
+            Arc::new(PpocrCtcLoader::new(runtime, node_placement_diagnostic)),
+        ),
+        None => VisionFfiProvider::new(None, nn),
+    }
+    .map_err(|error| {
         kernel_failure(
             startup,
             backend,
@@ -708,6 +726,27 @@ fn assemble_vision_provider(
         )
     })?;
     Ok(Arc::new(provider))
+}
+
+/// The OCR runtime of a v0.3 manifest section; every file must exist, none is read.
+fn ocr_runtime_spec(
+    artifacts: &actingcommand_vision_ffi::FastDeployPpocrArtifacts,
+) -> Result<VisionRuntimeSpec, VisionFfiError> {
+    artifacts.validate_existing_files()?;
+    let execution_provider = artifacts.execution_provider.ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            "fastdeploy-ppocr",
+            "production OCR execution_provider must be explicitly cpu or cuda",
+        )
+    })?;
+    Ok(VisionRuntimeSpec {
+        onnxruntime_library: artifacts.onnxruntime_library_path()?.to_path_buf(),
+        runtime_library_closure: artifacts.runtime_library_paths.clone(),
+        expected_onnxruntime_sha256: artifacts.runtime_library_sha256.clone(),
+        execution_provider,
+        cuda_device: artifacts.cuda_device.clone(),
+    })
 }
 
 fn ffi_failure(

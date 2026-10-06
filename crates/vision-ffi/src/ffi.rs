@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::artifacts::FastDeployPpocrInvokeRequestView;
 use crate::{
-    CudaDeviceIdentity, CudaDeviceInventory, FastDeployPpocrArtifacts,
-    FastDeployPpocrInvokeResponse, NnClassificationResult, NnEngine, NnInferenceRequest,
-    OCR_PROVIDER_REQUEST_SCHEMA_VERSION, OcrEngine, OcrInferenceOutput, OcrInferenceRequest,
-    OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrSessionBinding, OcrSessionId,
-    OnnxExecutionProvider, OnnxRuntimeArtifacts, OnnxRuntimeInvokeRequest, VisionFfiError,
+    CudaDeviceIdentity, CudaDeviceInventory, NnClassificationResult, NnEngine, NnInferenceRequest,
+    OcrInvocationId, OcrSessionId, OnnxRuntimeArtifacts, OnnxRuntimeInvokeRequest, VisionFfiError,
     VisionFfiErrorCode, VisionFfiResult, VisionProviderArtifactManifest,
 };
 use libloading::Library;
@@ -74,15 +70,6 @@ pub struct VisionFfiOwnedBuffer {
 }
 
 impl VisionFfiOwnedBuffer {
-    /// PPOCR's response length and allocation capacity share the owned-buffer bound.
-    pub fn has_ppocr_releasable_metadata(&self) -> bool {
-        !self.data.is_null()
-            && self.capacity > 0
-            && self.len <= self.capacity
-            && self.len <= crate::PPOCR_MAX_RESPONSE_BYTES
-            && self.capacity <= crate::PPOCR_MAX_RESPONSE_BYTES
-    }
-
     /// Reports whether this metadata can be passed to the paired provider deallocator.
     ///
     /// This validates ownership metadata only. Pointer provenance remains an ABI
@@ -103,222 +90,6 @@ impl Default for VisionFfiOwnedBuffer {
             len: 0,
             capacity: 0,
         }
-    }
-}
-
-pub struct FastDeployPpocrBackend {
-    _library: Option<Arc<Library>>,
-    read_text_json: VisionFfiInvokeJson,
-    free_buffer: VisionFfiFreeBuffer,
-    artifacts: Option<FastDeployPpocrArtifacts>,
-    session: Option<Arc<OcrSessionBinding>>,
-    /// Sent as `FastDeployPpocrInvokeRequest.node_placement_diagnostic` on every request.
-    node_placement_diagnostic: Option<String>,
-}
-
-impl FastDeployPpocrBackend {
-    /// Injects the `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC` value the provider
-    /// receives with each request (Workflow #318 cfg3); `None` sends nothing.
-    pub fn with_node_placement_diagnostic(mut self, value: Option<String>) -> Self {
-        self.node_placement_diagnostic = value;
-        self
-    }
-
-    pub fn from_library_path(path: impl AsRef<OsStr>) -> VisionFfiResult<Self> {
-        let library = load_library("fastdeploy-ppocr", path)?;
-        let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
-        let free_buffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
-        Ok(Self {
-            _library: Some(library),
-            read_text_json,
-            free_buffer,
-            artifacts: None,
-            session: None,
-            node_placement_diagnostic: None,
-        })
-    }
-
-    pub fn from_artifacts(artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<Self> {
-        artifacts.validate_ppocr_v6_execution_existing_files()?;
-        establish_process_runtime_library_closure(&artifacts.runtime_library_paths)?;
-        let session = new_session_binding(&artifacts)?;
-        let library = load_library("fastdeploy-ppocr", &artifacts.provider_library_path)?;
-        let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
-        let free_buffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
-        Ok(Self {
-            _library: Some(library),
-            read_text_json,
-            free_buffer,
-            artifacts: Some(artifacts),
-            session: Some(Arc::new(session)),
-            node_placement_diagnostic: None,
-        })
-    }
-
-    pub fn from_manifest(manifest: &VisionProviderArtifactManifest) -> VisionFfiResult<Self> {
-        Self::from_artifacts(manifest.require_production_fastdeploy_ppocr()?.clone())
-    }
-
-    /// # Safety
-    ///
-    /// The function pointers must follow the ActingCommand OCR JSON ABI and
-    /// the free function must be able to release every buffer returned by the
-    /// invoke function for the lifetime of this backend.
-    pub unsafe fn from_raw_functions(
-        read_text_json: VisionFfiInvokeJson,
-        free_buffer: VisionFfiFreeBuffer,
-    ) -> Self {
-        Self {
-            _library: None,
-            read_text_json,
-            free_buffer,
-            artifacts: None,
-            session: None,
-            node_placement_diagnostic: None,
-        }
-    }
-
-    /// # Safety
-    ///
-    /// The function pointers must follow the ActingCommand OCR JSON envelope
-    /// ABI and the free function must be able to release every buffer returned
-    /// by the invoke function for the lifetime of this backend.
-    pub unsafe fn from_raw_functions_with_artifacts(
-        read_text_json: VisionFfiInvokeJson,
-        free_buffer: VisionFfiFreeBuffer,
-        artifacts: FastDeployPpocrArtifacts,
-    ) -> VisionFfiResult<Self> {
-        artifacts.validate_ppocr_v6_execution()?;
-        let session = new_session_binding(&artifacts)?;
-        Ok(Self {
-            _library: None,
-            read_text_json,
-            free_buffer,
-            artifacts: Some(artifacts),
-            session: Some(Arc::new(session)),
-            node_placement_diagnostic: None,
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) unsafe fn from_raw_functions_with_artifacts_and_inventory(
-        read_text_json: VisionFfiInvokeJson,
-        free_buffer: VisionFfiFreeBuffer,
-        artifacts: FastDeployPpocrArtifacts,
-        inventory: Option<CudaDeviceInventory>,
-    ) -> VisionFfiResult<Self> {
-        artifacts.validate_ppocr_v6_execution()?;
-        let session = new_session_binding_with(
-            &artifacts,
-            || inventory_result(inventory),
-            |_| Ok("1.24.0-test".to_string()),
-        )?;
-        Ok(Self {
-            _library: None,
-            read_text_json,
-            free_buffer,
-            artifacts: Some(artifacts),
-            session: Some(Arc::new(session)),
-            node_placement_diagnostic: None,
-        })
-    }
-
-    pub fn reconfigure(&mut self, artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<()> {
-        artifacts.validate_ppocr_v6_execution_existing_files()?;
-        #[cfg(windows)]
-        {
-            let current_artifacts = self.artifacts.as_ref().ok_or_else(|| {
-                VisionFfiError::fatal_with_code(
-                    VisionFfiErrorCode::InvalidRequest,
-                    "fastdeploy-ppocr",
-                    "unattested raw backend cannot be reconfigured as a production OCR session",
-                )
-            })?;
-            require_same_runtime_library_closure(
-                &current_artifacts.runtime_library_paths,
-                &artifacts.runtime_library_paths,
-            )?;
-            establish_process_runtime_library_closure(&artifacts.runtime_library_paths)?;
-        }
-        let key = resolve_session_key(&artifacts)?;
-        let current = self.session.as_ref().ok_or_else(|| {
-            VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::InvalidRequest,
-                "fastdeploy-ppocr",
-                "unattested raw backend cannot be reconfigured as a production OCR session",
-            )
-        })?;
-        require_same_process_runtime(current.key(), &key)?;
-        let next_generation = current.generation().checked_add(1).ok_or_else(|| {
-            VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::Internal,
-                "fastdeploy-ppocr",
-                "OCR session generation overflowed",
-            )
-        })?;
-        let session = OcrSessionBinding::new(current.session_id().clone(), next_generation, key);
-        session.validate()?;
-        let library = load_library("fastdeploy-ppocr", &artifacts.provider_library_path)?;
-        let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
-        let free_buffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
-
-        self._library = Some(library);
-        self.read_text_json = read_text_json;
-        self.free_buffer = free_buffer;
-        self.artifacts = Some(artifacts);
-        self.session = Some(Arc::new(session));
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn session_for_test(&self) -> VisionFfiResult<Arc<OcrSessionBinding>> {
-        self.session.as_ref().map(Arc::clone).ok_or_else(|| {
-            VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::Internal,
-                "fastdeploy-ppocr",
-                "test backend is missing its immutable session binding",
-            )
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn reconfigure_with_inventory_for_test(
-        &mut self,
-        artifacts: FastDeployPpocrArtifacts,
-        inventory: Option<CudaDeviceInventory>,
-    ) -> VisionFfiResult<()> {
-        artifacts.validate_ppocr_v6_execution()?;
-        let current_artifacts = self.artifacts.as_ref().ok_or_else(|| {
-            VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::InvalidRequest,
-                "fastdeploy-ppocr",
-                "unattested raw backend cannot be reconfigured as a production OCR session",
-            )
-        })?;
-        require_same_runtime_library_closure(
-            &current_artifacts.runtime_library_paths,
-            &artifacts.runtime_library_paths,
-        )?;
-        let key = resolve_session_key_with(
-            &artifacts,
-            || inventory_result(inventory),
-            |_| Ok("1.24.0-test".to_string()),
-        )?;
-        let current = self.session_for_test()?;
-        require_same_process_runtime(current.key(), &key)?;
-        let next_generation = current.generation().checked_add(1).ok_or_else(|| {
-            VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::Internal,
-                "fastdeploy-ppocr",
-                "OCR session generation overflowed",
-            )
-        })?;
-        let session = OcrSessionBinding::new(current.session_id().clone(), next_generation, key);
-        session.validate()?;
-
-        self.artifacts = Some(artifacts);
-        self.session = Some(Arc::new(session));
-        Ok(())
     }
 }
 
@@ -422,8 +193,14 @@ fn runtime_closure_error(message: impl Into<String>) -> VisionFfiError {
     )
 }
 
+/// Loads the declared ONNX Runtime library closure once per process, in order, with
+/// `LoadLibraryExW` and the released search flags; the handles stay loaded for the process
+/// lifetime. The same closure is idempotent; a different one, or any retry after a failed
+/// load, is refused until restart.
 #[cfg(windows)]
-fn establish_process_runtime_library_closure(declared_paths: &[PathBuf]) -> VisionFfiResult<()> {
+pub fn establish_process_runtime_library_closure(
+    declared_paths: &[PathBuf],
+) -> VisionFfiResult<()> {
     establish_runtime_library_closure_with(
         &PROCESS_RUNTIME_LIBRARY_CLOSURE,
         declared_paths,
@@ -432,7 +209,7 @@ fn establish_process_runtime_library_closure(declared_paths: &[PathBuf]) -> Visi
 }
 
 #[cfg(not(windows))]
-fn establish_process_runtime_library_closure(
+pub fn establish_process_runtime_library_closure(
     _declared_paths: &[std::path::PathBuf],
 ) -> VisionFfiResult<()> {
     Ok(())
@@ -457,90 +234,13 @@ fn load_process_runtime_library(path: &Path) -> VisionFfiResult<Arc<Library>> {
     Ok(Arc::new(library.into()))
 }
 
-fn require_same_process_runtime(
-    current: &crate::OcrSessionKey,
-    candidate: &crate::OcrSessionKey,
-) -> VisionFfiResult<()> {
-    if current.runtime_library_path() == candidate.runtime_library_path()
-        && current.runtime_library_sha256() == candidate.runtime_library_sha256()
-        && current.onnxruntime_version() == candidate.onnxruntime_version()
-    {
-        Ok(())
-    } else {
-        Err(VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::ProviderUnavailable,
-            "fastdeploy-ppocr",
-            "OCR runtime-library identity cannot change in-process; restart is required",
-        ))
-    }
-}
-
-fn new_session_binding(artifacts: &FastDeployPpocrArtifacts) -> VisionFfiResult<OcrSessionBinding> {
-    new_session_binding_with(artifacts, enumerate_cuda_devices, |path| {
-        onnxruntime_version_string(path)
-    })
-}
-
-fn new_session_binding_with<F, V>(
-    artifacts: &FastDeployPpocrArtifacts,
-    inventory: F,
-    runtime_version: V,
-) -> VisionFfiResult<OcrSessionBinding>
-where
-    F: FnOnce() -> VisionFfiResult<CudaDeviceInventory>,
-    V: FnOnce(&std::path::Path) -> VisionFfiResult<String>,
-{
-    let key = resolve_session_key_with(artifacts, inventory, runtime_version)?;
-    let session = OcrSessionBinding::new(next_session_id()?, 1, key);
-    session.validate()?;
-    Ok(session)
-}
-
-fn resolve_session_key(
-    artifacts: &FastDeployPpocrArtifacts,
-) -> VisionFfiResult<crate::OcrSessionKey> {
-    resolve_session_key_with(artifacts, enumerate_cuda_devices, |path| {
-        onnxruntime_version_string(path)
-    })
-}
-
-fn resolve_session_key_with<F, V>(
-    artifacts: &FastDeployPpocrArtifacts,
-    inventory: F,
-    runtime_version: V,
-) -> VisionFfiResult<crate::OcrSessionKey>
-where
-    F: FnOnce() -> VisionFfiResult<CudaDeviceInventory>,
-    V: FnOnce(&std::path::Path) -> VisionFfiResult<String>,
-{
-    artifacts.validate_ppocr_v6_execution()?;
-    let runtime_version = runtime_version(artifacts.onnxruntime_library_path()?)?;
-    match artifacts.execution_provider {
-        Some(OnnxExecutionProvider::Cpu) => artifacts.production_session_key(None, runtime_version),
-        Some(OnnxExecutionProvider::Cuda) => {
-            let selector = artifacts.cuda_device.as_ref().ok_or_else(|| {
-                VisionFfiError::fatal_with_code(
-                    VisionFfiErrorCode::InvalidRequest,
-                    "fastdeploy-ppocr",
-                    "CUDA OCR configuration is missing its device selector",
-                )
-            })?;
-            let resolved = inventory()?.resolve(selector)?;
-            artifacts.production_session_key(Some(resolved), runtime_version)
-        }
-        None => Err(VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidRequest,
-            "fastdeploy-ppocr",
-            "production OCR execution_provider must be explicitly cpu or cuda",
-        )),
-    }
-}
-
-fn next_session_id() -> VisionFfiResult<OcrSessionId> {
+/// Issues the next process-unique OCR session identity.
+pub fn next_ocr_session_id() -> VisionFfiResult<OcrSessionId> {
     next_sequence(&NEXT_OCR_SESSION_SEQUENCE, "OCR session").map(OcrSessionId::from_sequence)
 }
 
-fn next_invocation_id() -> VisionFfiResult<OcrInvocationId> {
+/// Issues the next process-unique OCR invocation identity.
+pub fn next_ocr_invocation_id() -> VisionFfiResult<OcrInvocationId> {
     next_sequence(&NEXT_OCR_INVOCATION_SEQUENCE, "OCR invocation")
         .map(OcrInvocationId::from_sequence)
 }
@@ -557,19 +257,6 @@ fn next_sequence(counter: &AtomicU64, label: &str) -> VisionFfiResult<u64> {
                 format!("{label} identity space is exhausted"),
             )
         })
-}
-
-#[cfg(test)]
-fn inventory_result(
-    inventory: Option<CudaDeviceInventory>,
-) -> VisionFfiResult<CudaDeviceInventory> {
-    inventory.ok_or_else(|| {
-        VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::ProviderUnavailable,
-            "ocr-device-inventory",
-            "test CUDA inventory is unavailable",
-        )
-    })
 }
 
 #[repr(C)]
@@ -862,80 +549,6 @@ pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> Vision
     Ok(())
 }
 
-impl OcrEngine for FastDeployPpocrBackend {
-    fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
-        self.read_text_view(request.view())
-    }
-
-    fn read_text_with_attestation(
-        &mut self,
-        request: OcrInferenceRequest,
-    ) -> VisionFfiResult<OcrInferenceOutput> {
-        self.read_text_with_attestation_view(request.view())
-    }
-
-    fn read_text_view(
-        &mut self,
-        request: OcrInferenceRequestView<'_>,
-    ) -> VisionFfiResult<OcrInferenceResult> {
-        self.read_text_with_attestation_view(request)
-            .map(|output| output.result)
-    }
-
-    fn read_text_with_attestation_view(
-        &mut self,
-        request: OcrInferenceRequestView<'_>,
-    ) -> VisionFfiResult<OcrInferenceOutput> {
-        request.validate()?;
-        let Some(artifacts) = &self.artifacts else {
-            let (mut result, diagnostics): (OcrInferenceResult, _) =
-                invoke_ppocr_json(self.read_text_json, self.free_buffer, &request)?;
-            result.ppocr_diagnostics = diagnostics;
-            result
-                .validate_for(request)
-                .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
-            return Err(VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::InvalidResponse,
-                "fastdeploy-ppocr",
-                "OCR provider returned a result without a session-bound execution attestation",
-            )
-            .with_ppocr_diagnostics(result.ppocr_diagnostics));
-        };
-        let session = self.session.as_ref().map(Arc::clone).ok_or_else(|| {
-            VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::Internal,
-                "fastdeploy-ppocr",
-                "production OCR backend is missing its immutable session binding",
-            )
-        })?;
-        let invocation_id = next_invocation_id()?;
-        let envelope = FastDeployPpocrInvokeRequestView {
-            schema_version: OCR_PROVIDER_REQUEST_SCHEMA_VERSION,
-            invocation_id: &invocation_id,
-            session: session.as_ref(),
-            request,
-            artifacts,
-            node_placement_diagnostic: self.node_placement_diagnostic.as_deref(),
-        };
-        envelope.validate()?;
-        let (mut response, diagnostics): (FastDeployPpocrInvokeResponse, _) =
-            invoke_ppocr_json(self.read_text_json, self.free_buffer, &envelope)?;
-        response.result.ppocr_diagnostics = diagnostics;
-        response
-            .validate_against(&invocation_id, &session)
-            .map_err(|error| {
-                error.with_ppocr_diagnostics(response.result.ppocr_diagnostics.clone())
-            })?;
-        response.result.validate_for(request).map_err(|error| {
-            error.with_ppocr_diagnostics(response.result.ppocr_diagnostics.clone())
-        })?;
-        Ok(OcrInferenceOutput {
-            result: response.result,
-            execution_attestation: Some(response.attestation),
-        })
-    }
-}
-
 pub struct OnnxRuntimeBackend {
     _library: Option<Arc<Library>>,
     classify_json: VisionFfiInvokeJson,
@@ -1077,60 +690,6 @@ where
         VisionFfiError::fatal(module, format!("failed to load FFI symbol: {err}"))
     })?;
     Ok(*symbol)
-}
-
-struct PpocrOwnedResponse {
-    buffer: VisionFfiOwnedBuffer,
-    free_buffer: VisionFfiFreeBuffer,
-}
-
-impl Drop for PpocrOwnedResponse {
-    fn drop(&mut self) {
-        if self.buffer.capacity > 0 {
-            // SAFETY: metadata was validated and ownership belongs to the paired provider.
-            unsafe { (self.free_buffer)(self.buffer) };
-        }
-    }
-}
-
-fn invoke_ppocr_json<I: Serialize, O: DeserializeOwned>(
-    invoke: VisionFfiInvokeJson,
-    free_buffer: VisionFfiFreeBuffer,
-    request: &I,
-) -> VisionFfiResult<(O, crate::PpocrDiagnostics)> {
-    let request_json = serde_json::to_vec(request).map_err(|error| {
-        VisionFfiError::fatal(
-            "fastdeploy-ppocr",
-            format!("failed to serialize FFI request: {error}"),
-        )
-    })?;
-    let mut buffer = VisionFfiOwnedBuffer::default();
-    // SAFETY: one invocation borrows the live request and writes caller-owned ABI storage.
-    let status = unsafe { invoke(request_json.as_ptr(), request_json.len(), &mut buffer) };
-    if !((buffer.len == 0 && buffer.capacity == 0) || buffer.has_ppocr_releasable_metadata()) {
-        return Err(VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidResponse,
-            "fastdeploy-ppocr",
-            format!(
-                "FFI backend returned invalid owned buffer metadata: data_is_null={}; len={}; capacity={}; limit={}; action=not_read_not_released",
-                buffer.data.is_null(),
-                buffer.len,
-                buffer.capacity,
-                crate::PPOCR_MAX_RESPONSE_BYTES,
-            ),
-        ));
-    }
-    let owned = PpocrOwnedResponse {
-        buffer,
-        free_buffer,
-    };
-    let bytes = if owned.buffer.len == 0 {
-        &[]
-    } else {
-        // SAFETY: validated metadata and the provider-owned guard keep this slice live.
-        unsafe { slice::from_raw_parts(owned.buffer.data, owned.buffer.len) }
-    };
-    crate::ppocr_result::decode_ppocr_response(status, bytes)
 }
 
 fn invoke_json<I, O>(
@@ -1589,36 +1148,6 @@ mod tests {
         assert_eq!(dropped.load(Ordering::SeqCst), 0);
     }
 
-    #[test]
-    fn reconfigure_rejects_changed_companion_closure_before_state_mutation() {
-        let inventory = test_cuda_inventory();
-        let artifacts = test_ppocr_artifacts(test_runtime_closure_paths());
-        let mut backend = unsafe {
-            FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
-                unreachable_ocr_invoke,
-                noop_free_buffer,
-                artifacts.clone(),
-                Some(inventory.clone()),
-            )
-        }
-        .expect("synthetic backend");
-        let session_before = backend.session_for_test().expect("session before");
-
-        let mut changed = artifacts.clone();
-        changed.runtime_library_paths[1] = absolute_test_path("different-cudnn64_9.dll");
-        let err = backend
-            .reconfigure_with_inventory_for_test(changed, Some(inventory))
-            .expect_err("changed companion closure rejected");
-
-        assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
-        assert!(err.message().contains("cannot change in-process"));
-        assert_eq!(backend.artifacts.as_ref(), Some(&artifacts));
-        let session_after = backend.session_for_test().expect("session after");
-        assert_eq!(session_after.session_id(), session_before.session_id());
-        assert_eq!(session_after.generation(), session_before.generation());
-        assert!(backend._library.is_none());
-    }
-
     #[cfg(windows)]
     #[test]
     fn windows_runtime_closure_uses_only_released_loadlibraryex_flags() {
@@ -1661,65 +1190,6 @@ mod tests {
             PathBuf::from(format!("/synthetic-runtime/{name}"))
         }
     }
-
-    fn test_ppocr_artifacts(runtime_library_paths: Vec<PathBuf>) -> FastDeployPpocrArtifacts {
-        let detector_hash = "a".repeat(64);
-        let recognizer_hash = "b".repeat(64);
-        let dictionary_hash = "c".repeat(64);
-        let model_hash = crate::ppocr_model_content_sha256(
-            &detector_hash,
-            &recognizer_hash,
-            &dictionary_hash,
-            None,
-        )
-        .expect("fixture model hash");
-        FastDeployPpocrArtifacts {
-            provider_library_path: absolute_test_path("ac_fastdeploy_ppocr.dll"),
-            provider_library_sha256: Some("e".repeat(64)),
-            runtime_library_path: Some(runtime_library_paths[0].clone()),
-            runtime_library_paths,
-            runtime_library_sha256: Some("d".repeat(64)),
-            detector_model_path: absolute_test_path("detector.onnx"),
-            recognizer_model_path: absolute_test_path("recognizer.onnx"),
-            dictionary_path: absolute_test_path("dictionary.txt"),
-            classifier_model_path: None,
-            model_ref: Some(crate::PPOCR_V6_MEDIUM_MODEL_REF.to_string()),
-            model_sha256: Some(model_hash),
-            detector_model_sha256: Some(detector_hash),
-            recognizer_model_sha256: Some(recognizer_hash),
-            dictionary_sha256: Some(dictionary_hash),
-            classifier_model_sha256: None,
-            execution_provider: Some(OnnxExecutionProvider::Cuda),
-            cuda_device: Some(crate::CudaDeviceSelector {
-                ordinal: 0,
-                expected_stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
-            }),
-            strict_no_fallback: Some(true),
-            supported_languages: vec!["en".to_string()],
-            default_timeout_ms: 1_000,
-        }
-    }
-
-    fn test_cuda_inventory() -> CudaDeviceInventory {
-        CudaDeviceInventory {
-            driver_version: 12_800,
-            devices: vec![CudaDeviceIdentity {
-                ordinal: 0,
-                stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
-                pci_bus_id: Some("0000:01:00.0".to_string()),
-            }],
-        }
-    }
-
-    unsafe extern "C" fn unreachable_ocr_invoke(
-        _request_ptr: *const u8,
-        _request_len: usize,
-        _response_out: *mut VisionFfiOwnedBuffer,
-    ) -> i32 {
-        panic!("synthetic reconfigure test must not invoke OCR")
-    }
-
-    unsafe extern "C" fn noop_free_buffer(_buffer: VisionFfiOwnedBuffer) {}
 
     unsafe extern "C" fn counting_noop_free_buffer(_buffer: VisionFfiOwnedBuffer) {
         FREE_CALLS.fetch_add(1, Ordering::SeqCst);
