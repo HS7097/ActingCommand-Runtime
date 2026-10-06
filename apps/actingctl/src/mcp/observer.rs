@@ -46,7 +46,7 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
     let mut warnings = Vec::new();
     let install = install_view(&location, &mut warnings);
     let lab_present = location
-        .root
+        .install_root
         .as_ref()
         .is_some_and(|root| root.join("tools").join("actinglab.exe").is_file());
     let mut result = Map::new();

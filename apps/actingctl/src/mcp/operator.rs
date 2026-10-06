@@ -299,12 +299,12 @@ fn parse_package_ref(text: &str, field: &str) -> Result<PackageRef, ToolError> {
         .map_err(|error| invalid_argument(field, &format!("is not a package reference: {error}")))
 }
 
-/// `<root>\tools\actinglab.exe --json package digest --package <path>`: the package's content
-/// reference, as actinglab computes it.
+/// `<install root>\tools\actinglab.exe --json package digest --package <path>`: the package's
+/// content reference, as actinglab computes it.
 fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, ToolError> {
     let location = context.runtime.locate();
     location.check()?;
-    let Some(root) = location.root else {
+    let Some(root) = location.install_root else {
         return Err(ToolError::usage(
             "lab_tool_unavailable",
             "no install root, so actinglab cannot compute the package_ref; pass package_ref",

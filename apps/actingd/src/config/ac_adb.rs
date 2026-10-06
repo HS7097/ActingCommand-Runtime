@@ -8,6 +8,8 @@
 //! acsetup's upgrade staging directory (`.staging-<ms>\runtime|ui|tools`) has the same shape,
 //! so a staged `check-config` sees the staged adb. Anything else (a development build, H3, an
 //! older acsetup's zip-named staging) is no install root and keeps the earlier behaviour.
+//! Workflow #359: a program in an A/B slot (`<root>\<A|B>\runtime`, holding its slot lock)
+//! takes `tools\` from the install root `<root>` that lock names, not from its slot.
 //!
 //! An instance uses this adb when the daemon runs from an install root and the instance's
 //! `adb_path` is absent or names that same file. `require` then hashes the distributed
@@ -35,9 +37,9 @@ own adb as before; an explicit instance may name any other adb)";
 /// The adb of the install root the daemon runs from; the file may be missing.
 #[derive(Clone)]
 pub(super) struct InstalledAdb {
-    /// The canonical install root `R`.
+    /// The canonical install root holding `tools\`: `R`, or a slot program's A/B root.
     root: PathBuf,
-    /// `R\tools\platform-tools\adb.exe`.
+    /// `<root>\tools\platform-tools\adb.exe`.
     adb: PathBuf,
 }
 
@@ -51,6 +53,12 @@ impl InstalledAdb {
         if !root.join("runtime").join("BUILD-MANIFEST.json").is_file() {
             return None;
         }
+        // A lock error has already stopped startup: `process_installation_for` takes this
+        // same cached slot lock first, for running and candidate checks alike.
+        let root = match actingcommand_contract::process_slot_lock() {
+            Ok(Some(lock)) => lock.root().to_path_buf(),
+            Ok(None) | Err(_) => root,
+        };
         let adb = root.join("tools").join("platform-tools").join("adb.exe");
         Some(Self { root, adb })
     }
