@@ -1347,7 +1347,8 @@ fn ocr_targets_reject_invalid_existing_contract_fields() {
     invalid["minimum_confidence"] = json!(1.1);
     cases.push(("minimum_confidence", invalid));
     let mut invalid = valid_ocr_declaration("ocr/invalid-model");
-    invalid["model_ref"] = json!("OtherModel");
+    // Workflow #360: any logical model folder name is valid; a host path still is not.
+    invalid["model_ref"] = json!("models/OtherModel");
     cases.push(("model_ref", invalid));
     let mut invalid = valid_ocr_declaration("ocr/invalid-hash");
     invalid["model_sha256"] = json!("A");
