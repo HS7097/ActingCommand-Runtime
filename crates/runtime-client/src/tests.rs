@@ -516,7 +516,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
             let value = serde_json::to_value(result.unwrap()).unwrap();
             let projection = &value["official_ocr_fields_projection"];
             assert_eq!(projection["failure"], Value::Null);
-            assert_eq!(projection["provider_execution"], Value::Null);
+            assert_eq!(projection["provider_executions"], json!([]));
             assert_eq!(projection["observations"][0]["target_ids"], json!([]));
             for field in projection["records"][0]["fields"].as_array().unwrap() {
                 assert_eq!(field["reason"], "region_unresolved");
@@ -529,7 +529,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
             let projection = &value["official_ocr_fields_projection"];
             assert_eq!(
                 projection["schema_version"],
-                "actingcommand.runtime.official-ocr-fields-projection.v1"
+                "actingcommand.runtime.official-ocr-fields-projection.v2"
             );
             assert_eq!(
                 projection["records"][0]["frame_id"],
@@ -2195,7 +2195,8 @@ fn successful_multi_page_task_projects_complete_official_ocr_and_provider_facts(
         summary["unmatched_raw_readings"][0]["raw_text"],
         "unmatched raw"
     );
-    let provider = serde_json::to_value(projection.provider_execution())
+    assert_eq!(projection.provider_executions().len(), 1);
+    let provider = serde_json::to_value(&projection.provider_executions()[0])
         .expect("serialize provider execution");
     assert_eq!(provider["actual_provider"], "cpu");
     assert_eq!(provider["cpu_ep_registered"], true);
@@ -2213,7 +2214,7 @@ fn successful_multi_page_task_projects_complete_official_ocr_and_provider_facts(
     );
     let stdout = serde_json::to_value(&output).expect("serialize official stdout");
     assert_eq!(
-        stdout["official_ocr_projection"]["provider_execution"]["model_ref"],
+        stdout["official_ocr_projection"]["provider_executions"][0]["model_ref"],
         "fixture-model"
     );
     drop(client);
@@ -2311,7 +2312,7 @@ fn official_ocr_projection_folds_matching_created_and_verified_lifecycle_facts()
     assert_eq!(projection.observations().len(), 2);
     assert_eq!(
         serde_json::to_value(&projection).expect("projection JSON")["schema_version"],
-        "actingcommand.runtime.official-ocr-projection.v2"
+        "actingcommand.runtime.official-ocr-projection.v3"
     );
     assert_eq!(
         projection.comparison_artifact_created_event_id(),

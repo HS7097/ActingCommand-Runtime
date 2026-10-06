@@ -20,8 +20,9 @@ use actingcommand_vision_ffi::{
     VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView, VisionModelLoader,
     VisionPixelFormat, VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
     establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
-    onnxruntime_version_string, ppocr_model_content_sha256, sha256_file_hex, sha256_hex,
+    onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex, sha256_hex,
 };
+use actingcommand_vision_ffi::{NnModelLoad, NnModelSpec};
 use actingcommand_vision_ffi::{
     PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
     PpocrDiagnostics, PpocrNodePlacementDiagnostic as NodePlacementDiagnostic,
@@ -35,6 +36,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
+
+mod nn;
 
 const DEFAULT_REC_HEIGHT: usize = 48;
 const DEFAULT_DYNAMIC_REC_WIDTH: usize = 320;
@@ -343,11 +346,15 @@ impl VisionModelLoader for PpocrCtcLoader {
         session_id: &OcrSessionId,
         wait_deadline: Instant,
     ) -> VisionFfiResult<OcrModelLoad> {
-        let detector_sha256 = sha256_hex(&read_model_file(&model.detector_path, "detector")?);
+        let detector_sha256 = model
+            .detector_path
+            .as_deref()
+            .map(|path| read_model_file(path, "detector").map(|bytes| sha256_hex(&bytes)))
+            .transpose()?;
         let recognizer = read_model_file(&model.recognizer_path, "recognizer")?;
         let dictionary = read_model_file(&model.dictionary_path, "dictionary")?;
-        let model_sha256 = ppocr_model_content_sha256(
-            &detector_sha256,
+        let model_sha256 = ppocr_model_set_sha256(
+            detector_sha256.as_deref(),
             &sha256_hex(&recognizer),
             &sha256_hex(&dictionary),
             None,
@@ -361,7 +368,7 @@ impl VisionModelLoader for PpocrCtcLoader {
             engine_binding_sha256: ocr_engine_binding_sha256(
                 &facts.executable_sha256,
                 &facts.onnxruntime_sha256,
-                None,
+                &model.description_sha256,
             ),
             runtime_library_path: facts.onnxruntime_library.to_string_lossy().into_owned(),
             runtime_library_sha256: facts.onnxruntime_sha256.clone(),
@@ -385,6 +392,8 @@ impl VisionModelLoader for PpocrCtcLoader {
             &mut diagnostics,
         )
         .map_err(|error| failure(error).with_ppocr_diagnostics(diagnostics.clone()))?;
+        require_recognizer_classes(&recognizer, dictionary.len(), &model.model_ref)
+            .map_err(|error| failure(error).with_ppocr_diagnostics(diagnostics.clone()))?;
         Ok(OcrModelLoad::Loaded {
             engine: Box::new(PpocrCtcModel {
                 binding,
@@ -401,6 +410,68 @@ impl VisionModelLoader for PpocrCtcLoader {
             model_sha256,
         })
     }
+
+    fn load_nn(
+        &self,
+        model: &NnModelSpec,
+        expected_model_sha256: &str,
+        wait_deadline: Instant,
+    ) -> VisionFfiResult<NnModelLoad> {
+        let bytes = read_model_file(&model.model_path, "classifier")?;
+        let model_sha256 = sha256_hex(&bytes);
+        if model_sha256 != expected_model_sha256 {
+            return Ok(NnModelLoad::Mismatch { model_sha256 });
+        }
+        let facts = runtime_facts(&self.runtime, wait_deadline)?;
+        let cuda_ordinal = facts
+            .resolved_cuda_device
+            .as_ref()
+            .map(|device| {
+                i32::try_from(device.ordinal)
+                    .map_err(|_| failure("the resolved CUDA ordinal exceeds the i32 range"))
+            })
+            .transpose()?;
+        let session = nn::load_session(&bytes, &model.model_path, cuda_ordinal).map_err(failure)?;
+        Ok(NnModelLoad::Loaded {
+            engine: Box::new(nn::OnnxClassifyModel::new(session)),
+            model_sha256,
+        })
+    }
+}
+
+/// Fails unless a static recognizer class count is the dictionary size plus the CTC blank,
+/// optionally plus the space class; a dynamic count is checked when the output is decoded.
+fn require_recognizer_classes(
+    session: &Session,
+    dictionary_entries: usize,
+    model_ref: &str,
+) -> Result<(), String> {
+    let Some(output) = session.outputs().first() else {
+        return Err("PPOCR recognizer model has no outputs".to_string());
+    };
+    let ValueType::Tensor { shape, .. } = output.dtype() else {
+        return Err(format!(
+            "PPOCR recognizer output {} is not a tensor",
+            output.name()
+        ));
+    };
+    match shape.last().map(|classes| usize::try_from(*classes)) {
+        Some(Ok(classes)) if classes > 0 => check_class_count(classes, dictionary_entries)
+            .map_err(|message| format!("OCR model '{model_ref}': {message}")),
+        _ => Ok(()),
+    }
+}
+
+fn check_class_count(classes: usize, dictionary_entries: usize) -> Result<(), String> {
+    if classes == dictionary_entries + 1 || classes == dictionary_entries + 2 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the recognizer has {classes} output classes but the dictionary keys.txt has {dictionary_entries} entries; expected {} or {}",
+            dictionary_entries + 1,
+            dictionary_entries + 2
+        ))
+    }
 }
 
 /// One loaded `ppocr-ctc` model: the recognizer session, the verified dictionary and, after
@@ -412,8 +483,8 @@ struct PpocrCtcModel {
     dictionary: Vec<String>,
     recognizer: Session,
     detector: Option<Session>,
-    detector_path: PathBuf,
-    detector_sha256: String,
+    detector_path: Option<PathBuf>,
+    detector_sha256: Option<String>,
     node_placement_diagnostic: Option<String>,
     /// Session-load diagnostics, returned with the next request's result or error.
     pending_diagnostics: PpocrDiagnostics,
@@ -547,23 +618,28 @@ impl PpocrCtcModel {
     /// Builds the detector session on the first full-frame request, from bytes whose hash
     /// equals the detector hash verified when the model was loaded.
     fn load_detector(&self, diagnostics: &mut PpocrDiagnostics) -> Result<Session, String> {
-        let bytes = std::fs::read(&self.detector_path).map_err(|error| {
+        let (Some(path), Some(expected)) = (&self.detector_path, &self.detector_sha256) else {
+            return Err(format!(
+                "OCR model '{}' has no detector; a full_frame region needs det.onnx",
+                self.binding.key().model_ref()
+            ));
+        };
+        let bytes = std::fs::read(path).map_err(|error| {
             format!(
                 "failed to read the OCR detector file {}: {error}",
-                self.detector_path.display()
+                path.display()
             )
         })?;
         let actual = sha256_hex(&bytes);
-        if actual != self.detector_sha256 {
+        if actual != *expected {
             return Err(format!(
-                "OCR detector file {} changed since the model was verified: expected={}, actual={actual}; restart is required",
-                self.detector_path.display(),
-                self.detector_sha256
+                "OCR detector file {} changed since the model was verified: expected={expected}, actual={actual}; restart is required",
+                path.display()
             ));
         }
         load_ort_session(
             &bytes,
-            &self.detector_path,
+            path,
             &self.plan,
             PpocrModelRole::Detector,
             self.node_placement_diagnostic.as_deref(),
@@ -1622,12 +1698,7 @@ fn decode_ctc_output(
             "PPOCR recognizer output class count must include blank plus labels".to_string(),
         );
     }
-    if class_count > dictionary.len() + 2 {
-        return Err(format!(
-            "PPOCR recognizer output has {class_count} classes but dictionary has {} labels",
-            dictionary.len()
-        ));
-    }
+    check_class_count(class_count, dictionary.len())?;
     let mut text = String::new();
     let mut previous_index = 0_usize;
     let mut confidences = Vec::new();
@@ -1735,6 +1806,7 @@ mod tests {
     use super::*;
     use actingcommand_vision_ffi::{
         CudaDeviceSelector, FastDeployPpocrArtifacts, PPOCR_V6_MEDIUM_MODEL_REF, VisionFrame,
+        ppocr_model_content_sha256,
     };
 
     #[test]

@@ -91,7 +91,7 @@ const MAX_OFFICIAL_OCR_PROJECTION_DURATION: Duration = Duration::from_secs(60);
 const MAX_OFFICIAL_OCR_FRAMES: u32 = 256;
 const MAX_OFFICIAL_OCR_ITEMS: usize = 4_096;
 const MAX_OFFICIAL_OCR_MAPPING_FACTS: usize = 16_384;
-const OFFICIAL_OCR_PROJECTION_SCHEMA: &str = "actingcommand.runtime.official-ocr-projection.v2";
+const OFFICIAL_OCR_PROJECTION_SCHEMA: &str = "actingcommand.runtime.official-ocr-projection.v3";
 pub(crate) const OCR_OBSERVATION_SCHEMA: &str =
     "actingcommand.runtime.post-admission-ocr-observation.v1";
 pub(crate) const OCR_COMPARISON_ENVELOPE_SCHEMA: &str =
@@ -298,7 +298,8 @@ pub struct RuntimeOfficialOcrFieldsProjection {
     observations: Vec<RuntimeOfficialOcrObservation>,
     records: Vec<RuntimeOfficialOcrFieldRecord>,
     failure: Option<OcrFieldReason>,
-    provider_execution: Option<RuntimeOfficialOcrProviderExecution>,
+    /// One entry per provider binding (Workflow #360: each target keeps one model).
+    provider_executions: Vec<RuntimeOfficialOcrProviderExecution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -327,7 +328,8 @@ pub struct RuntimeOfficialOcrProjection {
     comparison_artifact_verified_sequence: u64,
     observations: Vec<RuntimeOfficialOcrObservation>,
     summary: RuntimeOfficialOcrSummary,
-    provider_execution: RuntimeOfficialOcrProviderExecution,
+    /// One entry per provider binding (Workflow #360: each target keeps one model).
+    provider_executions: Vec<RuntimeOfficialOcrProviderExecution>,
     comparison: RuntimeOfficialOcrComparison,
 }
 
@@ -750,8 +752,8 @@ impl RuntimeOfficialOcrProjection {
         &self.summary
     }
 
-    pub const fn provider_execution(&self) -> &RuntimeOfficialOcrProviderExecution {
-        &self.provider_execution
+    pub fn provider_executions(&self) -> &[RuntimeOfficialOcrProviderExecution] {
+        &self.provider_executions
     }
 
     pub const fn comparison(&self) -> &RuntimeOfficialOcrComparison {
@@ -3924,13 +3926,14 @@ pub(crate) fn resolve_official_ocr_projection(
             .iter()
             .flat_map(|record| &record.fields)
             .all(|field| field.reason == OcrFieldReason::RegionUnresolved);
-        let provider_execution = if provider_evidence.is_empty() && (failed || regions_unresolved) {
-            None
-        } else {
-            Some(project_official_ocr_provider(provider_evidence)?)
-        };
+        let provider_executions =
+            if provider_evidence.is_empty() && (failed || regions_unresolved) {
+                Vec::new()
+            } else {
+                project_official_ocr_providers(provider_evidence)?
+            };
         *fields_projection = Some(RuntimeOfficialOcrFieldsProjection {
-            schema_version: "actingcommand.runtime.official-ocr-fields-projection.v1",
+            schema_version: "actingcommand.runtime.official-ocr-fields-projection.v2",
             run_id: *run_id,
             task_id: *task_id,
             report_artifact: comparison_artifact,
@@ -3940,7 +3943,7 @@ pub(crate) fn resolve_official_ocr_projection(
             observations,
             records,
             failure: records_report.failure,
-            provider_execution,
+            provider_executions,
         });
         return Ok(None);
     }
@@ -3958,7 +3961,7 @@ pub(crate) fn resolve_official_ocr_projection(
         return Err(official_ocr_error("runtime_official_ocr_mode_mismatch"));
     }
     let (summary, report) = parse_official_ocr_comparison(&comparison_value, &observations)?;
-    let provider_execution = project_official_ocr_provider(provider_evidence)?;
+    let provider_executions = project_official_ocr_providers(provider_evidence)?;
     Ok(Some(RuntimeOfficialOcrProjection {
         schema_version: OFFICIAL_OCR_PROJECTION_SCHEMA,
         run_id: *run_id,
@@ -3970,7 +3973,7 @@ pub(crate) fn resolve_official_ocr_projection(
         comparison_artifact_verified_sequence,
         observations,
         summary,
-        provider_execution,
+        provider_executions,
         comparison: report,
     }))
 }
@@ -4562,9 +4565,11 @@ fn parse_official_ocr_comparison(
     ))
 }
 
-fn project_official_ocr_provider(
+/// Groups the run's provider evidence by binding. Workflow #360: a run may use several models,
+/// but each target keeps one binding (one model and session) for the whole run.
+fn project_official_ocr_providers(
     mut records: Vec<(u32, String, OcrProviderEvidence)>,
-) -> RuntimeClientResult<RuntimeOfficialOcrProviderExecution> {
+) -> RuntimeClientResult<Vec<RuntimeOfficialOcrProviderExecution>> {
     if records.is_empty() || records.len() > MAX_OFFICIAL_OCR_ITEMS {
         return Err(official_ocr_error(
             "runtime_official_ocr_provider_evidence_missing",
@@ -4577,45 +4582,62 @@ fn project_official_ocr_provider(
             right.2.invocation_id.as_str(),
         ))
     });
-    let binding = records[0].2.clone();
     let mut invocation_ids = BTreeSet::new();
-    let mut evidence = Vec::with_capacity(records.len());
+    let mut target_groups = BTreeMap::new();
+    let mut groups: Vec<(OcrProviderEvidence, Vec<RuntimeOfficialOcrProviderEvidence>)> =
+        Vec::new();
     for (frame_index, target_id, record) in records {
-        if !invocation_ids.insert(record.invocation_id.clone())
-            || !same_official_ocr_provider_binding(&binding, &record)
-        {
+        if !invocation_ids.insert(record.invocation_id.clone()) {
             return Err(official_ocr_error(
                 "runtime_official_ocr_provider_evidence_mismatch",
             ));
         }
-        evidence.push(RuntimeOfficialOcrProviderEvidence {
+        let group = match groups
+            .iter()
+            .position(|(binding, _)| same_official_ocr_provider_binding(binding, &record))
+        {
+            Some(group) => group,
+            None => {
+                groups.push((record.clone(), Vec::new()));
+                groups.len() - 1
+            }
+        };
+        if *target_groups.entry(target_id.clone()).or_insert(group) != group {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_provider_evidence_mismatch",
+            ));
+        }
+        groups[group].1.push(RuntimeOfficialOcrProviderEvidence {
             frame_index,
             target_id,
             invocation_id: record.invocation_id,
         });
     }
-    Ok(RuntimeOfficialOcrProviderExecution {
-        requested_provider: binding.requested_provider,
-        actual_provider: binding.resolved_provider,
-        requested_cuda_ordinal: binding.requested_cuda_ordinal,
-        requested_cuda_identity: binding.requested_cuda_identity,
-        actual_cuda_ordinal: binding.resolved_cuda_ordinal,
-        actual_cuda_identity: binding.resolved_cuda_identity,
-        provider_implementation: binding.provider_implementation,
-        provider_binary_sha256: binding.provider_binary_sha256,
-        runtime_version: binding.runtime_version,
-        model_ref: binding.model_ref,
-        model_sha256: binding.model_sha256,
-        cpu_ep_registered: binding.cpu_ep_registered,
-        cpu_fallback_disabled: binding.cpu_fallback_disabled,
-        fallback_forbidden: binding.fallback_forbidden,
-        fallback_observed: binding.fallback_observed,
-        strict_no_fallback: binding.fallback_forbidden && binding.fallback_observed.is_none(),
-        complete: binding.complete,
-        session_id: binding.session_id,
-        session_generation: binding.session_generation,
-        evidence,
-    })
+    Ok(groups
+        .into_iter()
+        .map(|(binding, evidence)| RuntimeOfficialOcrProviderExecution {
+            requested_provider: binding.requested_provider,
+            actual_provider: binding.resolved_provider,
+            requested_cuda_ordinal: binding.requested_cuda_ordinal,
+            requested_cuda_identity: binding.requested_cuda_identity,
+            actual_cuda_ordinal: binding.resolved_cuda_ordinal,
+            actual_cuda_identity: binding.resolved_cuda_identity,
+            provider_implementation: binding.provider_implementation,
+            provider_binary_sha256: binding.provider_binary_sha256,
+            runtime_version: binding.runtime_version,
+            model_ref: binding.model_ref,
+            model_sha256: binding.model_sha256,
+            cpu_ep_registered: binding.cpu_ep_registered,
+            cpu_fallback_disabled: binding.cpu_fallback_disabled,
+            fallback_forbidden: binding.fallback_forbidden,
+            fallback_observed: binding.fallback_observed,
+            strict_no_fallback: binding.fallback_forbidden && binding.fallback_observed.is_none(),
+            complete: binding.complete,
+            session_id: binding.session_id,
+            session_generation: binding.session_generation,
+            evidence,
+        })
+        .collect())
 }
 
 fn same_official_ocr_provider_binding(
