@@ -1811,10 +1811,7 @@ impl From<String> for ProviderInvokeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_vision_ffi::{
-        CudaDeviceSelector, FastDeployPpocrArtifacts, PPOCR_V6_MEDIUM_MODEL_REF, VisionFrame,
-        ppocr_model_content_sha256,
-    };
+    use actingcommand_vision_ffi::{CudaDeviceSelector, VisionFrame, ppocr_model_content_sha256};
 
     #[test]
     fn session_plan_keeps_cpu_and_cuda_provider_registration_disjoint() {
@@ -2299,35 +2296,22 @@ mod tests {
             ordinal: 1,
             expected_stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
         };
-        let artifacts = FastDeployPpocrArtifacts {
-            provider_library_path: PathBuf::from("provider.dll"),
-            provider_library_sha256: Some("e".repeat(64)),
-            runtime_library_paths: vec![PathBuf::from("onnxruntime.dll")],
-            runtime_library_path: Some(PathBuf::from("onnxruntime.dll")),
-            runtime_library_sha256: Some("d".repeat(64)),
-            detector_model_path: PathBuf::from("detector.onnx"),
-            recognizer_model_path: PathBuf::from("recognizer.onnx"),
-            dictionary_path: PathBuf::from("dictionary.txt"),
-            classifier_model_path: None,
-            model_ref: Some(PPOCR_V6_MEDIUM_MODEL_REF.to_string()),
-            model_sha256: Some(model_hash),
-            detector_model_sha256: Some(detector_hash),
-            recognizer_model_sha256: Some(recognizer_hash),
-            dictionary_sha256: Some(dictionary_hash),
-            classifier_model_sha256: None,
-            execution_provider: Some(backend),
-            cuda_device: (backend == OnnxExecutionProvider::Cuda).then_some(selector),
-            strict_no_fallback: Some(true),
-            supported_languages: vec!["zh_cn".to_string()],
-            default_timeout_ms: 1_000,
-        };
         let resolved = (backend == OnnxExecutionProvider::Cuda).then_some(CudaDeviceIdentity {
             ordinal: 1,
             stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
             pci_bus_id: Some("0000:02:00.0".to_string()),
         });
-        artifacts
-            .production_session_key(resolved, "1.24.0-test")
-            .expect("session key")
+        OcrSessionKey::from_parts(OcrSessionKeyParts {
+            engine_binding_sha256: "e".repeat(64),
+            runtime_library_path: "onnxruntime.dll".to_string(),
+            runtime_library_sha256: "d".repeat(64),
+            onnxruntime_version: "1.24.0-test".to_string(),
+            model_ref: "PP-OCRv6_medium".to_string(),
+            model_sha256: model_hash,
+            requested_backend: backend,
+            requested_cuda_device: (backend == OnnxExecutionProvider::Cuda).then_some(selector),
+            resolved_cuda_device: resolved,
+        })
+        .expect("session key")
     }
 }

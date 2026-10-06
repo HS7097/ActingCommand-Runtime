@@ -6,9 +6,7 @@ param(
     [string] $TaskRoot,
 
     [Parameter(Mandatory)]
-    [string] $TestRoot,
-
-    [string] $VisionProviderCheckExecutable
+    [string] $TestRoot
 )
 
 Set-StrictMode -Version Latest
@@ -229,7 +227,11 @@ function New-ArtifactFixture {
             @{ name = 'actingledger.exe'; content = 'synthetic actingledger payload' },
             @{ name = 'actingcommand-vision-provider-check.exe'; content = 'synthetic provider-check payload' },
             @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' },
-            @{ name = 'ac_fastdeploy_ppocr.dll'; content = 'synthetic nonempty provider payload' }
+            @{ name = 'platform-tools/adb.exe'; content = 'synthetic adb payload' },
+            @{ name = 'platform-tools/AdbWinApi.dll'; content = 'synthetic AdbWinApi payload' },
+            @{ name = 'platform-tools/AdbWinUsbApi.dll'; content = 'synthetic AdbWinUsbApi payload' },
+            @{ name = 'platform-tools/NOTICE.txt'; content = 'synthetic platform-tools notice' },
+            @{ name = 'platform-tools/source.properties'; content = 'Pkg.Revision=37.0.1' }
         )
     }
     $records = @()
@@ -258,10 +260,12 @@ function New-ArtifactFixture {
     }
     if ($ArtifactKind -ceq 'Runtime') {
         $manifest.runtime_payload_layout = 'distribution-v1'
+    } else {
+        $manifest.tools_payload_layout = 'platform-tools-v2'
     }
     Write-Utf8NoBom -Path (Join-Path $directory 'BUILD-MANIFEST.json') -Text (($manifest | ConvertTo-Json -Depth 8) + "`n")
     if ($CorruptPayload) {
-        $corruptName = if ($ArtifactKind -ceq 'Runtime') { 'actingctl.exe' } else { 'ac_fastdeploy_ppocr.dll' }
+        $corruptName = if ($ArtifactKind -ceq 'Runtime') { 'actingctl.exe' } else { 'actinglab.exe' }
         Add-Content -LiteralPath (Join-Path $directory $corruptName) -Value 'corrupt' -NoNewline
     }
 }
@@ -327,7 +331,11 @@ if ($args.Count -ge 2 -and $args[0] -ceq 'run' -and $args[1] -ceq 'download') {
     $destination = Value-After '--dir'
     $source = Join-Path $root "artifacts/$mode/$name"
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "fixture artifact is missing: $source" }
-    Get-ChildItem -LiteralPath $source -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destination $_.Name) }
+    Get-ChildItem -LiteralPath $source -File -Recurse | ForEach-Object {
+        $target = Join-Path $destination ([IO.Path]::GetRelativePath($source, $_.FullName))
+        New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+        Copy-Item -LiteralPath $_.FullName -Destination $target
+    }
     exit 0
 }
 Write-Error "unsupported fake gh arguments: $($args -join ' ')"
@@ -380,17 +388,17 @@ try {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
     $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe'',\s*''actingd\.config\.example\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
-    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe'',\s*''ac_fastdeploy_ppocr\.dll''\s*\)'
+    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
-    foreach ($required in @(
+    foreach ($retired in @(
         '--package actingcommand-ppocr-onnx-json-provider',
         'actingcommand_ppocr_onnx_json_provider.dll',
-        'ac_fastdeploy_ppocr.dll',
-        'expected PP-OCR provider output is empty'
+        'ac_fastdeploy_ppocr.dll'
     )) {
-        Assert-True -Condition $workflowText.Contains($required) -Message "workflow provider closure is missing '$required'"
+        Assert-True -Condition (-not $workflowText.Contains($retired)) -Message "workflow still builds or stages the retired vision provider: '$retired'"
     }
+    Assert-True -Condition $workflowText.Contains("'platform-tools-v2'") -Message 'workflow Tools manifest does not declare platform-tools-v2'
     foreach ($field in @(
         'repository', 'commit_sha', 'tree_sha', 'cargo_lock_sha256', 'rust_toolchain',
         'target', 'configuration', 'workflow_run_id', 'workflow_run_attempt',
@@ -411,12 +419,7 @@ try {
     Assert-True -Condition ([long]$ort.archive.size -eq 280958859) -Message 'ONNX Runtime archive size is not frozen'
     Assert-True -Condition ($ort.archive.sha256 -ceq 'ef3337a0b8184eb8beec310f7c83bd50376b3eefc43aab84ac8e452f6987df0a') -Message 'ONNX Runtime archive SHA-256 is not frozen'
     Assert-True -Condition (@($ort.extract_allowlist).Count -eq 3) -Message 'ONNX Runtime extraction allowlist is not exact'
-    Assert-True -Condition ([long]$sourceManifest.components.'provider-v0.3'.max_runtime_total_bytes -eq 2684354560) -Message 'provider runtime byte bound is not exactly 2.5 GiB'
-    Assert-True -Condition (@($sourceManifest.components.'provider-v0.3'.required_names.cpu).Count -gt 1) -Message 'CPU closure must cover multiple runtime DLLs'
-    Assert-True -Condition (@($sourceManifest.components.'provider-v0.3'.required_names.cuda).Count -gt 2) -Message 'CUDA closure must cover multiple runtime DLLs'
-    if (-not [string]::IsNullOrWhiteSpace($VisionProviderCheckExecutable)) {
-        Assert-True -Condition (Test-Path -LiteralPath $VisionProviderCheckExecutable -PathType Leaf) -Message 'static manifest parser executable is missing'
-    }
+    Assert-True -Condition ($null -eq $sourceManifest.components.PSObject.Properties['provider-v0.3']) -Message 'the retired provider-v0.3 component is still declared'
     Complete-Case -Name $script:CurrentCase
 
     $fixtureRoot = Join-Path $testRootFull 'fake-gh'
@@ -451,14 +454,15 @@ try {
     }
     Complete-Case -Name $script:CurrentCase
 
-    $script:CurrentCase = 'artifact-tools-provider-positive-exact-selection'
+    $script:CurrentCase = 'artifact-tools-positive-exact-selection'
     $toolsOutput = Join-Path $testRootFull 'downloads/tools-positive'
     $toolsJson = & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsOutput -GhExecutable $fakeGh
     $tools = $toolsJson | ConvertFrom-Json -Depth 20
     Assert-True -Condition ($tools.status -ceq 'PASS') -Message 'Tools artifact verification did not report PASS'
-    Assert-True -Condition (@($tools.verified_files).Count -eq 5) -Message 'Tools artifact verifier did not freeze exactly five payloads'
-    $providerFixture = Get-Item -LiteralPath (Join-Path $toolsOutput 'ac_fastdeploy_ppocr.dll') -ErrorAction Stop
-    Assert-True -Condition ($providerFixture.Length -gt 0) -Message 'Tools artifact provider payload is missing or empty'
+    Assert-True -Condition (@($tools.verified_files).Count -eq 9) -Message 'Tools artifact verifier did not freeze exactly nine platform-tools-v2 payloads'
+    $adbFixture = Get-Item -LiteralPath (Join-Path $toolsOutput 'platform-tools/adb.exe') -ErrorAction Stop
+    Assert-True -Condition ($adbFixture.Length -gt 0) -Message 'Tools artifact platform-tools payload is missing or empty'
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $toolsOutput 'ac_fastdeploy_ppocr.dll'))) -Message 'Tools artifact still carries the retired vision provider'
     Complete-Case -Name $script:CurrentCase
 
     Invoke-FailCase -Name 'artifact-wrong-sha' -MessagePattern 'found 0' -Action {
@@ -693,417 +697,6 @@ try {
         & $materializer -TaskRoot $testRootFull -CacheRoot (Join-Path $testRootFull 'cache/missing-mumu') -Component mumu-nemu-installed -MumuInstallRoot $mumuRoot -MumuVersion $mumuVersion
     }
 
-    $providerRoot = Join-Path $testRootFull 'provider-fixture'
-    $providerFiles = [ordered]@{
-        provider = 'ac_fastdeploy_ppocr.dll'
-        detector = 'models/detector.onnx'
-        recognizer = 'models/recognizer.onnx'
-        dictionary = 'models/ppocrv6_dict.txt'
-        core = 'runtime/onnxruntime.dll'
-        shared = 'runtime/onnxruntime_providers_shared.dll'
-        cuda = 'runtime/onnxruntime_providers_cuda.dll'
-        external = 'runtime/cublas64_12.dll'
-    }
-    foreach ($entry in $providerFiles.GetEnumerator()) {
-        Write-Utf8NoBom -Path (Join-Path $providerRoot $entry.Value) -Text "fixture-$($entry.Key)"
-    }
-    $ortLicense = "$($ort.license.id); $($ort.license.url); redistribution=$($ort.license.redistribution)"
-
-    function New-ProviderFixtureSet {
-        param(
-            [Parameter(Mandatory)][string] $Name,
-            [Parameter(Mandatory)][string] $Backend,
-            [Parameter(Mandatory)][string[]] $RuntimePaths,
-            [string] $SelectedCorePath = $providerFiles.core
-        )
-        $dependencies = foreach ($runtimePath in $RuntimePaths) {
-            $runtimeName = [IO.Path]::GetFileName($runtimePath)
-            $isOrt = @($ort.extract_allowlist | ForEach-Object { [IO.Path]::GetFileName([string]$_) }) -ccontains $runtimeName
-            [ordered]@{
-                path = $runtimePath
-                sha256 = Get-Sha256 (Join-Path $providerRoot $runtimePath)
-                source = if ($isOrt) { [string]$ort.archive.url } else { "task-local-fixture:$runtimeName" }
-                version = if ($isOrt) { [string]$ort.version } else { 'fixture-cuda-runtime-v1' }
-                license_provenance_note = if ($isOrt) { $ortLicense } else { 'synthetic test-only external CUDA dependency; not redistributed' }
-                kind = if ($isOrt) { 'onnxruntime_archive' } else { 'external_cuda' }
-            }
-        }
-        $detectorHash = Get-Sha256 (Join-Path $providerRoot $providerFiles.detector)
-        $recognizerHash = Get-Sha256 (Join-Path $providerRoot $providerFiles.recognizer)
-        $dictionaryHash = Get-Sha256 (Join-Path $providerRoot $providerFiles.dictionary)
-        $selectedCoreHash = if (Test-Path -LiteralPath (Join-Path $providerRoot $SelectedCorePath) -PathType Leaf) {
-            Get-Sha256 (Join-Path $providerRoot $SelectedCorePath)
-        } else {
-            Get-Sha256 (Join-Path $providerRoot $providerFiles.core)
-        }
-        $ocr = [ordered]@{
-            provider_library_path = $providerFiles.provider
-            provider_library_sha256 = Get-Sha256 (Join-Path $providerRoot $providerFiles.provider)
-            runtime_library_paths = $RuntimePaths
-            runtime_library_path = $SelectedCorePath
-            runtime_library_sha256 = $selectedCoreHash
-            detector_model_path = $providerFiles.detector
-            recognizer_model_path = $providerFiles.recognizer
-            dictionary_path = $providerFiles.dictionary
-            classifier_model_path = $null
-            model_ref = 'PP-OCRv6_medium'
-            model_sha256 = Get-PpocrModelContentSha256 -Detector $detectorHash -Recognizer $recognizerHash -Dictionary $dictionaryHash
-            detector_model_sha256 = $detectorHash
-            recognizer_model_sha256 = $recognizerHash
-            dictionary_sha256 = $dictionaryHash
-            classifier_model_sha256 = $null
-            execution_provider = $Backend
-            strict_no_fallback = $true
-            supported_languages = @('zh_cn', 'en')
-            default_timeout_ms = 1000
-        }
-        if ($Backend -ceq 'cuda') {
-            $ocr['cuda_device'] = [ordered]@{
-                ordinal = 0
-                expected_stable_identity = 'cuda-uuid:fixture'
-            }
-        }
-        $providerManifest = [ordered]@{
-            schema_version = 'actingcommand.vision_provider_artifacts.v0.3'
-            fastdeploy_ppocr = $ocr
-            onnxruntime = $null
-        }
-        $dependencyManifest = [ordered]@{
-            schema_version = 'actingcommand.provider_runtime_dependencies.v1'
-            backend = $Backend
-            closure_complete = $true
-            selected_core_path = $SelectedCorePath
-            dependencies = @($dependencies)
-        }
-        $providerManifestPath = Join-Path $providerRoot "$Name-artifacts.json"
-        $dependencyManifestPath = Join-Path $providerRoot "$Name-dependencies.json"
-        $providerManifestSha = Write-JsonFixture -Path $providerManifestPath -Value $providerManifest
-        $dependencyManifestSha = Write-JsonFixture -Path $dependencyManifestPath -Value $dependencyManifest
-        [pscustomobject]@{
-            provider = $providerManifest
-            dependency = $dependencyManifest
-            provider_path = $providerManifestPath
-            provider_sha = $providerManifestSha
-            dependency_path = $dependencyManifestPath
-            dependency_sha = $dependencyManifestSha
-        }
-    }
-
-    function Save-ProviderFixtureSet {
-        param([Parameter(Mandatory)] $Set)
-        $Set.provider_sha = Write-JsonFixture -Path $Set.provider_path -Value $Set.provider
-        $Set.dependency_sha = Write-JsonFixture -Path $Set.dependency_path -Value $Set.dependency
-    }
-
-    function Invoke-ProviderMaterializer {
-        param(
-            [Parameter(Mandatory)] $Set,
-            [Parameter(Mandatory)][string] $CacheName,
-            [Parameter(Mandatory)][string] $Backend,
-            [string] $SourcesPath = $sourcesManifest,
-            [switch] $WithCudaSelector
-        )
-        $arguments = @{
-            TaskRoot = $testRootFull
-            CacheRoot = Join-Path $testRootFull "cache/$CacheName"
-            Component = 'provider-v0.3'
-            OcrBackend = $Backend
-            ProviderArtifactManifestPath = $Set.provider_path
-            ProviderArtifactManifestSha256 = $Set.provider_sha
-            ProviderDependencyManifestPath = $Set.dependency_path
-            ProviderDependencyManifestSha256 = $Set.dependency_sha
-            SourcesManifestPath = $SourcesPath
-        }
-        if ($WithCudaSelector) {
-            $arguments.CudaDeviceOrdinal = 0
-            $arguments.CudaStableIdentity = 'cuda-uuid:fixture'
-        }
-        & $materializer @arguments
-    }
-
-    $cpuSet = New-ProviderFixtureSet -Name 'cpu' -Backend cpu -RuntimePaths @(
-        $providerFiles.core,
-        $providerFiles.shared
-    )
-    # Task Contract: Workflow #240 / #240-IMP-v2 (comment 5445007319).
-    # Test class: authorized Defect regression with a preserved first red.
-    $script:CurrentCase = 'materializer-provider-cpu-multi-dll-positive'
-    $cpuResult = Invoke-ProviderMaterializer -Set $cpuSet -CacheName 'provider-cpu' -Backend cpu
-    Assert-True -Condition ($cpuResult.state -ceq 'Ready') -Message 'CPU provider bytes were not Ready'
-    $cpuProvenance = Get-Content -LiteralPath $cpuResult.provenance_path -Raw | ConvertFrom-Json -Depth 100
-    $cpuProvider = $cpuProvenance.components.'provider-v0.3'
-    Assert-True -Condition ($cpuProvider.byte_materialization_ready -eq $true) -Message 'CPU byte readiness was not explicit'
-    Assert-True -Condition ($cpuProvider.functional_validation_performed -eq $false) -Message 'CPU fixture incorrectly claimed provider execution'
-    Assert-True -Condition (@($cpuProvider.runtime_libraries).Count -eq 2) -Message 'CPU runtime closure did not preserve both DLLs'
-    $cpuConfigPath = Join-Path $cpuResult.cache_root ([string]$cpuProvider.canonical_manifest.cache_path)
-    $cpuConfig = Get-Content -LiteralPath $cpuConfigPath -Raw | ConvertFrom-Json -Depth 100
-    Assert-True -Condition ($null -eq $cpuConfig.fastdeploy_ppocr.PSObject.Properties['cuda_device']) -Message 'CPU canonical configuration did not omit cuda_device'
-    Assert-True -Condition ($null -eq $cpuConfig.fastdeploy_ppocr.classifier_model_path) -Message 'CPU canonical configuration did not preserve the absent classifier'
-    $cpuArtifactFields = @('provider_library_path', 'detector_model_path', 'recognizer_model_path', 'dictionary_path')
-    $cpuArtifactHashFields = @('provider_library_sha256', 'detector_model_sha256', 'recognizer_model_sha256', 'dictionary_sha256')
-    $cpuExpectedArtifactPaths = @(
-        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/provider/ac_fastdeploy_ppocr.dll')),
-        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/models/detector.onnx')),
-        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/models/recognizer.onnx')),
-        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/models/ppocrv6_dict.txt'))
-    )
-    $cpuExpectedArtifactRelativePaths = @(
-        'provider/provider/ac_fastdeploy_ppocr.dll',
-        'provider/models/detector.onnx',
-        'provider/models/recognizer.onnx',
-        'provider/models/ppocrv6_dict.txt'
-    )
-    $cpuArtifactBindings = @(
-        $cpuProvider.provider_library,
-        $cpuProvider.model_bundle.detector,
-        $cpuProvider.model_bundle.recognizer,
-        $cpuProvider.model_bundle.dictionary
-    )
-    for ($index = 0; $index -lt $cpuArtifactFields.Count; $index++) {
-        $artifactPath = [string]$cpuConfig.fastdeploy_ppocr.PSObject.Properties[$cpuArtifactFields[$index]].Value
-        $artifactHash = [string]$cpuConfig.fastdeploy_ppocr.PSObject.Properties[$cpuArtifactHashFields[$index]].Value
-        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($artifactPath)) -Message 'CPU canonical artifact path was not absolute'
-        Assert-True -Condition (Test-Path -LiteralPath $artifactPath -PathType Leaf) -Message 'CPU canonical artifact path did not exist'
-        Assert-True -Condition ($artifactPath -ceq $cpuExpectedArtifactPaths[$index]) -Message 'CPU canonical artifact path escaped its exact Ready subdirectory or duplicated a path segment'
-        Assert-True -Condition ((Get-Sha256 $artifactPath) -ceq $artifactHash) -Message 'CPU canonical artifact path did not preserve its declared hash'
-        $binding = $cpuArtifactBindings[$index]
-        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CPU artifact provenance cache_path became absolute'
-        Assert-True -Condition ([string]$binding.cache_path -ceq $cpuExpectedArtifactRelativePaths[$index]) -Message 'CPU artifact provenance cache_path changed value'
-        Assert-True -Condition ([string]$binding.relative_path -ceq $cpuExpectedArtifactRelativePaths[$index]) -Message 'CPU artifact provenance relative_path changed value'
-        Assert-True -Condition ([string]$binding.sha256 -ceq $artifactHash) -Message 'CPU artifact provenance hash changed value'
-    }
-    $cpuRuntimePaths = @($cpuConfig.fastdeploy_ppocr.runtime_library_paths | ForEach-Object { [string]$_ })
-    $cpuRuntimeRoot = [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/runtime')).TrimEnd('\')
-    $cpuExpectedRuntimePaths = @(
-        [IO.Path]::GetFullPath((Join-Path $cpuRuntimeRoot 'onnxruntime.dll')),
-        [IO.Path]::GetFullPath((Join-Path $cpuRuntimeRoot 'onnxruntime_providers_shared.dll'))
-    )
-    $cpuExpectedRelativePaths = @(
-        'provider/runtime/onnxruntime.dll',
-        'provider/runtime/onnxruntime_providers_shared.dll'
-    )
-    Assert-True -Condition ($cpuRuntimePaths.Count -eq $cpuExpectedRuntimePaths.Count) -Message 'CPU canonical runtime list was incomplete'
-    for ($index = 0; $index -lt $cpuRuntimePaths.Count; $index++) {
-        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($cpuRuntimePaths[$index])) -Message 'CPU canonical runtime path was not absolute'
-        Assert-True -Condition (Test-Path -LiteralPath $cpuRuntimePaths[$index] -PathType Leaf) -Message 'CPU canonical runtime path did not exist'
-        Assert-True -Condition ($cpuRuntimePaths[$index] -ceq $cpuExpectedRuntimePaths[$index]) -Message 'CPU canonical runtime path changed order or escaped the provider runtime directory'
-        $binding = @($cpuProvider.runtime_libraries)[$index]
-        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CPU provenance cache_path became absolute'
-        Assert-True -Condition ([string]$binding.cache_path -ceq $cpuExpectedRelativePaths[$index]) -Message 'CPU provenance cache_path changed order or value'
-        Assert-True -Condition ([string]$binding.relative_path -ceq $cpuExpectedRelativePaths[$index]) -Message 'CPU provenance relative_path changed order or value'
-    }
-    Assert-True -Condition (@($cpuRuntimePaths | Where-Object { $_ -ceq $cpuConfig.fastdeploy_ppocr.runtime_library_path }).Count -eq 1) -Message 'CPU selected core did not occur exactly once'
-    Assert-True -Condition ([string]$cpuConfig.fastdeploy_ppocr.runtime_library_path -ceq $cpuExpectedRuntimePaths[0]) -Message 'CPU selected core was not the exact staged core path'
-    if (-not [string]::IsNullOrWhiteSpace($VisionProviderCheckExecutable)) {
-        & $VisionProviderCheckExecutable --manifest $cpuConfigPath --backend fastdeploy_ppocr | Out-Null
-        Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'existing manifest parser rejected CPU canonical configuration'
-    }
-    Complete-Case -Name $script:CurrentCase
-
-    $cudaSet = New-ProviderFixtureSet -Name 'cuda' -Backend cuda -RuntimePaths @(
-        $providerFiles.core,
-        $providerFiles.shared,
-        $providerFiles.cuda,
-        $providerFiles.external
-    )
-    # Task Contract: Workflow #240 / #240-IMP-v2 (comment 5445007319).
-    # Test class: authorized Defect regression with a preserved first red.
-    $script:CurrentCase = 'materializer-provider-cuda-multi-dll-positive'
-    $cudaResult = Invoke-ProviderMaterializer -Set $cudaSet -CacheName 'provider-cuda' -Backend cuda -WithCudaSelector
-    Assert-True -Condition ($cudaResult.state -ceq 'Ready') -Message 'CUDA provider bytes were not Ready'
-    $cudaProvenance = Get-Content -LiteralPath $cudaResult.provenance_path -Raw | ConvertFrom-Json -Depth 100
-    $cudaProvider = $cudaProvenance.components.'provider-v0.3'
-    Assert-True -Condition (@($cudaProvider.runtime_libraries).Count -eq 4) -Message 'CUDA runtime closure was incomplete'
-    Assert-True -Condition (@($cudaProvider.runtime_libraries | Where-Object { $_.kind -ceq 'external_cuda' }).Count -eq 1) -Message 'CUDA external dependency provenance was not preserved'
-    $cudaConfigPath = Join-Path $cudaResult.cache_root ([string]$cudaProvider.canonical_manifest.cache_path)
-    $cudaConfig = Get-Content -LiteralPath $cudaConfigPath -Raw | ConvertFrom-Json -Depth 100
-    Assert-True -Condition ($null -eq $cudaConfig.fastdeploy_ppocr.classifier_model_path) -Message 'CUDA canonical configuration did not preserve the absent classifier'
-    $cudaArtifactFields = @('provider_library_path', 'detector_model_path', 'recognizer_model_path', 'dictionary_path')
-    $cudaArtifactHashFields = @('provider_library_sha256', 'detector_model_sha256', 'recognizer_model_sha256', 'dictionary_sha256')
-    $cudaExpectedArtifactPaths = @(
-        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/provider/ac_fastdeploy_ppocr.dll')),
-        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/models/detector.onnx')),
-        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/models/recognizer.onnx')),
-        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/models/ppocrv6_dict.txt'))
-    )
-    $cudaExpectedArtifactRelativePaths = @(
-        'provider/provider/ac_fastdeploy_ppocr.dll',
-        'provider/models/detector.onnx',
-        'provider/models/recognizer.onnx',
-        'provider/models/ppocrv6_dict.txt'
-    )
-    $cudaArtifactBindings = @(
-        $cudaProvider.provider_library,
-        $cudaProvider.model_bundle.detector,
-        $cudaProvider.model_bundle.recognizer,
-        $cudaProvider.model_bundle.dictionary
-    )
-    for ($index = 0; $index -lt $cudaArtifactFields.Count; $index++) {
-        $artifactPath = [string]$cudaConfig.fastdeploy_ppocr.PSObject.Properties[$cudaArtifactFields[$index]].Value
-        $artifactHash = [string]$cudaConfig.fastdeploy_ppocr.PSObject.Properties[$cudaArtifactHashFields[$index]].Value
-        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($artifactPath)) -Message 'CUDA canonical artifact path was not absolute'
-        Assert-True -Condition (Test-Path -LiteralPath $artifactPath -PathType Leaf) -Message 'CUDA canonical artifact path did not exist'
-        Assert-True -Condition ($artifactPath -ceq $cudaExpectedArtifactPaths[$index]) -Message 'CUDA canonical artifact path escaped its exact Ready subdirectory or duplicated a path segment'
-        Assert-True -Condition ((Get-Sha256 $artifactPath) -ceq $artifactHash) -Message 'CUDA canonical artifact path did not preserve its declared hash'
-        $binding = $cudaArtifactBindings[$index]
-        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CUDA artifact provenance cache_path became absolute'
-        Assert-True -Condition ([string]$binding.cache_path -ceq $cudaExpectedArtifactRelativePaths[$index]) -Message 'CUDA artifact provenance cache_path changed value'
-        Assert-True -Condition ([string]$binding.relative_path -ceq $cudaExpectedArtifactRelativePaths[$index]) -Message 'CUDA artifact provenance relative_path changed value'
-        Assert-True -Condition ([string]$binding.sha256 -ceq $artifactHash) -Message 'CUDA artifact provenance hash changed value'
-    }
-    $cudaRuntimePaths = @($cudaConfig.fastdeploy_ppocr.runtime_library_paths | ForEach-Object { [string]$_ })
-    $cudaRuntimeRoot = [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/runtime')).TrimEnd('\')
-    $cudaExpectedRuntimePaths = @(
-        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'onnxruntime.dll')),
-        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'onnxruntime_providers_shared.dll')),
-        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'onnxruntime_providers_cuda.dll')),
-        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'cublas64_12.dll'))
-    )
-    $cudaExpectedRelativePaths = @(
-        'provider/runtime/onnxruntime.dll',
-        'provider/runtime/onnxruntime_providers_shared.dll',
-        'provider/runtime/onnxruntime_providers_cuda.dll',
-        'provider/runtime/cublas64_12.dll'
-    )
-    Assert-True -Condition ($cudaRuntimePaths.Count -eq $cudaExpectedRuntimePaths.Count) -Message 'CUDA canonical runtime list was incomplete'
-    for ($index = 0; $index -lt $cudaRuntimePaths.Count; $index++) {
-        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($cudaRuntimePaths[$index])) -Message 'CUDA canonical runtime path was not absolute'
-        Assert-True -Condition (Test-Path -LiteralPath $cudaRuntimePaths[$index] -PathType Leaf) -Message 'CUDA canonical runtime path did not exist'
-        Assert-True -Condition ($cudaRuntimePaths[$index] -ceq $cudaExpectedRuntimePaths[$index]) -Message 'CUDA canonical runtime path changed order or escaped the provider runtime directory'
-        $binding = @($cudaProvider.runtime_libraries)[$index]
-        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CUDA provenance cache_path became absolute'
-        Assert-True -Condition ([string]$binding.cache_path -ceq $cudaExpectedRelativePaths[$index]) -Message 'CUDA provenance cache_path changed order or value'
-        Assert-True -Condition ([string]$binding.relative_path -ceq $cudaExpectedRelativePaths[$index]) -Message 'CUDA provenance relative_path changed order or value'
-    }
-    Assert-True -Condition (@($cudaRuntimePaths | Where-Object { $_ -ceq $cudaConfig.fastdeploy_ppocr.runtime_library_path }).Count -eq 1) -Message 'CUDA selected core did not occur exactly once'
-    Assert-True -Condition ([string]$cudaConfig.fastdeploy_ppocr.runtime_library_path -ceq $cudaExpectedRuntimePaths[0]) -Message 'CUDA selected core was not the exact staged core path'
-    Assert-True -Condition ($cudaConfig.fastdeploy_ppocr.cuda_device.ordinal -eq 0) -Message 'CUDA ordinal was not preserved'
-    Assert-True -Condition ($cudaConfig.fastdeploy_ppocr.cuda_device.expected_stable_identity -ceq 'cuda-uuid:fixture') -Message 'CUDA stable identity was not preserved'
-    if (-not [string]::IsNullOrWhiteSpace($VisionProviderCheckExecutable)) {
-        & $VisionProviderCheckExecutable --manifest $cudaConfigPath --backend fastdeploy_ppocr | Out-Null
-        Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'existing manifest parser rejected CUDA canonical configuration'
-    }
-    Complete-Case -Name $script:CurrentCase
-
-    Invoke-FailCase -Name 'materializer-backend-mismatch' -MessagePattern 'backend must match' -Action {
-        Invoke-ProviderMaterializer -Set $cudaSet -CacheName 'backend-mismatch' -Backend cpu | Out-Null
-    }
-    Invoke-FailCase -Name 'materializer-missing-cuda-selector' -MessagePattern 'requires an explicit ordinal' -Action {
-        Invoke-ProviderMaterializer -Set $cudaSet -CacheName 'missing-cuda-selector' -Backend cuda | Out-Null
-    }
-
-    $fallbackSet = New-ProviderFixtureSet -Name 'fallback' -Backend cpu -RuntimePaths @($providerFiles.core, $providerFiles.shared)
-    $fallbackSet.provider.fastdeploy_ppocr.strict_no_fallback = $false
-    Save-ProviderFixtureSet -Set $fallbackSet
-    Invoke-FailCase -Name 'materializer-undeclared-fallback' -MessagePattern 'strict_no_fallback' -Action {
-        Invoke-ProviderMaterializer -Set $fallbackSet -CacheName 'fallback' -Backend cpu | Out-Null
-    }
-
-    $missingProviderSet = New-ProviderFixtureSet -Name 'missing-provider' -Backend cpu -RuntimePaths @($providerFiles.core, $providerFiles.shared)
-    $missingProviderSet.provider.fastdeploy_ppocr.provider_library_path = 'missing-ac_fastdeploy_ppocr.dll'
-    Save-ProviderFixtureSet -Set $missingProviderSet
-    Invoke-FailCase -Name 'materializer-missing-provider-output' -MessagePattern 'Cannot find path|does not exist' -Action {
-        Invoke-ProviderMaterializer -Set $missingProviderSet -CacheName 'missing-provider' -Backend cpu | Out-Null
-    }
-
-    $wrongHashSet = New-ProviderFixtureSet -Name 'wrong-runtime-hash' -Backend cpu -RuntimePaths @($providerFiles.core, $providerFiles.shared)
-    $wrongHashSet.dependency.dependencies[1].sha256 = ('f' * 64)
-    Save-ProviderFixtureSet -Set $wrongHashSet
-    Invoke-FailCase -Name 'materializer-runtime-hash-mismatch' -MessagePattern 'dependency hash mismatch' -Action {
-        Invoke-ProviderMaterializer -Set $wrongHashSet -CacheName 'runtime-hash' -Backend cpu | Out-Null
-    }
-
-    $missingCompanionSet = New-ProviderFixtureSet -Name 'missing-companion' -Backend cuda -RuntimePaths @(
-        $providerFiles.core,
-        $providerFiles.cuda,
-        $providerFiles.external
-    )
-    Invoke-FailCase -Name 'materializer-missing-companion' -MessagePattern 'missing onnxruntime_providers_shared' -Action {
-        Invoke-ProviderMaterializer -Set $missingCompanionSet -CacheName 'missing-companion' -Backend cuda -WithCudaSelector | Out-Null
-    }
-
-    $noExternalSet = New-ProviderFixtureSet -Name 'missing-external' -Backend cuda -RuntimePaths @(
-        $providerFiles.core,
-        $providerFiles.shared,
-        $providerFiles.cuda
-    )
-    Invoke-FailCase -Name 'materializer-missing-external-cuda-provenance' -MessagePattern 'explicit task-local CUDA' -Action {
-        Invoke-ProviderMaterializer -Set $noExternalSet -CacheName 'missing-external' -Backend cuda -WithCudaSelector | Out-Null
-    }
-
-    $absentCoreSet = New-ProviderFixtureSet -Name 'absent-core' -Backend cpu -RuntimePaths @($providerFiles.shared) -SelectedCorePath $providerFiles.core
-    Invoke-FailCase -Name 'materializer-absent-selected-core' -MessagePattern 'selected ONNX Runtime core' -Action {
-        Invoke-ProviderMaterializer -Set $absentCoreSet -CacheName 'absent-core' -Backend cpu | Out-Null
-    }
-
-    $duplicateCoreSet = New-ProviderFixtureSet -Name 'duplicate-core' -Backend cpu -RuntimePaths @($providerFiles.core, $providerFiles.core)
-    Invoke-FailCase -Name 'materializer-duplicate-selected-core' -MessagePattern 'duplicate or case collision' -Action {
-        Invoke-ProviderMaterializer -Set $duplicateCoreSet -CacheName 'duplicate-core' -Backend cpu | Out-Null
-    }
-
-    Write-Utf8NoBom -Path (Join-Path $testRootFull 'onnxruntime.dll') -Text 'outside-manifest-root'
-    $escapeSet = New-ProviderFixtureSet -Name 'escape' -Backend cpu -RuntimePaths @('../onnxruntime.dll', $providerFiles.shared) -SelectedCorePath '../onnxruntime.dll'
-    Invoke-FailCase -Name 'materializer-runtime-path-escape' -MessagePattern 'stay inside' -Action {
-        Invoke-ProviderMaterializer -Set $escapeSet -CacheName 'path-escape' -Backend cpu | Out-Null
-    }
-
-    Write-Utf8NoBom -Path (Join-Path $providerRoot 'junction-target/onnxruntime.dll') -Text 'junction-core'
-    Write-Utf8NoBom -Path (Join-Path $providerRoot 'junction-target/onnxruntime_providers_shared.dll') -Text 'junction-shared'
-    New-Item -ItemType Junction -Path (Join-Path $providerRoot 'junction') -Target (Join-Path $providerRoot 'junction-target') | Out-Null
-    $reparseSet = New-ProviderFixtureSet -Name 'reparse' -Backend cpu -RuntimePaths @(
-        'junction/onnxruntime.dll',
-        'junction/onnxruntime_providers_shared.dll'
-    ) -SelectedCorePath 'junction/onnxruntime.dll'
-    Invoke-FailCase -Name 'materializer-runtime-reparse-path' -MessagePattern 'reparse point' -Action {
-        Invoke-ProviderMaterializer -Set $reparseSet -CacheName 'reparse' -Backend cpu | Out-Null
-    }
-
-    Write-Utf8NoBom -Path (Join-Path $providerRoot 'runtime/a/external.dll') -Text 'external-a'
-    Write-Utf8NoBom -Path (Join-Path $providerRoot 'runtime/b/EXTERNAL.DLL') -Text 'external-b'
-    $caseCollisionSet = New-ProviderFixtureSet -Name 'case-collision' -Backend cuda -RuntimePaths @(
-        $providerFiles.core,
-        $providerFiles.shared,
-        $providerFiles.cuda,
-        'runtime/a/external.dll',
-        'runtime/b/EXTERNAL.DLL'
-    )
-    Invoke-FailCase -Name 'materializer-runtime-name-case-collision' -MessagePattern 'duplicate or case collision' -Action {
-        Invoke-ProviderMaterializer -Set $caseCollisionSet -CacheName 'case-collision' -Backend cuda -WithCudaSelector | Out-Null
-    }
-
-    Write-Utf8NoBom -Path (Join-Path $providerRoot 'runtime/unexpected.dll') -Text 'unexpected-ort-name'
-    $unexpectedSet = New-ProviderFixtureSet -Name 'unexpected' -Backend cuda -RuntimePaths @(
-        $providerFiles.core,
-        $providerFiles.shared,
-        $providerFiles.cuda,
-        $providerFiles.external,
-        'runtime/unexpected.dll'
-    )
-    $unexpected = $unexpectedSet.dependency.dependencies[-1]
-    $unexpected.kind = 'onnxruntime_archive'
-    $unexpected.source = [string]$ort.archive.url
-    $unexpected.version = [string]$ort.version
-    $unexpected.license_provenance_note = $ortLicense
-    Save-ProviderFixtureSet -Set $unexpectedSet
-    Invoke-FailCase -Name 'materializer-unexpected-runtime-name' -MessagePattern 'unexpected ONNX Runtime' -Action {
-        Invoke-ProviderMaterializer -Set $unexpectedSet -CacheName 'unexpected' -Backend cuda -WithCudaSelector | Out-Null
-    }
-
-    $lowCountManifest = Get-Content -LiteralPath $sourcesManifest -Raw | ConvertFrom-Json -Depth 100
-    $lowCountManifest.components.'provider-v0.3'.max_runtime_file_count = 1
-    $lowCountPath = Join-Path $providerRoot 'sources-low-count.json'
-    [void](Write-JsonFixture -Path $lowCountPath -Value $lowCountManifest)
-    Invoke-FailCase -Name 'materializer-runtime-count-bound' -MessagePattern 'dependency count' -Action {
-        Invoke-ProviderMaterializer -Set $cpuSet -CacheName 'count-bound' -Backend cpu -SourcesPath $lowCountPath | Out-Null
-    }
-
-    $lowBytesManifest = Get-Content -LiteralPath $sourcesManifest -Raw | ConvertFrom-Json -Depth 100
-    $lowBytesManifest.components.'provider-v0.3'.max_runtime_total_bytes = 1
-    $lowBytesPath = Join-Path $providerRoot 'sources-low-bytes.json'
-    [void](Write-JsonFixture -Path $lowBytesPath -Value $lowBytesManifest)
-    Invoke-FailCase -Name 'materializer-runtime-byte-bound' -MessagePattern 'total byte bound' -Action {
-        Invoke-ProviderMaterializer -Set $cpuSet -CacheName 'byte-bound' -Backend cpu -SourcesPath $lowBytesPath | Out-Null
-    }
     Invoke-FailCase -Name 'materializer-forbidden-global-path' -MessagePattern 'D-drive|strict child' -Action {
         & $materializer -TaskRoot $testRootFull -CacheRoot 'C:\issue194-forbidden-cache' -Component mumu-nemu-installed -MumuInstallRoot $mumuRoot -MumuVersion $mumuVersion
     }

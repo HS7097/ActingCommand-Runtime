@@ -19,12 +19,16 @@ The existing exact-artifact downloader understands this layout and the historica
 fixed two-executable Runtime layout whose manifest omits the field. It continues
 to reject incomplete or unexpected payloads. The separate Tools artifact carries
 `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and, under
-`platform-tools/`, the official Android platform-tools 37.0.1 files `adb.exe`,
-`AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. Its
-own manifest declares `tools_payload_layout: "platform-tools-v1"` and binds all
-ten files; the downloader still accepts the historical five-file Tools layout
-whose manifest omits the field and rejects any other layout.
+`actingcommand-device-test.exe` and, under `platform-tools/`, the official
+Android platform-tools 37.0.1 files `adb.exe`, `AdbWinApi.dll`,
+`AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. Its own manifest
+declares `tools_payload_layout: "platform-tools-v2"` and binds all nine files.
+The OCR and NN engine is linked into `actingcommand-actingd.exe`; no vision
+provider DLL ships (Workflow #360), and actingd reads its models from the vision
+root named by the configuration's `vision` section. The downloader still accepts
+the historical `platform-tools-v1` layout (the same files plus
+`ac_fastdeploy_ppocr.dll`) and the five-file Tools layout whose manifest omits
+the field, and rejects any other layout.
 
 The build takes `platform-tools_r37.0.1-win.zip` only from Google's official
 `https://dl.google.com/android/repository/` URL and fails unless the archive has

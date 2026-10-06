@@ -425,7 +425,6 @@ dependencies = [
  "actingcommand-vision-ffi",
  "serde",
  "serde_json",
- "sha2",
 ]
 
 [[package]]

@@ -16,10 +16,11 @@ MuMu/Nemu, model, provider, or Runtime binaries.
   `actingctl.exe`, `actingd.config.example.json`, `INSTALL.md`, and `RELEASE-NOTES.md`;
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
   `actingledger.exe`,
-  `actingcommand-vision-provider-check.exe`, `actingcommand-device-test.exe`, and
-  the existing PP-OCR cdylib staged as `ac_fastdeploy_ppocr.dll`, plus the official
-  Android platform-tools 37.0.1 files under `platform-tools/`: `adb.exe`,
-  `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`.
+  `actingcommand-vision-provider-check.exe` and `actingcommand-device-test.exe`,
+  plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
+  `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
+  `source.properties`. The OCR engine is linked into `actingcommand-actingd.exe`;
+  no vision provider DLL is built or staged (Workflow #360).
 
 Before it compiles anything, the build fetches
 `https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip` (the only
@@ -47,10 +48,11 @@ Explicit unknown, empty or non-string layouts fail; an incomplete distribution
 cannot fall back to the two-file layout. Both layouts retain the flat directory,
 exact case/path, complete declared/physical set, size/hash and source checks.
 
-Tools manifests declare `tools_payload_layout: "platform-tools-v1"`, which requires
-exactly the ten Tools payloads listed above (manifest paths use `/`) and allows no
-directory other than `platform-tools`. Historical Tools manifests without this
-field still require exactly the five flat files. An explicit unknown, empty or
+Tools manifests declare `tools_payload_layout: "platform-tools-v2"`, which requires
+exactly the nine Tools payloads listed above (manifest paths use `/`) and allows no
+directory other than `platform-tools`. Historical `platform-tools-v1` manifests
+require the same files plus `ac_fastdeploy_ppocr.dll`, and historical Tools
+manifests without this field still require exactly the five flat files. An explicit unknown, empty or
 non-string layout fails, a Runtime manifest may not declare a Tools layout, and a
 Tools manifest may not declare a Runtime layout.
 
@@ -95,16 +97,11 @@ on drive `D:`. Component selection is explicit:
   `onnxruntime_providers_shared.dll`, and `onnxruntime_providers_cuda.dll` under
   fixed file-count and byte bounds. It does not infer or copy CUDA/cuDNN/driver
   files from `PATH`, System32, or another cache.
-- `provider-v0.3` accepts an exact-hash caller manifest using
-  `actingcommand.vision_provider_artifacts.v0.3` plus an exact-hash private
-  `actingcommand.provider_runtime_dependencies.v1` manifest. It rehashes and
-  copies the canonical provider, detector, recognizer, dictionary, selected
-  `onnxruntime.dll`, and every declared companion DLL.
 - `mumu-nemu-installed` records metadata for one explicit installed root and
   `nx_device` version. Vendor files remain in place and are never copied or run.
 
 CPU/CUDA selection is exact lowercase and has no automatic fallback. CUDA also
-requires both an ordinal and stable identity. Examples:
+requires both an ordinal and stable identity. Example:
 
 ```powershell
 pwsh -NoProfile -File scripts/windows-tools/Materialize-TaskToolCache.ps1 `
@@ -112,37 +109,14 @@ pwsh -NoProfile -File scripts/windows-tools/Materialize-TaskToolCache.ps1 `
   -CacheRoot D:\task\runtime-check\cache\platform-tools `
   -Component platform-tools-37.0.1 `
   -AcceptAndroidSdkLicense
-
-pwsh -NoProfile -File scripts/windows-tools/Materialize-TaskToolCache.ps1 `
-  -TaskRoot D:\task\runtime-check `
-  -CacheRoot D:\task\runtime-check\cache\provider `
-  -Component provider-v0.3 `
-  -OcrBackend cuda `
-  -CudaDeviceOrdinal 0 `
-  -CudaStableIdentity 'cuda-uuid:...' `
-  -ProviderArtifactManifestPath D:\task\runtime-check\provider\artifacts.json `
-  -ProviderArtifactManifestSha256 <64-lowercase-hex> `
-  -ProviderDependencyManifestPath D:\task\runtime-check\provider\dependencies.json `
-  -ProviderDependencyManifestSha256 <64-lowercase-hex>
 ```
-
-The private dependency manifest must declare `backend`, `closure_complete: true`,
-`selected_core_path`, and a bounded `dependencies` array. Each dependency records
-`path`, `sha256`, `source`, `version`, `license_provenance_note`, and `kind` set to
-either `onnxruntime_archive` or `external_cuda`. The selected core occurs exactly
-once. CPU omits `cuda_device`; CUDA requires an ordinal, stable identity, all three
-pinned ONNX Runtime DLL names, and at least one explicit task-local external CUDA
-dependency record. Duplicate or case-colliding names, path escapes, reparse points,
-missing companions, undeclared fallback, hash mismatch, and count or byte overflow
-fail loud.
 
 Every published cache directory contains `PROVENANCE.json` with selected sources,
 versions, original paths, cache paths, sizes, hashes, license notes, explicit
-backend, fallback state, execution state, and cleanup classification. A clean
-`provider/vision-provider-artifacts.v0.3.json` is emitted with only existing public
-fields and rewritten task-cache paths. `Ready` means exact bytes were materialized;
-`functional_validation_performed` remains false and provider identity, DLL-load
-closure, selected device, accuracy, and performance remain Pending Verification.
+backend, fallback state, execution state, and cleanup classification. `Ready`
+means exact bytes were materialized; `functional_validation_performed` remains
+false. The `provider-v0.3` component that copied a caller's v0.3 provider closure
+is retired with the provider DLL (Workflow #360).
 
 ## Cleanup
 

@@ -16,9 +16,6 @@ use std::{
     sync::Mutex,
 };
 
-pub const OCR_READ_TEXT_SYMBOL: &[u8] = b"ac_fastdeploy_ppocr_read_text_json\0";
-pub const NN_CLASSIFY_SYMBOL: &[u8] = b"ac_onnxruntime_classify_json\0";
-pub const FREE_BUFFER_SYMBOL: &[u8] = b"ac_vision_free_buffer\0";
 const CUDA_SUCCESS: i32 = 0;
 const CUDA_PCI_BUS_ID_BYTES: usize = 64;
 const MAX_ONNXRUNTIME_VERSION_BYTES: usize = 256;
@@ -48,22 +45,6 @@ static PROCESS_RUNTIME_LIBRARY_CLOSURE: Mutex<RuntimeLibraryClosureState<Arc<Lib
 const PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS: u32 =
     libloading::os::windows::LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
         | libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32;
-
-pub type VisionFfiInvokeJson = unsafe extern "C" fn(
-    request_ptr: *const u8,
-    request_len: usize,
-    response_out: *mut VisionFfiOwnedBuffer,
-) -> i32;
-
-pub type VisionFfiFreeBuffer = unsafe extern "C" fn(buffer: VisionFfiOwnedBuffer);
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct VisionFfiOwnedBuffer {
-    pub data: *mut u8,
-    pub len: usize,
-    pub capacity: usize,
-}
 
 #[cfg(any(windows, test))]
 fn require_same_runtime_library_closure(
@@ -512,20 +493,6 @@ fn lower_hex_bytes(bytes: &[u8]) -> String {
         value.push(HEX[(byte & 0x0f) as usize] as char);
     }
     value
-}
-
-pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> VisionFfiResult<()> {
-    let library = load_library("fastdeploy-ppocr", path)?;
-    let _: VisionFfiInvokeJson = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
-    let _: VisionFfiFreeBuffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
-    Ok(())
-}
-
-pub fn validate_onnxruntime_provider_abi(path: impl AsRef<OsStr>) -> VisionFfiResult<()> {
-    let library = load_library("onnxruntime", path)?;
-    let _: VisionFfiInvokeJson = load_symbol(&library, "onnxruntime", NN_CLASSIFY_SYMBOL)?;
-    let _: VisionFfiFreeBuffer = load_symbol(&library, "onnxruntime", FREE_BUFFER_SYMBOL)?;
-    Ok(())
 }
 
 pub fn validate_runtime_library_loadable(
