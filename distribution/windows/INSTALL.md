@@ -231,9 +231,15 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   optional receipt fields an `actingctl` older than this daemon cannot decode.
 
 The parser rejects unknown fields and configuration files larger than 1 MiB.
-The blank state root and salt must be filled before startup. Use your existing
-provider manifest and connection configuration when those capabilities are
-required; optional fields must follow the same source schema. Provider models,
+The blank state root and salt must be filled before startup. Packages with OCR
+or NN targets need the top-level `vision` section, for example
+`"vision": {"execution_provider": "cpu"}`: the vision root (by default
+`<install root>\vision`, else `vision` next to the configuration file) holds
+`ort\onnxruntime.dll` and one folder per model under `models\`, named by the
+`model_ref` the packages use (`contracts/vision-model-folders.md`). The retired
+`vision_provider_manifest` key is refused. Use your existing connection
+configuration when those capabilities are required; optional fields must follow
+the same source schema. Provider models,
 SDKs, drivers, device tools and private connection data are separate dependencies
 and are not installed by this Runtime artifact. Nothing in the template creates
 an instance, chooses a device or supplies credentials.
@@ -246,7 +252,8 @@ Before starting, validate the filled copy without side effects:
 
 It prints one JSON result line and exits 0 only when the configuration loads,
 assembles and validates exactly as startup would. It creates, reads or locks
-nothing under `state_root`, does not read the vision provider manifest, and
+nothing under `state_root`, lists the vision root without reading any model
+file, and
 resolves relative policy package paths against the current directory exactly as
 startup does; see `contracts/actingd-check-config.md`.
 

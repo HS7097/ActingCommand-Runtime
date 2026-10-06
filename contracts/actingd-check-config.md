@@ -4,15 +4,17 @@
 and stops before the first side effect. It runs the configuration load, the
 typed assembly of `actingcommand.actingd.config.v1`, the check of the install
 root's adb (see "Default ADB"),
-`RuntimeHostConfig::validate` and the instance resource package admission (see
-"Instance resource package"), the same checks as startup's first step, reports
+`RuntimeHostConfig::validate`, the listing of the vision root (see "Vision
+root") and the instance resource package admission (see "Instance resource
+package"), the same checks as startup's first step, reports
 the MuMu install root startup would use (resolved read-only when `mumu_root` is
 not configured, see "MuMu install root") and the state of the install root's
 adb, then drops the assembly. It never
 stats, creates or reads anything under `state_root`, never opens the ledger,
 never acquires `owner.lock`, never binds a socket and records no lifecycle
 failure. A passing check is not a startup: the daemon's own startup path
-remains the only authority on the state root and the vision provider manifest.
+remains the only authority on the state root, and a vision model's content is
+read and hashed only when the model is first used.
 
 ## Invocation
 
@@ -45,7 +47,7 @@ and describes a control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_model_content","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"]}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -53,7 +55,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 one entry per group; the real object carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":true,"reason":"declarative_identity; allowed_clients=any"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"},{"name":"env_overrides","enabled":false,"reason":"flag absent"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":true,"reason":"declarative_identity; allowed_clients=any"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"section absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"},{"name":"env_overrides","enabled":false,"reason":"flag absent"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
@@ -144,7 +146,7 @@ terminal with the chosen eligibility basis in the original eviction intent.
     allowed_clients=<n>` with the size of the effective allow-list, or
     `declarative_identity; allowed_clients=any` without a `governance` section,
     see "Governance"), `policy_driver` (`policy`
-    section present), `vision_provider` (`vision_provider_manifest` present),
+    section present), `vision_provider` (`vision` section present),
     `device_diagnostic` (always on; the reason carries the mode),
     `performance_monitor` (always on with the default sample interval),
     `mumu_discovery` and `emulator_control` (on only when at least one
@@ -190,9 +192,9 @@ terminal with the chosen eligibility basis in the original eviction intent.
     produced yet. A `value` is a typed scalar (`string`, `integer`,
     `boolean`, `duration_ms`).
 - `not_checked` lists what this command did not validate. It always starts
-  with `vision_provider_manifest` (only read and validated inside host startup,
-  which records `provider.startup_observed`) and `state_root` (nothing under it
-  is inspected). `resource_package_directory_declarations` is appended when at
+  with `vision_model_content` (a model's files are read, hashed and loaded only
+  on its first use, see "Vision root") and `state_root` (nothing under it is
+  inspected). `resource_package_directory_declarations` is appended when at
   least one instance's `resource_package` is a directory whose name is not a
   content digest: its existence is checked, its declarations are not (see
   "Instance resource package"). A digest-named directory is admitted in full and
@@ -207,6 +209,9 @@ terminal with the chosen eligibility basis in the original eviction intent.
   computed whenever an install root is recognised, also for a configuration
   with no instance; a state other than `ok` fails the check only when an
   instance uses that adb.
+- `vision` is always present: `null` without a `vision` section, otherwise
+  the listed vision root `{ root, execution_provider, onnxruntime_library,
+  ocr_models, nn_models }` (see "Vision root").
 - `warnings` is always present: one `env_override_ignored:<VAR>` per
   `ACTINGCOMMAND_*` fallback variable that is set while `allow_env_overrides`
   is off, in the order of "Environment overrides", and empty otherwise. A
@@ -226,19 +231,23 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `scheduled_execution_instance_unknown`, `procedure_package_not_regular`,
 `procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
-`config_manifest_incomplete`, the `prerequisite_package*` and `return_home_package*` codes
+`config_manifest_incomplete`, `vision_provider_manifest_retired`,
+`vision_config_invalid`, the `prerequisite_package*` and `return_home_package*` codes
 of "Prerequisite packages", and after the typed assembly the install root's
 adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
 `invalid_governance_policy` and the other
-`RuntimeHostConfig::validate` codes) or `resource_package`
-(`resource_package_missing`, `resource_package_invalid`), in that order. The
+`RuntimeHostConfig::validate` codes), `vision` (`vision_root_unavailable`,
+`vision_root_in_program_slot`, `vision_runtime_unavailable`,
+`vision_models_empty`, `vision_model_folder_invalid`, see "Vision root") or
+`resource_package` (`resource_package_missing`, `resource_package_invalid`), in
+that order. The
 secret fingerprint salt is never printed.
 
-A `resource_package` failure and an `adb_install_missing` /
-`adb_install_mismatch` failure (stage `assemble`, see "Default ADB") also carry
-`error.detail`; no other failure does:
+A `resource_package` failure, an `adb_install_missing` /
+`adb_install_mismatch` failure (stage `assemble`, see "Default ADB") and a
+`vision` failure also carry `error.detail`; no other failure does:
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"resource_package_invalid","stage":"resource_package","detail":{"alias":"node.a","path":"D:/runtime/packages/neutral.zip","loader_code":"contained_task_admission_failed","loader_message":"fatal containment error: missing package entry: resources/operations/task/task.json"}}}
@@ -251,6 +260,43 @@ or a digest-named package directory, and `null` otherwise. A changed or missing
 file in a digest-named directory reports `loader_code`
 `content_directory_digest_mismatch` with the expected and actual digests and the
 file count in `loader_message`.
+
+## Vision root
+
+Workflow #360 replaces `vision_provider_manifest` with the optional top-level
+`vision` section; `contracts/vision-model-folders.md` defines the vision root:
+
+```json
+"vision":{"execution_provider":"cpu"}
+```
+
+`execution_provider` is `cpu` or `cuda`; `cuda` requires `cuda_device
+{ ordinal, expected_stable_identity }` and `cpu` refuses it
+(`vision_config_invalid`, stage `assemble`). `root` is optional: without it the
+vision root is `<install root>\vision` when the daemon runs from an install
+root, else `vision` next to the configuration file; a relative `root` resolves
+against the configuration file's directory. A file that still names
+`vision_provider_manifest`, whatever its value, fails with
+`vision_provider_manifest_retired`, and an install selection that still names a
+provider file fails loading with `install_provider_retired`.
+
+The check lists the vision root exactly as startup does and reads no model
+file: the root must exist (`vision_root_unavailable`) outside the install root's
+`A\` and `B\` (`vision_root_in_program_slot`), `models\` must be readable
+(`vision_root_unavailable`), `ort\onnxruntime.dll` must exist, with
+`ort\onnxruntime_providers_cuda.dll` for `cuda` (`vision_runtime_unavailable`),
+and `models\` must hold at least one folder (`vision_models_empty`). A folder
+that breaks the folder rule fails the check with `vision_model_folder_invalid`
+and `error.detail.invalid_models`, one `{ name, path, reason }` per such folder,
+although daemon startup records such a folder and keeps running (only the
+targets naming it fail). The other `vision` failures carry
+`error.detail.message`.
+
+On success `vision` reports the canonical `root`, the `execution_provider`, the
+`onnxruntime_library` path and every model folder by name: `ocr_models`
+entries `{ model_ref, layout, detector, description_sha256, languages }`
+(`layout` `flat` or `nested`, `detector` whether a detector is present) and
+`nn_models` entries `{ model_ref, description_sha256, languages }`.
 
 ## Instance resource package
 

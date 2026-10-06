@@ -116,7 +116,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         subsystem(
             "vision_provider",
             inputs.vision_provider_configured,
-            present(inputs.vision_provider_configured, "manifest absent"),
+            present(inputs.vision_provider_configured, "section absent"),
         ),
         ConfigSubsystem {
             name: "device_diagnostic".to_owned(),

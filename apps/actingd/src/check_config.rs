@@ -10,14 +10,15 @@ use actingcommand_runtime_host::{
     ExecutionBackendProvider, ExecutionBackendRegistry, ResolvedAdbEndpoint,
     ResolvedInstanceEndpoint, RuntimeHostConfig,
 };
+use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider};
 use config::InstanceBindingKey;
 use serde_json::json;
 use std::path::Path;
 
 const CHECK_CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v1";
-/// Inputs this command cannot validate: the vision provider manifest is only read and
-/// validated inside host startup, and nothing under `state_root` is inspected here.
-const NOT_CHECKED: [&str; 2] = ["vision_provider_manifest", "state_root"];
+/// Inputs this command cannot validate: vision model content is read and hashed only when a
+/// model is first used (Workflow #360), and nothing under `state_root` is inspected here.
+const NOT_CHECKED: [&str; 2] = ["vision_model_content", "state_root"];
 /// Added to `not_checked` when a `resource_package` is a directory whose name is not a content
 /// digest: the field carries no reference to admit such a directory against (Workflow #288).
 const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
@@ -74,6 +75,24 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             rejection = Some(Rejection::AdbInstall(refused));
             (code, "assemble")
         })?;
+        // Workflow #360: the vision root listed exactly as startup lists it; no model file is
+        // read. A folder that breaks the folder rule fails this check, though startup would
+        // only record it.
+        let vision = match provider.vision() {
+            None => None,
+            Some(vision) => {
+                let inventory = vision.inspect().map_err(|refused| {
+                    let code = refused.code;
+                    rejection = Some(Rejection::Vision(refused));
+                    (code, "vision")
+                })?;
+                if !inventory.listing.invalid.is_empty() {
+                    rejection = Some(Rejection::VisionFolders(inventory.listing.invalid));
+                    return Err(("vision_model_folder_invalid", "vision"));
+                }
+                Some(vision_report(vision, &inventory))
+            }
+        };
         let modes = provider.modes();
         let deferred = provider.deferred_bindings();
         let mumu_root = provider.mumu_root().map(Path::to_path_buf);
@@ -102,6 +121,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             manifest,
             ignored_env_overrides,
             adb_default,
+            vision,
         };
         summarize(&config_path, &checked, &resource_packages)
     });
@@ -114,6 +134,32 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 let (detail, message) = match rejection {
                     Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
                     Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
+                    Rejection::Vision(refused) => (
+                        json!({ "message": refused.message }),
+                        refused.message.clone(),
+                    ),
+                    Rejection::VisionFolders(folders) => (
+                        json!({
+                            "invalid_models": folders
+                                .iter()
+                                .map(|folder| json!({
+                                    "name": folder.name,
+                                    "path": folder.path.to_string_lossy(),
+                                    "reason": folder.reason,
+                                }))
+                                .collect::<Vec<_>>(),
+                        }),
+                        folders
+                            .iter()
+                            .map(|folder| {
+                                format!(
+                                    "vision model folder '{}' is invalid: {}",
+                                    folder.name, folder.reason
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    ),
                 };
                 error["detail"] = detail;
                 failure = failure.with_detail(message);
@@ -134,11 +180,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     result
 }
 
-/// A refusal that carries `error.detail`: a resource package (stage `resource_package`) or
-/// the install root's adb (Workflow #337, stage `assemble`).
+/// A refusal that carries `error.detail`: a resource package (stage `resource_package`), the
+/// install root's adb (Workflow #337, stage `assemble`), or the vision root or its model
+/// folders (Workflow #360, stage `vision`).
 enum Rejection {
     ResourcePackage(config::ResourcePackageRejection),
     AdbInstall(config::ac_adb::AdbInstallRejection),
+    Vision(config::VisionRefusal),
+    VisionFolders(Vec<InvalidModelFolder>),
 }
 
 /// Everything `summarize` reports once every check passed: the registry as configured and
@@ -157,6 +206,45 @@ struct CheckedAssembly {
     ignored_env_overrides: Vec<&'static str>,
     /// Workflow #337: the install root's adb and its state; `None` outside an install root.
     adb_default: Option<config::ac_adb::AdbDefault>,
+    /// Workflow #360: the listed vision root; `None` when `vision` is absent.
+    vision: Option<serde_json::Value>,
+}
+
+/// The vision root as listed: its path, execution provider and every model folder.
+fn vision_report(
+    vision: &config::ConfiguredVision,
+    inventory: &config::VisionInventory,
+) -> serde_json::Value {
+    json!({
+        "root": inventory.root.to_string_lossy(),
+        "execution_provider": match vision.execution_provider() {
+            OnnxExecutionProvider::Cpu => "cpu",
+            OnnxExecutionProvider::Cuda => "cuda",
+        },
+        "onnxruntime_library": inventory.runtime.onnxruntime_library.to_string_lossy(),
+        "ocr_models": inventory
+            .listing
+            .ocr
+            .iter()
+            .map(|spec| json!({
+                "model_ref": spec.model_ref,
+                "layout": spec.layout.as_str(),
+                "detector": spec.detector_path.is_some(),
+                "description_sha256": spec.description_sha256,
+                "languages": spec.description.languages,
+            }))
+            .collect::<Vec<_>>(),
+        "nn_models": inventory
+            .listing
+            .nn
+            .iter()
+            .map(|spec| json!({
+                "model_ref": spec.model_ref,
+                "description_sha256": spec.description_sha256,
+                "languages": spec.description.languages,
+            }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn summarize(
@@ -284,6 +372,8 @@ fn summarize(
             .adb_default
             .as_ref()
             .map(config::ac_adb::AdbDefault::report),
+        // Workflow #360: `null` when `vision` is absent, else the listed vision root.
+        "vision": checked.vision,
         // Workflow #318 (cfg3): one `env_override_ignored:<VAR>` per set variable that
         // `allow_env_overrides` off leaves unread; empty otherwise.
         "warnings": checked

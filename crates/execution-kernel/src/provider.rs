@@ -131,11 +131,11 @@ impl<E: ?Sized, S> ModelSlot<E, S> {
         }
     }
 
-    fn lazy(model_ref: String, spec: S, admitted_sha256: Option<String>) -> Self {
+    fn lazy(model_ref: String, spec: S) -> Self {
         Self {
             model_ref,
             spec: Some(spec),
-            admitted_sha256,
+            admitted_sha256: None,
             verified_sha256: OnceLock::new(),
             cell: Mutex::new(SlotCell {
                 engine: None,
@@ -260,7 +260,7 @@ impl VisionFfiProvider {
                 .map(|spec| {
                     (
                         spec.model_ref.clone(),
-                        ModelSlot::lazy(spec.model_ref.clone(), spec, None),
+                        ModelSlot::lazy(spec.model_ref.clone(), spec),
                     )
                 })
                 .collect(),
@@ -270,7 +270,7 @@ impl VisionFfiProvider {
                 .map(|spec| {
                     (
                         spec.model_ref.clone(),
-                        ModelSlot::lazy(spec.model_ref.clone(), spec, None),
+                        ModelSlot::lazy(spec.model_ref.clone(), spec),
                     )
                 })
                 .collect(),
@@ -674,7 +674,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
             ));
         }
         if cell.engine.is_none() {
-            self.load_nn(slot, &mut *cell, request.model_sha256, deadline)?;
+            self.load_nn(slot, &mut cell, request.model_sha256, deadline)?;
         }
         slot.require(request.model_sha256, "NN")?;
         let timeout_ms = request.timeout_ms.saturating_sub(waited_ms);

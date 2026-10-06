@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{NnInferenceRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult};
+use crate::{VisionFfiError, VisionFfiErrorCode, VisionFfiResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -1203,12 +1203,6 @@ impl OnnxRuntimeArtifacts {
 pub enum OnnxExecutionProvider {
     Cpu,
     Cuda,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OnnxRuntimeInvokeRequest {
-    pub request: NnInferenceRequest,
-    pub artifacts: OnnxRuntimeArtifacts,
 }
 
 pub fn ppocr_model_content_sha256(

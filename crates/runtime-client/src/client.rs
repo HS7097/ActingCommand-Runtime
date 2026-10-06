@@ -3926,12 +3926,12 @@ pub(crate) fn resolve_official_ocr_projection(
             .iter()
             .flat_map(|record| &record.fields)
             .all(|field| field.reason == OcrFieldReason::RegionUnresolved);
-        let provider_executions =
-            if provider_evidence.is_empty() && (failed || regions_unresolved) {
-                Vec::new()
-            } else {
-                project_official_ocr_providers(provider_evidence)?
-            };
+        let provider_executions = if provider_evidence.is_empty() && (failed || regions_unresolved)
+        {
+            Vec::new()
+        } else {
+            project_official_ocr_providers(provider_evidence)?
+        };
         *fields_projection = Some(RuntimeOfficialOcrFieldsProjection {
             schema_version: "actingcommand.runtime.official-ocr-fields-projection.v2",
             run_id: *run_id,

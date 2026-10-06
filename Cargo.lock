@@ -237,17 +237,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actingcommand-onnxruntime-json-provider"
-version = "0.1.0"
-dependencies = [
- "actingcommand-onnx-provider-support",
- "actingcommand-vision-ffi",
- "ort",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "actingcommand-pack-containment"
 version = "0.1.0"
 dependencies = [

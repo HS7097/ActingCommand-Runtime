@@ -404,9 +404,7 @@ fn read_description(
             return Err("model.json is not a regular file".to_string());
         }
         Ok(metadata) if metadata.len() > MAX_DESCRIPTION_BYTES => {
-            return Err(format!(
-                "model.json exceeds {MAX_DESCRIPTION_BYTES} bytes"
-            ));
+            return Err(format!("model.json exceeds {MAX_DESCRIPTION_BYTES} bytes"));
         }
         Ok(_) => {
             let bytes =
@@ -426,10 +424,9 @@ fn read_description(
 /// True for a regular file, false when nothing is there; anything else is an error.
 fn regular_file(path: &Path) -> Result<bool, String> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
-            "{} is a symbolic link",
-            path.display()
-        )),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("{} is a symbolic link", path.display()))
+        }
         Ok(metadata) if metadata.is_file() => Ok(true),
         Ok(_) => Err(format!("{} is not a regular file", path.display())),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
@@ -440,10 +437,9 @@ fn regular_file(path: &Path) -> Result<bool, String> {
 /// True for a directory, false when nothing is there; anything else is an error.
 fn directory(path: &Path) -> Result<bool, String> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
-            "{} is a symbolic link or junction",
-            path.display()
-        )),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("{} is a symbolic link or junction", path.display()))
+        }
         Ok(metadata) if metadata.is_dir() => Ok(true),
         Ok(_) => Err(format!("{} is not a folder", path.display())),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
