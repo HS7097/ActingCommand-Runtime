@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Domain separator of the engine binding digest recorded as an OCR execution's
 /// `provider_binary_sha256`.
@@ -47,6 +47,9 @@ pub enum OcrModelLoad {
     Loaded {
         engine: Box<dyn OcrEngine + Send>,
         model_sha256: String,
+        /// How long the load waited for locks held by other requests (another request's
+        /// ONNX Runtime initialisation); the request's budget pays for it, unlike the load.
+        waited_on_others: Duration,
     },
     /// The files hash to a different content identity; no session was built.
     Mismatch { model_sha256: String },

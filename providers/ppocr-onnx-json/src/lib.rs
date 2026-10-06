@@ -356,7 +356,7 @@ impl VisionModelLoader for PpocrCtcLoader {
             return Ok(OcrModelLoad::Mismatch { model_sha256 });
         }
         let dictionary = parse_dictionary(&dictionary, &model.dictionary_path).map_err(failure)?;
-        let facts = runtime_facts(&self.runtime, wait_deadline)?;
+        let (facts, waited_on_others) = runtime_facts(&self.runtime, wait_deadline)?;
         let key = OcrSessionKey::from_parts(OcrSessionKeyParts {
             engine_binding_sha256: ocr_engine_binding_sha256(
                 &facts.executable_sha256,
@@ -399,6 +399,7 @@ impl VisionModelLoader for PpocrCtcLoader {
                 pending_diagnostics: diagnostics,
             }),
             model_sha256,
+            waited_on_others,
         })
     }
 }
@@ -603,19 +604,24 @@ impl PpocrCtcModel {
 
 /// Initialises ONNX Runtime once per process. A request waiting for another request's
 /// initialisation waits only until its own deadline.
+/// The process runtime facts, initialising ONNX Runtime on first use, and how long this call
+/// waited for another request's initialisation (Workflow #360 §6: that wait is charged to the
+/// request's budget; this request's own initialisation is not).
 fn runtime_facts(
     spec: &VisionRuntimeSpec,
     wait_deadline: Instant,
-) -> VisionFfiResult<&'static RuntimeFacts> {
+) -> VisionFfiResult<(&'static RuntimeFacts, Duration)> {
     if let Some(facts) = RUNTIME_FACTS.get() {
-        return same_runtime(facts, spec);
+        return same_runtime(facts, spec).map(|facts| (facts, Duration::ZERO));
     }
+    let waiting = Instant::now();
     let _initialising = lock_until(&RUNTIME_INIT, wait_deadline, "ONNX Runtime initialisation")?;
+    let waited = waiting.elapsed();
     if let Some(facts) = RUNTIME_FACTS.get() {
-        return same_runtime(facts, spec);
+        return same_runtime(facts, spec).map(|facts| (facts, waited));
     }
     let facts = establish_runtime(spec)?;
-    Ok(RUNTIME_FACTS.get_or_init(move || facts))
+    Ok((RUNTIME_FACTS.get_or_init(move || facts), waited))
 }
 
 fn same_runtime(
