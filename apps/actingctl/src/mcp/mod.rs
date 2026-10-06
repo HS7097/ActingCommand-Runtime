@@ -18,7 +18,7 @@ mod tools;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use tools::TierSet;
@@ -134,8 +134,7 @@ fn config(arguments: &[OsString]) -> Result<ExitCode, String> {
     }
     let client = client.ok_or_else(|| CONFIG_USAGE.to_owned())?;
     let tiers: TierSet = tiers.unwrap_or_default();
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("cannot find the actingctl executable: {error}"))?;
+    let executable = registered_program()?;
     let executable = executable
         .to_str()
         .ok_or_else(|| "the actingctl path is not valid Unicode".to_owned())?;
@@ -164,6 +163,80 @@ fn config(arguments: &[OsString]) -> Result<ExitCode, String> {
     };
     print_text(&text)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// The program a client registers (#359 item 7). Run from a slot of an A/B installation,
+/// that is the fixed entry `<root>\runtime\actingctl.exe`, which forwards to the active
+/// slot; a slot path stops working after a switch. Otherwise it is this executable.
+fn registered_program() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot find the actingctl executable: {error}"))?;
+    // The launcher's inherited selection, or a direct slot entry's active.json; either
+    // way the selected slot holds this executable.
+    let selected = actingcommand_contract::process_installation()
+        .map_err(|error| format!("cannot read the installation selection: {error}"))?;
+    let root = match selected {
+        Some(selected) => Some(selected.root().to_path_buf()),
+        None => match slot_install_root(&executable) {
+            Some(root) => {
+                let selection = root.join(actingcommand_contract::INSTALL_SELECTION_PATH);
+                selection
+                    .try_exists()
+                    .map_err(|error| format!("cannot check {}: {error}", selection.display()))?
+                    .then_some(root)
+            }
+            None => None,
+        },
+    };
+    let Some(root) = root else {
+        return Ok(executable);
+    };
+    let root = plain_path(&root);
+    let entry = root.join("runtime").join("actingctl.exe");
+    match std::fs::metadata(&entry) {
+        Ok(metadata) if metadata.is_file() => Ok(entry),
+        Ok(_) => Err(format!(
+            "this actingctl runs from a slot of the A/B installation at {}, but its fixed entry {} is not a file; register that fixed entry once it is restored, not a slot path",
+            root.display(),
+            entry.display()
+        )),
+        Err(error) => Err(format!(
+            "this actingctl runs from a slot of the A/B installation at {}, but its fixed entry {} is unavailable ({error}); register that fixed entry once it is restored, not a slot path",
+            root.display(),
+            entry.display()
+        )),
+    }
+}
+
+/// `<root>` when the executable sits at `<root>\<A|B>\runtime\<file>`.
+fn slot_install_root(executable: &Path) -> Option<PathBuf> {
+    let runtime = executable
+        .parent()
+        .filter(|directory| directory.file_name().is_some_and(|name| name == "runtime"))?;
+    let slot = runtime.parent().filter(|directory| {
+        directory
+            .file_name()
+            .is_some_and(|name| name == "A" || name == "B")
+    })?;
+    slot.parent().map(Path::to_path_buf)
+}
+
+/// The canonical installation root carries the Windows verbatim prefix; a client
+/// configuration takes the ordinary spelling of the same path.
+fn plain_path(path: &Path) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{share}"))
+    } else if let Some(drive) = text
+        .strip_prefix(r"\\?\")
+        .filter(|rest| rest.as_bytes().get(1) == Some(&b':'))
+    {
+        PathBuf::from(drive)
+    } else {
+        path.to_path_buf()
+    }
 }
 
 /// A TOML literal string, or a basic string when the value holds a single quote.
