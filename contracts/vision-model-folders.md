@@ -50,11 +50,42 @@ UTF-8 JSON of at most 64 KiB, unknown fields refused:
   it must match the layout.
 - `languages`: optional, informational; recorded at startup and never compared
   with a target's languages.
+- `recognizer`, `detector`, `decoder`: optional `ppocr-ctc` parameter sections
+  (see "Parameters"); an `onnx-classify` description has none.
 
 A folder without `model.json` has the family's defaults. The description digest
 is the SHA-256 of the canonical description with every default filled in, so a
 missing file and a file that spells out the defaults have the same digest. The
 description is read once at startup; a change needs a restart.
+
+## Parameters
+
+Every field of a `ppocr-ctc` section is optional; its default is the engine's
+built-in behaviour, so a model without `model.json` reads exactly as before.
+
+| Field | Default | Allowed | Meaning |
+|---|---|---|---|
+| `recognizer.input_height` | 48 | 8..=256 | tensor height; a static model height must equal it |
+| `recognizer.min_width` | 32 | 8..=`max_width` | narrowest tensor width; narrower content is zero-padded |
+| `recognizer.max_width` | 320 | ..=4096 | widest tensor width; wider content is squeezed |
+| `recognizer.channel_order` | `bgr` | `bgr`, `rgb` | plane order of the recognizer input |
+| `detector.max_side` | 960 | >= `multiple` | longest side of a dynamic detector input |
+| `detector.min_side` | 32 | >= 1 | shortest side |
+| `detector.multiple` | 32 | 1..=256 | both sides round up to it |
+| `detector.channel_order` | `rgb` | `rgb`, `bgr` | plane order; mean and deviation follow the plane |
+| `detector.resize` | `nearest` | `nearest`, `linear` | resampling of the detector input |
+| `detector.threshold` | 0.3 | (0, 1) | text probability of a map cell |
+| `detector.min_area` | 4 | >= 1 | fewest cells of a text component |
+| `detector.box_padding` | 16 | 0..=256 | frame pixels added around a box |
+| `detector.max_boxes` | 64 | 1..=1024 | most boxes recognized per request |
+| `detector.merge_min_overlap_percent` | 35 | 0..=100 | vertical overlap for merging boxes on a line |
+| `detector.merge_gap_factor` | 3 | 0..=16 | horizontal gap allowed, in box heights |
+| `detector.merge_min_height` | 24 | 0..=1024 | box height counted at least this |
+| `decoder.space_class` | `drop` | `drop`, `space` | the class after the dictionary decodes to a space |
+
+A value out of range, an unknown field or a section on an `onnx-classify`
+description makes the folder invalid. The detector parameters apply only to
+`full_frame` regions.
 
 ## Identity
 
@@ -62,9 +93,12 @@ description is read once at startup; a change needs a restart.
   (`none` when absent), recognizer and dictionary files, with the classifier
   `none`. It does not depend on the layout or the file names.
 - NN: the SHA-256 of `model.onnx`.
-- The description is not part of the identity. It enters the engine binding
-  digest each OCR execution records as `provider_binary_sha256`, together with
-  the SHA-256 of the running executable and of `onnxruntime.dll`.
+- The description is not part of the identity. Its canonical form (every
+  section and field filled in) enters the engine binding digest each OCR
+  execution records as `provider_binary_sha256`, together with the SHA-256 of
+  the running executable and of `onnxruntime.dll`, so two runs with different
+  parameters show different `provider_binary_sha256` with the same
+  `model_sha256`.
 
 ## Invalid folders
 

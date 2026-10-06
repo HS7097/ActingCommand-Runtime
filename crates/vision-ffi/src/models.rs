@@ -139,10 +139,138 @@ impl OcrModelLayout {
     }
 }
 
+/// The plane order of an NCHW input built from an RGB frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChannelOrder {
+    Rgb,
+    Bgr,
+}
+
+/// How the detector input is resampled from the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DetectorResize {
+    /// Index sampling (the engine's original behaviour).
+    Nearest,
+    /// The uint8 bilinear arithmetic the recognizer uses.
+    Linear,
+}
+
+/// What the class after the dictionary (dictionary size + 1) decodes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpaceClass {
+    /// The class is dropped like the blank (the engine's original behaviour).
+    Drop,
+    /// The class is a space character.
+    Space,
+}
+
+/// Recognizer preprocessing of a `ppocr-ctc` model (Workflow #360 O3). Every default is the
+/// engine's original constant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PpocrRecognizerParams {
+    /// The tensor height for a model with a dynamic height; a static height must equal it.
+    pub input_height: u32,
+    /// The narrowest tensor width; narrower content is zero-padded to it.
+    pub min_width: u32,
+    /// The widest tensor width; wider content is squeezed into it.
+    pub max_width: u32,
+    pub channel_order: ChannelOrder,
+}
+
+impl Default for PpocrRecognizerParams {
+    fn default() -> Self {
+        Self {
+            input_height: 48,
+            min_width: 32,
+            max_width: 320,
+            channel_order: ChannelOrder::Bgr,
+        }
+    }
+}
+
+/// Detector preprocessing and box post-processing of a `ppocr-ctc` model (Workflow #360 O3).
+/// Every default is the engine's original constant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PpocrDetectorParams {
+    /// The longest input side of a model with dynamic dimensions.
+    pub max_side: u32,
+    pub min_side: u32,
+    /// Both input sides are rounded up to this multiple.
+    pub multiple: u32,
+    pub channel_order: ChannelOrder,
+    pub resize: DetectorResize,
+    /// The probability above which a map cell is text.
+    pub threshold: f32,
+    /// The fewest map cells a text component keeps.
+    pub min_area: u32,
+    /// Frame pixels added on every side of a detected box.
+    pub box_padding: u32,
+    /// The most boxes recognized per request.
+    pub max_boxes: u32,
+    /// Two boxes on one line merge when their vertical overlap is at least this percentage of
+    /// the lower box height ...
+    pub merge_min_overlap_percent: u32,
+    /// ... and their horizontal gap is at most this factor times the taller box height ...
+    pub merge_gap_factor: u32,
+    /// ... with that height counted as at least this many pixels.
+    pub merge_min_height: u32,
+}
+
+impl Default for PpocrDetectorParams {
+    fn default() -> Self {
+        Self {
+            max_side: 960,
+            min_side: 32,
+            multiple: 32,
+            channel_order: ChannelOrder::Rgb,
+            resize: DetectorResize::Nearest,
+            threshold: 0.30,
+            min_area: 4,
+            box_padding: 16,
+            max_boxes: 64,
+            merge_min_overlap_percent: 35,
+            merge_gap_factor: 3,
+            merge_min_height: 24,
+        }
+    }
+}
+
+/// CTC decoding of a `ppocr-ctc` model (Workflow #360 O3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PpocrDecoderParams {
+    pub space_class: SpaceClass,
+}
+
+impl Default for PpocrDecoderParams {
+    fn default() -> Self {
+        Self {
+            space_class: SpaceClass::Drop,
+        }
+    }
+}
+
+/// The effective parameters of one `ppocr-ctc` model.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PpocrCtcParams {
+    pub recognizer: PpocrRecognizerParams,
+    pub detector: PpocrDetectorParams,
+    pub decoder: PpocrDecoderParams,
+}
+
+/// The most detected boxes a description may allow per request.
+const MAX_DETECTOR_BOXES: u32 = 1_024;
+
 /// A model folder's description: its `model.json`, or the family defaults when the folder
 /// has none. Its canonical form fills every default, so a missing file and a file that
-/// spells out the defaults describe the same model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// spells out the defaults describe the same model. Parameter sections belong to the
+/// `ppocr-ctc` family; an `onnx-classify` description has none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VisionModelDescription {
     pub schema_version: String,
@@ -150,15 +278,96 @@ pub struct VisionModelDescription {
     /// Informational; recorded at startup and never compared with a target's languages.
     #[serde(default)]
     pub languages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recognizer: Option<PpocrRecognizerParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detector: Option<PpocrDetectorParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder: Option<PpocrDecoderParams>,
 }
 
 impl VisionModelDescription {
     pub fn default_for(family: VisionModelFamily) -> Self {
+        let ppocr = family == VisionModelFamily::PpocrCtc;
         Self {
             schema_version: VISION_MODEL_DESCRIPTION_SCHEMA.to_string(),
             family: family.as_str().to_string(),
             languages: Vec::new(),
+            recognizer: ppocr.then(PpocrRecognizerParams::default),
+            detector: ppocr.then(PpocrDetectorParams::default),
+            decoder: ppocr.then(PpocrDecoderParams::default),
         }
+    }
+
+    /// The effective `ppocr-ctc` parameters; a missing section has the defaults.
+    pub fn ppocr_params(&self) -> PpocrCtcParams {
+        PpocrCtcParams {
+            recognizer: self.recognizer.clone().unwrap_or_default(),
+            detector: self.detector.clone().unwrap_or_default(),
+            decoder: self.decoder.clone().unwrap_or_default(),
+        }
+    }
+
+    /// Fills every missing parameter section of a `ppocr-ctc` description with its defaults.
+    fn normalize(&mut self, family: VisionModelFamily) {
+        if family == VisionModelFamily::PpocrCtc {
+            let params = self.ppocr_params();
+            self.recognizer = Some(params.recognizer);
+            self.detector = Some(params.detector);
+            self.decoder = Some(params.decoder);
+        }
+    }
+
+    fn validate_params(&self, family: VisionModelFamily) -> Result<(), String> {
+        if family != VisionModelFamily::PpocrCtc {
+            if self.recognizer.is_some() || self.detector.is_some() || self.decoder.is_some() {
+                return Err(format!(
+                    "model.json of a '{}' model takes no recognizer, detector or decoder section",
+                    family.as_str()
+                ));
+            }
+            return Ok(());
+        }
+        let params = self.ppocr_params();
+        let recognizer = &params.recognizer;
+        if !(8..=256).contains(&recognizer.input_height) {
+            return Err("model.json recognizer.input_height must be in 8..=256".to_string());
+        }
+        if recognizer.min_width < 8
+            || recognizer.max_width > 4_096
+            || recognizer.min_width > recognizer.max_width
+        {
+            return Err(
+                "model.json recognizer widths must satisfy 8 <= min_width <= max_width <= 4096"
+                    .to_string(),
+            );
+        }
+        let detector = &params.detector;
+        if !(1..=256).contains(&detector.multiple)
+            || detector.min_side == 0
+            || detector.max_side < detector.multiple
+        {
+            return Err(
+                "model.json detector sides must satisfy 1 <= multiple <= 256, min_side >= 1 and max_side >= multiple"
+                    .to_string(),
+            );
+        }
+        if !detector.threshold.is_finite() || detector.threshold <= 0.0 || detector.threshold >= 1.0
+        {
+            return Err("model.json detector.threshold must be between 0 and 1".to_string());
+        }
+        if detector.min_area == 0
+            || detector.box_padding > 256
+            || !(1..=MAX_DETECTOR_BOXES).contains(&detector.max_boxes)
+            || detector.merge_min_overlap_percent > 100
+            || detector.merge_gap_factor > 16
+            || detector.merge_min_height > 1_024
+        {
+            return Err(format!(
+                "model.json detector limits must satisfy min_area >= 1, box_padding <= 256, max_boxes in 1..={MAX_DETECTOR_BOXES}, merge_min_overlap_percent <= 100, merge_gap_factor <= 16 and merge_min_height <= 1024"
+            ));
+        }
+        Ok(())
     }
 
     fn validate(&self, family: VisionModelFamily) -> Result<(), String> {
@@ -194,7 +403,7 @@ impl VisionModelDescription {
                 "model.json languages must hold at most {MAX_DESCRIPTION_LANGUAGES} non-blank values of at most {MAX_LANGUAGE_BYTES} bytes"
             ));
         }
-        Ok(())
+        self.validate_params(family)
     }
 
     /// SHA-256 of the canonical JSON form.
@@ -210,7 +419,7 @@ impl VisionModelDescription {
 }
 
 /// One OCR model folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OcrModelSpec {
     pub model_ref: String,
     pub layout: OcrModelLayout,
@@ -222,7 +431,7 @@ pub struct OcrModelSpec {
 }
 
 /// One NN classification model folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NnModelSpec {
     pub model_ref: String,
     pub model_path: PathBuf,
@@ -239,7 +448,7 @@ pub struct InvalidModelFolder {
 }
 
 /// The folders under one `models` directory, sorted by name.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct VisionModelListing {
     pub ocr: Vec<OcrModelSpec>,
     pub nn: Vec<NnModelSpec>,
@@ -409,9 +618,10 @@ fn read_description(
         Ok(_) => {
             let bytes =
                 fs::read(&path).map_err(|error| format!("model.json is unreadable: {error}"))?;
-            let description: VisionModelDescription = serde_json::from_slice(&bytes)
+            let mut description: VisionModelDescription = serde_json::from_slice(&bytes)
                 .map_err(|error| format!("model.json is invalid: {error}"))?;
             description.validate(family)?;
+            description.normalize(family);
             description
         }
     };
