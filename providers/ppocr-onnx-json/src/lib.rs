@@ -1184,7 +1184,7 @@ fn frame_region_to_recognition_tensor(
             let x_weights = rec_linear_weights(fx);
             let read = |y, x| {
                 read_rgb_pixel(
-                    &frame.pixels,
+                    frame.pixels,
                     frame.pixel_format,
                     (y * frame_width + rect.x + x) * channels,
                 )
@@ -1256,7 +1256,7 @@ fn frame_region_to_detection_tensor(
         for out_x in 0..input_shape.width {
             let src_x = rect.x + (out_x * rect.width / input_shape.width).min(rect.width - 1);
             let pixel_offset = (src_y * frame_width + src_x) * channels;
-            let (r, g, b) = read_rgb_pixel(&frame.pixels, frame.pixel_format, pixel_offset)?;
+            let (r, g, b) = read_rgb_pixel(frame.pixels, frame.pixel_format, pixel_offset)?;
             let dst = out_y * input_shape.width + out_x;
             tensor[dst] = normalize_det_pixel(r, 0);
             tensor[plane_size + dst] = normalize_det_pixel(g, 1);

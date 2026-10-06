@@ -337,7 +337,7 @@ impl VisionFfiProvider {
             ));
         }
         if cell.engine.is_none() {
-            self.load_ocr(slot, &mut *cell, model_sha256, deadline)?;
+            self.load_ocr(slot, &mut cell, model_sha256, deadline)?;
         }
         slot.require(model_sha256, "OCR")?;
         let identity = slot.identity()?;
