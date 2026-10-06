@@ -10,7 +10,6 @@ use super::user_config_store::read_user_config;
 use super::zip_error::{zip_io_error, zip_write_error};
 use super::{
     ALLOW_PATH_ADB_FOR_MUMU_ENV, CliError, CliOutcome, FlagArgs, GlobalOptions, maa_task_graph,
-    resource_convert,
 };
 use actingcommand_device::{
     AdbPathSource, CaptureBackendChoice, EnvOverrides, Frame, PixelFormat, resolve_adb_path,
@@ -38,7 +37,6 @@ pub(super) fn run_resource(
             crate::resource_restore::run_resource_restore(args)
         }
         "validate" => resource_declarations::run_resource_validation(&repo, &flags),
-        "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
         "catalog" => {
             for name in flags.flags.keys() {

@@ -324,7 +324,7 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
 }
 
 #[test]
-fn resource_restore_uses_native_evidence_and_existing_package_chain() {
+fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     use actingcommand_contract::{
         ContainedLabOperationRequest, LabOperationSelection, LabProjectionHint,
     };
@@ -369,34 +369,47 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
     )
     .unwrap();
     fs::write(source.join("ours/navigation/neutral.test.projection.json"),br#"{"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"private-value","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]}"#).unwrap();
-    run_actinglab_json(
-        &config,
-        &runtime_root,
-        &local,
-        [
-            "--json",
-            "resource",
-            "convert",
-            "--repo",
-            source.to_str().unwrap(),
-        ],
+    let parsed = actingcommand_resource_tooling::OperationParser::load(
+        &source.join("ours"),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+    .build_all()
+    .unwrap();
+    let mut package_files = std::collections::BTreeMap::from([
+        ("control.json", serde_json::to_vec(&json!({"schema_version":"Lab-1y.control.v1",
+            "game":"neutral","server":"test","package_id":"neutral.test.seed",
+            "entry_task_id":"seed","execution_mode":"navigable_route","resolution":{"width":2,"height":2}})).unwrap()),
+        ("resources/operations/seed/task.json", serde_json::to_vec(&source_task).unwrap()),
+        ("resources/operations/seed/assets/HOME.png", template.clone()),
+        ("resources/operations/resources.json", fs::read(source.join("ours/operations/resources.json")).unwrap()),
+        ("resources/recognition/neutral.test.pack.json", serde_json::to_vec(&parsed.pack).unwrap()),
+        ("resources/recognition/neutral.test.pages.json", serde_json::to_vec(&parsed.pages).unwrap()),
+        ("resources/navigation/neutral.test.navigation.json", serde_json::to_vec(&parsed.navigation).unwrap()),
+        ("resources/navigation/neutral.test.projection.json", fs::read(source.join("ours/navigation/neutral.test.projection.json")).unwrap()),
+    ]);
+    let files = package_files
+        .iter()
+        .filter_map(|(path, bytes)| {
+            path.strip_prefix("resources/").map(
+                |path| json!({"path":path,"sha256":format!("sha256:{:x}", Sha256::digest(bytes))}),
+            )
+        })
+        .collect::<Vec<_>>();
+    package_files.insert(
+        "resources/manifest.json",
+        serde_json::to_vec(&json!({"schema_version":"0.3","entry_task_id":"seed","files":files}))
+            .unwrap(),
     );
     let original = root.path().join("original.zip");
-    run_actinglab_json(
-        &config,
-        &runtime_root,
-        &local,
-        [
-            "--json",
-            "package",
-            "build-task",
-            "--repo",
-            source.to_str().unwrap(),
-            "--task",
-            "seed",
-            "--out",
-            original.to_str().unwrap(),
-        ],
+    write_zip(
+        &original,
+        &package_files
+            .iter()
+            .map(|(path, bytes)| (*path, bytes.as_slice()))
+            .collect::<Vec<_>>(),
     );
     let source_bytes = open_published_package(&original)
         .unwrap()
@@ -642,34 +655,26 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
             .iter()
             .all(|action| action["safety"] == "dangerous")
     );
-    run_actinglab_json(
-        &config,
-        &runtime_root,
-        &local,
-        [
-            "--json",
-            "resource",
-            "convert",
-            "--repo",
-            restored.to_str().unwrap(),
-        ],
+    let restored_outputs = actingcommand_resource_tooling::OperationParser::load(
+        &restored.join("ours"),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+    .build_all()
+    .unwrap();
+    assert_eq!(restored_outputs.pack["game"], "neutral");
+    assert_eq!(restored_outputs.pack["server"], "test");
+    assert!(
+        !restored_outputs.pack["targets"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
-    let built = root.path().join("restored.zip");
-    run_actinglab_json(
-        &config,
-        &runtime_root,
-        &local,
-        [
-            "--json",
-            "package",
-            "build-task",
-            "--repo",
-            restored.to_str().unwrap(),
-            "--task",
-            "restored",
-            "--out",
-            built.to_str().unwrap(),
-        ],
+    assert_eq!(
+        fs::read(restored.join("ours/operations/restored/task.json")).unwrap(),
+        task_bytes
     );
     run_actinglab_json(
         &config,
@@ -680,7 +685,7 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
             "package",
             "validate",
             "--zip",
-            built.to_str().unwrap(),
+            original.to_str().unwrap(),
         ],
     );
     let pending = root.path().join("pending");

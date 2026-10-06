@@ -157,7 +157,7 @@ fn start_authoring_runtime(state_root: &Path) -> RuntimeHost {
     .expect("Runtime host")
 }
 
-fn prepare_promotable_record(config: &Path, state_dir: &Path, frame_path: &Path) {
+fn prepare_recorded_steps(config: &Path, state_dir: &Path, frame_path: &Path) {
     fs::write(frame_path, test_record_frame_png(12, 10)).expect("record frame");
     set_config_env(config);
     let start = run_cli(
@@ -1830,7 +1830,9 @@ fn top_level_record_capability_is_available() {
             command.get("status").and_then(Value::as_str),
             Some(match command_name {
                 "session stream" => "unverified",
-                "session request stream check" => "retired",
+                "session request stream check"
+                | "record build-task"
+                | "session record build-task" => "retired",
                 _ => "available",
             })
         );
@@ -2698,7 +2700,7 @@ fn help_lists_capture_backend_short_alias() {
 }
 
 #[test]
-fn help_lists_resource_declaration_and_conversion_options() {
+fn help_lists_resource_declaration_options() {
     let help = help_data();
     assert_eq!(
         help.pointer("/command_options/resource validate/1")
@@ -2715,16 +2717,6 @@ fn help_lists_resource_declaration_and_conversion_options() {
             .and_then(Value::as_str),
         Some("--repo <repository root>")
     );
-    let options = help
-        .pointer("/command_options/resource convert")
-        .and_then(Value::as_array)
-        .expect("resource convert options");
-
-    assert!(
-        options
-            .iter()
-            .any(|option| option.as_str() == Some("--maa-tasks <dir>"))
-    );
 }
 
 #[test]
@@ -2739,11 +2731,6 @@ fn help_lists_required_external_authoring_metadata() {
         help.pointer("/command_options/resource compile-maa/1")
             .and_then(Value::as_str),
         Some("--task <id> (repeatable with --facts)")
-    );
-    assert_eq!(
-        help.pointer("/command_options/session record build-task/0")
-            .and_then(Value::as_str),
-        Some("--locale <locale>")
     );
 }
 

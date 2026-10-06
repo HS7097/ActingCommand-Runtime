@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_lab::{
-    PackageBuildTaskRequest, PackageBuildTaskResponse, PackageEnvOptions, PackageResolution,
-    PackageSource, PackageValidateRequest, PackageValidationResponse, ResourceConvertRequest,
-    ResourceConvertResponse,
+    PackageBundleRequest, PackageBundleResponse, PackageDigestRequest, PackageDigestResponse,
+    PackageValidateRequest, PackageValidationResponse,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -17,48 +16,28 @@ fn package_family_exposes_typed_requests_and_responses() {
         include_entries: false,
         expected_input_sha256: None,
     };
-    let _build = PackageBuildTaskRequest {
-        source: PackageSource::Local(PathBuf::from("resources")),
-        temporary_root: PathBuf::from("target/tmp"),
-        task_id: "task".to_string(),
-        game: Some("arknights".to_string()),
-        server: Some("cn".to_string()),
-        locale: None,
-        package_id: None,
-        execution_mode: None,
-        resolution: Some(PackageResolution {
-            width: 1280,
-            height: 720,
-        }),
-        include_recovery: false,
-        out: PathBuf::from("task.zip"),
-        dry_run: true,
-        max_buffered_payload_bytes: actingcommand_lab::DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
-        env: PackageEnvOptions::default(),
+    let _digest = PackageDigestRequest {
+        package: PathBuf::from("packs/task"),
     };
-    let _convert = ResourceConvertRequest {
-        repo: PathBuf::from("resources"),
-        game: Some("arknights".to_string()),
-        server: Some("cn".to_string()),
-        locale: Some("zh-CN".to_string()),
-        maa_tasks_root: None,
-        dry_run: true,
+    let _bundle = PackageBundleRequest {
+        applications: PathBuf::from("applications.json"),
+        packs_root: PathBuf::from("packs"),
+        out: PathBuf::from("bundle"),
+        source: None,
+        maintenance: None,
     };
 
     assert_serializable::<PackageValidationResponse>();
-    assert_serializable::<PackageBuildTaskResponse>();
-    assert_serializable::<ResourceConvertResponse>();
+    assert_serializable::<PackageDigestResponse>();
+    assert_serializable::<PackageBundleResponse>();
 }
 
 // Specification: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5554462313
 #[test]
-fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
+fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
     use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
     use actingcommand_pack_containment::Sha256Hash;
-    use actingcommand_resource_tooling::{
-        AuthoringEnvironmentSnapshot, DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, open_published_package,
-        prepare_package_build_task, resource_convert,
-    };
+    use actingcommand_resource_tooling::{OperationParser, open_published_package};
     use serde_json::json;
     use std::fs;
     use std::io::{Cursor, Read, Write};
@@ -145,32 +124,67 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
         "outcome_key":"fields_recorded"});
     let build = |value: &serde_json::Value, name: &str| {
         fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
-        resource_convert(ResourceConvertRequest {
-            repo: root.clone(),
-            game: None,
-            server: None,
-            locale: None,
-            maa_tasks_root: None,
-            dry_run: false,
-        })?;
-        prepare_package_build_task(PackageBuildTaskRequest {
-            source: PackageSource::Local(root.clone()),
-            temporary_root: temp.path().join("source"),
-            task_id: "return_home".into(),
-            game: None,
-            server: None,
-            locale: None,
-            package_id: None,
-            execution_mode: Some("navigable_route".into()),
-            resolution: None,
-            include_recovery: false,
-            out: temp.path().join(format!("{name}.zip")),
-            dry_run: false,
-            max_buffered_payload_bytes: DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
-            env: PackageEnvOptions::default(),
-        })?
-        .build(&AuthoringEnvironmentSnapshot::default())
-        .map_err(Box::new)
+        let outputs = OperationParser::load(&root, None, None, None)?.build_all()?;
+        let mut control = json!({
+            "schema_version": if value["schema_version"] == "0.9" { "Lab-1y.control.v2" } else { "Lab-1y.control.v1" },
+            "package_id": "neutral.wait", "execution_mode": "navigable_route",
+            "game": GAME, "server": SERVER, "resolution": {"width":1280,"height":720},
+            "entry_task_id": "return_home"
+        });
+        for key in ["phases", "timeout_ms", "max_steps"] {
+            if let Some(field) = value.get(key) {
+                control[key] = field.clone();
+            }
+        }
+        let mut entries = std::collections::BTreeMap::from([
+            ("control.json", serde_json::to_vec(&control).unwrap()),
+            (
+                "resources/operations/return_home/task.json",
+                serde_json::to_vec(value).unwrap(),
+            ),
+            (
+                "resources/operations/return_home/assets/HOME.png",
+                png.to_vec(),
+            ),
+            (
+                "resources/operations/resources.json",
+                fs::read(root.join("operations/resources.json")).unwrap(),
+            ),
+            (
+                "resources/recognition/fourth-game.test-shard.pack.json",
+                serde_json::to_vec(&outputs.pack).unwrap(),
+            ),
+            (
+                "resources/recognition/fourth-game.test-shard.pages.json",
+                serde_json::to_vec(&outputs.pages).unwrap(),
+            ),
+            (
+                "resources/navigation/fourth-game.test-shard.navigation.json",
+                serde_json::to_vec(&outputs.navigation).unwrap(),
+            ),
+        ]);
+        let files = entries.iter().filter_map(|(path, bytes)| path.strip_prefix("resources/").map(|path| json!({"path":path,"sha256":format!("sha256:{}", Sha256Hash::digest(bytes))}))).collect::<Vec<_>>();
+        entries.insert(
+            "resources/manifest.json",
+            serde_json::to_vec(
+                &json!({"schema_version":"0.3","entry_task_id":"return_home","files":files}),
+            )
+            .unwrap(),
+        );
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, bytes) in entries {
+            writer.start_file(path, FileOptions::default()).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        PreparedContainedTask::load(
+            "neutral-wait",
+            &bytes,
+            ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string()).unwrap(),
+        )
+        .map_err(|error| actingcommand_contract::LabError::package_invalid(error.to_string()))?;
+        fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();
+        Ok::<_, Box<actingcommand_contract::LabError>>(())
     };
     let admit = |bytes: &[u8]| {
         PreparedContainedTask::load(
@@ -185,20 +199,18 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
         if let Some(timeout) = timeout {
             task["operations"][0]["expect_after"]["timeout_ms"] = json!(timeout);
         }
-        build(&task, &name).expect("official bounded build");
+        build(&task, &name).expect("bounded source fixture");
         package = open_published_package(&temp.path().join(format!("{name}.zip")))
             .unwrap()
             .read_all()
             .unwrap();
-        admit(&package).expect("exact built bytes pass Runtime admission");
+        admit(&package).expect("exact fixture bytes pass Runtime admission");
     }
     for timeout in [0, 1_800_001, u64::MAX] {
         task["operations"][0]["expect_after"]["timeout_ms"] = json!(timeout);
         let error = build(&task, &format!("invalid-{timeout}")).unwrap_err();
         assert!(
-            error
-                .message
-                .contains("expect_after.timeout_ms must be in 1..=1800000"),
+            error.message.contains("contained_task_control_invalid"),
             "{error:?}"
         );
     }
@@ -296,7 +308,7 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
         }
     }
 
-    // PHASED-ROUTE-v1: source, formal build and both admission consumers agree.
+    // PHASED-ROUTE-v1: source and both admission consumers agree.
     task["schema_version"] = json!("0.9");
     task.as_object_mut().unwrap().remove("post_admission_ocr");
     task.as_object_mut().unwrap().remove("ocr_targets");
@@ -316,7 +328,7 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
     ]);
     task["scheduling_outcome"] = json!({"designated_operation":"home_noop","mappings":[
         {"outcome_key":"returned","effect":"designated_effect_completed","terminal_pages":["home"]}]});
-    build(&task, "phased").expect("formal non-OCR phased build");
+    build(&task, "phased").expect("non-OCR phased source fixture");
     let bytes = open_published_package(&temp.path().join("phased.zip"))
         .unwrap()
         .read_all()

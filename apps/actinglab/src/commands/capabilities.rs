@@ -17,7 +17,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("list", ["offline"], "available"),
         command_cap("capabilities", ["offline"], "available"),
         command_cap("resource validate", ["offline"], "available"),
-        command_cap("resource convert", ["offline"], "available"),
+        command_cap("resource convert", ["offline"], "retired"),
         command_cap("resource catalog", ["offline", "read_only"], "available"),
         command_cap("resource restore", ["offline"], "available"),
         command_cap("scheduling compile", ["offline", "read_only"], "available"),
@@ -42,8 +42,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("package preflight", ["offline", "read_only"], "available"),
         command_cap("package inspect", ["offline"], "available"),
         package_cli::offline_capability(),
-        command_cap("package build-task", ["offline"], "available"),
-        command_cap("package build-pack", ["offline"], "available"),
+        command_cap("package build-task", ["offline"], "retired"),
+        command_cap("package build-pack", ["offline"], "retired"),
         command_cap("package digest", ["offline"], "available"),
         command_cap("package bundle", ["offline"], "available"),
         command_cap("ledger show", ["offline", "read_only"], "retired"),
@@ -400,8 +400,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
-        command_cap("session record build-task", ["offline"], "available"),
-        command_cap("session record promote", ["offline"], "available"),
+        command_cap("session record build-task", ["offline"], "retired"),
+        command_cap("session record promote", ["offline"], "retired"),
+        command_cap("session record publish", ["offline"], "retired"),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -410,8 +411,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
-        command_cap("record build-task", ["offline"], "available"),
-        command_cap("record promote", ["offline"], "available"),
+        command_cap("record build-task", ["offline"], "retired"),
+        command_cap("record promote", ["offline"], "retired"),
+        command_cap("record publish", ["offline"], "retired"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),
@@ -481,6 +483,22 @@ where
 {
     let needs = needs.into_iter().map(Into::into).collect::<Vec<String>>();
     let (status, reason_code) = match status {
+        "retired"
+            if matches!(
+                command,
+                "package build-task"
+                    | "package build-pack"
+                    | "resource convert"
+                    | "record build-task"
+                    | "record promote"
+                    | "record publish"
+                    | "session record build-task"
+                    | "session record promote"
+                    | "session record publish"
+            ) =>
+        {
+            ("retired", "resource_production_retired")
+        }
         "retired" if command.starts_with("ledger ") => ("retired", "local_ledger_retired"),
         "retired" if command == "devices" || command.starts_with("session instance ") => {
             ("retired", "actinglab_device_authority_retired")
@@ -601,7 +619,7 @@ pub(crate) fn session_layer_capability_contract() -> Value {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
                 "recovery_policy_defers_without_matching_lease": true,
-                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "session record build-task", "session record promote", "record mark --frame <png>", "record mark --request <file>", "record mark --step <k> --optional [--settle-ms <ms>]", "record mark --step <k> --not-optional", "capture --record", "observe --capture --record"]
+                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "record mark --frame <png>", "record mark --request <file>", "record mark --step <k> --optional [--settle-ms <ms>]", "record mark --step <k> --not-optional", "capture --record", "observe --capture --record"]
             },
             "control": {
                 "requires_lease": true,

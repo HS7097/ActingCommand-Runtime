@@ -201,7 +201,7 @@
     }
 
     #[test]
-    fn top_level_record_build_task_routes_to_session_record() {
+    fn top_level_record_build_task_reports_retirement() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
@@ -224,10 +224,10 @@
         );
         set_missing_config_env();
 
-        assert_eq!(build.exit_code(), 3);
+        assert_eq!(build.exit_code(), 2);
         assert_eq!(
             build.envelope.error.as_ref().unwrap().code,
-            "record_session_not_active"
+            "resource_production_retired"
         );
     }
 
@@ -399,7 +399,7 @@
     }
 
     #[test]
-    fn session_record_build_task_requires_record() {
+    fn session_record_build_task_refuses_without_record() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
             [
@@ -415,10 +415,10 @@
             true,
         );
 
-        assert_eq!(result.exit_code(), 3);
+        assert_eq!(result.exit_code(), 2);
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
-            "record_session_not_active"
+            "resource_production_retired"
         );
     }
 
@@ -1405,97 +1405,17 @@
     }
 
     #[test]
-    fn session_record_build_rejects_artifact_source_outside_state_dir() {
+    fn session_record_artifact_source_must_stay_within_state_dir() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path().join("session");
         fs::create_dir_all(&state_dir).unwrap();
         let escaped_artifact = temp.path().join("outside.png");
         fs::write(&escaped_artifact, test_record_frame_png(4, 5)).unwrap();
-        let rect = SessionRecordRect {
-            x: 0,
-            y: 0,
-            width: 4,
-            height: 5,
-        };
-        let record = SessionRecordContext {
-            schema_version: "session-record-context-v0".to_string(),
-            record_id: "record-1".to_string(),
-            task_id: "daily-check".to_string(),
-            instance: "ak".to_string(),
-            status: "stopped".to_string(),
-            holder: None,
-            lease_id: None,
-            started_at_unix_ms: 1,
-            updated_at_unix_ms: 2,
-            steps: vec![SessionRecordStep {
-                schema_version: "session-record-step-v0".to_string(),
-                step_id: "home-anchor".to_string(),
-                created_at_unix_ms: 1,
-                updated_at_unix_ms: 2,
-                data: SessionRecordStepData::Anchor {
-                    id: "page/home".to_string(),
-                    region: SessionRecordRegion::Rect { rect: rect.clone() },
-                    color_check: false,
-                    threshold: Some(0.95),
-                    frame_provenance: Some(Box::new(SessionRecordFrameProvenance {
-                        source: "local_png".to_string(),
-                        path: escaped_artifact.display().to_string(),
-                        sha256: "sha256".to_string(),
-                        width: 12,
-                        height: 10,
-                        recorded_at_unix_ms: 1,
-                        capture_backend: None,
-                        freshness: None,
-                        capture_attempts: Vec::new(),
-                    })),
-                    artifact: Some(Box::new(SessionRecordAnchorArtifact {
-                        kind: "template_crop".to_string(),
-                        path: escaped_artifact.display().to_string(),
-                        sha256: "sha256".to_string(),
-                        width: 4,
-                        height: 5,
-                        region: rect.clone(),
-                    })),
-                    evaluation: Box::new(SessionRecordStepEvaluation {
-                        status: "passed".to_string(),
-                        reason: "test".to_string(),
-                        auto_region: None,
-                        backtest: Some(SessionRecordAnchorBacktest {
-                            source: "local_png_self_test".to_string(),
-                            metric: "ccorr_normed".to_string(),
-                            region: rect,
-                            x: 0,
-                            y: 0,
-                            raw_score: 1.0,
-                            score: 1.0,
-                            threshold: 0.95,
-                            passed: true,
-                        }),
-                        contrast_backtest: None,
-                    }),
-                },
-            }],
-        };
-        let flags = FlagArgs::parse(&Vec::<String>::new()).unwrap();
-
-        let result = session_record_build_draft(
-            &record,
-            &flags,
-            &temp.path().join("out"),
-            "arknights",
-            "cn",
-            "zh-CN",
-            &state_dir,
-        );
-        let err = match result {
-            Ok(_) => panic!("expected path_escape error"),
-            Err(err) => err,
-        };
-
+        let err = ensure_path_within(&state_dir, &escaped_artifact, "record artifact", &["record"])
+            .expect_err("artifact outside the state directory must fail closed");
         assert_eq!(err.code, "path_escape");
         assert_eq!(err.exit_code(), 3);
     }
-
     #[test]
     fn session_record_anchor_materializes_current_capture_source_frame_metadata() {
         let temp = TempDir::new().unwrap();
@@ -2505,554 +2425,6 @@
     }
 
     #[test]
-    fn session_record_build_task_writes_draft_bundle() {
-        let _guard = env_lock();
-        let temp = TempDir::new().unwrap();
-        let config = temp.path().join("config.json");
-        let state_dir = temp.path().join("session");
-        let frame_path = temp.path().join("source.png");
-        let out = temp.path().join("draft");
-        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        set_config_env(&config);
-
-        let start = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "start",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--task-id",
-                "daily-check",
-            ],
-            true,
-        );
-        let anchor = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "anchor",
-                "--step-id",
-                "home-anchor",
-                "--id",
-                "page/home",
-                "--region",
-                "2,3,4,5",
-                "--frame",
-                frame_path.to_str().unwrap(),
-                "--color-check",
-            ],
-            true,
-        );
-        let mail_anchor = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "anchor",
-                "--step-id",
-                "mail-anchor",
-                "--id",
-                "page/mail",
-                "--region",
-                "2,3,4,5",
-                "--frame",
-                frame_path.to_str().unwrap(),
-            ],
-            true,
-        );
-        let color_probe = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "color-probe",
-                "--step-id",
-                "home-color",
-                "--id",
-                "color/home-status",
-                "--region",
-                "2,3,4,5",
-                "--frame",
-                frame_path.to_str().unwrap(),
-            ],
-            true,
-        );
-        let verify_template = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "verify-template",
-                "--step-id",
-                "mail-ready",
-                "--id",
-                "template/mail-ready",
-                "--region",
-                "2,3,4,5",
-                "--frame",
-                frame_path.to_str().unwrap(),
-            ],
-            true,
-        );
-        let operation = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "operation",
-                "--step-id",
-                "home-to-mail",
-                "--from",
-                "page/home",
-                "--to",
-                "page/mail",
-                "--click",
-                "5,6",
-            ],
-            true,
-        );
-        let swipe = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "operation",
-                "--step-id",
-                "mail-swipe-home",
-                "--from",
-                "page/mail",
-                "--to",
-                "page/home",
-                "--swipe",
-                "3,4,2,2->7,8,2,2",
-                "--duration-ms",
-                "650",
-            ],
-            true,
-        );
-        let long_press = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "operation",
-                "--step-id",
-                "home-long-press",
-                "--from",
-                "page/home",
-                "--long-press",
-                "6,7",
-                "--duration-ms",
-                "900",
-            ],
-            true,
-        );
-        let build = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "build-task",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--out",
-                out.to_str().unwrap(),
-                "--game",
-                "arknights",
-                "--server",
-                "cn",
-                "--locale",
-                "zh-CN",
-                "--client-version",
-                "record-test-client",
-            ],
-            true,
-        );
-        set_missing_config_env();
-
-        assert_eq!(start.exit_code(), 0);
-        assert_eq!(anchor.exit_code(), 0);
-        assert_eq!(mail_anchor.exit_code(), 0);
-        assert_eq!(
-            color_probe.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&color_probe.envelope).unwrap()
-        );
-        assert_eq!(
-            verify_template.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&verify_template.envelope).unwrap()
-        );
-        assert_eq!(
-            operation.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&operation.envelope).unwrap()
-        );
-        assert_eq!(
-            swipe.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&swipe.envelope).unwrap()
-        );
-        assert_eq!(
-            long_press.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&long_press.envelope).unwrap()
-        );
-        assert_eq!(
-            build.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&build.envelope).unwrap()
-        );
-        let data = build.envelope.data.as_ref().unwrap();
-        assert_eq!(data.get("status").and_then(Value::as_str), Some("built"));
-        assert_eq!(data.get("anchor_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            data.get("color_probe_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            data.get("verify_template_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(data.get("operation_count").and_then(Value::as_u64), Some(3));
-        assert_eq!(
-            data.pointer("/bundle/schema_version")
-                .and_then(Value::as_str),
-            Some("0.5")
-        );
-        assert_eq!(
-            data.pointer("/bundle/task_id").and_then(Value::as_str),
-            Some("daily-check")
-        );
-        assert_eq!(
-            data.pointer("/bundle/game").and_then(Value::as_str),
-            Some("arknights")
-        );
-        assert_eq!(
-            data.pointer("/bundle/server_scope/0")
-                .and_then(Value::as_str),
-            Some("cn")
-        );
-        assert_eq!(
-            data.pointer("/bundle/coordinate_space/width")
-                .and_then(Value::as_u64),
-            Some(12)
-        );
-        assert_eq!(
-            data.pointer("/bundle/provenance/game")
-                .and_then(Value::as_str),
-            Some("arknights")
-        );
-        assert_eq!(
-            data.pointer("/bundle/provenance/server")
-                .and_then(Value::as_str),
-            Some("cn")
-        );
-        assert_eq!(
-            data.pointer("/bundle/provenance/resolution/height")
-                .and_then(Value::as_u64),
-            Some(10)
-        );
-        assert_eq!(
-            data.pointer("/bundle/provenance/client_version")
-                .and_then(Value::as_str),
-            Some("record-test-client")
-        );
-        assert_eq!(
-            data.pointer("/bundle/anchors/0/template")
-                .and_then(Value::as_str),
-            Some("assets/anchor-home-anchor-page_home.png")
-        );
-        assert_eq!(
-            data.pointer("/bundle/anchors/0/color_check/region/rect/x")
-                .and_then(Value::as_i64),
-            Some(2)
-        );
-        assert_eq!(
-            data.pointer("/bundle/anchors/0/color_check/expected/0")
-                .and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            data.pointer("/bundle/anchors/0/color_check/expected/1")
-                .and_then(Value::as_u64),
-            Some(5)
-        );
-        assert_eq!(
-            data.pointer("/bundle/anchors/0/color_check/expected/2")
-                .and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            data.pointer("/bundle/color_probes/0/id")
-                .and_then(Value::as_str),
-            Some("color/home-status")
-        );
-        assert_eq!(
-            data.pointer("/bundle/color_probes/0/expected/0")
-                .and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            data.pointer("/bundle/color_probes/0/expected/1")
-                .and_then(Value::as_u64),
-            Some(5)
-        );
-        assert_eq!(
-            data.pointer("/bundle/color_probes/0/expected/2")
-                .and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            data.pointer("/bundle/verify_templates/0/id")
-                .and_then(Value::as_str),
-            Some("template/mail-ready")
-        );
-        assert_eq!(
-            data.pointer("/bundle/verify_templates/0/template")
-                .and_then(Value::as_str),
-            Some("assets/verify-template-mail-ready-template_mail-ready.png")
-        );
-        assert_eq!(
-            data.pointer("/bundle/verify_templates/0/region/rect/x")
-                .and_then(Value::as_i64),
-            Some(2)
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/0/click/kind")
-                .and_then(Value::as_str),
-            Some("point")
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/0/click/x")
-                .and_then(Value::as_i64),
-            Some(5)
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/0/guard/page_id")
-                .and_then(Value::as_str),
-            Some("page/home")
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/0/guard/target_id")
-                .and_then(Value::as_str),
-            Some("page/page/home")
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/0/guard/expected_rect/x")
-                .and_then(Value::as_i64),
-            Some(5)
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/1/click/kind")
-                .and_then(Value::as_str),
-            Some("drag")
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/1/click/from/x")
-                .and_then(Value::as_i64),
-            Some(3)
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/1/click/to/y")
-                .and_then(Value::as_i64),
-            Some(8)
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/1/click/duration_ms")
-                .and_then(Value::as_u64),
-            Some(650)
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/1/guard/expected_rect/x")
-                .and_then(Value::as_i64),
-            Some(3)
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/2/click/kind")
-                .and_then(Value::as_str),
-            Some("long_press")
-        );
-        assert_eq!(
-            data.pointer("/bundle/operations/2/click/duration_ms")
-                .and_then(Value::as_u64),
-            Some(900)
-        );
-        assert!(out.join("operations/resources.json").is_file());
-        assert!(out.join("operations/daily-check/task.json").is_file());
-        assert!(
-            out.join("operations/daily-check/assets/anchor-home-anchor-page_home.png")
-                .is_file()
-        );
-        assert!(
-            out.join("operations/daily-check/assets/anchor-mail-anchor-page_mail.png")
-                .is_file()
-        );
-        assert!(
-            out.join(
-                "operations/daily-check/assets/verify-template-mail-ready-template_mail-ready.png"
-            )
-            .is_file()
-        );
-        let written: Value = serde_json::from_str(
-            &fs::read_to_string(out.join("operations/daily-check/task.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            written.pointer("/operations/0/id").and_then(Value::as_str),
-            Some("home-to-mail")
-        );
-        assert_eq!(
-            written
-                .pointer("/operations/1/click/kind")
-                .and_then(Value::as_str),
-            Some("drag")
-        );
-        assert_eq!(
-            written
-                .pointer("/operations/2/click/kind")
-                .and_then(Value::as_str),
-            Some("long_press")
-        );
-        assert_eq!(
-            written
-                .pointer("/anchors/0/color_check/expected/0")
-                .and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            written
-                .pointer("/color_probes/0/expected/0")
-                .and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            written
-                .pointer("/verify_templates/0/template")
-                .and_then(Value::as_str),
-            Some("assets/verify-template-mail-ready-template_mail-ready.png")
-        );
-
-        let packaged = run_cli(
-            [
-                "--json",
-                "package",
-                "build-task",
-                "--repo",
-                out.to_str().unwrap(),
-                "--task",
-                "daily-check",
-                "--out",
-                temp.path().join("daily-check.zip").to_str().unwrap(),
-                "--dry-run",
-            ],
-            true,
-        );
-        assert_eq!(
-            packaged.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&packaged.envelope).unwrap()
-        );
-        let packaged_data = packaged.envelope.data.as_ref().unwrap();
-        assert_eq!(
-            packaged_data.get("status").and_then(Value::as_str),
-            Some("validated")
-        );
-        assert_eq!(
-            packaged_data.get("task_id").and_then(Value::as_str),
-            Some("daily-check")
-        );
-        let converted = run_cli(
-            [
-                "--json",
-                "resource",
-                "convert",
-                "--repo",
-                out.to_str().unwrap(),
-            ],
-            true,
-        );
-        assert_eq!(
-            converted.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&converted.envelope).unwrap()
-        );
-        let navigation: Value = serde_json::from_str(
-            &fs::read_to_string(out.join("navigation/arknights.cn.navigation.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            navigation
-                .pointer("/navigation/1/id")
-                .and_then(Value::as_str),
-            Some("mail-swipe-home")
-        );
-        assert_eq!(
-            navigation
-                .pointer("/navigation/1/click/kind")
-                .and_then(Value::as_str),
-            Some("drag")
-        );
-    }
-
-    #[test]
     fn session_record_build_task_rejects_deferred_color_probe() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
@@ -3196,15 +2568,10 @@
         assert_eq!(mail_anchor.exit_code(), 0);
         assert_eq!(color_probe.exit_code(), 0);
         assert_eq!(operation.exit_code(), 0);
-        assert_ne!(build.exit_code(), 0);
-        let error = build.envelope.error.as_ref().expect("build error");
-        assert!(
-            error.message.contains("without expected color"),
-            "{}",
-            error.message
-        );
+        assert_eq!(build.exit_code(), 2);
+        assert_eq!(build.envelope.error.as_ref().unwrap().code, "resource_production_retired");
+        assert!(!out.exists());
     }
-
     #[test]
     fn session_record_build_task_rejects_deferred_verify_template() {
         let _guard = env_lock();
@@ -3349,305 +2716,12 @@
         assert_eq!(mail_anchor.exit_code(), 0);
         assert_eq!(verify_template.exit_code(), 0);
         assert_eq!(operation.exit_code(), 0);
-        assert_ne!(build.exit_code(), 0);
-        let error = build.envelope.error.as_ref().expect("build error");
-        assert!(
-            error.message.contains("without a frame artifact"),
-            "{}",
-            error.message
-        );
+        assert_eq!(build.exit_code(), 2);
+        assert_eq!(build.envelope.error.as_ref().unwrap().code, "resource_production_retired");
+        assert!(!out.exists());
     }
-
     #[test]
-    fn session_record_promote_writes_repo_ours_and_guards_overwrite() {
-        let _guard = env_lock();
-        let temp = TempDir::new().unwrap();
-        let runtime_root = temp.path().join("runtime");
-        let _runtime_env = use_runtime_state_root(&runtime_root);
-        let host = start_authoring_runtime(&runtime_root);
-        let config = temp.path().join("config.json");
-        let state_dir = temp.path().join("session");
-        let frame_path = temp.path().join("source.png");
-        let repo = temp.path().join("resource-repo");
-        let ours = repo.join("ours");
-        let resources_path = ours.join("operations/resources.json");
-        fs::create_dir_all(ours.join("operations")).unwrap();
-        fs::create_dir_all(ours.join("recognition")).unwrap();
-        fs::write(
-            &resources_path,
-            r#"{"schema_version":"1.0","resources":[{"id":"keep"}],"resource_count":1}"#,
-        )
-        .unwrap();
-        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        set_config_env(&config);
-
-        let start = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "start",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--task-id",
-                "daily-check",
-            ],
-            true,
-        );
-        let home_anchor = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "anchor",
-                "--step-id",
-                "home-anchor",
-                "--id",
-                "page/home",
-                "--region",
-                "2,3,4,5",
-                "--frame",
-                frame_path.to_str().unwrap(),
-            ],
-            true,
-        );
-        let mail_anchor = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "anchor",
-                "--step-id",
-                "mail-anchor",
-                "--id",
-                "page/mail",
-                "--region",
-                "2,3,4,5",
-                "--frame",
-                frame_path.to_str().unwrap(),
-            ],
-            true,
-        );
-        let operation = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--kind",
-                "operation",
-                "--step-id",
-                "home-to-mail",
-                "--from",
-                "page/home",
-                "--to",
-                "page/mail",
-                "--click",
-                "5,6",
-            ],
-            true,
-        );
-        let promote = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "promote",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--repo",
-                repo.to_str().unwrap(),
-                "--game",
-                "arknights",
-                "--server",
-                "cn",
-                "--locale",
-                "zh-CN",
-            ],
-            true,
-        );
-        let reject = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "promote",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--repo",
-                repo.to_str().unwrap(),
-                "--game",
-                "arknights",
-                "--server",
-                "cn",
-                "--locale",
-                "zh-CN",
-            ],
-            true,
-        );
-        fs::write(
-            ours.join("operations/daily-check/obsolete.txt"),
-            "stale task file",
-        )
-        .unwrap();
-        let forced = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "promote",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--repo",
-                repo.to_str().unwrap(),
-                "--game",
-                "arknights",
-                "--server",
-                "cn",
-                "--locale",
-                "zh-CN",
-                "--force",
-            ],
-            true,
-        );
-        let packaged = run_cli(
-            [
-                "--json",
-                "package",
-                "build-task",
-                "--repo",
-                repo.to_str().unwrap(),
-                "--task",
-                "daily-check",
-                "--out",
-                temp.path().join("daily-check.zip").to_str().unwrap(),
-                "--dry-run",
-            ],
-            true,
-        );
-        set_missing_config_env();
-
-        assert_eq!(start.exit_code(), 0);
-        assert_eq!(home_anchor.exit_code(), 0);
-        assert_eq!(mail_anchor.exit_code(), 0);
-        assert_eq!(operation.exit_code(), 0);
-        assert_eq!(
-            promote.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&promote.envelope).unwrap()
-        );
-        let data = promote.envelope.data.as_ref().unwrap();
-        assert_eq!(data.get("status").and_then(Value::as_str), Some("promoted"));
-        assert_eq!(
-            data.get("resource_layout").and_then(Value::as_str),
-            Some("repo_ours")
-        );
-        assert_eq!(
-            data.get("resources_action").and_then(Value::as_str),
-            Some("preserved")
-        );
-        assert!(
-            data.pointer("/authoring/runtime_correlation_id")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty())
-        );
-        assert_eq!(
-            data.pointer("/authoring/receipt/validation/checks")
-                .and_then(Value::as_array)
-                .map(|checks| checks.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
-            Some(vec![
-                "draft_schema",
-                "resource_convert",
-                "repository_references",
-                "package_build",
-                "containment_round_trip"
-            ])
-        );
-        assert!(ours.join("operations/daily-check/task.json").is_file());
-        assert!(
-            ours.join("operations/daily-check/assets/anchor-home-anchor-page_home.png")
-                .is_file()
-        );
-        for generated in [
-            "recognition/arknights.cn.pack.json",
-            "recognition/arknights.cn.pages.json",
-            "navigation/arknights.cn.navigation.json",
-            "operations/operations.index.json",
-            "operations/operations.primitives.json",
-        ] {
-            assert!(ours.join(generated).is_file(), "missing {generated}");
-        }
-        let resources: Value =
-            serde_json::from_str(&fs::read_to_string(&resources_path).unwrap()).unwrap();
-        assert_eq!(
-            resources.pointer("/resources/0/id").and_then(Value::as_str),
-            Some("keep")
-        );
-        assert_eq!(reject.exit_code(), 3);
-        assert_eq!(
-            reject.envelope.error.as_ref().unwrap().code,
-            "record_promote_target_exists"
-        );
-        assert_eq!(
-            forced.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&forced.envelope).unwrap()
-        );
-        assert!(!ours.join("operations/daily-check/obsolete.txt").exists());
-        assert_eq!(
-            serde_json::from_str::<Value>(&fs::read_to_string(&resources_path).unwrap())
-                .unwrap()
-                .pointer("/resources/0/id")
-                .and_then(Value::as_str),
-            Some("keep")
-        );
-        assert_eq!(
-            packaged.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&packaged.envelope).unwrap()
-        );
-        assert_eq!(
-            packaged
-                .envelope
-                .data
-                .as_ref()
-                .unwrap()
-                .get("status")
-                .and_then(Value::as_str),
-            Some("validated")
-        );
-        host.close().expect("close Runtime host");
-    }
-
-    #[test]
-    fn session_record_promote_requires_runtime_before_mutating_target() {
+    fn session_record_promote_refuses_before_runtime_or_target_mutation() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
@@ -3659,7 +2733,7 @@
         let ours = repo.join("ours");
         fs::create_dir_all(ours.join("operations")).unwrap();
         fs::create_dir_all(ours.join("recognition")).unwrap();
-        prepare_promotable_record(&config, &state_dir, &frame_path);
+        prepare_recorded_steps(&config, &state_dir, &frame_path);
 
         let promote = run_cli(
             [
@@ -3684,10 +2758,10 @@
         );
         set_missing_config_env();
 
-        assert_eq!(promote.exit_code(), 5);
+        assert_eq!(promote.exit_code(), 2);
         assert_eq!(
             promote.envelope.error.as_ref().unwrap().code,
-            "runtime_not_running"
+            "resource_production_retired"
         );
         assert!(!ours.join("operations/daily-check").exists());
         assert!(!ours.join("operations/resources.json").exists());
@@ -3695,7 +2769,7 @@
     }
 
     #[test]
-    fn session_record_promote_validation_failure_rolls_back_canonical_tree() {
+    fn session_record_promote_refusal_preserves_canonical_tree() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let runtime_root = temp.path().join("runtime");
@@ -3718,7 +2792,7 @@
             r#"{"schema_version":"1.0","resources":[],"resource_count":0}"#,
         )
         .unwrap();
-        prepare_promotable_record(&config, &state_dir, &frame_path);
+        prepare_recorded_steps(&config, &state_dir, &frame_path);
 
         let promote = run_cli(
             [
@@ -3744,7 +2818,8 @@
         );
         set_missing_config_env();
 
-        assert_ne!(promote.exit_code(), 0);
+        assert_eq!(promote.exit_code(), 2);
+        assert_eq!(promote.envelope.error.as_ref().unwrap().code, "resource_production_retired");
         assert_eq!(
             fs::read_to_string(existing_task.join("sentinel.txt")).unwrap(),
             "canonical-before"
@@ -3833,21 +2908,9 @@
         assert_eq!(start.exit_code(), 0);
         assert_eq!(operation.exit_code(), 0);
         assert_eq!(build.exit_code(), 2);
-        assert_eq!(
-            build.envelope.error.as_ref().unwrap().code,
-            "validation_failed"
-        );
-        assert!(
-            build
-                .envelope
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("unresolved target click")
-        );
+        assert_eq!(build.envelope.error.as_ref().unwrap().code, "resource_production_retired");
+        assert!(!out.exists());
     }
-
     #[test]
     fn session_record_build_task_rejects_missing_page_anchor() {
         let _guard = env_lock();
@@ -3947,21 +3010,9 @@
         assert_eq!(anchor.exit_code(), 0);
         assert_eq!(operation.exit_code(), 0);
         assert_eq!(build.exit_code(), 2);
-        assert_eq!(
-            build.envelope.error.as_ref().unwrap().code,
-            "validation_failed"
-        );
-        assert!(
-            build
-                .envelope
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("has no matching anchor")
-        );
+        assert_eq!(build.envelope.error.as_ref().unwrap().code, "resource_production_retired");
+        assert!(!out.exists());
     }
-
     #[test]
     fn session_record_build_task_rejects_out_of_bounds_click() {
         let _guard = env_lock();
@@ -4061,23 +3112,9 @@
         assert_eq!(anchor.exit_code(), 0);
         assert_eq!(operation.exit_code(), 0);
         assert_eq!(build.exit_code(), 2);
-        assert_eq!(
-            build.envelope.error.as_ref().unwrap().code,
-            "validation_failed"
-        );
-        assert!(
-            build
-                .envelope
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("outside coordinate_space"),
-            "{}",
-            serde_json::to_string_pretty(&build.envelope).unwrap()
-        );
+        assert_eq!(build.envelope.error.as_ref().unwrap().code, "resource_production_retired");
+        assert!(!out.exists());
     }
-
     #[test]
     fn session_record_step_requires_active_record() {
         let _guard = env_lock();
@@ -4998,14 +4035,14 @@
     }
 
     #[test]
-    fn session_record_amend_from_drift_diagnostics_updates_anchor_and_build_task() {
+    fn session_record_amend_from_drift_diagnostics_updates_anchor() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         let diagnostics_path = temp.path().join("drift.json");
-        let out = temp.path().join("draft");
+
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
         write_json_file(
             &diagnostics_path,
@@ -5101,28 +4138,6 @@
             ],
             true,
         );
-        let build = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "build-task",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--out",
-                out.to_str().unwrap(),
-                "--game",
-                "arknights",
-                "--server",
-                "cn",
-                "--locale",
-                "zh-CN",
-                "--dry-run",
-            ],
-            true,
-        );
         set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
@@ -5177,25 +4192,6 @@
             amend_data
                 .pointer("/record/steps/0/evaluation/backtest")
                 .is_some()
-        );
-        assert_eq!(
-            build.exit_code(),
-            0,
-            "{}",
-            serde_json::to_string_pretty(&build.envelope).unwrap()
-        );
-        let build_data = build.envelope.data.as_ref().unwrap();
-        assert_eq!(
-            build_data
-                .pointer("/bundle/anchors/0/region/rect/x")
-                .and_then(Value::as_i64),
-            Some(1)
-        );
-        assert_eq!(
-            build_data
-                .pointer("/bundle/anchors/0/threshold")
-                .and_then(Value::as_f64),
-            Some(0.90)
         );
     }
 

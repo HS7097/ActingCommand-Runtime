@@ -1970,27 +1970,19 @@ fn maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets() {
 }
 
 #[test]
-fn resource_convert_accepts_explicit_maa_tasks_mode() {
+fn source_parser_accepts_explicit_maa_task_overlays() {
     let (root, maa_dir) = write_synthetic_maa_convert_fixture();
-    let summary = resource_convert(ResourceConvertRequest {
-        repo: root.path().to_path_buf(),
-        game: None,
-        server: None,
-        locale: None,
-        maa_tasks_root: Some(maa_dir),
-        dry_run: true,
-    })
-    .unwrap();
-
-    assert_eq!(summary.source_mode.as_deref(), Some("maa_tasks"));
-    assert_eq!(summary.maa_compiled_tasks, Some(3));
-    assert_eq!(summary.targets, 2);
+    let mut parser = OperationParser::load(root.path(), None, None, None).unwrap();
+    parser.load_maa_task_overlays(&maa_dir).unwrap();
+    let outputs = parser.build_all().unwrap();
+    assert_eq!(parser.maa_task_overlays.len(), 3);
+    assert_eq!(outputs.pack["targets"].as_array().unwrap().len(), 2);
 }
 
 // Task Contract: Workflow #269 / #269-A2B-MAPPING-ADMISSION-IMPLEMENT-v2
 // (comment 5533851835). Test class: specification criterion.
 #[test]
-fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
+fn source_declarations_strictly_admit_maa_semantic_mapping_read_only() {
     for (task_count, use_overlay) in [(64, true), (1, false), (0, false), (0, true)] {
         let (root, maa_dir) = write_synthetic_maa_convert_fixture();
         let mapping_path = root.path().join("tasks/maa-semantic-mapping.json");
@@ -2025,23 +2017,15 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
             )
             .expect("write mapping");
         }
-        let summary = resource_convert(ResourceConvertRequest {
-            repo: root.path().to_path_buf(),
-            game: None,
-            server: None,
-            locale: None,
-            maa_tasks_root: use_overlay.then_some(maa_dir),
-            dry_run: task_count != 0,
-        })
-        .expect("valid resource conversion");
-        assert_eq!(summary.maa_semantic_mappings, task_count);
+        let mut parser = OperationParser::load(root.path(), None, None, None).unwrap();
         assert_eq!(
-            serde_json::to_value(&summary)
-                .expect("serialized response")
-                .get("maa_semantic_mappings")
-                .and_then(Value::as_u64),
-            Some(task_count as u64)
+            admit_maa_semantic_mapping(root.path(), &parser.game).unwrap(),
+            task_count
         );
+        if use_overlay {
+            parser.load_maa_task_overlays(&maa_dir).unwrap();
+        }
+        parser.build_all().expect("valid source declarations");
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -2176,15 +2160,8 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
             .expect("write mapping");
         }
 
-        let error = resource_convert(ResourceConvertRequest {
-            repo: root.path().to_path_buf(),
-            game: None,
-            server: None,
-            locale: None,
-            maa_tasks_root: Some(root.path().join("missing-maa-tasks")),
-            dry_run: false,
-        })
-        .expect_err("invalid semantic mapping must fail");
+        let error = admit_maa_semantic_mapping(root.path(), "arknights")
+            .expect_err("invalid semantic mapping must fail");
         assert_eq!(error.code, "package_invalid", "case {case:?}");
         assert!(
             error.message.contains(expected_message),
@@ -2207,7 +2184,7 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
 }
 
 #[test]
-fn resource_convert_rejects_missing_coordinate_space_before_writing_outputs() {
+fn source_parser_rejects_missing_coordinate_space_without_writing_outputs() {
     let (root, _maa_dir) = write_synthetic_maa_convert_fixture();
     let task_path = root.path().join("operations/synthetic-maa/task.json");
     let mut task: Value =
@@ -2222,15 +2199,8 @@ fn resource_convert_rejects_missing_coordinate_space_before_writing_outputs() {
     )
     .expect("write task");
 
-    let err = resource_convert(ResourceConvertRequest {
-        repo: root.path().to_path_buf(),
-        game: None,
-        server: None,
-        locale: None,
-        maa_tasks_root: None,
-        dry_run: false,
-    })
-    .expect_err("missing coordinate_space must fail before output");
+    let err = OperationParser::load(root.path(), None, None, None)
+        .expect_err("missing coordinate_space must fail before output");
 
     assert_eq!(err.code, "resource_declaration_invalid");
     let details = err.details.expect("typed declaration refusal");

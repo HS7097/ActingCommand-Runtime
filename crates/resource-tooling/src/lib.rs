@@ -10,9 +10,7 @@
 mod api;
 mod authoring;
 mod business_catalog;
-mod environment;
 mod maa_task_graph;
-mod package_build;
 mod package_directory;
 mod package_publish;
 mod package_validate;
@@ -22,13 +20,9 @@ mod resource_restore;
 pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;
-pub use environment::AuthoringEnvironmentSnapshot;
 pub use maa_task_graph::{
     MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,
     MaaTaskGraphStats, compile_maa_task_graph,
-};
-pub use package_build::{
-    PackageBuildCatalog, PreparedPackageBuildTask, prepare_package_build_task,
 };
 pub use package_directory::{package_bundle, package_digest};
 pub use package_publish::{
@@ -38,6 +32,6 @@ pub use package_publish::{
 pub use package_validate::validate_package;
 pub use resource_convert::{
     Bundle, OperationParser, ParseOutputs, ResolvedResourceRoot, canonical_game, canonical_locale,
-    canonical_server, resolve_resource_root, resource_convert, validate_maa_semantic_declarations,
+    canonical_server, resolve_resource_root, validate_maa_semantic_declarations,
 };
 pub use resource_restore::*;

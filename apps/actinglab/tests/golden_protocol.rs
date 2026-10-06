@@ -86,13 +86,13 @@ const CASES: &[CaseSpec] = &[
         ExpectedKind::Failure,
     ),
     case(
-        "package_build_task_success",
+        "package_build_task_retired",
         "package build-task",
-        ExpectedKind::Success,
+        ExpectedKind::Failure,
     ),
     case(
-        "package_build_task_failure",
-        "package build-task",
+        "package_build_pack_retired",
+        "package build-pack",
         ExpectedKind::Failure,
     ),
     case(
@@ -220,7 +220,24 @@ fn observe_success_projection_is_invariant_to_fixture_root_length() {
 }
 
 #[test]
-fn matrix_has_fifteen_commands_with_success_and_failure_paths() {
+fn matrix_covers_active_success_failure_and_retired_refusal_paths() {
+    let active = [
+        "recognize",
+        "detect-page",
+        "current-page",
+        "is-visible",
+        "tap-target",
+        "navigate",
+        "package validate",
+        "lab validate",
+        "lab run",
+        "detect",
+        "env resolve",
+        "env status",
+        "observe",
+        "do",
+    ];
+    let retired = ["package build-task", "package build-pack"];
     let mut commands = BTreeMap::<&str, Vec<ExpectedKind>>::new();
     for case in CASES {
         commands
@@ -229,8 +246,10 @@ fn matrix_has_fifteen_commands_with_success_and_failure_paths() {
             .push(case.expected_kind);
     }
 
-    assert_eq!(commands.len(), 15);
-    for (command, kinds) in commands {
+    for command in active {
+        let kinds = commands
+            .remove(command)
+            .unwrap_or_else(|| panic!("{command} is missing from the active inventory"));
         assert!(
             kinds.contains(&ExpectedKind::Success),
             "{command} is missing a success path"
@@ -240,6 +259,17 @@ fn matrix_has_fifteen_commands_with_success_and_failure_paths() {
             "{command} is missing a failure path"
         );
     }
+    for command in retired {
+        assert_eq!(
+            commands.remove(command),
+            Some(vec![ExpectedKind::Failure]),
+            "{command} must have its explicit refusal path"
+        );
+    }
+    assert!(
+        commands.is_empty(),
+        "unclassified matrix commands: {commands:?}"
+    );
 }
 
 #[test]
@@ -1223,14 +1253,14 @@ impl Fixture {
                 args.extend([os("package"), os("validate"), os("--zip")]);
                 args.push(self.bad_hash_package.clone().into_os_string());
             }
-            "package_build_task_success" => {
+            "package_build_task_retired" => {
                 args.extend([os("--dry-run"), os("package"), os("build-task")]);
                 args.extend([os("--repo"), self.package_repo.clone().into_os_string()]);
                 args.extend([os("--task"), os("operator_task")]);
                 args.extend([os("--out"), self.root().join("task.zip").into_os_string()]);
             }
-            "package_build_task_failure" => {
-                args.extend([os("--dry-run"), os("package"), os("build-task")]);
+            "package_build_pack_retired" => {
+                args.extend([os("--dry-run"), os("package"), os("build-pack")]);
                 args.extend([os("--repo"), self.package_repo.clone().into_os_string()]);
                 args.extend([os("--task"), os("missing_task")]);
                 args.extend([os("--out"), self.root().join("task.zip").into_os_string()]);

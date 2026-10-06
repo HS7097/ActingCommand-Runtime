@@ -263,6 +263,7 @@ impl MaaTaskGraph {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn tasks(&self) -> &BTreeMap<String, Value> {
         &self.tasks
     }

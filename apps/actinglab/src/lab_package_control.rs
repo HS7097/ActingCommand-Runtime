@@ -154,8 +154,6 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
             )
             .with_details(details))
         }
-        "build-task" => package_build::run_build_task(global, &flags),
-        "build-pack" => package_build::run_build_pack(global, &flags),
         "digest" => package_build::run_digest(&flags),
         "bundle" => {
             crate::dry_run_gate::refuse(

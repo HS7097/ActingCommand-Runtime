@@ -21,13 +21,19 @@ declares the command's mode in the same commit; a command without a declaration 
   is not an admission: what it did not check is listed in `not_checked`.
 - `refused`: with `--dry-run` the command fails before any Runtime connection and before any
   write, with `dry_run_unsupported` (exit 2, `details.dry_run: true`, `details.executed: false`)
-  unless the table names an older code. Argument checks listed for the form run first; the others
+  unless the table names another code. Argument checks listed for the form run first; the others
   run only on a real invocation. A refusal is not an argument error: do not drop `--dry-run` and
   retry unless the user asked for the action. `refused` says only that the flag is rejected; it
   does not imply a side effect.
 - `no_effect`: the command has no side effect beyond the registered bootstrap and transient writes
   (it reads or prints, is retired or reserved, or always refuses); `--dry-run` does not change its
   behaviour.
+
+Retired resource production is refused during pure parsed admission, before installation
+selection or a slot lock, configuration loading, recording directories or locks, and output
+files. The same refusal applies when an explicitly named retired command carries `--dry-run`
+or `--version`. Author a content directory or use the retained Lab recording workflow, then
+use `package digest/bundle`.
 
 ## Capability fields
 
@@ -50,6 +56,7 @@ An entry the declaration table does not list is `no_effect` when its status is `
 | `dry_run_unsupported` | 2 | the #341 refusals below | `details.dry_run: true`, `details.executed: false`, `blocked_by: []` |
 | `explicit_offline_entry_required` | 3 | `lab run` | none; identified by this table and `dry_run_refusal_code` |
 | `offline_device_scope_forbidden` | 2 | `package dry-run` | none |
+| `resource_production_retired` | 2 | `package build-task/build-pack`, `resource convert`, `record build-task/promote/publish`, including `session record` aliases | none; unconditional retirement refusal |
 | `validation_failed` | 2 | `scheduling compile`, `scheduling timeline` | none |
 | `record_flag_unsupported` | 2 | `observe --capture --record`, `do --capture --record`, `session app --record`, `session instance app --record` | none |
 
@@ -137,7 +144,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `navigate` | preview | `executed_false` | |
 | `monitor` | no_effect | | retired |
 | `stream` | mixed | | `stream check`: no_effect; every other form, `--input-relay` included: preview, `capture_dry_run` |
-| `record` | mixed | | `start`, `step`, `amend`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `stop`, `mark`, `build-task`, `promote`: preview, `dry_run` |
+| `record` | mixed | | `start`, `step`, `amend`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `stop`, `mark`: preview, `dry_run`; `build-task`, `promote`, `publish`: refused, `resource_production_retired` |
 | `explain` | no_effect | | |
 | `config get` | no_effect | | |
 | `config set` | preview | `dry_run` | `validated`, `persisted: false` |
@@ -165,8 +172,8 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `package dry-run` | refused | `offline_device_scope_forbidden` | positional arguments, `--version` |
 | `package inspect` | no_effect | | |
 | `package run` | refused | `dry_run_unsupported` | flag parsing, legacy routing flags, `--zip`, package validation, instance selector; alternative `package dry-run` |
-| `package build-task` | preview | `dry_run` | registered transient ZIP and `--from-remote` clone |
-| `package build-pack` | preview | `dry_run` | as `package build-task` |
+| `package build-task` | refused | `resource_production_retired` | pure parsed admission |
+| `package build-pack` | refused | `resource_production_retired` | pure parsed admission |
 | `package digest` | no_effect | | |
 | `package bundle` | refused | `dry_run_unsupported` | flag parsing only; alternative `package digest` |
 | `operation validate` | no_effect | | |
@@ -188,7 +195,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `scheduling timeline` | refused | `validation_failed` | as `scheduling compile` |
 | `resource restore` | refused | `dry_run_unsupported` | flag parsing, `--repo`; no alternative |
 | `resource validate` | no_effect | | |
-| `resource convert` | preview | `dry_run` | |
+| `resource convert` | refused | `resource_production_retired` | pure parsed admission |
 | `resource compile-maa` | no_effect | | |
 | `resource` import route of the external-tool data (reserved) | no_effect | | reserved; one of the two inventory entries whose names the C2 genericity guard keeps out of `contracts/` |
 | `resource` drift route of the external-tool data (reserved) | no_effect | | reserved; the other such entry |
@@ -267,16 +274,13 @@ These writes exist today, are not changed and are not side effects for this cont
 to `preview` and `no_effect` alike:
 
 - the salt `<state>/env-detection/.local_salt`, generated only when it is missing, by `detect`,
-  `env resolve`, `env status` and by any resolution of `{env:…}` markers (for example
-  `session recover`, `package build-task` and `package build-pack`); a request without a marker
+  `env resolve`, `env status` and by resolution of `{env:…}` markers in `session recover`; a request without a marker
   does not reach it;
-- the session state directory that every `record` / `session record` action, `status`,
-  `candidates`, `build-task` and `promote` included, creates before it runs;
+- the session state directory that retained `record` / `session record` actions, `status`
+  and `candidates` included, create before they run;
 - the existing per-instance recording lock and its holder metadata, used by `record stop`
   and `record mark` previews to read one consistent recording; the operating-system lock
   is released when the command exits;
-- the temporary ZIP of `package build-task` / `package build-pack` (written, then deleted) and the
-  `--from-remote` clone under the system temporary directory;
 - the `lab vendor-stdio-selftest` log under the system temporary directory, deleted afterwards;
 - the Runtime debug audit events of `do` / `ensure` with `--capture --dry-run`.
 

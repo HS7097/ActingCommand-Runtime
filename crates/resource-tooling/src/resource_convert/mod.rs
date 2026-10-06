@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
+use crate::maa_task_graph;
 use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
-pub(crate) use actingcommand_pack_containment::source::validate_phases_bundle;
+
 use actingcommand_pack_containment::source::{
     self, ParseFiles, SourceFile, SourceRead, canonical_resource_identifier, first_server_scope,
     required_string, resource_ids, string_field,
@@ -18,7 +18,9 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 const MAA_SEMANTIC_MAPPING_PATH: &str = "tasks/maa-semantic-mapping.json";
+#[cfg(test)]
 const MAA_TASK_FACTS_PATH: &str = "upstream-sync/maa.tasks.json";
 const MAA_TASK_FACTS_DECLARED_PATH: &str = "ours/upstream-sync/maa.tasks.json";
 const MAA_SEMANTIC_MAPPING_SCHEMA: &str = "actingcommand.maa-semantic-mapping.v1";
@@ -78,82 +80,7 @@ struct MaaTaskFactsId {
     value: String,
 }
 
-pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceConvertResponse> {
-    let resource_root = resolve_resource_root(&request.repo);
-    let repo = &resource_root.root;
-    let game_override = request.game.as_deref().map(canonical_game).transpose()?;
-    let mut parser = OperationParser::load(
-        repo,
-        game_override.as_deref(),
-        request.server.as_deref(),
-        request.locale.as_deref(),
-    )?;
-    let maa_semantic_mappings = admit_maa_semantic_mapping(repo, &parser.game)?;
-    let maa_tasks_root = request.maa_tasks_root;
-    if let Some(tasks_root) = maa_tasks_root.as_deref() {
-        parser.load_maa_task_overlays(tasks_root)?;
-    }
-    let outputs = parser.build_all()?;
-    let dry_run = request.dry_run;
-    if !dry_run {
-        write_outputs(&outputs, repo)?;
-    }
-    let maa_compiled_tasks = maa_tasks_root
-        .as_ref()
-        .map(|_| parser.maa_task_overlays.len());
-    Ok(ResourceConvertResponse {
-        repo: resource_root.input.display().to_string(),
-        resource_root: repo.display().to_string(),
-        resource_layout: resource_root.layout.to_string(),
-        game: parser.game,
-        server: parser.server,
-        locale: parser.locale,
-        dry_run,
-        maa_semantic_mappings,
-        bundles: parser.bundles.len(),
-        targets: outputs
-            .pack
-            .get("targets")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
-        pages: outputs
-            .pages
-            .get("pages")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
-        edges: outputs
-            .navigation
-            .get("navigation")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
-        page_operations: outputs
-            .navigation
-            .get("page_operations")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
-        index_tasks: outputs
-            .index
-            .get("operations")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
-        primitives: outputs
-            .primitives
-            .get("primitives")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
-        status: if dry_run { "validated" } else { "written" }.to_string(),
-        source_mode: maa_tasks_root.as_ref().map(|_| "maa_tasks".to_string()),
-        maa_tasks_root: maa_tasks_root.map(|path| path.display().to_string()),
-        maa_compiled_tasks,
-    })
-}
-
+#[cfg(test)]
 fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
     let mapping_path = root.join(MAA_SEMANTIC_MAPPING_PATH);
     let facts_path = root.join(MAA_TASK_FACTS_PATH);
@@ -412,34 +339,6 @@ pub struct OperationParser {
     maa_task_overlays: HashMap<String, Value>,
 }
 
-fn write_outputs(outputs: &ParseOutputs, repo: &Path) -> CliOutcome<()> {
-    let game = required_string(&outputs.pack, "game")?;
-    let server = required_string(&outputs.pack, "server")?;
-    let stem = format!("{game}.{server}");
-    write_json_file(
-        &repo.join("recognition").join(format!("{stem}.pack.json")),
-        &outputs.pack,
-    )?;
-    write_json_file(
-        &repo.join("recognition").join(format!("{stem}.pages.json")),
-        &outputs.pages,
-    )?;
-    write_json_file(
-        &repo
-            .join("navigation")
-            .join(format!("{stem}.navigation.json")),
-        &outputs.navigation,
-    )?;
-    write_json_file(
-        &repo.join("operations").join("operations.index.json"),
-        &outputs.index,
-    )?;
-    write_json_file(
-        &repo.join("operations").join("operations.primitives.json"),
-        &outputs.primitives,
-    )
-}
-
 impl OperationParser {
     pub fn load(
         root: &Path,
@@ -524,7 +423,8 @@ impl OperationParser {
         Ok(parser)
     }
 
-    pub(super) fn load_maa_task_overlays(&mut self, tasks_root: &Path) -> CliOutcome<()> {
+    #[cfg(test)]
+    fn load_maa_task_overlays(&mut self, tasks_root: &Path) -> CliOutcome<()> {
         let graph = maa_task_graph::compile_maa_task_graph(tasks_root)?;
         self.maa_task_overlays = graph
             .tasks()
@@ -557,7 +457,8 @@ impl OperationParser {
         self.core().build_selected(task_ids, &capture_files(self))
     }
 
-    pub(crate) fn canonical_task(&self, task_id: &str) -> CliOutcome<Value> {
+    #[cfg(test)]
+    fn canonical_task(&self, task_id: &str) -> CliOutcome<Value> {
         self.core().canonical_task(task_id)
     }
 
@@ -690,21 +591,6 @@ fn read_json_value(path: &Path) -> CliOutcome<Value> {
     })?;
     serde_json::from_str(&text).map_err(|err| {
         CliError::package_invalid(format!("failed to parse {}: {err}", path.display()))
-    })
-}
-
-fn write_json_file(path: &Path, value: &Value) -> CliOutcome<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            CliError::package_invalid(format!("failed to create {}: {err}", parent.display()))
-        })?;
-    }
-    let mut text = serde_json::to_string_pretty(value).map_err(|err| {
-        CliError::package_invalid(format!("failed to serialize {}: {err}", path.display()))
-    })?;
-    text.push('\n');
-    fs::write(path, text).map_err(|err| {
-        CliError::package_invalid(format!("failed to write {}: {err}", path.display()))
     })
 }
 

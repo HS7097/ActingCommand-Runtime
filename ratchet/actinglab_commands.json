@@ -53,7 +53,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 136,
+  "command_count": 133,
   "commands": [
     "help",
     "version",
@@ -114,8 +114,6 @@
     "package dry-run",
     "package inspect",
     "package run",
-    "package build-task",
-    "package build-pack",
     "package digest",
     "package bundle",
     "operation validate",
@@ -137,7 +135,6 @@
     "scheduling timeline",
     "resource restore",
     "resource validate",
-    "resource convert",
     "resource compile-maa",
     "resource catalog",
     "resource import-alas",

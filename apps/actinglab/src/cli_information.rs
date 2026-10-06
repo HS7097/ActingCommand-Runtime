@@ -48,11 +48,6 @@ pub(super) fn help_data() -> Value {
                 "--zip <package>", "--expected-sha256 <external hash>", "--task-id <draft ID>",
                 "--entry-page <page>", "--target-page <page> (repeatable)", "--goal <author text>"
             ],
-            "resource convert": [
-                "--operations <dir>",
-                "--out <dir>",
-                "--maa-tasks <dir>"
-            ],
             "resource compile-maa": [
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
@@ -61,9 +56,6 @@ pub(super) fn help_data() -> Value {
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>",
                 "--maintenance <JSON array of package_id, server, uses; requests actingcommand.bundle.v3>"
-            ],
-            "session record build-task": [
-                "--locale <locale>"
             ]
         },
         "compatibility_notes": {

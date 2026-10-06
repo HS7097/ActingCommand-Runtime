@@ -72,11 +72,9 @@ use commands::{
 };
 #[cfg(test)]
 use commands::{
-    SessionRecordAnchorArtifact, SessionRecordAnchorBacktest, SessionRecordAnchorRegionResolution,
-    SessionRecordContext, SessionRecordFrameProvenance, SessionRecordSourceFrame,
-    SessionRecordStep, SessionRecordStepData, SessionRecordStepEvaluation, find_drift_amend_step,
-    materialize_anchor_artifact_from_source, parse_session_record_drift_diagnostics,
-    session_record_build_draft,
+    SessionRecordAnchorRegionResolution, SessionRecordContext, SessionRecordSourceFrame,
+    find_drift_amend_step, materialize_anchor_artifact_from_source,
+    parse_session_record_drift_diagnostics,
 };
 use commands::{SessionRecordRect, SessionRecordRegion, run_session_record};
 use commands::{attach_env_resolved, record_env_needs_detection, record_env_resolved};
@@ -95,7 +93,7 @@ use lab_package_control::{
 use monitor_stream::{run_monitor, stream_contract_json, stream_events_json};
 #[rustfmt::skip] use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
-    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,
+    parse_optional_unit_f64, parse_optional_usize,
     parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,
     parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,
     required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,
@@ -107,9 +105,8 @@ use resource_runtime_support::{
     effective_adb_path_for_instance, effective_resource_root, effective_run_root,
     effective_runtime_endpoint, enforce_path_adb_target_boundary, exit_code_table, find_files,
     list_resource_kind, list_runs, match_metric_name, path_string, process_env_overrides,
-    require_runtime, resolve_resource_root, resolved_adb_json, resolved_adb_json_from,
-    run_explain_run, run_report, run_resource, scene_from_frame, validate_json_file,
-    validate_operation_dir,
+    require_runtime, resolved_adb_json, resolved_adb_json_from, run_explain_run, run_report,
+    run_resource, scene_from_frame, validate_json_file, validate_operation_dir,
 };
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
@@ -181,8 +178,6 @@ mod package_cli;
 pub mod project_interface;
 mod readonly_cli;
 pub mod recovery_exec;
-mod resource_authoring;
-mod resource_convert;
 mod resource_restore;
 mod resource_runtime_support;
 mod run_summary;
@@ -213,12 +208,16 @@ const TRUSTED_REMOTE_TOKEN_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_TOKEN";
 const TRUSTED_REMOTE_CLIENT_CERT_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT";
 const ALLOW_PATH_ADB_FOR_MUMU_ENV: &str = "ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU";
 fn main() -> ExitCode {
-    if let Err(error) = actingcommand_contract::process_installation() {
+    let json_default = !io::stdout().is_terminal();
+    let invocation = parse_invocation(env::args().skip(1), json_default);
+    // Parsed admission refuses retired production before installation selection takes a slot.
+    if invocation.is_ok()
+        && let Err(error) = actingcommand_contract::process_installation()
+    {
         eprintln!("FATAL actinglab: {error}");
         return ExitCode::FAILURE;
     }
-    let json_default = !io::stdout().is_terminal();
-    let result = run_cli(env::args().skip(1), json_default);
+    let result = run_invocation(invocation);
     let exit_code = result.exit_code();
     if result.print_json {
         println!("{}", result.envelope_json());
@@ -257,12 +256,17 @@ struct Invocation {
     command_name: String,
 }
 
+#[cfg(test)]
 fn run_cli<I>(args: I, json_default: bool) -> CliResult
 where
     I: IntoIterator,
     I::Item: Into<String>,
 {
-    match parse_invocation(args, json_default).and_then(execute_invocation) {
+    run_invocation(parse_invocation(args, json_default))
+}
+
+fn run_invocation(invocation: Result<Invocation, (String, bool, CliError)>) -> CliResult {
+    match invocation.and_then(execute_invocation) {
         Ok((invocation, data, human)) => {
             CliResult::ok(invocation.command_name, data, invocation.global.json, human)
         }

@@ -124,8 +124,9 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
     ("amend", UNSUPPORTED),
     ("status", Mode::NoEffect),
     ("candidates", Mode::NoEffect),
-    ("build-task", DRY_RUN),
-    ("promote", DRY_RUN),
+    ("build-task", Mode::Refused("resource_production_retired")),
+    ("promote", Mode::Refused("resource_production_retired")),
+    ("publish", Mode::Refused("resource_production_retired")),
 ];
 
 /// The declaration table of `commands[].dry_run_mode`. A capability entry not listed here is
@@ -133,21 +134,14 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
 const DECLARATIONS: &[(&str, Mode)] = &[
     // preview
     ("config set", DRY_RUN),
-    ("resource convert", DRY_RUN),
-    ("package build-task", DRY_RUN),
-    ("package build-pack", DRY_RUN),
     ("tap", DRY_RUN),
     ("swipe", DRY_RUN),
     ("long-tap", DRY_RUN),
     ("key", DRY_RUN),
     ("text", DRY_RUN),
     ("detect", DRY_RUN),
-    ("record build-task", DRY_RUN),
-    ("record promote", DRY_RUN),
     ("record stop", DRY_RUN),
     ("record mark", DRY_RUN),
-    ("session record build-task", DRY_RUN),
-    ("session record promote", DRY_RUN),
     ("session record stop", DRY_RUN),
     ("session record mark", DRY_RUN),
     ("do", EXECUTED_FALSE),
@@ -157,6 +151,42 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session recover", EXECUTED_FALSE),
     ("session stream", Mode::Preview("capture_dry_run")),
     // refused
+    (
+        "resource convert",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "package build-task",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "package build-pack",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "record build-task",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "record promote",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "record publish",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "session record build-task",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "session record promote",
+        Mode::Refused("resource_production_retired"),
+    ),
+    (
+        "session record publish",
+        Mode::Refused("resource_production_retired"),
+    ),
     ("capture --record", UNSUPPORTED),
     ("session capture --record", UNSUPPORTED),
     (
