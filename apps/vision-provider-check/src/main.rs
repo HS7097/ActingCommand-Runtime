@@ -23,6 +23,13 @@ struct CheckOptions {
 #[derive(Debug, Serialize)]
 struct ModelFoldersReport {
     ok: bool,
+    /// When `ok` is false: the code actingd's startup listing and `check-config` refuse this
+    /// models root with (`vision_root_unavailable`, `vision_models_empty` or
+    /// `vision_model_folder_invalid`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
     models_root: String,
     hashed: bool,
     ocr_models: Vec<OcrModelReport>,
@@ -90,13 +97,10 @@ where
         )
     })?;
     println!("{json}");
-    if !report.ok {
+    if let Some(code) = report.code {
         return Err(VisionFfiError::fatal(
             MODULE,
-            format!(
-                "{} model folder(s) break the folder rule",
-                report.invalid_models.len()
-            ),
+            format!("{code}: {}", report.message.as_deref().unwrap_or_default()),
         ));
     }
     Ok(())
@@ -139,9 +143,38 @@ fn argument_value(args: &mut impl Iterator<Item = String>, arg: &str) -> VisionF
 }
 
 /// Lists the model folders exactly as actingd does at startup and, with `--hash`, reads every
-/// model file once to compute the identity a target must name.
+/// model file once to compute the identity a target must name. It fails where actingd's
+/// listing and `check-config` fail: an unreadable or missing root, no model folder at all, or a
+/// folder that breaks the rule.
 fn model_folders_report(options: &CheckOptions) -> VisionFfiResult<ModelFoldersReport> {
-    let listing = list_vision_models(&options.models_root)?;
+    let models_root = path_string(&options.models_root);
+    let listing = match list_vision_models(&options.models_root) {
+        Ok(listing) => listing,
+        Err(error) => {
+            return Ok(ModelFoldersReport {
+                ok: false,
+                code: Some("vision_root_unavailable"),
+                message: Some(error.message().to_owned()),
+                models_root,
+                hashed: false,
+                ocr_models: Vec::new(),
+                nn_models: Vec::new(),
+                invalid_models: Vec::new(),
+            });
+        }
+    };
+    if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
+        return Ok(ModelFoldersReport {
+            ok: false,
+            code: Some("vision_models_empty"),
+            message: Some(format!("{models_root} holds no model folder")),
+            models_root,
+            hashed: false,
+            ocr_models: Vec::new(),
+            nn_models: Vec::new(),
+            invalid_models: Vec::new(),
+        });
+    }
     let ocr_models = listing
         .ocr
         .iter()
@@ -177,9 +210,17 @@ fn model_folders_report(options: &CheckOptions) -> VisionFfiResult<ModelFoldersR
             reason: folder.reason,
         })
         .collect::<Vec<_>>();
+    let invalid = (!invalid_models.is_empty()).then(|| {
+        format!(
+            "{} model folder(s) break the folder rule",
+            invalid_models.len()
+        )
+    });
     Ok(ModelFoldersReport {
-        ok: invalid_models.is_empty(),
-        models_root: path_string(&options.models_root),
+        ok: invalid.is_none(),
+        code: invalid.is_some().then_some("vision_model_folder_invalid"),
+        message: invalid,
+        models_root,
         hashed: options.hash,
         ocr_models,
         nn_models,
