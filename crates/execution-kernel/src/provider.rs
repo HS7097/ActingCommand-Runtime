@@ -317,8 +317,9 @@ impl VisionFfiProvider {
     }
 
     /// Runs `call` on the model's engine, building it first when needed. Waiting for the
-    /// model's lock consumes the request's `timeout_ms`; the request's own model load does
-    /// not; the engine receives what remains.
+    /// model's lock, or inside the load for another request's runtime initialisation,
+    /// consumes the request's `timeout_ms`; the request's own model load does not; the engine
+    /// receives what remains.
     fn call_ocr<R>(
         &self,
         model_ref: &str,
@@ -331,7 +332,7 @@ impl VisionFfiProvider {
         let started = Instant::now();
         let deadline = deadline_after(started, timeout_ms, "OCR")?;
         let mut cell = lock_until(&slot.cell, deadline, "OCR", model_ref)?;
-        let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut waited = started.elapsed();
         if let Some(reason) = &cell.retired {
             return Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -339,8 +340,9 @@ impl VisionFfiProvider {
             ));
         }
         if cell.engine.is_none() {
-            self.load_ocr(slot, &mut cell, model_sha256, deadline)?;
+            waited += self.load_ocr(slot, &mut cell, model_sha256, deadline)?;
         }
+        let waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
         slot.require(model_sha256, "OCR")?;
         let identity = slot.identity()?;
         let remaining = timeout_ms.saturating_sub(waited_ms);
@@ -376,7 +378,7 @@ impl VisionFfiProvider {
         cell: &mut SlotCell<dyn OcrEngine + Send>,
         model_sha256: &str,
         deadline: Instant,
-    ) -> Result<(), VisionProviderError> {
+    ) -> Result<Duration, VisionProviderError> {
         let (Some(spec), Some(loader)) = (slot.spec.as_ref(), self.loader.as_ref()) else {
             return Err(unavailable("OCR"));
         };
@@ -393,6 +395,7 @@ impl VisionFfiProvider {
             Ok(OcrModelLoad::Loaded {
                 engine,
                 model_sha256: actual,
+                waited_on_others,
             }) => {
                 if !slot.verify(&actual) {
                     self.release_loaded_model();
@@ -400,7 +403,7 @@ impl VisionFfiProvider {
                 }
                 cell.engine = Some(engine);
                 cell.counted = true;
-                Ok(())
+                Ok(waited_on_others)
             }
             Ok(OcrModelLoad::Mismatch {
                 model_sha256: actual,
@@ -430,7 +433,7 @@ impl VisionFfiProvider {
         cell: &mut SlotCell<dyn NnEngine + Send>,
         model_sha256: &str,
         deadline: Instant,
-    ) -> Result<(), VisionProviderError> {
+    ) -> Result<Duration, VisionProviderError> {
         let (Some(spec), Some(loader)) = (slot.spec.as_ref(), self.loader.as_ref()) else {
             return Err(unavailable("NN"));
         };
@@ -439,6 +442,7 @@ impl VisionFfiProvider {
             Ok(NnModelLoad::Loaded {
                 engine,
                 model_sha256: actual,
+                waited_on_others,
             }) => {
                 if !slot.verify(&actual) {
                     self.release_loaded_model();
@@ -446,7 +450,7 @@ impl VisionFfiProvider {
                 }
                 cell.engine = Some(engine);
                 cell.counted = true;
-                Ok(())
+                Ok(waited_on_others)
             }
             Ok(NnModelLoad::Mismatch {
                 model_sha256: actual,
@@ -666,7 +670,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         let started = Instant::now();
         let deadline = deadline_after(started, request.timeout_ms, "NN")?;
         let mut cell = lock_until(&slot.cell, deadline, "NN", request.model_ref)?;
-        let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut waited = started.elapsed();
         if let Some(reason) = &cell.retired {
             return Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -674,8 +678,9 @@ impl RecognitionVisionProvider for VisionFfiProvider {
             ));
         }
         if cell.engine.is_none() {
-            self.load_nn(slot, &mut cell, request.model_sha256, deadline)?;
+            waited += self.load_nn(slot, &mut cell, request.model_sha256, deadline)?;
         }
+        let waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
         slot.require(request.model_sha256, "NN")?;
         let timeout_ms = request.timeout_ms.saturating_sub(waited_ms);
         if timeout_ms == 0 {
