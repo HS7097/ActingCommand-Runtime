@@ -61,14 +61,17 @@ their manifest. An explicit unknown, empty or non-string layout is rejected;
 
 Tools use their separate artifact (`-ArtifactKind Tools`,
 `actingcommand-tools-<sha>`). Its manifest declares
-`tools_payload_layout: "platform-tools-v1"`: the root holds `actinglab.exe`,
+`tools_payload_layout: "platform-tools-v2"`: the root holds `actinglab.exe`,
 `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe`, `ac_fastdeploy_ppocr.dll` and
-`BUILD-MANIFEST.json`, and the one subdirectory `platform-tools` holds the
-official Android platform-tools 37.0.1 files `adb.exe`, `AdbWinApi.dll`,
-`AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. The manifest binds all
-ten payload files (paths use `/`). Historical Tools artifacts without the layout
-field have only the five root files; any other layout is rejected.
+`actingcommand-device-test.exe` and `BUILD-MANIFEST.json`, and the one
+subdirectory `platform-tools` holds the official Android platform-tools 37.0.1
+files `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
+`source.properties`. The manifest binds all nine payload files (paths use `/`).
+The OCR engine is linked into `actingcommand-actingd.exe`, so no vision provider
+DLL ships (Workflow #360). Historical Tools artifacts with
+`platform-tools-v1` also carry `ac_fastdeploy_ppocr.dll` (ten files), and those
+without the layout field have only five root files; any other layout is
+rejected.
 
 The build takes these platform-tools files only from Google's official archive
 `https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip`, after

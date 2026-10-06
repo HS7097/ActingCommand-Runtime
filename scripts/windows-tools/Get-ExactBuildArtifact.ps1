@@ -481,8 +481,9 @@ try {
     }
 
     # A Tools manifest with tools_payload_layout 'platform-tools-v1' adds the official
-    # platform-tools files under the one subdirectory 'platform-tools'; without the field
-    # a Tools artifact keeps the historical five flat files. Any other layout fails.
+    # platform-tools files under the one subdirectory 'platform-tools'; 'platform-tools-v2'
+    # (Workflow #360) is the same without the retired vision provider DLL. Without the
+    # field a Tools artifact keeps the historical five flat files. Any other layout fails.
     $allowedDirectory = $null
     if ($manifest.PSObject.Properties.Name -contains 'tools_payload_layout') {
         $layout = $manifest.PSObject.Properties['tools_payload_layout']
@@ -490,16 +491,20 @@ try {
             $ArtifactKind -cne 'Tools' -or
             $layout.Name -cne 'tools_payload_layout' -or
             $layout.Value -isnot [string] -or
-            $layout.Value -cne 'platform-tools-v1'
+            ($layout.Value -cne 'platform-tools-v1' -and $layout.Value -cne 'platform-tools-v2')
         ) {
-            throw "Manifest tools_payload_layout must be exactly 'platform-tools-v1' for a Tools artifact."
+            throw "Manifest tools_payload_layout must be exactly 'platform-tools-v1' or 'platform-tools-v2' for a Tools artifact."
         }
         $expectedFiles = @(
             'actinglab.exe',
             'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
-            'actingcommand-device-test.exe',
-            'ac_fastdeploy_ppocr.dll',
+            'actingcommand-device-test.exe'
+        )
+        if ($layout.Value -ceq 'platform-tools-v1') {
+            $expectedFiles += 'ac_fastdeploy_ppocr.dll'
+        }
+        $expectedFiles += @(
             'platform-tools/adb.exe',
             'platform-tools/AdbWinApi.dll',
             'platform-tools/AdbWinUsbApi.dll',

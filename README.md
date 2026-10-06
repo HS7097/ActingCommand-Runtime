@@ -90,7 +90,7 @@ There are four workflows in total: three CI workflows and the on-demand `release
 
 ## Workspace members
 
-The workspace declares 31 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
+The workspace declares 30 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
 ### apps (6)
 
@@ -101,7 +101,7 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 47 top-level dispatch arms, 132 commands |
 | apps/device-test | actingcommand-device-test | bin `actingcommand-device-test` | Device backend probing, offline dry-run planning, page/recognition evaluation |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
-| apps/vision-provider-check | actingcommand-vision-provider-check | bin | Verifies vision provider artifact manifests, emits artifact locks and export audits |
+| apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
 ### crates (22)
 
@@ -115,7 +115,7 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 | crates/lab | actingcommand-lab | Optional authoring and debugging adapter layer; production still builds and runs without it |
 | crates/ledger | actingcommand-ledger | Recoverable single-writer storage for the global runtime event ledger |
 | crates/ledger-forensics | actingcommand-ledger-forensics | Read-only forensics over the GlobalLedger and verified evidence archives |
-| crates/onnx-provider-support | actingcommand-onnx-provider-support | Provider-side ORT lifetime: idempotent init, cancellable watchdog, session cache |
+| crates/onnx-provider-support | actingcommand-onnx-provider-support | Engine-side ORT lifetime: idempotent init, cancellable watchdog |
 | crates/pack-containment | actingcommand-pack-containment | Loads and verifies sealed resource packs, including projection and recognition metadata checks |
 | crates/page-detector | actingcommand-page-detector | Evaluates declarative page sets against recognition results |
 | crates/policy | actingcommand-policy | Pure scheduling-policy contract shared by the catalog compiler and the evaluator |
@@ -128,14 +128,13 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 | crates/runtime-state | actingcommand-runtime-state | SQLite-backed authoritative runtime state and immutable release generations |
 | crates/scheduler | actingcommand-scheduler | Per-instance write admission, lease lifetime and fencing authority |
 | crates/selection-policy | actingcommand-selection-policy | Pure selection-policy evaluator: declared document, bounded candidates and explicit facts in, deterministic choice with reasons out; plus the offline debugging bin `selection-eval` |
-| crates/vision-ffi | actingcommand-vision-ffi | Safe FFI boundary for OCR/NN engines |
+| crates/vision-ffi | actingcommand-vision-ffi | Boundary types, model folder rule and loader contract of the in-process OCR/NN engine |
 
-### providers (2)
+### providers (1)
 
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
-| providers/onnxruntime-json | actingcommand-onnxruntime-json-provider | cdylib + rlib | ONNXRuntime-backed NN JSON ABI provider, exports `ac_onnxruntime_classify_json` |
-| providers/ppocr-onnx-json | actingcommand-ppocr-onnx-json-provider | cdylib + rlib | ONNXRuntime-backed PPOCR ROI recognizer, exports `ac_fastdeploy_ppocr_read_text_json`; ships no models or runtime DLLs |
+| providers/ppocr-onnx-json | actingcommand-ppocr-onnx-json-provider | rlib | In-process ONNX Runtime vision engine linked by actingd: PP-OCR (`ppocr-ctc`) and ONNX classification (`onnx-classify`) models loaded from model folders on first use; ships no models or runtime DLLs |
 
 ### tools (1)
 
@@ -147,7 +146,7 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 
 Capture backends exist by name: `fixture_simulation`, `adb_screencap`, `adb_screencap_encode`, `adb_screencap_raw_gzip`, `droidcast_raw`, `nemu_ipc`, with selectable values `auto`, `auto-fastest`, `adb`, `droidcast_raw` and `nemu_ipc`. The input backends are `nemu_ipc`, `maatouch`, `minitouch` and `adb_shell_input`, with selectable values `auto`, `auto-fastest`, `nemu_ipc`, `maatouch`, `minitouch` and `adb_shell_input`. The Nemu IPC capture and input backends are implemented inside the crate; the capture backend carries its own worker thread. Vendor stdio is captured in bounded, explicitly closed sessions that report a resource-quiescence state.
 
-Recognition targets come in five kinds: Template, Color, ClickOnly, Ocr and Nn. Template matching is CPU image matching with an explicit 5-second timeout and a two-stage coarse-match/refine structure; a timeout failure reports which stage it occurred in. Production OCR and NN are reachable only through the `vision-ffi` boundary into two separate cdylib providers, and the host-side adapter enforces provider identity: `model_ref` must be a bounded logical identifier containing no `/`, `\` or `:` (host paths are not accepted), and `model_sha256` must be exactly 64 lowercase hexadecimal characters. Page projection is a side-effect-free projection of the resolved facts of a single frame, schema `actingcommand.page-projection.v1`, capped at 64 entries / 32 KiB, with entries keyed by role (Navigate / PageOp / ControlPoint), task ID, resource ID and page, each entry carrying a Safety classification that defaults to Dangerous; OCR field declarations under operation schema `0.8` go through `post_admission_ocr.mode = fields_v1`, field declarations cannot be mixed with the older truth-set declarations, and this contract contains no target-proprietary value (`contracts/ocr-fields.md`, `contracts/page-projection.md`).
+Recognition targets come in five kinds: Template, Color, ClickOnly, Ocr and Nn. Template matching is CPU image matching with an explicit 5-second timeout and a two-stage coarse-match/refine structure; a timeout failure reports which stage it occurred in. Production OCR and NN run in the in-process engine behind the `vision-ffi` boundary; each target names its model folder and content (`contracts/vision-model-folders.md`), and the host-side adapter enforces that identity: `model_ref` must be a bounded logical identifier containing no `/`, `\` or `:` (host paths are not accepted), and `model_sha256` must be exactly 64 lowercase hexadecimal characters. Page projection is a side-effect-free projection of the resolved facts of a single frame, schema `actingcommand.page-projection.v1`, capped at 64 entries / 32 KiB, with entries keyed by role (Navigate / PageOp / ControlPoint), task ID, resource ID and page, each entry carrying a Safety classification that defaults to Dangerous; OCR field declarations under operation schema `0.8` go through `post_admission_ocr.mode = fields_v1`, field declarations cannot be mixed with the older truth-set declarations, and this contract contains no target-proprietary value (`contracts/ocr-fields.md`, `contracts/page-projection.md`).
 
 ## Build and run
 
@@ -233,9 +232,9 @@ actingcommand-actingd suspended --config runtime.json
 # Offline owner unlock after startup refused owner_resource_unconfirmed (appends to owner.lock, never deletes it; the next start takes over)
 actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confirm-resources-released
 
-# Vision provider artifact check
+# Vision model folders and provider startup facts
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
-actingcommand-vision-provider-check --manifest provider.json --backend all --require-existing
+actingcommand-vision-provider-check --models-root <vision root>\models --hash
 
 # Read-only MuMu instance discovery probe (runs only MuMuManager version and info -v all; prints one JSON line)
 actingcommand-device-test mumu-discover [--root <mumu-install-root>]

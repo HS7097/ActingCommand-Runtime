@@ -90,7 +90,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 
 ## Workspace 成员
 
-工作区声明 31 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 30 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
 ### apps（6）
 
@@ -101,7 +101,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧 CLI，47 个顶层分派臂、132 条命令 |
 | apps/device-test | actingcommand-device-test | bin `actingcommand-device-test` | 设备后端探测与离线 dry-run 规划、页面/识别求值 |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
-| apps/vision-provider-check | actingcommand-vision-provider-check | bin | 校验视觉提供者工件清单、产出工件锁与导出审计 |
+| apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
 ### crates（22）
 
@@ -115,7 +115,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 | crates/lab | actingcommand-lab | 可选的创作与调试适配层；排除后生产仍可构建可运行 |
 | crates/ledger | actingcommand-ledger | 全局运行时事件账本的可恢复单写者存储 |
 | crates/ledger-forensics | actingcommand-ledger-forensics | 基于 GlobalLedger 与已验证证据归档的只读取证 |
-| crates/onnx-provider-support | actingcommand-onnx-provider-support | 提供者侧 ORT 生命周期：幂等初始化、可取消看门狗、会话缓存 |
+| crates/onnx-provider-support | actingcommand-onnx-provider-support | 引擎侧 ORT 生命周期：幂等初始化、可取消看门狗 |
 | crates/pack-containment | actingcommand-pack-containment | 加载与校验密封资源包，含投影与识别元数据校验 |
 | crates/page-detector | actingcommand-page-detector | 以识别结果求值声明式页面集合 |
 | crates/policy | actingcommand-policy | 目录编译器与求值器共享的纯调度策略合约 |
@@ -128,14 +128,13 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 | crates/runtime-state | actingcommand-runtime-state | SQLite 支撑的权威运行时状态与不可变发布代次 |
 | crates/scheduler | actingcommand-scheduler | 按实例的写入准入、租约生命周期与围栏权限 |
 | crates/selection-policy | actingcommand-selection-policy | 纯选择策略求值器：输入声明文档、有界候选与显式事实，输出确定性选择及理由；另带离线调试 bin `selection-eval` |
-| crates/vision-ffi | actingcommand-vision-ffi | OCR/NN 引擎的安全 FFI 边界 |
+| crates/vision-ffi | actingcommand-vision-ffi | 进程内 OCR/NN 引擎的边界类型、模型文件夹规则与加载器契约 |
 
-### providers（2）
+### providers（1）
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
-| providers/onnxruntime-json | actingcommand-onnxruntime-json-provider | cdylib + rlib | ONNXRuntime 支撑的 NN JSON ABI 提供者，导出 `ac_onnxruntime_classify_json` |
-| providers/ppocr-onnx-json | actingcommand-ppocr-onnx-json-provider | cdylib + rlib | ONNXRuntime 支撑的 PPOCR ROI 识别器，导出 `ac_fastdeploy_ppocr_read_text_json`；不打包模型与运行时 DLL |
+| providers/ppocr-onnx-json | actingcommand-ppocr-onnx-json-provider | rlib | 由 actingd 链接的进程内 ONNX Runtime 视觉引擎：PP-OCR（`ppocr-ctc`）与 ONNX 分类（`onnx-classify`）模型，首次使用时从模型文件夹加载；不打包模型与运行时 DLL |
 
 ### tools（1）
 
@@ -147,7 +146,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 
 采集后端按名称存在：`fixture_simulation`、`adb_screencap`、`adb_screencap_encode`、`adb_screencap_raw_gzip`、`droidcast_raw`、`nemu_ipc`，可选值为 `auto`、`auto-fastest`、`adb`、`droidcast_raw`、`nemu_ipc`。输入后端为 `nemu_ipc`、`maatouch`、`minitouch`、`adb_shell_input`，可选值为 `auto`、`auto-fastest`、`nemu_ipc`、`maatouch`、`minitouch`、`adb_shell_input`。Nemu IPC 采集与输入后端都在 crate 内实现，采集后端带独立工作线程。厂商 stdio 以有界、显式关闭的会话捕获，并报告资源静默状态。
 
-识别目标分五类：Template、Color、ClickOnly、Ocr、Nn。模板匹配是 CPU 图像匹配，带 5 秒显式超时与粗匹配/精修两段，超时失败会报告发生在哪一段。生产 OCR 与 NN 只能经 `vision-ffi` 边界到达两个独立 cdylib 提供者，宿主侧适配器强制提供者身份：`model_ref` 必须是不含 `/`、`\` 或 `:` 的有界逻辑标识（不接受主机路径），`model_sha256` 必须是恰好 64 位小写十六进制。页面投影是对单帧已解析事实的无副作用投影，schema `actingcommand.page-projection.v1`，上限 64 条 / 32 KiB，条目按角色（Navigate / PageOp / ControlPoint）、任务 ID、资源 ID 与页面为键，每条携带 Safety 分类且默认值为 Dangerous；操作 schema `0.8` 的 OCR 字段声明走 `post_admission_ocr.mode = fields_v1`，字段声明与旧的真值集合声明不可混用，且本合约不含任何目标专有值（`contracts/ocr-fields.md`、`contracts/page-projection.md`）。
+识别目标分五类：Template、Color、ClickOnly、Ocr、Nn。模板匹配是 CPU 图像匹配，带 5 秒显式超时与粗匹配/精修两段，超时失败会报告发生在哪一段。生产 OCR 与 NN 在 `vision-ffi` 边界后的进程内引擎中运行；每个目标指明其模型文件夹与内容（`contracts/vision-model-folders.md`），宿主侧适配器强制该身份：`model_ref` 必须是不含 `/`、`\` 或 `:` 的有界逻辑标识（不接受主机路径），`model_sha256` 必须是恰好 64 位小写十六进制。页面投影是对单帧已解析事实的无副作用投影，schema `actingcommand.page-projection.v1`，上限 64 条 / 32 KiB，条目按角色（Navigate / PageOp / ControlPoint）、任务 ID、资源 ID 与页面为键，每条携带 Safety 分类且默认值为 Dangerous；操作 schema `0.8` 的 OCR 字段声明走 `post_admission_ocr.mode = fields_v1`，字段声明与旧的真值集合声明不可混用，且本合约不含任何目标专有值（`contracts/ocr-fields.md`、`contracts/page-projection.md`）。
 
 ## 构建与运行
 
@@ -235,9 +234,9 @@ actingcommand-actingd suspended --config runtime.json
 # 启动因 owner_resource_unconfirmed 被拒后的离线解锁（只向 owner.lock 追加、从不删除；下次启动自动接管）
 actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confirm-resources-released
 
-# 视觉提供者工件检查
+# 视觉模型文件夹与提供者启动事实
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
-actingcommand-vision-provider-check --manifest provider.json --backend all --require-existing
+actingcommand-vision-provider-check --models-root <vision root>\models --hash
 
 # 只读 MuMu 实例发现探针（只运行 MuMuManager version 与 info -v all；输出一行 JSON）
 actingcommand-device-test mumu-discover [--root <mumu-install-root>]

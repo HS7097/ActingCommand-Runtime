@@ -21,14 +21,6 @@ param(
 
     [string] $CudaStableIdentity,
 
-    [string] $ProviderArtifactManifestPath,
-
-    [string] $ProviderArtifactManifestSha256,
-
-    [string] $ProviderDependencyManifestPath,
-
-    [string] $ProviderDependencyManifestSha256,
-
     [string] $MumuInstallRoot,
 
     [string] $MumuVersion,
@@ -434,445 +426,6 @@ function Get-ExtractedFileRecords {
     )
 }
 
-function Resolve-ProviderFile {
-    param(
-        [Parameter(Mandatory)][string] $ManifestRoot,
-        [Parameter(Mandatory)][string] $DeclaredPath,
-        [Parameter(Mandatory)][string] $Label
-    )
-    $candidate = if ([IO.Path]::IsPathFullyQualified($DeclaredPath)) {
-        [IO.Path]::GetFullPath($DeclaredPath)
-    } else {
-        [IO.Path]::GetFullPath((Join-Path $ManifestRoot $DeclaredPath))
-    }
-    if (-not (Test-PathWithin -Path $candidate -Root $ManifestRoot)) {
-        Stop-Materialization "$Label must stay inside the caller-supplied manifest root"
-    }
-    $cursor = [IO.Path]::GetFullPath($ManifestRoot).TrimEnd('\')
-    $relative = [IO.Path]::GetRelativePath($cursor, $candidate)
-    foreach ($segment in $relative.Replace('/', '\').Split(
-        [char[]]@('\'),
-        [StringSplitOptions]::RemoveEmptyEntries
-    )) {
-        $cursor = Join-Path $cursor $segment
-        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            Stop-Materialization "$Label path contains a reparse point: $cursor"
-        }
-    }
-    Get-RegularFile -Path $candidate -Label $Label
-}
-
-function Copy-ProviderArtifacts {
-    param(
-        [Parameter(Mandatory)][string] $StageRoot,
-        [Parameter(Mandatory)][string] $PublishedRoot,
-        [Parameter(Mandatory)][string] $Backend,
-        [Nullable[int]] $CudaOrdinal,
-        [string] $CudaIdentity,
-        [Parameter(Mandatory)] $ProviderDefinition
-    )
-    if ([string]::IsNullOrWhiteSpace($ProviderArtifactManifestPath) -or
-        [string]::IsNullOrWhiteSpace($ProviderArtifactManifestSha256)) {
-        Stop-Materialization 'provider-v0.3 requires ProviderArtifactManifestPath and its exact SHA-256'
-    }
-    if ([string]::IsNullOrWhiteSpace($ProviderDependencyManifestPath) -or
-        [string]::IsNullOrWhiteSpace($ProviderDependencyManifestSha256)) {
-        Stop-Materialization 'provider-v0.3 requires ProviderDependencyManifestPath and its exact SHA-256'
-    }
-    Assert-LowerSha256 -Value $ProviderArtifactManifestSha256 -Label 'ProviderArtifactManifestSha256'
-    Assert-LowerSha256 -Value $ProviderDependencyManifestSha256 -Label 'ProviderDependencyManifestSha256'
-    $manifestFile = Get-RegularFile -Path $ProviderArtifactManifestPath -Label 'provider artifact manifest'
-    $actualManifestHash = Get-Sha256 -Path $manifestFile
-    if ($actualManifestHash -cne $ProviderArtifactManifestSha256) {
-        Stop-Materialization "provider manifest SHA-256 mismatch: expected=$ProviderArtifactManifestSha256 actual=$actualManifestHash"
-    }
-    $providerManifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json -Depth 100
-    if ($providerManifest.schema_version -cne 'actingcommand.vision_provider_artifacts.v0.3') {
-        Stop-Materialization 'provider manifest must use actingcommand.vision_provider_artifacts.v0.3'
-    }
-    $ocr = $providerManifest.fastdeploy_ppocr
-    if ($null -eq $ocr) {
-        Stop-Materialization 'provider manifest must contain fastdeploy_ppocr'
-    }
-    if ($ocr.execution_provider -cne $Backend -or $ocr.strict_no_fallback -cne $true) {
-        Stop-Materialization 'provider backend must match the explicit cpu/cuda selection with strict_no_fallback=true'
-    }
-    if ($ocr.model_ref -cne 'PP-OCRv6_medium') {
-        Stop-Materialization "provider model_ref must be exactly 'PP-OCRv6_medium'"
-    }
-    if ($null -ne $ocr.classifier_model_path -or $null -ne $ocr.classifier_model_sha256) {
-        Stop-Materialization 'provider-v0.3 materialization does not accept an undeclared classifier model'
-    }
-    $languages = @($ocr.supported_languages)
-    if ($languages.Count -eq 0 -or
-        $languages.Where({ [string]::IsNullOrWhiteSpace([string]$_) }).Count -ne 0) {
-        Stop-Materialization 'provider supported_languages must contain only non-empty values'
-    }
-    if ([long]$ocr.default_timeout_ms -le 0) {
-        Stop-Materialization 'provider default_timeout_ms must be positive'
-    }
-    $cudaDeviceProperty = $ocr.PSObject.Properties['cuda_device']
-    $cudaDevice = if ($null -eq $cudaDeviceProperty) { $null } else { $cudaDeviceProperty.Value }
-    if ($Backend -ceq 'cpu') {
-        if ($null -ne $cudaDevice) {
-            Stop-Materialization 'CPU selection must not include a CUDA selector'
-        }
-    } else {
-        if ($null -eq $CudaOrdinal -or [string]::IsNullOrWhiteSpace($CudaIdentity)) {
-            Stop-Materialization 'CUDA selection requires CudaDeviceOrdinal and CudaStableIdentity'
-        }
-        if ([int]$cudaDevice.ordinal -ne [int]$CudaOrdinal -or
-            $cudaDevice.expected_stable_identity -cne $CudaIdentity) {
-            Stop-Materialization 'provider CUDA selector does not match the explicit ordinal and stable identity'
-        }
-    }
-    foreach ($field in @(
-        'provider_library_sha256',
-        'runtime_library_sha256',
-        'model_sha256',
-        'detector_model_sha256',
-        'recognizer_model_sha256',
-        'dictionary_sha256'
-    )) {
-        Assert-LowerSha256 -Value ([string]$ocr.$field) -Label $field
-    }
-    $manifestRoot = Split-Path -Parent $manifestFile
-    if (-not $manifestRoot.StartsWith('D:\', [StringComparison]::OrdinalIgnoreCase) -or
-        (Test-PathWithin -Path $manifestRoot -Root 'D:\项目仓库') -or
-        -not (Test-PathWithin -Path $manifestRoot -Root $TaskRoot)) {
-        Stop-Materialization 'caller-supplied provider artifacts must come from the selected task-owned D-drive root, not a shared mirror'
-    }
-    foreach ($temporaryRoot in @($env:TEMP, $env:TMP)) {
-        if (-not [string]::IsNullOrWhiteSpace($temporaryRoot) -and
-            (Test-PathWithin -Path $manifestRoot -Root $temporaryRoot)) {
-            Stop-Materialization 'caller-supplied provider artifacts must not come from system TEMP or TMP'
-        }
-    }
-    $providerFile = Resolve-ProviderFile -ManifestRoot $manifestRoot -DeclaredPath ([string]$ocr.provider_library_path) -Label 'provider library'
-    if ((Get-Sha256 -Path $providerFile) -cne $ocr.provider_library_sha256) {
-        Stop-Materialization 'provider library does not match provider_library_sha256'
-    }
-    if ([IO.Path]::GetFileName($providerFile) -cne 'ac_fastdeploy_ppocr.dll') {
-        Stop-Materialization 'provider library must use the canonical name ac_fastdeploy_ppocr.dll'
-    }
-
-    $dependencyManifestFile = Get-RegularFile -Path $ProviderDependencyManifestPath -Label 'provider dependency manifest'
-    $actualDependencyManifestHash = Get-Sha256 -Path $dependencyManifestFile
-    if ($actualDependencyManifestHash -cne $ProviderDependencyManifestSha256) {
-        Stop-Materialization "provider dependency manifest SHA-256 mismatch: expected=$ProviderDependencyManifestSha256 actual=$actualDependencyManifestHash"
-    }
-    $dependencyManifestRoot = Split-Path -Parent $dependencyManifestFile
-    if (-not $dependencyManifestRoot.StartsWith('D:\', [StringComparison]::OrdinalIgnoreCase) -or
-        (Test-PathWithin -Path $dependencyManifestRoot -Root 'D:\项目仓库') -or
-        -not (Test-PathWithin -Path $dependencyManifestRoot -Root $TaskRoot)) {
-        Stop-Materialization 'provider dependencies must come from the selected task-owned D-drive root'
-    }
-    foreach ($temporaryRoot in @($env:TEMP, $env:TMP)) {
-        if (-not [string]::IsNullOrWhiteSpace($temporaryRoot) -and
-            (Test-PathWithin -Path $dependencyManifestRoot -Root $temporaryRoot)) {
-            Stop-Materialization 'provider dependencies must not come from system TEMP or TMP'
-        }
-    }
-    $dependencyManifest = Get-Content -LiteralPath $dependencyManifestFile -Raw | ConvertFrom-Json -Depth 100
-    if ($dependencyManifest.schema_version -cne [string]$ProviderDefinition.dependency_manifest_schema) {
-        Stop-Materialization 'unsupported provider dependency manifest schema_version'
-    }
-    if ($dependencyManifest.backend -cne $Backend -or $dependencyManifest.closure_complete -cne $true) {
-        Stop-Materialization 'dependency manifest backend must match and closure_complete must be true'
-    }
-    $selectedCoreDeclaration = [string]$dependencyManifest.selected_core_path
-    if ([string]::IsNullOrWhiteSpace($selectedCoreDeclaration) -or
-        [IO.Path]::GetFileName($selectedCoreDeclaration) -cne [string]$ProviderDefinition.selected_core_name) {
-        Stop-Materialization 'dependency manifest must select exactly onnxruntime.dll as the core'
-    }
-    if ([string]$ocr.runtime_library_path -cne $selectedCoreDeclaration) {
-        Stop-Materialization 'provider runtime_library_path must match the dependency manifest selected core'
-    }
-
-    $dependencies = @($dependencyManifest.dependencies)
-    if ($dependencies.Count -eq 0 -or $dependencies.Count -gt [int]$ProviderDefinition.max_runtime_file_count) {
-        Stop-Materialization "provider runtime dependency count must be between 1 and $($ProviderDefinition.max_runtime_file_count)"
-    }
-    $declaredRuntimePaths = @($ocr.runtime_library_paths | ForEach-Object { [string]$_ })
-    if ($declaredRuntimePaths.Count -ne $dependencies.Count) {
-        Stop-Materialization 'provider runtime_library_paths must exactly cover the dependency manifest'
-    }
-
-    $pathNames = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $fileNames = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $resolvedPaths = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $ortNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($name in @($ProviderDefinition.onnxruntime_archive_names)) {
-        [void]$ortNames.Add([string]$name)
-    }
-    $runtimeBindings = @()
-    [long]$runtimeTotalBytes = 0
-    [int]$selectedCoreOccurrences = 0
-    [int]$externalCudaCount = 0
-    for ($index = 0; $index -lt $dependencies.Count; $index++) {
-        $dependency = $dependencies[$index]
-        foreach ($field in @('path', 'sha256', 'source', 'version', 'license_provenance_note', 'kind')) {
-            if ($null -eq $dependency.PSObject.Properties[$field] -or
-                [string]::IsNullOrWhiteSpace([string]$dependency.$field)) {
-                Stop-Materialization "provider dependency entry is missing $field"
-            }
-        }
-        $declaredPath = [string]$dependency.path
-        if ([string]$declaredRuntimePaths[$index] -cne $declaredPath) {
-            Stop-Materialization 'provider runtime_library_paths order must match dependency manifest paths exactly'
-        }
-        if ($pathNames.ContainsKey($declaredPath)) {
-            Stop-Materialization "provider dependency paths contain a duplicate or case collision: $declaredPath"
-        }
-        $pathNames.Add($declaredPath, $declaredPath)
-        $runtimeFile = Resolve-ProviderFile -ManifestRoot $dependencyManifestRoot -DeclaredPath $declaredPath -Label 'provider runtime dependency'
-        if ($resolvedPaths.ContainsKey($runtimeFile)) {
-            Stop-Materialization "provider dependencies resolve to the same file more than once: $declaredPath"
-        }
-        $resolvedPaths.Add($runtimeFile, $runtimeFile)
-        $name = [IO.Path]::GetFileName($runtimeFile)
-        if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*\.dll$') {
-            Stop-Materialization "provider dependency has an unsafe DLL name: $name"
-        }
-        if ($fileNames.ContainsKey($name)) {
-            Stop-Materialization "provider dependency names contain a duplicate or case collision: $name"
-        }
-        $fileNames.Add($name, $name)
-        Assert-LowerSha256 -Value ([string]$dependency.sha256) -Label "SHA-256 for $name"
-        $actualHash = Get-Sha256 -Path $runtimeFile
-        if ($actualHash -cne [string]$dependency.sha256) {
-            Stop-Materialization "provider dependency hash mismatch for $name"
-        }
-        $item = Get-Item -LiteralPath $runtimeFile -ErrorAction Stop
-        if ([long]$item.Length -le 0) {
-            Stop-Materialization "provider dependency is empty: $name"
-        }
-        $runtimeTotalBytes = Add-BoundedInt64 -Left $runtimeTotalBytes -Right ([long]$item.Length) -Label 'provider runtime closure'
-        if ($runtimeTotalBytes -gt [long]$ProviderDefinition.max_runtime_total_bytes) {
-            Stop-Materialization 'provider runtime dependency closure exceeds its total byte bound'
-        }
-        $kind = [string]$dependency.kind
-        if ($kind -ceq 'onnxruntime_archive') {
-            if (-not $ortNames.Contains($name)) {
-                Stop-Materialization "unexpected ONNX Runtime archive dependency name: $name"
-            }
-            $archiveDefinition = $componentTable[[string]$ProviderDefinition.onnxruntime_archive_component]
-            $expectedLicense = "$($archiveDefinition.license.id); $($archiveDefinition.license.url); redistribution=$($archiveDefinition.license.redistribution)"
-            if ([string]$dependency.source -cne [string]$archiveDefinition.archive.url -or
-                [string]$dependency.version -cne [string]$archiveDefinition.version -or
-                [string]$dependency.license_provenance_note -cne $expectedLicense) {
-                Stop-Materialization "ONNX Runtime dependency provenance mismatch for $name"
-            }
-        } elseif ($kind -ceq 'external_cuda') {
-            if ($Backend -cne 'cuda') {
-                Stop-Materialization 'CPU dependency closure must not contain external CUDA dependencies'
-            }
-            if ($ortNames.Contains($name)) {
-                Stop-Materialization "ONNX Runtime archive dependency cannot be declared external: $name"
-            }
-            $externalCudaCount++
-        } else {
-            Stop-Materialization "unsupported provider dependency kind: $kind"
-        }
-        if ($declaredPath -ceq $selectedCoreDeclaration) {
-            $selectedCoreOccurrences++
-        }
-        $runtimeBindings += [ordered]@{
-            source = [string]$dependency.source
-            source_path = $runtimeFile
-            original_path = $runtimeFile
-            version = [string]$dependency.version
-            expected_name = $name
-            size_bytes = [long]$item.Length
-            sha256 = $actualHash
-            license_provenance_note = [string]$dependency.license_provenance_note
-            kind = $kind
-            selected_core = ($declaredPath -ceq $selectedCoreDeclaration)
-            executed = $false
-        }
-    }
-    if ($selectedCoreOccurrences -ne 1) {
-        Stop-Materialization 'selected ONNX Runtime core must occur exactly once in the dependency closure'
-    }
-    foreach ($requiredName in @($ProviderDefinition.required_names.PSObject.Properties[$Backend].Value)) {
-        if (-not $fileNames.ContainsKey([string]$requiredName)) {
-            Stop-Materialization "provider runtime dependency closure is missing $requiredName"
-        }
-    }
-    if ($Backend -ceq 'cpu' -and $fileNames.ContainsKey('onnxruntime_providers_cuda.dll')) {
-        Stop-Materialization 'CPU dependency closure must not include the CUDA provider DLL'
-    }
-    if ($Backend -ceq 'cuda' -and
-        $ProviderDefinition.external_cuda_provenance_required -ceq $true -and
-        $externalCudaCount -eq 0) {
-        Stop-Materialization 'CUDA dependency closure requires explicit task-local CUDA/cuDNN/driver provenance'
-    }
-    $selectedBinding = @($runtimeBindings | Where-Object { $_.selected_core })
-    if ($selectedBinding.Count -ne 1 -or [string]$ocr.runtime_library_sha256 -cne [string]$selectedBinding[0].sha256) {
-        Stop-Materialization 'provider runtime_library_sha256 must match the selected core dependency'
-    }
-    $detectorFile = Resolve-ProviderFile -ManifestRoot $manifestRoot -DeclaredPath ([string]$ocr.detector_model_path) -Label 'detector model'
-    $recognizerFile = Resolve-ProviderFile -ManifestRoot $manifestRoot -DeclaredPath ([string]$ocr.recognizer_model_path) -Label 'recognizer model'
-    $dictionaryFile = Resolve-ProviderFile -ManifestRoot $manifestRoot -DeclaredPath ([string]$ocr.dictionary_path) -Label 'OCR dictionary'
-    foreach ($binding in @(
-        @($detectorFile, [string]$ocr.detector_model_sha256, 'detector model'),
-        @($recognizerFile, [string]$ocr.recognizer_model_sha256, 'recognizer model'),
-        @($dictionaryFile, [string]$ocr.dictionary_sha256, 'OCR dictionary')
-    )) {
-        if ((Get-Sha256 -Path $binding[0]) -cne $binding[1]) {
-            Stop-Materialization "$($binding[2]) does not match its declared SHA-256"
-        }
-    }
-    $providerDestination = Get-SafeChildPath -Root $StageRoot -RelativePath 'provider/provider/ac_fastdeploy_ppocr.dll' -Label 'provider destination'
-    $detectorDestination = Get-SafeChildPath -Root $StageRoot -RelativePath 'provider/models/detector.onnx' -Label 'detector destination'
-    $recognizerDestination = Get-SafeChildPath -Root $StageRoot -RelativePath 'provider/models/recognizer.onnx' -Label 'recognizer destination'
-    $dictionaryDestination = Get-SafeChildPath -Root $StageRoot -RelativePath 'provider/models/ppocrv6_dict.txt' -Label 'dictionary destination'
-    foreach ($copy in @(
-        @($providerFile, $providerDestination),
-        @($detectorFile, $detectorDestination),
-        @($recognizerFile, $recognizerDestination),
-        @($dictionaryFile, $dictionaryDestination)
-    )) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $copy[1]) -Force | Out-Null
-        Copy-Item -LiteralPath $copy[0] -Destination $copy[1] -ErrorAction Stop
-    }
-    $runtimePublishedPaths = @()
-    $selectedRuntimePublishedPath = $null
-    foreach ($binding in $runtimeBindings) {
-        $runtimeDestination = Get-SafeChildPath -Root $StageRoot -RelativePath ("provider/runtime/" + [string]$binding.expected_name) -Label 'runtime destination'
-        New-Item -ItemType Directory -Path (Split-Path -Parent $runtimeDestination) -Force | Out-Null
-        Copy-Item -LiteralPath ([string]$binding.source_path) -Destination $runtimeDestination -ErrorAction Stop
-        $binding.cache_path = [IO.Path]::GetRelativePath($StageRoot, $runtimeDestination).Replace('\', '/')
-        $binding.relative_path = $binding.cache_path
-        if ((Get-Sha256 -Path $runtimeDestination) -cne [string]$binding.sha256) {
-            Stop-Materialization "copied provider dependency hash mismatch for $($binding.expected_name)"
-        }
-        $runtimePublishedPath = Get-SafeChildPath -Root $PublishedRoot -RelativePath ([string]$binding.cache_path) -Label 'published runtime path'
-        $runtimePublishedPaths += [string]$runtimePublishedPath
-        if ($binding.selected_core) { $selectedRuntimePublishedPath = [string]$runtimePublishedPath }
-    }
-    if (@($runtimePublishedPaths | Where-Object { $_ -ceq $selectedRuntimePublishedPath }).Count -ne 1) {
-        Stop-Materialization 'selected published ONNX Runtime core must occur exactly once in the runtime closure'
-    }
-
-    $providerCachePath = [IO.Path]::GetRelativePath($StageRoot, $providerDestination).Replace('\', '/')
-    $detectorCachePath = [IO.Path]::GetRelativePath($StageRoot, $detectorDestination).Replace('\', '/')
-    $recognizerCachePath = [IO.Path]::GetRelativePath($StageRoot, $recognizerDestination).Replace('\', '/')
-    $dictionaryCachePath = [IO.Path]::GetRelativePath($StageRoot, $dictionaryDestination).Replace('\', '/')
-    $providerPublishedPath = Get-SafeChildPath -Root $PublishedRoot -RelativePath $providerCachePath -Label 'published provider path'
-    $detectorPublishedPath = Get-SafeChildPath -Root $PublishedRoot -RelativePath $detectorCachePath -Label 'published detector path'
-    $recognizerPublishedPath = Get-SafeChildPath -Root $PublishedRoot -RelativePath $recognizerCachePath -Label 'published recognizer path'
-    $dictionaryPublishedPath = Get-SafeChildPath -Root $PublishedRoot -RelativePath $dictionaryCachePath -Label 'published dictionary path'
-    $canonicalOcr = [ordered]@{
-        provider_library_path = $providerPublishedPath
-        provider_library_sha256 = (Get-Sha256 -Path $providerDestination)
-        runtime_library_paths = $runtimePublishedPaths
-        runtime_library_path = $selectedRuntimePublishedPath
-        runtime_library_sha256 = [string]$selectedBinding[0].sha256
-        detector_model_path = $detectorPublishedPath
-        recognizer_model_path = $recognizerPublishedPath
-        dictionary_path = $dictionaryPublishedPath
-        classifier_model_path = $null
-        model_ref = [string]$ocr.model_ref
-        model_sha256 = [string]$ocr.model_sha256
-        detector_model_sha256 = [string]$ocr.detector_model_sha256
-        recognizer_model_sha256 = [string]$ocr.recognizer_model_sha256
-        dictionary_sha256 = [string]$ocr.dictionary_sha256
-        classifier_model_sha256 = $null
-        execution_provider = $Backend
-    }
-    if ($Backend -ceq 'cuda') {
-        $canonicalOcr['cuda_device'] = [ordered]@{
-            ordinal = [int]$CudaOrdinal
-            expected_stable_identity = $CudaIdentity
-        }
-    }
-    $canonicalOcr['strict_no_fallback'] = $true
-    $canonicalOcr['supported_languages'] = $languages
-    $canonicalOcr['default_timeout_ms'] = [long]$ocr.default_timeout_ms
-    $canonicalManifest = [ordered]@{
-        schema_version = 'actingcommand.vision_provider_artifacts.v0.3'
-        fastdeploy_ppocr = $canonicalOcr
-        onnxruntime = $null
-    }
-    $canonicalManifestPath = Get-SafeChildPath -Root $StageRoot -RelativePath 'provider/vision-provider-artifacts.v0.3.json' -Label 'canonical provider manifest'
-    [IO.File]::WriteAllText(
-        $canonicalManifestPath,
-        ($canonicalManifest | ConvertTo-Json -Depth 30) + "`n",
-        [Text.UTF8Encoding]::new($false)
-    )
-    [ordered]@{
-        manifest_path = $manifestFile
-        manifest_sha256 = $actualManifestHash
-        schema_version = $providerManifest.schema_version
-        backend = $Backend
-        strict_no_fallback = $true
-        dependency_manifest_path = $dependencyManifestFile
-        dependency_manifest_sha256 = $actualDependencyManifestHash
-        canonical_manifest = [ordered]@{
-            cache_path = [IO.Path]::GetRelativePath($StageRoot, $canonicalManifestPath).Replace('\', '/')
-            size_bytes = [long](Get-Item -LiteralPath $canonicalManifestPath).Length
-            sha256 = (Get-Sha256 -Path $canonicalManifestPath)
-            schema_version = 'actingcommand.vision_provider_artifacts.v0.3'
-            static_parser_only = $true
-        }
-        provider_library = [ordered]@{
-            source = $providerFile
-            source_path = $providerFile
-            version = [Diagnostics.FileVersionInfo]::GetVersionInfo($providerFile).FileVersion
-            expected_name = [IO.Path]::GetFileName($providerFile)
-            relative_path = $providerCachePath
-            cache_path = $providerCachePath
-            size_bytes = (Get-Item -LiteralPath $providerDestination).Length
-            sha256 = (Get-Sha256 $providerDestination)
-            license_provenance_note = 'Caller-supplied v0.3 manifest is hash authority only; source version and redistribution license require separate preserved evidence.'
-        }
-        runtime_libraries = $runtimeBindings
-        runtime_total_bytes = $runtimeTotalBytes
-        model_bundle = [ordered]@{
-            model_ref = [string]$ocr.model_ref
-            declared_model_sha256 = [string]$ocr.model_sha256
-            detector = [ordered]@{
-                source = $detectorFile
-                source_path = $detectorFile
-                version = [string]$ocr.model_ref
-                expected_name = [IO.Path]::GetFileName($detectorFile)
-                relative_path = [IO.Path]::GetRelativePath($StageRoot, $detectorDestination).Replace('\', '/')
-                cache_path = [IO.Path]::GetRelativePath($StageRoot, $detectorDestination).Replace('\', '/')
-                size_bytes = (Get-Item -LiteralPath $detectorDestination).Length
-                sha256 = (Get-Sha256 $detectorDestination)
-                license_provenance_note = 'Caller manifest supplies exact bytes; source revision and license remain separate required evidence.'
-            }
-            recognizer = [ordered]@{
-                source = $recognizerFile
-                source_path = $recognizerFile
-                version = [string]$ocr.model_ref
-                expected_name = [IO.Path]::GetFileName($recognizerFile)
-                relative_path = [IO.Path]::GetRelativePath($StageRoot, $recognizerDestination).Replace('\', '/')
-                cache_path = [IO.Path]::GetRelativePath($StageRoot, $recognizerDestination).Replace('\', '/')
-                size_bytes = (Get-Item -LiteralPath $recognizerDestination).Length
-                sha256 = (Get-Sha256 $recognizerDestination)
-                license_provenance_note = 'Caller manifest supplies exact bytes; source revision and license remain separate required evidence.'
-            }
-            dictionary = [ordered]@{
-                source = $dictionaryFile
-                source_path = $dictionaryFile
-                version = [string]$ocr.model_ref
-                expected_name = [IO.Path]::GetFileName($dictionaryFile)
-                relative_path = [IO.Path]::GetRelativePath($StageRoot, $dictionaryDestination).Replace('\', '/')
-                cache_path = [IO.Path]::GetRelativePath($StageRoot, $dictionaryDestination).Replace('\', '/')
-                size_bytes = (Get-Item -LiteralPath $dictionaryDestination).Length
-                sha256 = (Get-Sha256 $dictionaryDestination)
-                license_provenance_note = 'Caller manifest supplies exact bytes; source revision and license remain separate required evidence.'
-            }
-        }
-        byte_materialization_ready = $true
-        functional_validation_performed = $false
-        executed = $false
-    }
-}
-
 function Get-InstalledFileAttestation {
     param(
         [Parameter(Mandatory)][string] $Path,
@@ -983,7 +536,7 @@ foreach ($id in $selected) {
 if ($selected -contains 'platform-tools-37.0.1' -and -not $AcceptAndroidSdkLicense.IsPresent) {
     Stop-Materialization 'platform-tools-37.0.1 requires explicit -AcceptAndroidSdkLicense'
 }
-$needsBackend = $selected -contains 'ppocrv6-medium-onnx' -or $selected -contains 'provider-v0.3'
+$needsBackend = $selected -contains 'ppocrv6-medium-onnx'
 if ($needsBackend -and [string]::IsNullOrWhiteSpace($OcrBackend)) {
     Stop-Materialization 'OCR components require an explicit -OcrBackend cpu or cuda; no automatic fallback exists'
 }
@@ -1022,10 +575,6 @@ if ($selected -contains 'ppocrv6-medium-source') {
 }
 if ($selected -contains 'ppocrv6-medium-onnx') {
     $blockingPendingReasons += [string]$componentTable['ppocrv6-medium-onnx'].compatibility.reason
-}
-$functionalPendingReasons = @()
-if ($selected -contains 'provider-v0.3') {
-    $functionalPendingReasons += 'Provider/runtime/model bytes and canonical v0.3 binding are exact; provider identity, DLL-load closure, selected device, fallback behavior, accuracy, and performance require separately authorized live validation.'
 }
 $state = if ($blockingPendingReasons.Count -eq 0) { 'Ready' } else { 'PendingVerification' }
 $suffix = if ($state -ceq 'Ready') { 'ready' } else { 'pending-verification' }
@@ -1100,15 +649,6 @@ try {
                 }
                 $componentResults[$id] = [ordered]@{ artifacts = $artifacts; executed = $false }
             }
-            'caller_supplied_provider_manifest' {
-                $componentResults[$id] = Copy-ProviderArtifacts `
-                    -StageRoot $stageRoot `
-                    -PublishedRoot $finalRoot `
-                    -Backend $OcrBackend `
-                    -CudaOrdinal $CudaDeviceOrdinal `
-                    -CudaIdentity $CudaStableIdentity `
-                    -ProviderDefinition $definition
-            }
             'installed_metadata_only' {
                 $componentResults[$id] = Get-MumuNemuAttestation
             }
@@ -1137,7 +677,7 @@ try {
         android_sdk_license_acknowledged = $AcceptAndroidSdkLicense.IsPresent
         downloaded_bytes = $declaredDownloadBytes
         components = $componentResults
-        pending_verification = @($blockingPendingReasons + $functionalPendingReasons)
+        pending_verification = @($blockingPendingReasons)
         byte_materialization_ready = ($state -ceq 'Ready')
         functional_validation_performed = $false
         cleanup = [ordered]@{
@@ -1152,7 +692,7 @@ try {
             system_temp_used = $false
             shared_mirror_written = $false
             installed_mumu_nemu_files_copied = $false
-            downloaded_or_caller_supplied_files_materialized = ($declaredDownloadBytes -gt 0 -or $selected -contains 'provider-v0.3')
+            downloaded_or_caller_supplied_files_materialized = ($declaredDownloadBytes -gt 0)
         }
     }
     $provenancePath = Join-Path $stageRoot 'PROVENANCE.json'

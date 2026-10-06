@@ -271,7 +271,7 @@ jobs:
             throw "rustup default failed with exit code $LASTEXITCODE"
           }
 
-      - name: Build Windows executables and PP-OCR provider
+      - name: Build Windows executables
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -285,13 +285,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "executable cargo build failed with exit code $LASTEXITCODE"
           }
-          & cargo build --locked --release --target x86_64-pc-windows-msvc `
-            --package actingcommand-ppocr-onnx-json-provider
-          if ($LASTEXITCODE -ne 0) {
-            throw "PP-OCR provider cargo build failed with exit code $LASTEXITCODE"
-          }
 
-      - name: Test Windows artifact tooling without provider execution
+      - name: Test Windows artifact tooling
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -303,10 +298,7 @@ jobs:
           $env:TMP = $processTemp
           & ./scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1 `
             -TaskRoot $taskRoot `
-            -TestRoot $testRoot `
-            -VisionProviderCheckExecutable (
-              Join-Path $PWD 'target\x86_64-pc-windows-msvc\release\actingcommand-vision-provider-check.exe'
-            )
+            -TestRoot $testRoot
           if (-not $?) {
             throw 'Windows artifact tooling tests failed'
           }
@@ -536,8 +528,7 @@ jobs:
             'actinglab.exe',
             'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
-            'actingcommand-device-test.exe',
-            'ac_fastdeploy_ppocr.dll'
+            'actingcommand-device-test.exe'
           )
           # Workflow #337: the official platform-tools files the fetch step verified, under platform-tools/.
           $platformToolsFiles = @(
@@ -610,7 +601,8 @@ jobs:
               $manifest.runtime_payload_layout = 'distribution-v1'
             }
             if ($PlatformToolsLayout) {
-              $manifest.tools_payload_layout = 'platform-tools-v1'
+              # Workflow #360: v2 is v1 without the retired vision provider DLL.
+              $manifest.tools_payload_layout = 'platform-tools-v2'
             }
             $manifestPath = Join-Path $Directory 'BUILD-MANIFEST.json'
             $json = $manifest | ConvertTo-Json -Depth 6
@@ -633,16 +625,6 @@ jobs:
             'actingcommand-vision-provider-check.exe',
             'actingcommand-device-test.exe'
           ) -Destination $toolsDir
-          $providerSource = Join-Path $buildDir 'actingcommand_ppocr_onnx_json_provider.dll'
-          if (-not (Test-Path -LiteralPath $providerSource -PathType Leaf)) {
-            throw "expected PP-OCR provider output is missing: $providerSource"
-          }
-          if ((Get-Item -LiteralPath $providerSource -ErrorAction Stop).Length -le 0) {
-            throw "expected PP-OCR provider output is empty: $providerSource"
-          }
-          Copy-Item -LiteralPath $providerSource -Destination (
-            Join-Path $toolsDir 'ac_fastdeploy_ppocr.dll'
-          )
           New-Item -ItemType Directory -Path (Join-Path $toolsDir 'platform-tools') | Out-Null
           Copy-BuildFiles -Names $platformToolsFiles -SourceDirectory $env:PLATFORM_TOOLS_DIR -Destination $toolsDir
           New-BuildManifest `
