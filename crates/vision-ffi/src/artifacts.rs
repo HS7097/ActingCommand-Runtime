@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{
-    NnInferenceRequest, OcrInferenceRequest, OcrInferenceRequestView, VisionFfiError,
-    VisionFfiErrorCode, VisionFfiResult,
-};
+use crate::{NnInferenceRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -17,14 +14,11 @@ pub const TRANSITIONAL_VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION: &str =
 pub const LEGACY_VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION: &str =
     "actingcommand.vision_provider_artifacts.v0.1";
 pub const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
-pub const OCR_PROVIDER_REQUEST_SCHEMA_VERSION: &str = "actingcommand.ocr_provider_request.v1";
-pub const OCR_PROVIDER_RESPONSE_SCHEMA_VERSION: &str = "actingcommand.ocr_provider_response.v1";
 pub const OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION: &str =
     "actingcommand.ocr_execution_attestation.v1";
 
 const MAX_OCR_ID_BYTES: usize = 96;
 const MAX_PROVIDER_IDENTITY_BYTES: usize = 256;
-const MAX_PROVIDER_BUILD_INFO_BYTES: usize = 4_096;
 pub const MAX_CUDA_DEVICES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -214,7 +208,46 @@ pub struct OcrSessionKey {
     provider_options_sha256: String,
 }
 
+/// The facts an in-process engine binds one OCR session to. `engine_binding_sha256` is
+/// recorded as the key's `provider_library_sha256` (Workflow #360: the engine binding digest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OcrSessionKeyParts {
+    pub engine_binding_sha256: String,
+    pub runtime_library_path: String,
+    pub runtime_library_sha256: String,
+    pub onnxruntime_version: String,
+    pub model_ref: String,
+    pub model_sha256: String,
+    pub requested_backend: OnnxExecutionProvider,
+    pub requested_cuda_device: Option<CudaDeviceSelector>,
+    pub resolved_cuda_device: Option<CudaDeviceIdentity>,
+}
+
 impl OcrSessionKey {
+    /// Builds and validates the key of one in-process OCR session; the provider options digest
+    /// is derived from the execution provider choice exactly as for a manifest session.
+    pub fn from_parts(parts: OcrSessionKeyParts) -> VisionFfiResult<Self> {
+        let provider_options_sha256 = ppocr_provider_options_sha256(
+            parts.requested_backend,
+            parts.requested_cuda_device.as_ref(),
+            parts.resolved_cuda_device.as_ref(),
+        );
+        let key = Self {
+            provider_library_sha256: parts.engine_binding_sha256,
+            runtime_library_path: parts.runtime_library_path,
+            runtime_library_sha256: parts.runtime_library_sha256,
+            onnxruntime_version: parts.onnxruntime_version,
+            model_ref: parts.model_ref,
+            model_sha256: parts.model_sha256,
+            requested_backend: parts.requested_backend,
+            requested_cuda_device: parts.requested_cuda_device,
+            resolved_cuda_device: parts.resolved_cuda_device,
+            provider_options_sha256,
+        };
+        key.validate()?;
+        Ok(key)
+    }
+
     pub fn provider_library_sha256(&self) -> &str {
         &self.provider_library_sha256
     }
@@ -277,13 +310,6 @@ impl OcrSessionKey {
             &self.onnxruntime_version,
         )?;
         validate_provider_identity("ocr-session-key", "model_ref", &self.model_ref)?;
-        if self.model_ref != PPOCR_V6_MEDIUM_MODEL_REF {
-            return Err(VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::InvalidRequest,
-                "ocr-session-key",
-                format!("OCR session model_ref must be '{PPOCR_V6_MEDIUM_MODEL_REF}'"),
-            ));
-        }
         validate_sha256("ocr-session-key", "model_sha256", &self.model_sha256)?;
         validate_sha256(
             "ocr-session-key",
@@ -341,7 +367,7 @@ pub struct OcrSessionBinding {
 }
 
 impl OcrSessionBinding {
-    pub(crate) fn new(session_id: OcrSessionId, generation: u64, key: OcrSessionKey) -> Self {
+    pub fn new(session_id: OcrSessionId, generation: u64, key: OcrSessionKey) -> Self {
         Self {
             session_id,
             generation,
@@ -429,186 +455,6 @@ pub struct OcrExecutionAttestation {
     pub fallback_policy: OcrFallbackPolicy,
     pub fallback_observed: Option<bool>,
     pub complete: bool,
-}
-
-impl OcrExecutionAttestation {
-    pub fn validate_against(
-        &self,
-        invocation_id: &OcrInvocationId,
-        session: &OcrSessionBinding,
-    ) -> VisionFfiResult<()> {
-        if self.schema_version != OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION {
-            return Err(invalid_attestation(format!(
-                "unsupported attestation schema_version '{}'",
-                self.schema_version
-            )));
-        }
-        if !self.complete {
-            return Err(invalid_attestation(
-                "OCR execution attestation is incomplete",
-            ));
-        }
-        self.invocation_id.validate().map_err(|err| {
-            invalid_attestation(format!("invalid invocation identity: {}", err.message()))
-        })?;
-        self.session.validate().map_err(|err| {
-            invalid_attestation(format!("invalid session binding: {}", err.message()))
-        })?;
-        if &self.invocation_id != invocation_id || &self.session != session {
-            return Err(invalid_attestation(
-                "OCR execution attestation does not match invocation/session binding",
-            ));
-        }
-        if self.resolved_execution_provider != session.key.requested_backend {
-            return Err(invalid_attestation(
-                "resolved OCR execution provider does not match requested backend",
-            ));
-        }
-        validate_provider_identity(
-            "ocr-attestation",
-            "provider.implementation",
-            &self.provider.implementation,
-        )
-        .map_err(|err| invalid_attestation(err.message()))?;
-        validate_provider_identity(
-            "ocr-attestation",
-            "provider.crate_version",
-            &self.provider.crate_version,
-        )
-        .map_err(|err| invalid_attestation(err.message()))?;
-        if self.provider.implementation != "actingcommand-ppocr-onnx-json" {
-            return Err(invalid_attestation(format!(
-                "unexpected OCR provider implementation '{}'",
-                self.provider.implementation
-            )));
-        }
-        if self
-            .provider
-            .build_git_sha
-            .as_ref()
-            .is_some_and(|build_git_sha| {
-                build_git_sha.len() != 40
-                    || !build_git_sha
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            })
-        {
-            return Err(invalid_attestation(
-                "provider.build_git_sha must be absent or exactly 40 lowercase hexadecimal characters",
-            ));
-        }
-        validate_sha256(
-            "ocr-attestation",
-            "provider.binary_sha256",
-            &self.provider.binary_sha256,
-        )
-        .map_err(|err| invalid_attestation(err.message()))?;
-        if self.provider.binary_sha256 != session.key.provider_library_sha256 {
-            return Err(invalid_attestation(
-                "provider binary identity does not match the immutable session key",
-            ));
-        }
-        validate_provider_identity(
-            "ocr-attestation",
-            "runtime.onnxruntime_version",
-            &self.runtime.onnxruntime_version,
-        )
-        .map_err(|err| invalid_attestation(err.message()))?;
-        validate_provider_build_info(&self.runtime.onnxruntime_build_info)?;
-        if self.runtime.onnxruntime_version != session.key.onnxruntime_version {
-            return Err(invalid_attestation(
-                "ONNX Runtime version does not match the immutable session key",
-            ));
-        }
-        for (field, value) in [
-            (
-                "runtime.cuda_runtime_version",
-                self.runtime.cuda_runtime_version.as_deref(),
-            ),
-            (
-                "runtime.cudnn_version",
-                self.runtime.cudnn_version.as_deref(),
-            ),
-        ] {
-            if let Some(value) = value {
-                validate_provider_identity("ocr-attestation", field, value)
-                    .map_err(|err| invalid_attestation(err.message()))?;
-            }
-        }
-        if self.fallback_policy != OcrFallbackPolicy::Forbidden {
-            return Err(invalid_attestation(
-                "OCR fallback policy must be explicitly forbidden",
-            ));
-        }
-        match self.resolved_execution_provider {
-            OnnxExecutionProvider::Cpu => {
-                if self.runtime.cuda_driver_version.is_some()
-                    || self.runtime.cuda_runtime_version.is_some()
-                    || self.runtime.cudnn_version.is_some()
-                    || self.registered_execution_providers != [OnnxExecutionProvider::Cpu]
-                    || !self.cpu_ep_registered
-                    || self.cpu_fallback_disabled
-                {
-                    return Err(invalid_attestation(
-                        "CPU OCR attestation must describe one CPU-only session without CUDA evidence",
-                    ));
-                }
-            }
-            OnnxExecutionProvider::Cuda => {
-                if self.runtime.cuda_driver_version == Some(0)
-                    || self.runtime.cuda_driver_version.is_none()
-                    || self.registered_execution_providers != [OnnxExecutionProvider::Cuda]
-                    || self.cpu_ep_registered
-                    || !self.cpu_fallback_disabled
-                {
-                    return Err(invalid_attestation(
-                        "CUDA OCR attestation must describe one CUDA session with CPU fallback disabled",
-                    ));
-                }
-            }
-        }
-        if self.fallback_observed.is_some() {
-            return Err(invalid_attestation(
-                "current provider API cannot observe fallback attempts; fallback_observed must be null",
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FastDeployPpocrInvokeResponse {
-    pub schema_version: String,
-    pub invocation_id: OcrInvocationId,
-    pub session_id: OcrSessionId,
-    pub session_generation: u64,
-    pub result: crate::OcrInferenceResult,
-    pub attestation: OcrExecutionAttestation,
-}
-
-impl FastDeployPpocrInvokeResponse {
-    pub fn validate_against(
-        &self,
-        invocation_id: &OcrInvocationId,
-        session: &OcrSessionBinding,
-    ) -> VisionFfiResult<()> {
-        if self.schema_version != OCR_PROVIDER_RESPONSE_SCHEMA_VERSION {
-            return Err(invalid_attestation(format!(
-                "unsupported OCR response schema_version '{}'",
-                self.schema_version
-            )));
-        }
-        if &self.invocation_id != invocation_id
-            || &self.session_id != session.session_id()
-            || self.session_generation != session.generation()
-        {
-            return Err(invalid_attestation(
-                "OCR response identity does not match the active invocation/session",
-            ));
-        }
-        self.attestation.validate_against(invocation_id, session)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1360,82 +1206,6 @@ pub enum OnnxExecutionProvider {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FastDeployPpocrInvokeRequest {
-    pub schema_version: String,
-    pub invocation_id: OcrInvocationId,
-    pub session: OcrSessionBinding,
-    pub request: OcrInferenceRequest,
-    pub artifacts: FastDeployPpocrArtifacts,
-    /// The caller-injected `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC` value (Workflow
-    /// #318 cfg3), which the provider validates; the provider no longer reads the variable
-    /// itself. Omitted when absent, so a request without it is unchanged on the wire.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node_placement_diagnostic: Option<String>,
-}
-
-impl FastDeployPpocrInvokeRequest {
-    pub fn validate(&self) -> VisionFfiResult<()> {
-        self.view().validate()
-    }
-
-    pub(crate) fn view(&self) -> FastDeployPpocrInvokeRequestView<'_> {
-        FastDeployPpocrInvokeRequestView {
-            schema_version: &self.schema_version,
-            invocation_id: &self.invocation_id,
-            session: &self.session,
-            request: self.request.view(),
-            artifacts: &self.artifacts,
-            node_placement_diagnostic: self.node_placement_diagnostic.as_deref(),
-        }
-    }
-}
-
-/// Borrowed `FastDeployPpocrInvokeRequest`; serializes to the same bytes (same field
-/// names, order and skip rule).
-#[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct FastDeployPpocrInvokeRequestView<'a> {
-    pub(crate) schema_version: &'a str,
-    pub(crate) invocation_id: &'a OcrInvocationId,
-    pub(crate) session: &'a OcrSessionBinding,
-    pub(crate) request: OcrInferenceRequestView<'a>,
-    pub(crate) artifacts: &'a FastDeployPpocrArtifacts,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) node_placement_diagnostic: Option<&'a str>,
-}
-
-impl FastDeployPpocrInvokeRequestView<'_> {
-    pub(crate) fn validate(&self) -> VisionFfiResult<()> {
-        if self.schema_version != OCR_PROVIDER_REQUEST_SCHEMA_VERSION {
-            return Err(VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::InvalidRequest,
-                "ocr-provider-request",
-                format!(
-                    "unsupported OCR request schema_version '{}'",
-                    self.schema_version
-                ),
-            ));
-        }
-        self.invocation_id.validate()?;
-        self.session.validate()?;
-        self.request.validate()?;
-        self.artifacts.validate_ppocr_v6_execution()?;
-        let expected_key = self.artifacts.production_session_key(
-            self.session.key().resolved_cuda_device().cloned(),
-            self.session.key().onnxruntime_version(),
-        )?;
-        if &expected_key != self.session.key() {
-            return Err(VisionFfiError::fatal_with_code(
-                VisionFfiErrorCode::InvalidRequest,
-                "ocr-provider-request",
-                "OCR request artifacts do not match the immutable session key",
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnnxRuntimeInvokeRequest {
     pub request: NnInferenceRequest,
     pub artifacts: OnnxRuntimeArtifacts,
@@ -1546,27 +1316,6 @@ fn validate_provider_identity(
         ));
     }
     Ok(())
-}
-
-fn validate_provider_build_info(value: &str) -> VisionFfiResult<()> {
-    if value.is_empty()
-        || value.len() > MAX_PROVIDER_BUILD_INFO_BYTES
-        || value.trim() != value
-        || value.chars().any(|character| character == '\0')
-    {
-        return Err(invalid_attestation(
-            "runtime.onnxruntime_build_info must be bounded, non-blank, and NUL-free",
-        ));
-    }
-    Ok(())
-}
-
-fn invalid_attestation(message: impl Into<String>) -> VisionFfiError {
-    VisionFfiError::fatal_with_code(
-        VisionFfiErrorCode::InvalidResponse,
-        "ocr-attestation",
-        message,
-    )
 }
 
 fn validate_sha256(module: &'static str, field: &str, hash: &str) -> VisionFfiResult<()> {

@@ -13,6 +13,7 @@ actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-execution-kernel = { workspace = true }
 actingcommand-policy = { workspace = true }
+actingcommand-ppocr-onnx-json-provider = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 actingcommand-runtime-host = { workspace = true, features = ["fixture-backends"] }
 actingcommand-vision-ffi = { workspace = true }

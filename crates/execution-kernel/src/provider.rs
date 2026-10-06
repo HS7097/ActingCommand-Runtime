@@ -21,14 +21,18 @@ use actingcommand_recognition_pack::{
 };
 use actingcommand_vision_ffi::{
     NnClassificationResult, NnEngine, NnInferenceRequest, OcrEngine, OcrExecutionAttestation,
-    OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequestView, OcrInferenceResult,
-    OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFrame,
-    VisionFrameView, VisionPixelFormat, VisionRect,
+    OcrFallbackPolicy, OcrInferenceRequestView, OcrInferenceResult, OcrModelLoad, OcrModelSpec,
+    OcrSessionId, OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode,
+    VisionFfiResult, VisionFrame, VisionFrameView, VisionModelLoader, VisionPixelFormat,
+    VisionRect, next_ocr_session_id,
 };
+use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, TryLockError};
+use std::time::{Duration, Instant};
 
 const MAX_MODEL_REF_BYTES: usize = 4_096;
 
@@ -80,43 +84,419 @@ impl VisionModelIdentity {
     }
 }
 
-struct OcrCapability {
-    identity: VisionModelIdentity,
-    engine: Mutex<Option<Box<dyn OcrEngine + Send>>>,
+/// The bound on lazily loaded vision models kept in memory at once (Workflow #360); the least
+/// recently used idle model is unloaded to make room.
+pub const MAX_LOADED_VISION_MODELS: usize = 4;
+
+static NEXT_MODEL_USE: AtomicU64 = AtomicU64::new(1);
+
+/// One OCR model the provider builds through its loader on first use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LazyOcrModel {
+    pub spec: OcrModelSpec,
+    /// The identity the configuration admits for this model, when it declares one; a request
+    /// naming another identity fails before anything is read.
+    pub admitted: Option<VisionModelIdentity>,
 }
 
-struct NnCapability {
-    identity: VisionModelIdentity,
-    engine: Mutex<Option<Box<dyn NnEngine + Send>>>,
+struct SlotCell<E: ?Sized> {
+    engine: Option<Box<E>>,
+    retired: Option<String>,
+    session_id: Option<OcrSessionId>,
+    /// The engine was built by the loader and counts toward `MAX_LOADED_VISION_MODELS`.
+    counted: bool,
 }
 
-/// Thread-safe Runtime adapter over the existing mutable vision-ffi engines.
+/// One model: its own lock serialises its load and its inferences, never another model's.
+struct ModelSlot<E: ?Sized, S> {
+    model_ref: String,
+    spec: Option<S>,
+    admitted_sha256: Option<String>,
+    /// The content identity established by the first hash of the model's files.
+    verified_sha256: OnceLock<String>,
+    cell: Mutex<SlotCell<E>>,
+    last_used: AtomicU64,
+}
+
+type OcrSlot = ModelSlot<dyn OcrEngine + Send, OcrModelSpec>;
+type NnSlot = ModelSlot<dyn NnEngine + Send, ()>;
+
+impl<E: ?Sized, S> ModelSlot<E, S> {
+    fn built(engine: Box<E>, identity: VisionModelIdentity) -> Self {
+        let verified_sha256 = OnceLock::new();
+        let _ = verified_sha256.set(identity.model_sha256().to_string());
+        Self {
+            model_ref: identity.model_ref().to_string(),
+            spec: None,
+            admitted_sha256: Some(identity.model_sha256().to_string()),
+            verified_sha256,
+            cell: Mutex::new(SlotCell {
+                engine: Some(engine),
+                retired: None,
+                session_id: None,
+                counted: false,
+            }),
+            last_used: AtomicU64::new(0),
+        }
+    }
+
+    fn lazy(model_ref: String, spec: S, admitted_sha256: Option<String>) -> Self {
+        Self {
+            model_ref,
+            spec: Some(spec),
+            admitted_sha256,
+            verified_sha256: OnceLock::new(),
+            cell: Mutex::new(SlotCell {
+                engine: None,
+                retired: None,
+                session_id: None,
+                counted: false,
+            }),
+            last_used: AtomicU64::new(0),
+        }
+    }
+
+    /// Refuses a request whose identity differs from the admitted or the verified one.
+    fn require(&self, model_sha256: &str, capability: &str) -> Result<(), VisionProviderError> {
+        for (source, known) in [
+            ("admitted", self.admitted_sha256.as_deref()),
+            ("installed", self.verified_sha256.get().map(String::as_str)),
+        ] {
+            if let Some(known) = known
+                && known != model_sha256
+            {
+                return Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    format!(
+                        "{capability} model '{}' {source} content is {known}; the target requires {model_sha256}",
+                        self.model_ref
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Records the content identity of a fresh hash; false when it differs from the first one.
+    fn verify(&self, model_sha256: &str) -> bool {
+        self.verified_sha256
+            .get_or_init(|| model_sha256.to_string())
+            .as_str()
+            == model_sha256
+    }
+
+    fn identity(&self) -> Result<VisionModelIdentity, VisionProviderError> {
+        let model_sha256 = self.verified_sha256.get().ok_or_else(|| {
+            VisionProviderError::new(
+                VisionProviderErrorCode::Internal,
+                format!("vision model '{}' has no verified identity", self.model_ref),
+            )
+        })?;
+        VisionModelIdentity::new(self.model_ref.clone(), model_sha256.clone())
+    }
+
+    fn touch(&self) {
+        self.last_used.store(
+            NEXT_MODEL_USE.fetch_add(1, Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+    }
+}
+
+/// Thread-safe Runtime adapter over the vision engines: one slot per model, each with its own
+/// lock, built on first use through the injected loader and kept within
+/// `MAX_LOADED_VISION_MODELS` by unloading the least recently used idle model.
 pub struct VisionFfiProvider {
-    ocr: Option<OcrCapability>,
-    nn: Option<NnCapability>,
+    ocr: BTreeMap<String, OcrSlot>,
+    nn: BTreeMap<String, NnSlot>,
+    loader: Option<Arc<dyn VisionModelLoader>>,
+    loaded: Mutex<usize>,
 }
 
 impl VisionFfiProvider {
+    /// A provider over already-built engines, one per capability.
     pub fn new(
         ocr: Option<(Box<dyn OcrEngine + Send>, VisionModelIdentity)>,
         nn: Option<(Box<dyn NnEngine + Send>, VisionModelIdentity)>,
     ) -> Result<Self, VisionProviderError> {
         if ocr.is_none() && nn.is_none() {
-            return Err(VisionProviderError::new(
-                VisionProviderErrorCode::Unavailable,
-                "vision provider must expose at least one production capability",
-            ));
+            return Err(no_capability());
         }
         Ok(Self {
-            ocr: ocr.map(|(engine, identity)| OcrCapability {
-                identity,
-                engine: Mutex::new(Some(engine)),
-            }),
-            nn: nn.map(|(engine, identity)| NnCapability {
-                identity,
-                engine: Mutex::new(Some(engine)),
-            }),
+            ocr: ocr
+                .into_iter()
+                .map(|(engine, identity)| {
+                    (
+                        identity.model_ref().to_string(),
+                        ModelSlot::built(engine, identity),
+                    )
+                })
+                .collect(),
+            nn: nn
+                .into_iter()
+                .map(|(engine, identity)| {
+                    (
+                        identity.model_ref().to_string(),
+                        ModelSlot::built(engine, identity),
+                    )
+                })
+                .collect(),
+            loader: None,
+            loaded: Mutex::new(0),
         })
+    }
+
+    /// A provider whose OCR models are built through `loader` on first use.
+    pub fn with_loader(
+        ocr: Vec<LazyOcrModel>,
+        nn: Option<(Box<dyn NnEngine + Send>, VisionModelIdentity)>,
+        loader: Arc<dyn VisionModelLoader>,
+    ) -> Result<Self, VisionProviderError> {
+        if ocr.is_empty() && nn.is_none() {
+            return Err(no_capability());
+        }
+        let mut slots = BTreeMap::new();
+        for model in ocr {
+            let model_ref = model.spec.model_ref.clone();
+            if let Some(admitted) = &model.admitted
+                && admitted.model_ref() != model_ref
+            {
+                return Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    format!(
+                        "OCR model '{model_ref}' is admitted under model_ref '{}'",
+                        admitted.model_ref()
+                    ),
+                ));
+            }
+            let admitted_sha256 = model
+                .admitted
+                .map(|admitted| admitted.model_sha256().to_string());
+            let slot = ModelSlot::lazy(model_ref.clone(), model.spec, admitted_sha256);
+            if slots.insert(model_ref.clone(), slot).is_some() {
+                return Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    format!("OCR model '{model_ref}' is declared more than once"),
+                ));
+            }
+        }
+        Ok(Self {
+            ocr: slots,
+            nn: nn
+                .into_iter()
+                .map(|(engine, identity)| {
+                    (
+                        identity.model_ref().to_string(),
+                        ModelSlot::built(engine, identity),
+                    )
+                })
+                .collect(),
+            loader: Some(loader),
+            loaded: Mutex::new(0),
+        })
+    }
+
+    fn ocr_slot(&self, model_ref: &str) -> Result<&OcrSlot, VisionProviderError> {
+        if self.ocr.is_empty() {
+            return Err(unavailable("OCR"));
+        }
+        self.ocr
+            .get(model_ref)
+            .ok_or_else(|| not_installed("OCR", model_ref, self.ocr.keys()))
+    }
+
+    fn nn_slot(&self, model_ref: &str) -> Result<&NnSlot, VisionProviderError> {
+        if self.nn.is_empty() {
+            return Err(unavailable("NN"));
+        }
+        self.nn
+            .get(model_ref)
+            .ok_or_else(|| not_installed("NN", model_ref, self.nn.keys()))
+    }
+
+    /// Runs `call` on the model's engine, building it first when needed. Waiting for the
+    /// model's lock consumes the request's `timeout_ms`; the request's own model load does
+    /// not; the engine receives what remains.
+    fn call_ocr<R>(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+        timeout_ms: u64,
+        call: impl FnOnce(&mut (dyn OcrEngine + Send), u64) -> VisionFfiResult<R>,
+    ) -> Result<(R, VisionModelIdentity), VisionProviderError> {
+        let slot = self.ocr_slot(model_ref)?;
+        slot.require(model_sha256, "OCR")?;
+        let started = Instant::now();
+        let deadline = deadline_after(started, timeout_ms, "OCR")?;
+        let mut cell = lock_until(&slot.cell, deadline, "OCR", model_ref)?;
+        let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let Some(reason) = &cell.retired {
+            return Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                reason.clone(),
+            ));
+        }
+        if cell.engine.is_none() {
+            self.load_ocr(slot, &mut *cell, model_sha256, deadline)?;
+        }
+        slot.require(model_sha256, "OCR")?;
+        let identity = slot.identity()?;
+        let remaining = timeout_ms.saturating_sub(waited_ms);
+        if remaining == 0 {
+            return Err(VisionProviderError::new(
+                VisionProviderErrorCode::Timeout,
+                "OCR request deadline exhausted before inference",
+            ));
+        }
+        slot.touch();
+        let outcome = {
+            let engine = cell
+                .engine
+                .as_deref_mut()
+                .ok_or_else(|| unavailable("OCR"))?;
+            catch_unwind(AssertUnwindSafe(|| call(engine, remaining)))
+        };
+        match outcome {
+            Ok(result) => result.map(|value| (value, identity)).map_err(map_ffi_error),
+            Err(_) => {
+                self.retire(&mut *cell, "OCR engine was retired after a provider panic");
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::Internal,
+                    "OCR engine panicked and was retired",
+                ))
+            }
+        }
+    }
+
+    fn load_ocr(
+        &self,
+        slot: &OcrSlot,
+        cell: &mut SlotCell<dyn OcrEngine + Send>,
+        model_sha256: &str,
+        deadline: Instant,
+    ) -> Result<(), VisionProviderError> {
+        let (Some(spec), Some(loader)) = (slot.spec.as_ref(), self.loader.as_ref()) else {
+            return Err(unavailable("OCR"));
+        };
+        let session_id = match &cell.session_id {
+            Some(session_id) => session_id.clone(),
+            None => {
+                let session_id = next_ocr_session_id().map_err(map_ffi_error)?;
+                cell.session_id = Some(session_id.clone());
+                session_id
+            }
+        };
+        self.reserve_loaded_model()?;
+        match loader.load_ocr(spec, model_sha256, &session_id, deadline) {
+            Ok(OcrModelLoad::Loaded {
+                engine,
+                model_sha256: actual,
+            }) => {
+                if !slot.verify(&actual) {
+                    self.release_loaded_model();
+                    return Err(self.changed_on_disk(slot, cell, &actual));
+                }
+                cell.engine = Some(engine);
+                cell.counted = true;
+                Ok(())
+            }
+            Ok(OcrModelLoad::Mismatch {
+                model_sha256: actual,
+            }) => {
+                self.release_loaded_model();
+                if !slot.verify(&actual) {
+                    return Err(self.changed_on_disk(slot, cell, &actual));
+                }
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    format!(
+                        "OCR model '{}' content is {actual}; the target requires {model_sha256}",
+                        slot.model_ref
+                    ),
+                ))
+            }
+            Err(error) => {
+                self.release_loaded_model();
+                Err(map_ffi_error(error))
+            }
+        }
+    }
+
+    fn changed_on_disk<E: ?Sized, S>(
+        &self,
+        slot: &ModelSlot<E, S>,
+        cell: &mut SlotCell<E>,
+        actual: &str,
+    ) -> VisionProviderError {
+        let reason = format!(
+            "vision model '{}' files changed from {} to {actual} while the Runtime was running; restart is required",
+            slot.model_ref,
+            slot.verified_sha256
+                .get()
+                .map_or("an unverified identity", String::as_str)
+        );
+        self.retire(cell, &reason);
+        VisionProviderError::new(VisionProviderErrorCode::Unavailable, reason)
+    }
+
+    fn retire<E: ?Sized>(&self, cell: &mut SlotCell<E>, reason: &str) {
+        cell.engine = None;
+        cell.retired = Some(reason.to_string());
+        if cell.counted {
+            cell.counted = false;
+            self.release_loaded_model();
+        }
+    }
+
+    /// Takes one place among the loaded models, unloading the least recently used idle model
+    /// when the bound is reached.
+    fn reserve_loaded_model(&self) -> Result<(), VisionProviderError> {
+        let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        if *loaded < MAX_LOADED_VISION_MODELS {
+            *loaded += 1;
+            return Ok(());
+        }
+        if self.evict_idle_model() {
+            // One model left and one takes its place: the count is unchanged.
+            return Ok(());
+        }
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            format!("all {MAX_LOADED_VISION_MODELS} loaded vision models are in use"),
+        ))
+    }
+
+    fn release_loaded_model(&self) {
+        let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        *loaded = loaded.saturating_sub(1);
+    }
+
+    /// Unloads the idle loaded model used least recently; a model whose lock is held is in use
+    /// and never chosen.
+    fn evict_idle_model(&self) -> bool {
+        let mut victim: Option<MutexGuard<'_, SlotCell<dyn OcrEngine + Send>>> = None;
+        let mut victim_use = u64::MAX;
+        for slot in self.ocr.values() {
+            let used = slot.last_used.load(Ordering::Relaxed);
+            if used >= victim_use {
+                continue;
+            }
+            if let Ok(cell) = slot.cell.try_lock()
+                && cell.counted
+                && cell.engine.is_some()
+            {
+                victim = Some(cell);
+                victim_use = used;
+            }
+        }
+        match victim {
+            Some(mut cell) => {
+                cell.engine = None;
+                cell.counted = false;
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -124,20 +504,8 @@ impl fmt::Debug for VisionFfiProvider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VisionFfiProvider")
-            .field(
-                "ocr_model_ref",
-                &self
-                    .ocr
-                    .as_ref()
-                    .map(|capability| capability.identity.model_ref()),
-            )
-            .field(
-                "nn_model_ref",
-                &self
-                    .nn
-                    .as_ref()
-                    .map(|capability| capability.identity.model_ref()),
-            )
+            .field("ocr_models", &self.ocr.keys().collect::<Vec<_>>())
+            .field("nn_models", &self.nn.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -148,12 +516,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         model_ref: &str,
         model_sha256: &str,
     ) -> Result<(), VisionProviderError> {
-        require_model(
-            self.ocr.as_ref().map(|capability| &capability.identity),
-            model_ref,
-            model_sha256,
-            "OCR",
-        )
+        self.ocr_slot(model_ref)?.require(model_sha256, "OCR")
     }
 
     fn require_nn_model(
@@ -161,34 +524,28 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         model_ref: &str,
         model_sha256: &str,
     ) -> Result<(), VisionProviderError> {
-        require_model(
-            self.nn.as_ref().map(|capability| &capability.identity),
-            model_ref,
-            model_sha256,
-            "NN",
-        )
+        self.nn_slot(model_ref)?.require(model_sha256, "NN")
     }
 
     fn read_text(
         &self,
         request: OcrProviderRequest<'_>,
     ) -> Result<OcrProviderResult, VisionProviderError> {
-        self.require_ocr_model(request.model_ref, request.model_sha256)?;
-        let capability = self.ocr.as_ref().ok_or_else(|| unavailable("OCR"))?;
         let frame = borrow_frame(request.frame)?;
-        let region = VisionRect {
-            x: request.region.x,
-            y: request.region.y,
-            width: request.region.width,
-            height: request.region.height,
-        };
-        let ffi_request = OcrInferenceRequestView {
-            frame,
-            region,
-            languages: request.languages,
-            timeout_ms: request.timeout_ms,
-        };
-        let result = invoke_ocr(capability, ffi_request)?;
+        let region = vision_rect(request.region);
+        let (result, _) = self.call_ocr(
+            request.model_ref,
+            request.model_sha256,
+            request.timeout_ms,
+            |engine, timeout_ms| {
+                engine.read_text_view(OcrInferenceRequestView {
+                    frame,
+                    region,
+                    languages: request.languages,
+                    timeout_ms,
+                })
+            },
+        )?;
         validate_ocr_backend(&result)
             .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
         Ok(map_ocr_result(result))
@@ -198,21 +555,21 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         &self,
         request: OcrProviderRequest<'_>,
     ) -> Result<OcrProviderObservation, VisionProviderError> {
-        self.require_ocr_model(request.model_ref, request.model_sha256)?;
-        let capability = self.ocr.as_ref().ok_or_else(|| unavailable("OCR"))?;
         let frame = borrow_frame(request.frame)?;
-        let ffi_request = OcrInferenceRequestView {
-            frame,
-            region: VisionRect {
-                x: request.region.x,
-                y: request.region.y,
-                width: request.region.width,
-                height: request.region.height,
+        let region = vision_rect(request.region);
+        let (output, identity) = self.call_ocr(
+            request.model_ref,
+            request.model_sha256,
+            request.timeout_ms,
+            |engine, timeout_ms| {
+                engine.read_text_with_attestation_view(OcrInferenceRequestView {
+                    frame,
+                    region,
+                    languages: request.languages,
+                    timeout_ms,
+                })
             },
-            languages: request.languages,
-            timeout_ms: request.timeout_ms,
-        };
-        let output = invoke_ocr_with_attestation(capability, ffi_request)?;
+        )?;
         validate_ocr_backend(&output.result).map_err(|error| {
             error.with_ppocr_diagnostics(output.result.ppocr_diagnostics.clone())
         })?;
@@ -227,10 +584,9 @@ impl RecognitionVisionProvider for VisionFfiProvider {
             .map_err(|error| {
                 error.with_ppocr_diagnostics(output.result.ppocr_diagnostics.clone())
             })?;
-        let execution =
-            map_ocr_execution_evidence(&attestation, &capability.identity).map_err(|error| {
-                error.with_ppocr_diagnostics(output.result.ppocr_diagnostics.clone())
-            })?;
+        let execution = map_ocr_execution_evidence(&attestation, &identity).map_err(|error| {
+            error.with_ppocr_diagnostics(output.result.ppocr_diagnostics.clone())
+        })?;
         Ok(OcrProviderObservation {
             result: map_ocr_result(output.result),
             execution: Some(execution),
@@ -241,16 +597,50 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         &self,
         request: NnProviderRequest<'_>,
     ) -> Result<NnProviderResult, VisionProviderError> {
-        self.require_nn_model(request.model_ref, request.model_sha256)?;
-        let capability = self.nn.as_ref().ok_or_else(|| unavailable("NN"))?;
+        let slot = self.nn_slot(request.model_ref)?;
+        slot.require(request.model_sha256, "NN")?;
         let frame = crop_frame(request.frame, request.region)?;
+        let started = Instant::now();
+        let deadline = deadline_after(started, request.timeout_ms, "NN")?;
+        let mut cell = lock_until(&slot.cell, deadline, "NN", request.model_ref)?;
+        let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let Some(reason) = &cell.retired {
+            return Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                reason.clone(),
+            ));
+        }
+        let timeout_ms = request.timeout_ms.saturating_sub(waited_ms);
+        if timeout_ms == 0 {
+            return Err(VisionProviderError::new(
+                VisionProviderErrorCode::Timeout,
+                "NN request deadline exhausted before inference",
+            ));
+        }
         let ffi_request = NnInferenceRequest {
             frame,
             model_id: request.model_ref.to_string(),
             labels: request.candidate_labels.to_vec(),
-            timeout_ms: request.timeout_ms,
+            timeout_ms,
         };
-        let result = invoke_nn(capability, ffi_request)?;
+        slot.touch();
+        let outcome = {
+            let engine = cell
+                .engine
+                .as_deref_mut()
+                .ok_or_else(|| unavailable("NN"))?;
+            catch_unwind(AssertUnwindSafe(|| engine.classify(ffi_request)))
+        };
+        let result = match outcome {
+            Ok(result) => result.map_err(map_ffi_error)?,
+            Err(_) => {
+                self.retire(&mut *cell, "NN engine was retired after a provider panic");
+                return Err(VisionProviderError::new(
+                    VisionProviderErrorCode::Internal,
+                    "NN engine panicked and was retired",
+                ));
+            }
+        };
         validate_nn_backend(&result)?;
         Ok(NnProviderResult {
             labels: result
@@ -265,116 +655,81 @@ impl RecognitionVisionProvider for VisionFfiProvider {
     }
 }
 
-fn require_model(
-    available: Option<&VisionModelIdentity>,
-    model_ref: &str,
-    model_sha256: &str,
+fn vision_rect(region: PackRect) -> VisionRect {
+    VisionRect {
+        x: region.x,
+        y: region.y,
+        width: region.width,
+        height: region.height,
+    }
+}
+
+fn deadline_after(
+    started: Instant,
+    timeout_ms: u64,
     capability: &str,
-) -> Result<(), VisionProviderError> {
-    let available = available.ok_or_else(|| unavailable(capability))?;
-    if available.model_ref() != model_ref || available.model_sha256() != model_sha256 {
-        return Err(VisionProviderError::new(
-            VisionProviderErrorCode::ModelMismatch,
-            format!(
-                "{capability} model identity does not match the admitted production capability"
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn invoke_ocr(
-    capability: &OcrCapability,
-    request: OcrInferenceRequestView<'_>,
-) -> Result<OcrInferenceResult, VisionProviderError> {
-    let mut slot = capability.engine.lock().map_err(|_| {
-        VisionProviderError::new(
-            VisionProviderErrorCode::Internal,
-            "OCR engine mutex is poisoned",
-        )
-    })?;
-    let engine = slot.as_mut().ok_or_else(|| {
-        VisionProviderError::new(
-            VisionProviderErrorCode::Unavailable,
-            "OCR engine was retired after a provider panic",
-        )
-    })?;
-    match catch_unwind(AssertUnwindSafe(|| engine.read_text_view(request))) {
-        Ok(result) => result.map_err(map_ffi_error),
-        Err(_) => {
-            *slot = None;
-            Err(VisionProviderError::new(
-                VisionProviderErrorCode::Internal,
-                "OCR engine panicked and was retired",
-            ))
-        }
-    }
-}
-
-fn invoke_ocr_with_attestation(
-    capability: &OcrCapability,
-    mut request: OcrInferenceRequestView<'_>,
-) -> Result<OcrInferenceOutput, VisionProviderError> {
-    let deadline = std::time::Instant::now()
-        .checked_add(std::time::Duration::from_millis(request.timeout_ms))
+) -> Result<Instant, VisionProviderError> {
+    started
+        .checked_add(Duration::from_millis(timeout_ms))
         .ok_or_else(|| {
-            VisionProviderError::new(VisionProviderErrorCode::Timeout, "OCR deadline overflow")
-        })?;
-    let mut slot = loop {
-        match capability.engine.try_lock() {
-            Ok(slot) => break slot,
-            Err(std::sync::TryLockError::Poisoned(_)) => {
+            VisionProviderError::new(
+                VisionProviderErrorCode::Timeout,
+                format!("{capability} deadline overflow"),
+            )
+        })
+}
+
+/// Takes one model's lock, waiting at most until the request's deadline (Workflow #360: every
+/// path, page gates included, waits under the target's own `timeout_ms`).
+fn lock_until<'a, T>(
+    mutex: &'a Mutex<T>,
+    deadline: Instant,
+    capability: &str,
+    model_ref: &str,
+) -> Result<MutexGuard<'a, T>, VisionProviderError> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(_)) => {
                 return Err(VisionProviderError::new(
                     VisionProviderErrorCode::Internal,
-                    "OCR engine mutex is poisoned",
+                    format!("{capability} engine mutex is poisoned"),
                 ));
             }
-            Err(std::sync::TryLockError::WouldBlock) => {
-                if std::time::Instant::now() >= deadline {
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
                     return Err(VisionProviderError::new(
                         VisionProviderErrorCode::Timeout,
-                        "OCR engine ownership wait exceeded request deadline",
+                        format!(
+                            "{capability} model '{model_ref}' was held by another request beyond this target's timeout_ms"
+                        ),
                     ));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(1));
+                std::thread::sleep(Duration::from_millis(1));
             }
         }
-    };
-    request.timeout_ms = u64::try_from(
-        deadline
-            .saturating_duration_since(std::time::Instant::now())
-            .as_millis(),
+    }
+}
+
+fn no_capability() -> VisionProviderError {
+    VisionProviderError::new(
+        VisionProviderErrorCode::Unavailable,
+        "vision provider must expose at least one production capability",
     )
-    .map_err(|_| {
-        VisionProviderError::new(
-            VisionProviderErrorCode::Timeout,
-            "OCR remaining budget overflow",
-        )
-    })?;
-    if request.timeout_ms == 0 {
-        return Err(VisionProviderError::new(
-            VisionProviderErrorCode::Timeout,
-            "OCR request deadline exhausted before inference",
-        ));
-    }
-    let engine = slot.as_mut().ok_or_else(|| {
-        VisionProviderError::new(
-            VisionProviderErrorCode::Unavailable,
-            "OCR engine was retired after a provider panic",
-        )
-    })?;
-    match catch_unwind(AssertUnwindSafe(|| {
-        engine.read_text_with_attestation_view(request)
-    })) {
-        Ok(result) => result.map_err(map_ffi_error),
-        Err(_) => {
-            *slot = None;
-            Err(VisionProviderError::new(
-                VisionProviderErrorCode::Internal,
-                "OCR engine panicked and was retired",
-            ))
-        }
-    }
+}
+
+fn not_installed<'a>(
+    capability: &str,
+    model_ref: &str,
+    installed: impl Iterator<Item = &'a String>,
+) -> VisionProviderError {
+    VisionProviderError::new(
+        VisionProviderErrorCode::ModelMismatch,
+        format!(
+            "{capability} model '{model_ref}' is not installed (installed {capability} models: [{}])",
+            installed.map(String::as_str).collect::<Vec<_>>().join(", ")
+        ),
+    )
 }
 
 fn map_ocr_result(result: OcrInferenceResult) -> OcrProviderResult {
@@ -439,34 +794,6 @@ fn map_ocr_execution_evidence(
         fallback_observed: attestation.fallback_observed,
         complete: attestation.complete,
     })
-}
-
-fn invoke_nn(
-    capability: &NnCapability,
-    request: NnInferenceRequest,
-) -> Result<NnClassificationResult, VisionProviderError> {
-    let mut slot = capability.engine.lock().map_err(|_| {
-        VisionProviderError::new(
-            VisionProviderErrorCode::Internal,
-            "NN engine mutex is poisoned",
-        )
-    })?;
-    let engine = slot.as_mut().ok_or_else(|| {
-        VisionProviderError::new(
-            VisionProviderErrorCode::Unavailable,
-            "NN engine was retired after a provider panic",
-        )
-    })?;
-    match catch_unwind(AssertUnwindSafe(|| engine.classify(request))) {
-        Ok(result) => result.map_err(map_ffi_error),
-        Err(_) => {
-            *slot = None;
-            Err(VisionProviderError::new(
-                VisionProviderErrorCode::Internal,
-                "NN engine panicked and was retired",
-            ))
-        }
-    }
 }
 
 fn borrow_frame(
@@ -1052,7 +1379,9 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_vision_ffi::{NnLabel, OcrInferenceRequest, OcrTextBlock};
+    use actingcommand_vision_ffi::{
+        NnLabel, OcrInferenceOutput, OcrInferenceRequest, OcrTextBlock,
+    };
     use serde_json::json;
 
     #[test]

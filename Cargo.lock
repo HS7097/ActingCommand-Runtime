@@ -46,6 +46,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-ledger-forensics",
  "actingcommand-policy",
+ "actingcommand-ppocr-onnx-json-provider",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",

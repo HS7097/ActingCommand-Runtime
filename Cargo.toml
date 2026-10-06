@@ -54,6 +54,7 @@ actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }
 actingcommand-page-detector = { path = "crates/page-detector" }
 actingcommand-pack-containment = { path = "crates/pack-containment" }
 actingcommand-policy = { path = "crates/policy" }
+actingcommand-ppocr-onnx-json-provider = { path = "providers/ppocr-onnx-json" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-resource-tooling = { path = "crates/resource-tooling" }

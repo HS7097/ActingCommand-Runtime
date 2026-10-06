@@ -1,31 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! ONNXRuntime-backed PPOCR ROI recognizer for the ActingCommand OCR JSON ABI.
+//! In-process ONNX Runtime PP-OCR engine of the `ppocr-ctc` family (Workflow #360).
 //!
-//! This provider intentionally stays behind the ActingCommand provider boundary.
-//! It does not copy MAA C++ code and does not bundle OCR models or runtime DLLs.
+//! actingd links this crate and hands [`PpocrCtcLoader`] to the Runtime as its vision model
+//! loader. The loader builds one engine per model on first use: it reads each model file
+//! once, verifies the model's content identity from those bytes and builds the ONNX Runtime
+//! sessions from the same bytes. ONNX Runtime itself is initialised once per process, on the
+//! first model build. A request borrows the frame and only the pixels inside the requested
+//! region are read. The engine does not copy MAA C++ code and does not bundle OCR models or
+//! runtime DLLs.
 
-use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer, SessionCache};
+use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer};
 use actingcommand_vision_ffi::{
-    CudaDeviceIdentity, FastDeployPpocrInvokeRequest, FastDeployPpocrInvokeResponse,
-    OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OCR_PROVIDER_RESPONSE_SCHEMA_VERSION,
-    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceResult, OcrProviderBuildIdentity,
-    OcrRuntimeBuildIdentity, OcrSessionIdentity, OcrSessionKey, OcrTextBlock,
-    OnnxExecutionProvider, VisionBackendKind, VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat,
-    VisionRect, enumerate_cuda_devices, onnxruntime_version_string,
+    CudaDeviceIdentity, OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrEngine,
+    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
+    OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrModelLoad, OcrModelSpec,
+    OcrProviderBuildIdentity, OcrRuntimeBuildIdentity, OcrSessionBinding, OcrSessionId,
+    OcrSessionKey, OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider, VisionBackendKind,
+    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView, VisionModelLoader,
+    VisionPixelFormat, VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
+    establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
+    onnxruntime_version_string, ppocr_model_content_sha256, sha256_file_hex, sha256_hex,
 };
 use actingcommand_vision_ffi::{
     PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
     PpocrDiagnostics, PpocrNodePlacementDiagnostic as NodePlacementDiagnostic,
-    serialize_ppocr_response,
+    validate_ppocr_call_diagnostics,
 };
 use ort::logging::LogLevel;
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
 use std::collections::VecDeque;
-use std::path::Path;
-use std::slice;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
 const DEFAULT_REC_HEIGHT: usize = 48;
@@ -41,26 +49,22 @@ const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_
 const MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES: usize = 4_096;
 const MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES: usize = 4_096;
 const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
+const ENGINE_MODULE: &str = "ppocr-ctc-engine";
+/// Recorded as the execution attestation's provider implementation.
+const ENGINE_IMPLEMENTATION: &str = "actingcommand-ocr-engine/ppocr-ctc";
 
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
-static RECOGNIZER_SESSIONS: OnceLock<SessionCache<BoundRecognizerSession, OcrSessionIdentity>> =
-    OnceLock::new();
-static DETECTOR_SESSIONS: OnceLock<ProviderSessionCache> = OnceLock::new();
+static RUNTIME_FACTS: OnceLock<RuntimeFacts> = OnceLock::new();
+static RUNTIME_INIT: Mutex<()> = Mutex::new(());
 
-type ProviderSessionCache = SessionCache<BoundOrtSession, OcrSessionIdentity>;
-
-struct BoundOrtSession {
-    key: OcrSessionKey,
-    plan: ProviderSessionPlan,
-    session: Session,
-}
-
-/// The recognizer session with the facts established, once per session identity, before
-/// its model load: the CUDA driver version it resolved and the hash-verified dictionary.
-struct BoundRecognizerSession {
-    bound: BoundOrtSession,
+/// The ONNX Runtime facts established once per process, on the first model build.
+struct RuntimeFacts {
+    onnxruntime_library: PathBuf,
+    onnxruntime_version: String,
+    onnxruntime_sha256: String,
+    executable_sha256: String,
+    resolved_cuda_device: Option<CudaDeviceIdentity>,
     cuda_driver_version: Option<u32>,
-    dictionary: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,9 +295,8 @@ fn parse_node_placement(message: &str) -> Result<CpuAssignedNodeDiagnostic, Stri
     })
 }
 
-/// `value` is the caller-injected variable value carried by the request
-/// (`FastDeployPpocrInvokeRequest.node_placement_diagnostic`, Workflow #318 cfg3); the
-/// provider never reads the environment itself.
+/// `value` is the caller-injected variable value the loader was built with (Workflow #318
+/// cfg3); the engine never reads the environment itself.
 fn node_placement_diagnostic_requested(
     plan: &ProviderSessionPlan,
     value: Option<&str>,
@@ -314,154 +317,206 @@ fn node_placement_diagnostic_requested(
     Ok(true)
 }
 
-#[cfg(test)]
-std::thread_local! {
-    static PANIC_ON_NEXT_READ_TEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+/// Builds one `ppocr-ctc` OCR engine per model on first use.
+pub struct PpocrCtcLoader {
+    runtime: VisionRuntimeSpec,
+    node_placement_diagnostic: Option<String>,
 }
 
-/// Reads text from a single OCR region through a PPOCR recognizer model.
-///
-/// # Safety
-///
-/// `request_ptr` and `request_len` must describe a valid JSON byte slice for
-/// the duration of the call. `response_out` must be a valid writable pointer to
-/// one `VisionFfiOwnedBuffer`; callers must release any non-empty response with
-/// `ac_vision_free_buffer` from this same provider.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ac_fastdeploy_ppocr_read_text_json(
-    request_ptr: *const u8,
-    request_len: usize,
-    response_out: *mut VisionFfiOwnedBuffer,
-) -> i32 {
-    invoke_provider(response_out, |diagnostics| {
-        #[cfg(test)]
-        panic_on_next_read_text_for_test();
-        read_text_json(request_ptr, request_len, diagnostics)
-    })
-}
-
-#[cfg(test)]
-fn panic_on_next_read_text_for_test() {
-    PANIC_ON_NEXT_READ_TEXT.with(|flag| {
-        if flag.replace(false) {
-            panic!("injected provider panic");
+impl PpocrCtcLoader {
+    /// `node_placement_diagnostic` is the caller-injected
+    /// `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC` value (Workflow #318 cfg3); the engine
+    /// validates it and never reads the environment itself.
+    pub fn new(runtime: VisionRuntimeSpec, node_placement_diagnostic: Option<String>) -> Self {
+        Self {
+            runtime,
+            node_placement_diagnostic,
         }
-    });
-}
-
-fn invoke_provider<F>(response_out: *mut VisionFfiOwnedBuffer, invoke: F) -> i32
-where
-    F: FnOnce(&mut PpocrDiagnostics) -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError>,
-{
-    let mut diagnostics = Vec::new();
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(&mut diagnostics)));
-    match result {
-        Ok(Ok(response)) => write_response(response_out, 0, &response, &diagnostics, None),
-        Ok(Err(err)) => write_response(
-            response_out,
-            err.status(),
-            &err.message(),
-            &diagnostics,
-            Some(err.message()),
-        ),
-        Err(_) => write_response(
-            response_out,
-            2,
-            &"provider panicked while reading OCR text",
-            &diagnostics,
-            Some("provider panicked while reading OCR text"),
-        ),
     }
 }
 
-/// Releases a buffer allocated by this provider.
-///
-/// # Safety
-///
-/// The buffer must have been returned by this provider and must not have been
-/// released before. Passing buffers from another provider or arbitrary pointers
-/// is undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ac_vision_free_buffer(buffer: VisionFfiOwnedBuffer) {
-    if !buffer.has_ppocr_releasable_metadata() {
-        return;
-    }
-    // SAFETY: every buffer returned by this provider is allocated from a Vec
-    // with the exact pointer, length, and capacity stored in the ABI struct.
-    unsafe {
-        drop(Vec::from_raw_parts(
-            buffer.data,
-            buffer.len,
-            buffer.capacity,
-        ));
-    }
-}
-
-fn read_text_json(
-    request_ptr: *const u8,
-    request_len: usize,
-    diagnostics: &mut PpocrDiagnostics,
-) -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError> {
-    let envelope = read_request(request_ptr, request_len)?;
-    envelope.validate().map_err(provider_error)?;
-    let session_identity = OcrSessionIdentity::from(&envelope.session);
-    let node_placement_diagnostic = envelope.node_placement_diagnostic.as_deref();
-    let recognizer_session = recognizer_sessions().get_or_load(&session_identity, |_| {
-        establish_recognizer_session(&envelope, node_placement_diagnostic, diagnostics)
-    })?;
-    // Each cached entry's key was provider-resolved and matched to the binding at load;
-    // `require_bound_session_key` below keeps that relation for every call.
-    let key = envelope.session.key();
-    let session_plan = ProviderSessionPlan::from_key(key)?;
-    ensure_ort_runtime(
-        envelope
-            .artifacts
-            .onnxruntime_library_path()
-            .map_err(provider_error)?,
-    )?;
-    let inference_deadline = Instant::now()
-        .checked_add(Duration::from_millis(envelope.request.timeout_ms))
-        .ok_or_else(|| {
-            ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
+impl VisionModelLoader for PpocrCtcLoader {
+    fn load_ocr(
+        &self,
+        model: &OcrModelSpec,
+        expected_model_sha256: &str,
+        session_id: &OcrSessionId,
+        wait_deadline: Instant,
+    ) -> VisionFfiResult<OcrModelLoad> {
+        let detector_sha256 = sha256_hex(&read_model_file(&model.detector_path, "detector")?);
+        let recognizer = read_model_file(&model.recognizer_path, "recognizer")?;
+        let dictionary = read_model_file(&model.dictionary_path, "dictionary")?;
+        let model_sha256 = ppocr_model_content_sha256(
+            &detector_sha256,
+            &sha256_hex(&recognizer),
+            &sha256_hex(&dictionary),
+            None,
+        )?;
+        if model_sha256 != expected_model_sha256 {
+            return Ok(OcrModelLoad::Mismatch { model_sha256 });
+        }
+        let dictionary = parse_dictionary(&dictionary, &model.dictionary_path).map_err(failure)?;
+        let facts = runtime_facts(&self.runtime, wait_deadline)?;
+        let key = OcrSessionKey::from_parts(OcrSessionKeyParts {
+            engine_binding_sha256: ocr_engine_binding_sha256(
+                &facts.executable_sha256,
+                &facts.onnxruntime_sha256,
+                None,
+            ),
+            runtime_library_path: facts.onnxruntime_library.to_string_lossy().into_owned(),
+            runtime_library_sha256: facts.onnxruntime_sha256.clone(),
+            onnxruntime_version: facts.onnxruntime_version.clone(),
+            model_ref: model.model_ref.clone(),
+            model_sha256: model_sha256.clone(),
+            requested_backend: self.runtime.execution_provider,
+            requested_cuda_device: self.runtime.cuda_device.clone(),
+            resolved_cuda_device: facts.resolved_cuda_device.clone(),
         })?;
+        let binding = OcrSessionBinding::new(session_id.clone(), 1, key);
+        binding.validate()?;
+        let plan = ProviderSessionPlan::from_key(binding.key()).map_err(failure)?;
+        let mut diagnostics = Vec::new();
+        let recognizer = load_ort_session(
+            &recognizer,
+            &model.recognizer_path,
+            &plan,
+            PpocrModelRole::Recognizer,
+            self.node_placement_diagnostic.as_deref(),
+            &mut diagnostics,
+        )
+        .map_err(|error| failure(error).with_ppocr_diagnostics(diagnostics.clone()))?;
+        Ok(OcrModelLoad::Loaded {
+            engine: Box::new(PpocrCtcModel {
+                binding,
+                plan,
+                cuda_driver_version: facts.cuda_driver_version,
+                dictionary,
+                recognizer,
+                detector: None,
+                detector_path: model.detector_path.clone(),
+                detector_sha256,
+                node_placement_diagnostic: self.node_placement_diagnostic.clone(),
+                pending_diagnostics: diagnostics,
+            }),
+            model_sha256,
+        })
+    }
+}
 
-    let full_frame = is_full_frame_region(&envelope.request.frame, envelope.request.region);
-    let (result, cuda_driver_version) = if full_frame {
-        let detector_session = detector_sessions().get_or_load(&session_identity, |_| {
-            let (detector_key, _) = resolve_bound_session_key(&envelope)?;
-            load_bound_ort_session(
-                &envelope.artifacts.detector_model_path,
-                detector_key,
-                PpocrModelRole::Detector,
-                node_placement_diagnostic,
-                diagnostics,
-            )
-        })?;
-        let detected = {
-            let mut detector_session = detector_session
-                .lock()
-                .map_err(|_| "PPOCR detector session mutex is poisoned".to_string())?;
-            require_bound_session_key(&detector_session, key)?;
-            detect_text_regions(
-                &mut detector_session.session,
-                &envelope.request.frame,
-                envelope.request.region,
-                remaining_inference_budget(inference_deadline, "PPOCR detector")?,
-            )?
+/// One loaded `ppocr-ctc` model: the recognizer session, the verified dictionary and, after
+/// the first full-frame request, the detector session.
+struct PpocrCtcModel {
+    binding: OcrSessionBinding,
+    plan: ProviderSessionPlan,
+    cuda_driver_version: Option<u32>,
+    dictionary: Vec<String>,
+    recognizer: Session,
+    detector: Option<Session>,
+    detector_path: PathBuf,
+    detector_sha256: String,
+    node_placement_diagnostic: Option<String>,
+    /// Session-load diagnostics, returned with the next request's result or error.
+    pending_diagnostics: PpocrDiagnostics,
+}
+
+impl OcrEngine for PpocrCtcModel {
+    fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
+        self.read_text_view(request.view())
+    }
+
+    fn read_text_with_attestation(
+        &mut self,
+        request: OcrInferenceRequest,
+    ) -> VisionFfiResult<OcrInferenceOutput> {
+        self.read_text_with_attestation_view(request.view())
+    }
+
+    fn read_text_view(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+    ) -> VisionFfiResult<OcrInferenceResult> {
+        self.read_text_with_attestation_view(request)
+            .map(|output| output.result)
+    }
+
+    fn read_text_with_attestation_view(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+    ) -> VisionFfiResult<OcrInferenceOutput> {
+        request.validate()?;
+        let invocation_id = next_ocr_invocation_id()?;
+        let mut diagnostics = std::mem::take(&mut self.pending_diagnostics);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            self.read_region(request, &mut diagnostics)
+        }));
+        let mut result = match outcome {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                return Err(error.into_ffi_error().with_ppocr_diagnostics(diagnostics));
+            }
+            Err(_) => {
+                return Err(VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::ProviderPanic,
+                    ENGINE_MODULE,
+                    "OCR engine panicked while reading text",
+                )
+                .with_ppocr_diagnostics(diagnostics));
+            }
         };
+        validate_ppocr_call_diagnostics(&diagnostics)
+            .map_err(|message| failure(message).with_ppocr_diagnostics(diagnostics.clone()))?;
+        result.ppocr_diagnostics = diagnostics;
+        result
+            .validate_for(request)
+            .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
+        Ok(OcrInferenceOutput {
+            execution_attestation: Some(self.attestation(invocation_id)),
+            result,
+        })
+    }
+}
+
+impl PpocrCtcModel {
+    fn read_region(
+        &mut self,
+        request: OcrInferenceRequestView<'_>,
+        diagnostics: &mut PpocrDiagnostics,
+    ) -> Result<OcrInferenceResult, ProviderInvokeError> {
+        let inference_deadline = Instant::now()
+            .checked_add(Duration::from_millis(request.timeout_ms))
+            .ok_or_else(|| {
+                ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
+            })?;
+        let frame = &request.frame;
+        if !is_full_frame_region(frame, request.region) {
+            let decoded = recognize_region(
+                &mut self.recognizer,
+                &self.dictionary,
+                frame,
+                request.region,
+                remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
+            )?;
+            return Ok(canonical_roi_result(decoded, request.region));
+        }
+        if self.detector.is_none() {
+            self.detector = Some(self.load_detector(diagnostics)?);
+        }
+        let detector = self
+            .detector
+            .as_mut()
+            .ok_or_else(|| "PPOCR detector session is unavailable".to_string())?;
+        let detected = detect_text_regions(
+            detector,
+            frame,
+            request.region,
+            remaining_inference_budget(inference_deadline, "PPOCR detector")?,
+        )?;
         let mut blocks = Vec::new();
-        let mut recognizer_session = recognizer_session
-            .lock()
-            .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
-        let recognizer = &mut *recognizer_session;
-        require_bound_session_key(&recognizer.bound, key)?;
-        let cuda_driver_version = recognizer.cuda_driver_version;
         for detected_box in detected.iter().take(MAX_DETECTED_TEXT_BOXES) {
             let decoded = recognize_region(
-                &mut recognizer.bound.session,
-                &recognizer.dictionary,
-                &envelope.request.frame,
+                &mut self.recognizer,
+                &self.dictionary,
+                frame,
                 detected_box.rect,
                 remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
             )?;
@@ -479,70 +534,230 @@ fn read_text_json(
             .collect::<Vec<_>>()
             .join("\n");
         let confidence = average_confidence(blocks.iter().filter_map(|block| block.confidence));
-        (
-            OcrInferenceResult {
-                ppocr_diagnostics: Vec::new(),
-                text,
-                blocks,
-                confidence,
-                backend: VisionBackendKind::FastDeployPpocr,
-                warnings: Vec::new(),
-            },
-            cuda_driver_version,
+        Ok(OcrInferenceResult {
+            ppocr_diagnostics: Vec::new(),
+            text,
+            blocks,
+            confidence,
+            backend: VisionBackendKind::FastDeployPpocr,
+            warnings: Vec::new(),
+        })
+    }
+
+    /// Builds the detector session on the first full-frame request, from bytes whose hash
+    /// equals the detector hash verified when the model was loaded.
+    fn load_detector(&self, diagnostics: &mut PpocrDiagnostics) -> Result<Session, String> {
+        let bytes = std::fs::read(&self.detector_path).map_err(|error| {
+            format!(
+                "failed to read the OCR detector file {}: {error}",
+                self.detector_path.display()
+            )
+        })?;
+        let actual = sha256_hex(&bytes);
+        if actual != self.detector_sha256 {
+            return Err(format!(
+                "OCR detector file {} changed since the model was verified: expected={}, actual={actual}; restart is required",
+                self.detector_path.display(),
+                self.detector_sha256
+            ));
+        }
+        load_ort_session(
+            &bytes,
+            &self.detector_path,
+            &self.plan,
+            PpocrModelRole::Detector,
+            self.node_placement_diagnostic.as_deref(),
+            diagnostics,
         )
-    } else {
-        let mut recognizer_session = recognizer_session
-            .lock()
-            .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
-        let recognizer = &mut *recognizer_session;
-        require_bound_session_key(&recognizer.bound, key)?;
-        let cuda_driver_version = recognizer.cuda_driver_version;
-        let decoded = recognize_region(
-            &mut recognizer.bound.session,
-            &recognizer.dictionary,
-            &envelope.request.frame,
-            envelope.request.region,
-            remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
-        )?;
-        (
-            canonical_roi_result(decoded, envelope.request.region),
-            cuda_driver_version,
-        )
-    };
-    let binary_sha256 = key.provider_library_sha256().to_string();
-    let onnxruntime_version = key.onnxruntime_version().to_string();
-    Ok(FastDeployPpocrInvokeResponse {
-        schema_version: OCR_PROVIDER_RESPONSE_SCHEMA_VERSION.to_string(),
-        invocation_id: envelope.invocation_id.clone(),
-        session_id: envelope.session.session_id().clone(),
-        session_generation: envelope.session.generation(),
-        result,
-        attestation: OcrExecutionAttestation {
+    }
+
+    fn attestation(&self, invocation_id: OcrInvocationId) -> OcrExecutionAttestation {
+        let key = self.binding.key();
+        OcrExecutionAttestation {
             schema_version: OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION.to_string(),
-            invocation_id: envelope.invocation_id,
-            session: envelope.session,
-            resolved_execution_provider: session_plan.resolved_execution_provider,
+            invocation_id,
+            session: self.binding.clone(),
+            resolved_execution_provider: self.plan.resolved_execution_provider,
             provider: OcrProviderBuildIdentity {
-                implementation: "actingcommand-ppocr-onnx-json".to_string(),
+                implementation: ENGINE_IMPLEMENTATION.to_string(),
                 crate_version: env!("CARGO_PKG_VERSION").to_string(),
                 build_git_sha: None,
-                binary_sha256,
+                binary_sha256: key.provider_library_sha256().to_string(),
             },
             runtime: OcrRuntimeBuildIdentity {
-                onnxruntime_version,
+                onnxruntime_version: key.onnxruntime_version().to_string(),
                 onnxruntime_build_info: ort::info().to_string(),
-                cuda_driver_version,
+                cuda_driver_version: self.cuda_driver_version,
                 cuda_runtime_version: None,
                 cudnn_version: None,
             },
-            registered_execution_providers: session_plan.registered_execution_providers,
-            cpu_ep_registered: session_plan.cpu_ep_registered,
-            cpu_fallback_disabled: session_plan.cpu_fallback_disabled,
+            registered_execution_providers: self.plan.registered_execution_providers.clone(),
+            cpu_ep_registered: self.plan.cpu_ep_registered,
+            cpu_fallback_disabled: self.plan.cpu_fallback_disabled,
             fallback_policy: OcrFallbackPolicy::Forbidden,
             fallback_observed: None,
             complete: true,
-        },
+        }
+    }
+}
+
+/// Initialises ONNX Runtime once per process. A request waiting for another request's
+/// initialisation waits only until its own deadline.
+fn runtime_facts(
+    spec: &VisionRuntimeSpec,
+    wait_deadline: Instant,
+) -> VisionFfiResult<&'static RuntimeFacts> {
+    if let Some(facts) = RUNTIME_FACTS.get() {
+        return same_runtime(facts, spec);
+    }
+    let _initialising = lock_until(&RUNTIME_INIT, wait_deadline, "ONNX Runtime initialisation")?;
+    if let Some(facts) = RUNTIME_FACTS.get() {
+        return same_runtime(facts, spec);
+    }
+    let facts = establish_runtime(spec)?;
+    Ok(RUNTIME_FACTS.get_or_init(move || facts))
+}
+
+fn same_runtime(
+    facts: &'static RuntimeFacts,
+    spec: &VisionRuntimeSpec,
+) -> VisionFfiResult<&'static RuntimeFacts> {
+    if facts.onnxruntime_library == spec.onnxruntime_library {
+        Ok(facts)
+    } else {
+        Err(unavailable(format!(
+            "ONNX Runtime is already initialised from {}; refusing {}; restart is required",
+            facts.onnxruntime_library.display(),
+            spec.onnxruntime_library.display()
+        )))
+    }
+}
+
+fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> {
+    let library = &spec.onnxruntime_library;
+    if spec
+        .runtime_library_closure
+        .iter()
+        .filter(|path| *path == library)
+        .count()
+        != 1
+    {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            ENGINE_MODULE,
+            "the ONNX Runtime library must occur exactly once in its runtime-library closure",
+        ));
+    }
+    let onnxruntime_sha256 = sha256_file_hex(ENGINE_MODULE, library)?;
+    if let Some(expected) = &spec.expected_onnxruntime_sha256
+        && *expected != onnxruntime_sha256
+    {
+        return Err(unavailable(format!(
+            "ONNX Runtime library {} SHA-256 mismatch: expected={expected}, actual={onnxruntime_sha256}",
+            library.display()
+        )));
+    }
+    establish_process_runtime_library_closure(&spec.runtime_library_closure)?;
+    let onnxruntime_version = onnxruntime_version_string(library)?;
+    ORT_RUNTIME.ensure(library).map_err(unavailable)?;
+    let executable = std::env::current_exe().map_err(|error| {
+        unavailable(format!("the running executable cannot be located: {error}"))
+    })?;
+    let executable_sha256 = sha256_file_hex(ENGINE_MODULE, &executable)?;
+    let (resolved_cuda_device, cuda_driver_version) = match spec.execution_provider {
+        OnnxExecutionProvider::Cpu => {
+            if spec.cuda_device.is_some() {
+                return Err(VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidRequest,
+                    ENGINE_MODULE,
+                    "a CPU OCR configuration must not include a CUDA device selector",
+                ));
+            }
+            (None, None)
+        }
+        OnnxExecutionProvider::Cuda => {
+            let selector = spec.cuda_device.as_ref().ok_or_else(|| {
+                VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidRequest,
+                    ENGINE_MODULE,
+                    "a CUDA OCR configuration requires an explicit ordinal and stable identity",
+                )
+            })?;
+            let inventory = enumerate_cuda_devices()?;
+            (
+                Some(inventory.resolve(selector)?),
+                Some(inventory.driver_version),
+            )
+        }
+    };
+    Ok(RuntimeFacts {
+        onnxruntime_library: library.clone(),
+        onnxruntime_version,
+        onnxruntime_sha256,
+        executable_sha256,
+        resolved_cuda_device,
+        cuda_driver_version,
     })
+}
+
+fn lock_until<'a, T>(
+    mutex: &'a Mutex<T>,
+    deadline: Instant,
+    what: &str,
+) -> VisionFfiResult<MutexGuard<'a, T>> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::Internal,
+                    ENGINE_MODULE,
+                    format!("{what} lock is poisoned; restart is required"),
+                ));
+            }
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(VisionFfiError::fatal_with_code(
+                        VisionFfiErrorCode::Timeout,
+                        ENGINE_MODULE,
+                        format!("waiting for {what} exceeded the request's timeout"),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+}
+
+fn read_model_file(path: &Path, role: &str) -> VisionFfiResult<Vec<u8>> {
+    std::fs::read(path).map_err(|error| {
+        unavailable(format!(
+            "failed to read the OCR {role} file {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn parse_dictionary(bytes: &[u8], path: &Path) -> Result<Vec<String>, String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|err| format!("failed to read PPOCR dictionary {}: {err}", path.display()))?;
+    let dictionary: Vec<_> = text.lines().map(ToOwned::to_owned).collect();
+    if dictionary.is_empty() {
+        return Err(format!("PPOCR dictionary {} is empty", path.display()));
+    }
+    Ok(dictionary)
+}
+
+fn unavailable(message: impl Into<String>) -> VisionFfiError {
+    VisionFfiError::fatal_with_code(
+        VisionFfiErrorCode::ProviderUnavailable,
+        ENGINE_MODULE,
+        message,
+    )
+}
+
+fn failure(message: impl Into<String>) -> VisionFfiError {
+    VisionFfiError::fatal_with_code(VisionFfiErrorCode::ProviderFailure, ENGINE_MODULE, message)
 }
 
 fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenceResult {
@@ -566,135 +781,8 @@ fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenc
     }
 }
 
-fn read_request(
-    request_ptr: *const u8,
-    request_len: usize,
-) -> Result<FastDeployPpocrInvokeRequest, String> {
-    if request_len == 0 {
-        return Err("empty JSON request".to_string());
-    }
-    if request_ptr.is_null() {
-        return Err("null JSON request pointer".to_string());
-    }
-    // SAFETY: the caller provides a request pointer and length that must remain
-    // valid for this call according to the ActingCommand JSON ABI.
-    let bytes = unsafe { slice::from_raw_parts(request_ptr, request_len) };
-    serde_json::from_slice(bytes)
-        .map_err(|err| format!("failed to parse FastDeploy/PPOCR JSON envelope: {err}"))
-}
-
-fn resolve_provider_device(
-    artifacts: &actingcommand_vision_ffi::FastDeployPpocrArtifacts,
-) -> Result<(Option<CudaDeviceIdentity>, Option<u32>), String> {
-    match artifacts.execution_provider {
-        Some(OnnxExecutionProvider::Cpu) => Ok((None, None)),
-        Some(OnnxExecutionProvider::Cuda) => {
-            let selector = artifacts.cuda_device.as_ref().ok_or_else(|| {
-                "CUDA OCR configuration is missing its device selector".to_string()
-            })?;
-            let inventory = enumerate_cuda_devices().map_err(provider_error)?;
-            let resolved = inventory.resolve(selector).map_err(provider_error)?;
-            Ok((Some(resolved), Some(inventory.driver_version)))
-        }
-        None => Err("OCR execution_provider must be explicitly cpu or cuda".to_string()),
-    }
-}
-
-/// Per-load checks, run before each model load of a session identity: artifact files
-/// exist and match their hashes, the CUDA device resolves, the ORT version is read, and
-/// the key resolved from them equals the adapter binding.
-fn resolve_bound_session_key(
-    envelope: &FastDeployPpocrInvokeRequest,
-) -> Result<(OcrSessionKey, Option<u32>), String> {
-    envelope
-        .artifacts
-        .validate_ppocr_v6_execution_existing_files()
-        .map_err(provider_error)?;
-    let (resolved_cuda_device, cuda_driver_version) = resolve_provider_device(&envelope.artifacts)?;
-    let runtime_library = envelope
-        .artifacts
-        .onnxruntime_library_path()
-        .map_err(provider_error)?;
-    let onnxruntime_version =
-        onnxruntime_version_string(runtime_library).map_err(provider_error)?;
-    let expected_key = envelope
-        .artifacts
-        .production_session_key(resolved_cuda_device, onnxruntime_version)
-        .map_err(provider_error)?;
-    if &expected_key != envelope.session.key() {
-        return Err(
-            "provider-resolved OCR session key does not match the adapter binding".to_string(),
-        );
-    }
-    Ok((expected_key, cuda_driver_version))
-}
-
-/// Runs only on a recognizer cache miss (first call of a session identity); a failure
-/// caches nothing, so the next call runs it again.
-fn establish_recognizer_session(
-    envelope: &FastDeployPpocrInvokeRequest,
-    node_placement_diagnostic: Option<&str>,
-    diagnostics: &mut PpocrDiagnostics,
-) -> Result<BoundRecognizerSession, String> {
-    let (key, cuda_driver_version) = resolve_bound_session_key(envelope)?;
-    ProviderSessionPlan::from_key(&key)?;
-    ensure_ort_runtime(
-        envelope
-            .artifacts
-            .onnxruntime_library_path()
-            .map_err(provider_error)?,
-    )?;
-    let dictionary = load_dictionary(&envelope.artifacts.dictionary_path)?;
-    let bound = load_bound_ort_session(
-        &envelope.artifacts.recognizer_model_path,
-        key,
-        PpocrModelRole::Recognizer,
-        node_placement_diagnostic,
-        diagnostics,
-    )?;
-    Ok(BoundRecognizerSession {
-        bound,
-        cuda_driver_version,
-        dictionary,
-    })
-}
-
-fn ensure_ort_runtime(runtime_library: &Path) -> Result<(), String> {
-    ORT_RUNTIME.ensure(runtime_library)
-}
-
-fn recognizer_sessions() -> &'static SessionCache<BoundRecognizerSession, OcrSessionIdentity> {
-    RECOGNIZER_SESSIONS.get_or_init(SessionCache::new)
-}
-
-fn detector_sessions() -> &'static ProviderSessionCache {
-    DETECTOR_SESSIONS.get_or_init(ProviderSessionCache::new)
-}
-
-fn load_bound_ort_session(
-    path: &Path,
-    key: OcrSessionKey,
-    role: PpocrModelRole,
-    node_placement_diagnostic: Option<&str>,
-    diagnostics: &mut PpocrDiagnostics,
-) -> Result<BoundOrtSession, String> {
-    let plan = ProviderSessionPlan::from_key(&key)?;
-    let session = load_ort_session(path, &plan, role, node_placement_diagnostic, diagnostics)?;
-    Ok(BoundOrtSession { key, plan, session })
-}
-
-fn require_bound_session_key(
-    session: &BoundOrtSession,
-    expected: &OcrSessionKey,
-) -> Result<(), String> {
-    if &session.key == expected && session.plan == ProviderSessionPlan::from_key(expected)? {
-        Ok(())
-    } else {
-        Err("OCR session identity was reused with a different immutable key".to_string())
-    }
-}
-
 fn load_ort_session(
+    model: &[u8],
     path: &Path,
     plan: &ProviderSessionPlan,
     role: PpocrModelRole,
@@ -708,7 +796,7 @@ fn load_ort_session(
             .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
             .with_intra_threads(1)
             .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-            .commit_from_file(path)
+            .commit_from_memory(model)
             .map_err(|err| {
                 format!(
                     "failed to load CPU-only PPOCR ONNX model {}: {err}",
@@ -720,7 +808,7 @@ fn load_ort_session(
                 "CUDA OCR session plan is missing the resolved device ordinal".to_string()
             })?;
             if diagnostic_requested {
-                capture_cuda_node_placement(path, ordinal, role, diagnostics)?;
+                capture_cuda_node_placement(model, path, ordinal, role, diagnostics)?;
             }
             Session::builder()
                 .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
@@ -739,7 +827,7 @@ fn load_ort_session(
                 })?
                 .with_disable_cpu_fallback()
                 .map_err(|err| format!("failed to disable PPOCR CPU fallback: {err}"))?
-                .commit_from_file(path)
+                .commit_from_memory(model)
                 .map_err(|err| {
                     format!(
                         "failed to load CUDA PPOCR ONNX model {} on device {ordinal}: {err}",
@@ -751,6 +839,7 @@ fn load_ort_session(
 }
 
 fn capture_cuda_node_placement(
+    model: &[u8],
     path: &Path,
     ordinal: i32,
     role: PpocrModelRole,
@@ -794,7 +883,7 @@ fn capture_cuda_node_placement(
                 "failed to register diagnostic CUDA execution provider for device {ordinal}: {err}"
             )
         })?
-        .commit_from_file(path)
+        .commit_from_memory(model)
         .map_err(|err| {
             format!(
                 "failed to initialize zero-inference CUDA PPOCR placement diagnostic for {} on device {ordinal}: {err}",
@@ -815,20 +904,10 @@ fn capture_cuda_node_placement(
     Ok(())
 }
 
-fn load_dictionary(path: &Path) -> Result<Vec<String>, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|err| format!("failed to read PPOCR dictionary {}: {err}", path.display()))?;
-    let dictionary: Vec<_> = text.lines().map(ToOwned::to_owned).collect();
-    if dictionary.is_empty() {
-        return Err(format!("PPOCR dictionary {} is empty", path.display()));
-    }
-    Ok(dictionary)
-}
-
 fn recognize_region(
     session: &mut Session,
     dictionary: &[String],
-    frame: &VisionFrame,
+    frame: &VisionFrameView<'_>,
     region: VisionRect,
     timeout: Duration,
 ) -> Result<DecodedText, ProviderInvokeError> {
@@ -868,7 +947,7 @@ struct DetectedTextBox {
 
 fn detect_text_regions(
     session: &mut Session,
-    frame: &VisionFrame,
+    frame: &VisionFrameView<'_>,
     region: VisionRect,
     timeout: Duration,
 ) -> Result<Vec<DetectedTextBox>, ProviderInvokeError> {
@@ -1069,7 +1148,7 @@ fn round_up_to_multiple(value: usize, multiple: usize) -> usize {
 }
 
 fn frame_region_to_recognition_tensor(
-    frame: &VisionFrame,
+    frame: &VisionFrameView<'_>,
     region: VisionRect,
     input_shape: &RecognitionInputShape,
 ) -> Result<Vec<f32>, String> {
@@ -1156,7 +1235,7 @@ fn rec_linear_pixel(samples: [u8; 4], x_weights: [i32; 2], y_weights: [i32; 2]) 
 }
 
 fn frame_region_to_detection_tensor(
-    frame: &VisionFrame,
+    frame: &VisionFrameView<'_>,
     region: VisionRect,
     input_shape: &DetectionInputShape,
 ) -> Result<Vec<f32>, String> {
@@ -1505,7 +1584,7 @@ fn rect_center_y(rect: VisionRect) -> i32 {
     rect.y + rect.height / 2
 }
 
-fn is_full_frame_region(frame: &VisionFrame, region: VisionRect) -> bool {
+fn is_full_frame_region(frame: &VisionFrameView<'_>, region: VisionRect) -> bool {
     region.x == 0
         && region.y == 0
         && region.width == frame.width as i32
@@ -1624,10 +1703,6 @@ fn argmax_with_softmax_confidence(row: &[f32]) -> Result<(usize, f32), String> {
     Ok((best_index, (best_value - max_value).exp() / exp_sum))
 }
 
-fn provider_error(err: impl std::fmt::Display) -> String {
-    format!("{err}")
-}
-
 #[derive(Debug)]
 enum ProviderInvokeError {
     Failure(String),
@@ -1639,16 +1714,12 @@ impl ProviderInvokeError {
         Self::Timeout(message.into())
     }
 
-    fn status(&self) -> i32 {
+    fn into_ffi_error(self) -> VisionFfiError {
         match self {
-            Self::Failure(_) => 1,
-            Self::Timeout(_) => 3,
-        }
-    }
-
-    fn message(&self) -> &str {
-        match self {
-            Self::Failure(message) | Self::Timeout(message) => message,
+            Self::Failure(message) => failure(message),
+            Self::Timeout(message) => {
+                VisionFfiError::fatal_with_code(VisionFfiErrorCode::Timeout, ENGINE_MODULE, message)
+            }
         }
     }
 }
@@ -1659,77 +1730,12 @@ impl From<String> for ProviderInvokeError {
     }
 }
 
-fn write_response<T: serde::Serialize>(
-    response_out: *mut VisionFfiOwnedBuffer,
-    status: i32,
-    value: &T,
-    diagnostics: &PpocrDiagnostics,
-    original_error: Option<&str>,
-) -> i32 {
-    match serialize_ppocr_response(value, diagnostics) {
-        Ok(bytes) => write_bytes(response_out, status, bytes),
-        Err(err) => {
-            let message = format!(
-                "failed to serialize provider response JSON: {err}; original status {status}; diagnostic reports {}; original error: {}",
-                diagnostics.len(),
-                original_error.unwrap_or("none")
-            );
-            match serialize_ppocr_response(&message, diagnostics) {
-                Ok(bytes) => write_bytes(response_out, 2, bytes),
-                Err(failure) => write_error(
-                    response_out,
-                    2,
-                    &format!("{message}; diagnostic response unavailable: {failure}"),
-                ),
-            }
-        }
-    }
-}
-
-fn write_error(response_out: *mut VisionFfiOwnedBuffer, status: i32, message: &str) -> i32 {
-    let mut bytes = Vec::new();
-    if message.len() > actingcommand_vision_ffi::PPOCR_MAX_BUSINESS_JSON_BYTES
-        || bytes.try_reserve_exact(message.len()).is_err()
-        || bytes.capacity() > actingcommand_vision_ffi::PPOCR_MAX_RESPONSE_BYTES
-    {
-        // An unavailable bounded error buffer still produces an explicit ABI failure.
-        if !response_out.is_null() {
-            // SAFETY: non-null response_out is writable caller-owned ABI storage.
-            unsafe { *response_out = VisionFfiOwnedBuffer::default() };
-        }
-        return 2;
-    }
-    bytes.extend_from_slice(message.as_bytes());
-    write_bytes(response_out, status, bytes)
-}
-
-fn write_bytes(response_out: *mut VisionFfiOwnedBuffer, status: i32, bytes: Vec<u8>) -> i32 {
-    if response_out.is_null() {
-        return 2;
-    }
-    let mut bytes = bytes;
-    let buffer = VisionFfiOwnedBuffer {
-        data: bytes.as_mut_ptr(),
-        len: bytes.len(),
-        capacity: bytes.capacity(),
-    };
-    std::mem::forget(bytes);
-    // SAFETY: response_out is checked for null and points to caller-owned
-    // writable storage according to the ActingCommand JSON ABI.
-    unsafe {
-        *response_out = buffer;
-    }
-    status
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use actingcommand_vision_ffi::{
-        CudaDeviceSelector, FastDeployPpocrArtifacts, PPOCR_V6_MEDIUM_MODEL_REF,
-        ppocr_model_content_sha256,
+        CudaDeviceSelector, FastDeployPpocrArtifacts, PPOCR_V6_MEDIUM_MODEL_REF, VisionFrame,
     };
-    use std::path::PathBuf;
 
     #[test]
     fn session_plan_keeps_cpu_and_cuda_provider_registration_disjoint() {
@@ -1920,7 +1926,7 @@ mod tests {
         };
 
         let tensor = frame_region_to_recognition_tensor(
-            &frame,
+            &frame.view(),
             VisionRect {
                 x: 0,
                 y: 0,
@@ -1970,7 +1976,8 @@ mod tests {
             height: 3,
             width: 7,
         };
-        let tensor = frame_region_to_recognition_tensor(&frame, region, &shape).expect("tensor");
+        let tensor =
+            frame_region_to_recognition_tensor(&frame.view(), region, &shape).expect("tensor");
         // ceil(3 / 2 * 3) = 5 columns. Half-pixel positions are -0.2, 0.4,
         // 1, 1.6, 2.2 horizontally and -1/6, 1/2, 7/6 vertically.
         let expected_bgr: [[u8; 15]; 3] = [
@@ -2038,11 +2045,11 @@ mod tests {
                 ..region
             },
         ] {
-            assert!(frame_region_to_recognition_tensor(&frame, invalid, &shape).is_err());
+            assert!(frame_region_to_recognition_tensor(&frame.view(), invalid, &shape).is_err());
         }
         frame.pixels.truncate(3);
-        let error =
-            frame_region_to_recognition_tensor(&frame, region, &shape).expect_err("short pixels");
+        let error = frame_region_to_recognition_tensor(&frame.view(), region, &shape)
+            .expect_err("short pixels");
         assert!(error.contains("pixel buffer ended"));
     }
 
@@ -2081,7 +2088,7 @@ mod tests {
                 pixels,
             };
             let tensor =
-                frame_region_to_recognition_tensor(&frame, region, &shape).expect("tensor");
+                frame_region_to_recognition_tensor(&frame.view(), region, &shape).expect("tensor");
             // Aspect width 4 caps to 3. The middle uint8 sample is 0: retaining
             // the clamped row weights 1/4 and 3/4 gives (0 + 1 + 2) >> 2.
             assert_eq!(tensor.len(), 18);
@@ -2149,7 +2156,7 @@ mod tests {
         };
 
         assert!(is_full_frame_region(
-            &frame,
+            &frame.view(),
             VisionRect {
                 x: 0,
                 y: 0,
@@ -2158,7 +2165,7 @@ mod tests {
             }
         ));
         assert!(!is_full_frame_region(
-            &frame,
+            &frame.view(),
             VisionRect {
                 x: 1,
                 y: 0,
@@ -2182,7 +2189,7 @@ mod tests {
             width: 160,
             height: 32,
         };
-        assert!(!is_full_frame_region(&frame, region));
+        assert!(!is_full_frame_region(&frame.view(), region));
 
         let result = canonical_roi_result(
             DecodedText {
@@ -2200,79 +2207,6 @@ mod tests {
         assert_eq!(result.blocks[0].text, "home");
         assert_eq!(result.blocks[0].rect, region);
         assert_eq!(result.blocks[0].confidence, Some(0.99));
-    }
-
-    #[test]
-    fn exported_read_text_reports_provider_panic() {
-        let mut response = VisionFfiOwnedBuffer::default();
-        PANIC_ON_NEXT_READ_TEXT.with(|flag| flag.set(true));
-
-        let status = unsafe {
-            ac_fastdeploy_ppocr_read_text_json(
-                std::ptr::null(),
-                0,
-                &mut response as *mut VisionFfiOwnedBuffer,
-            )
-        };
-
-        assert_eq!(status, 2);
-        let text = take_exported_response_text(response);
-        assert!(text.contains("panicked"));
-    }
-
-    #[test]
-    fn exported_provider_timeout_uses_stable_status() {
-        let mut response = VisionFfiOwnedBuffer::default();
-
-        let status = invoke_provider(&mut response, |_diagnostics| {
-            Err(ProviderInvokeError::timeout(
-                "injected deterministic timeout",
-            ))
-        });
-
-        assert_eq!(status, 3);
-        let text = take_exported_response_text(response);
-        assert!(text.contains("injected deterministic timeout"));
-    }
-
-    #[test]
-    fn exported_free_buffer_ignores_malformed_metadata() {
-        let null_with_length = VisionFfiOwnedBuffer {
-            data: std::ptr::null_mut(),
-            len: 1,
-            capacity: 1,
-        };
-        let capacity_smaller_than_length = VisionFfiOwnedBuffer {
-            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
-            len: 2,
-            capacity: 1,
-        };
-        let oversized = VisionFfiOwnedBuffer {
-            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
-            len: 1,
-            capacity: usize::MAX,
-        };
-
-        assert!(!null_with_length.has_releasable_metadata());
-        assert!(!capacity_smaller_than_length.has_releasable_metadata());
-        assert!(!oversized.has_releasable_metadata());
-        unsafe {
-            ac_vision_free_buffer(null_with_length);
-            ac_vision_free_buffer(capacity_smaller_than_length);
-            ac_vision_free_buffer(oversized);
-        }
-    }
-
-    fn take_exported_response_text(response: VisionFfiOwnedBuffer) -> String {
-        assert!(response.len > 0);
-        assert!(response.has_releasable_metadata());
-        // SAFETY: the exported provider returned metadata validated above, and
-        // the bytes are copied before the paired provider deallocator runs.
-        let bytes = unsafe { slice::from_raw_parts(response.data, response.len) }.to_vec();
-        unsafe {
-            ac_vision_free_buffer(response);
-        }
-        String::from_utf8(bytes).expect("utf8")
     }
 
     fn test_session_key(backend: OnnxExecutionProvider) -> OcrSessionKey {
