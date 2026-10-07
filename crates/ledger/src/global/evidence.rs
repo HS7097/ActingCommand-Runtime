@@ -159,6 +159,8 @@ impl GlobalLedgerEvidence {
             }
         }
     }
+    /// The sequence of the last event read. For an `sqlite_prefix` opening this is the prefix
+    /// end, not the source's head; use `read_extent().head_sequence` for the head.
     pub fn latest_sequence(&self) -> u64 {
         self.events().last().map_or(0, PersistedEvent::sequence)
     }
