@@ -14,7 +14,8 @@
 //! `return_home` runs the failed run's bound recovery package as a standalone contained task
 //! (when it bound none, the return-home package actingd configures for its package's game and
 //! server, with the longest response deadline; Workflow #336 L2d),
-//! `application_restart` schedules and runs the instance's startup package, and
+//! `application_restart` force-stops the instance's assigned application and then schedules
+//! and runs the instance's startup package (Workflow #369-2), and
 //! `emulator_restart` confirms Stop before Start through the existing control owner, then
 //! prepares the discovered binding. Environment readiness and a configured package's target
 //! attainment are separate facts. Missing packages or known unavailable entry channels skip
@@ -91,6 +92,17 @@ impl RecoveryLadderWindow {
     pub(super) fn is_running(&self) -> bool {
         self.running
     }
+}
+
+/// Workflow #369-2: what the application restart rung does after its entry checks.
+enum RestartEntry {
+    /// A known unavailable entry channel or ADB: skip the rung, the game untouched.
+    Skip(RecoveryRungSkipReason),
+    /// Stop the assigned application, then run the startup package.
+    Stop,
+    /// The startup package cannot be admitted: run it without the stop, so its admission
+    /// failure is recorded as before.
+    RunOnly,
 }
 
 enum RungAttempt {
@@ -689,19 +701,199 @@ impl HostShared {
         )
     }
 
-    /// R2: schedules (`startup_package_scheduled` under the ladder's links) and runs the
-    /// instance's startup package.
+    /// R2: restarts the instance's assigned application. Workflow #369-2: the entry checks the
+    /// startup package's run would make come first (review M2), and a known unavailable channel
+    /// or an ADB baseline that does not answer skips the rung without touching the game. Then
+    /// the assigned application is force-stopped through the existing application lifecycle
+    /// path (`stop_assigned_application`), and the startup package is scheduled
+    /// (`startup_package_scheduled` under the ladder's links) and run, which launches the game
+    /// and confirms its page. A failed stop fails the rung with its code; after the stop the
+    /// rung no longer skips. A startup package that cannot be admitted is run without the stop,
+    /// so its admission failure is recorded as before and the game is left alone.
     fn recovery_application_restart(
         &self,
         pending: &PendingRecoveryLadder,
         resolved: &RegisteredInstance,
     ) -> RuntimeHostResult<RungAttempt> {
+        let request = self
+            .startup_packages()?
+            .get(&pending.instance_id)
+            .cloned()
+            .ok_or_else(|| ladder_invariant("recovery_ladder_startup_package_missing"))?;
+        let stops = match self.recovery_restart_entry(pending, &request)? {
+            RestartEntry::Skip(reason) => return Ok(RungAttempt::Skipped { reason }),
+            RestartEntry::Stop => true,
+            RestartEntry::RunOnly => false,
+        };
+        if stops && let Err(reason) = self.stop_assigned_application(pending, resolved)? {
+            return Ok(RungAttempt::Failed {
+                run_id: None,
+                reason,
+            });
+        }
         let mut startup = self
             .prepare_startup_package(resolved, pending.links.clone(), pending.request_id)
             .map_err(|failure| *failure.error)?
             .ok_or_else(|| ladder_invariant("recovery_ladder_startup_package_missing"))?;
         startup.recovery_rung = true;
-        self.run_recovery_rung_package(&startup, false)
+        self.run_recovery_rung_package(&startup, stops)
+    }
+
+    /// Workflow #369-2 (review M2): the checks the rung's startup package run makes before any
+    /// lease (`run_startup_package`), made before the game is stopped: its admission, a known
+    /// unavailable capture or input channel its entry needs, and the ADB baseline the stop and
+    /// the launch need (30 s, as the run waits).
+    fn recovery_restart_entry(
+        &self,
+        pending: &PendingRecoveryLadder,
+        request: &ContainedTaskRequest,
+    ) -> RuntimeHostResult<RestartEntry> {
+        let prepared = match super::contained_task::prepare_contained_task(
+            &pending.instance_alias,
+            request,
+            self.execution()?.vision_provider(),
+            Instant::now() + Duration::from_millis(request.response_deadline_ms()),
+        ) {
+            Ok(prepared) => prepared,
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                return Err(*failure.error);
+            }
+            Err(_) => return Ok(RestartEntry::RunOnly),
+        };
+        let (capture, input) = prepared.recovery_entry_channels();
+        if let Some(reason) = self
+            .recovery_entry_unavailable(pending.instance_id, capture, input)?
+            .and_then(recovery_entry_skip)
+        {
+            return Ok(RestartEntry::Skip(reason));
+        }
+        if let Err(error) = self.execution()?.probe_adb_baseline_until(
+            &pending.instance_alias,
+            Instant::now() + Duration::from_secs(30),
+            &|| self.fatal.is_shutdown_requested(),
+        ) {
+            if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+                return Err(RuntimeHostError::execution(LADDER_OPERATION, &error));
+            }
+            return Ok(RestartEntry::Skip(RecoveryRungSkipReason::AdbUnavailable));
+        }
+        Ok(RestartEntry::Stop)
+    }
+
+    /// Workflow #369-2: force-stops the instance's assigned application as a host-minted
+    /// `ApplicationLifecycle { Stop }` request under the ladder's causation id, minted as a
+    /// startup package run's request is, with its own lease on the startup package connection:
+    /// `command.received` / `command.validated`, then the existing `application.intent` /
+    /// `application.completed`, then the lease's release. A non-fatal failure is recorded as a
+    /// runtime lifecycle failure and returned as the rung's reason.
+    fn stop_assigned_application(
+        &self,
+        pending: &PendingRecoveryLadder,
+        resolved: &RegisteredInstance,
+    ) -> RuntimeHostResult<Result<(), &'static str>> {
+        let action = actingcommand_contract::ApplicationLifecycleAction::Stop;
+        let instance_alias = resolved.instance_alias.as_str();
+        let issuer = self.events.issuer();
+        let request_id = issuer
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let correlation_id = issuer
+            .mint_correlation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let (actor, source) = scheduled_request_transport_origin(resolved.provenance());
+        let message = RuntimeRequest::new(
+            request_id,
+            correlation_id,
+            Some(pending.causation_id),
+            actor,
+            source,
+            unix_ms_now()?,
+            RuntimeOperation::ApplicationLifecycle {
+                instance_alias: instance_alias.to_owned(),
+                holder_id,
+                action,
+            },
+        )
+        .map_err(|_| ladder_invariant("recovery_application_stop_request_invalid"))?;
+        let validated = message
+            .validate()
+            .map_err(|_| ladder_invariant("recovery_application_stop_request_invalid"))?;
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler("build_recovery_application_stop_connection", &error)
+            })?;
+        let links = self
+            .events
+            .request_links(&validated, Some(pending.instance_id), None, None);
+        for payload in [
+            CommandPayloadDraft::received(action.event_action(), AuditInput::new()),
+            CommandPayloadDraft::validated(
+                action.event_action(),
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        ] {
+            self.append_event_raw(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links.clone(),
+                payload,
+            )?;
+        }
+        let stopped = self
+            .acquire_lease(RuntimeLeaseAcquisition {
+                request: &validated,
+                request_id: message.request_id(),
+                instance_alias,
+                holder_id,
+                connection_id,
+                run_links: None,
+                lease_ttl_ms: None,
+            })
+            .and_then(|acquired| {
+                let RuntimeResult::LeaseGranted { token } = acquired.result else {
+                    return Err(RequestFailure::poison_without_terminal(ladder_invariant(
+                        "recovery_application_stop_lease_result_invalid",
+                    )));
+                };
+                match self
+                    .application_control(&validated, &token, action, connection_id, None)
+                    .and_then(|_| {
+                        self.release_lease(
+                            &validated,
+                            message.request_id(),
+                            &token,
+                            connection_id,
+                            None,
+                        )
+                    }) {
+                    Ok(_) => Ok(()),
+                    Err(failure) => {
+                        Err(self.cleanup_composite_failure(token, connection_id, failure))
+                    }
+                }
+            });
+        match stopped {
+            Ok(()) => Ok(Ok(())),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err(*failure.error)
+            }
+            Err(failure) => {
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    links,
+                    None,
+                )?;
+                Ok(Err(failure.error.code()))
+            }
+        }
     }
 
     /// R3: the existing provider confirms the old process gone before the current instance
@@ -964,8 +1156,9 @@ impl HostShared {
 
     /// Runs a rung's package; it recovers when the run completes with `success` (its target
     /// page reached). A failure was already recorded by the runner. After a destructive action
-    /// (the emulator restart, Workflow #369-1) an unavailable entry channel or ADB fails the
-    /// rung instead of skipping it, so `rungs_tried` counts the action that ran.
+    /// (the emulator restart, Workflow #369-1; the application stop, Workflow #369-2) an
+    /// unavailable entry channel or ADB fails the rung instead of skipping it, so `rungs_tried`
+    /// counts the action that ran.
     fn run_recovery_rung_package(
         &self,
         run: &PendingStartupPackage,

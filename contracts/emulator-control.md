@@ -331,9 +331,20 @@ Rungs, in this fixed order, each existing work under the instance lease:
   probe failure, when the admitted actions need ADB, is `recovery_ladder_adb_not_ready`;
   admission refusals keep their `contained_task_package_*` code; failures are recorded as
   `runtime.failed` with category `recovery_ladder`.
-- `application_restart`: the instance's startup package is scheduled
-  (`startup_package_scheduled` under the ladder's links, a fresh causation id) and run, exactly
-  as after `emulator start`. Skipped with `no_startup_package` when none is configured.
+- `application_restart`: the assigned application is restarted (Workflow #369-2, Alice's
+  09-25 ruling "restore home, then restart the application, then restart the emulator"). The
+  checks the startup package's run makes come first: a known unavailable capture or input
+  channel its entry needs skips the rung (`capture_unavailable` / `input_unavailable`), and an
+  ADB baseline that does not answer within 30 s skips it (`adb_unavailable`), with the game
+  untouched. Then the assigned `application_id` is force-stopped by a host-minted
+  `ApplicationLifecycle { stop }` request under the ladder's causation id, with its own lease
+  (`command.received`, `command.validated`, `application.intent`, `application.completed`); a
+  failed stop fails the rung with its code, recorded as `runtime.failed`. Then the instance's
+  startup package is scheduled (`startup_package_scheduled` under the ladder's links, a fresh
+  causation id) and run, as after `emulator start`; after the stop an unavailable entry fails
+  the rung instead of skipping it. A startup package that cannot be admitted is run without the
+  stop, so its admission failure is recorded as before. Skipped with `no_startup_package` when
+  none is configured.
 - `emulator_restart`: Stop and then Start through this contract's existing provider control
   path, under one instance admission guard. Each action records `command.received`, then
   `command.validated` or `command.rejected` + `runtime.failed`. Stop must observe the old
