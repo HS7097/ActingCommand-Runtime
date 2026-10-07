@@ -598,10 +598,11 @@ that predicate Unknown with reason `type_mismatch`; a record missing its
 timestamp field resolves it Unknown with `field_missing` (the selection-policy
 words; Workflow #355 D12). Neither fails the evaluation: the other tasks and
 instances evaluate and dispatch normally, and the reason surfaces as the
-planning signal `<fact_key>.type_mismatch` or `<fact_key>.field_missing`. Like
-`fact_missing`, each new fact snapshot reserves one more detection for that
-instance's activity window, so an unrepaired pack type error ends as one
-detection-quota-exhausted signal per window. Errors of the catalog's own
+planning signal `<fact_key>.type_mismatch` or `<fact_key>.field_missing`. Each
+new fact snapshot reserves one more detection for that instance's activity
+window when that instance has no other dispatch in the cycle and its activity
+window is open (as for `fact_missing`), so an unrepaired pack type error ends as
+one detection-quota-exhausted signal per window. Errors of the catalog's own
 comparison (an operator on kinds it does not accept, such as `contains` on two
 integers) and arithmetic overflow still fail the evaluation; Runtime reports
 them as `policy_evaluation_rejected` and keeps the policy code and message as
