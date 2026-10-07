@@ -256,10 +256,12 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
             state.input_count.load(Ordering::Acquire),
             usize::from(!leaves_home)
         );
-        assert_eq!(
-            state.capture_count.load(Ordering::Acquire),
-            if leaves_home { 2 } else { 3 }
-        );
+        // Workflow #371-3: a page that left Home is awaited for the entry window first.
+        if leaves_home {
+            assert!(state.capture_count.load(Ordering::Acquire) >= 2);
+        } else {
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 3);
+        }
         let events = projected_events(
             &mut client,
             EventQuery {
@@ -518,7 +520,8 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     let receipt = client.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
-    assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+    // Workflow #371-3: the entry check waits its window before entry recovery is tried.
+    assert!(state.capture_count.load(Ordering::Acquire) >= 1);
     let events = projected_events(
         &mut client,
         EventQuery {

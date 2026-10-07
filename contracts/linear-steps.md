@@ -553,6 +553,17 @@ home page, while a `linear_steps` package's final page (a Lab page id such as
 places behave exactly as before; with neither, the rung is skipped (`no_recovery_package`) and
 the home entry fails with `contained_task_home_recovery_binding_missing`.
 
+**Page-graph home entry wait (Workflow #371-3).** The host's page-graph home entry check
+(`EntryRecognition { Initial }`, and `{ PostRecovery }` after the recovery or return-home
+package) no longer looks at one frame. Without target consensus it evaluates the required page
+one frame at a time, every capture interval of the package, until the page passes or
+`min(step_timeout_ms, task timeout)` is spent; each capture is a `CapturePage` boundary and each
+sleep a `PageRecognitionWait` boundary of its own `entry_recovery` budget, and the fact is
+written once with the result. The kernel's own ordinary home entry check waits the same way
+(`contracts/ocr-fields.md`). A pack with target consensus keeps its single consensus verdict,
+and offline simulation keeps the single frame. A run that starts away from home reaches entry
+recovery up to that window later.
+
 **Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
 detail of its task failure is always the native detail of a runtime lifecycle failure record
 (the existing `runtime.failed` with its lifecycle part) written right after the task terminal
