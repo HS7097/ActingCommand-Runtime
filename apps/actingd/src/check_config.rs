@@ -7,8 +7,9 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_manager};
 use actingcommand_runtime_host::{
-    ExecutionBackendProvider, ExecutionBackendRegistry, ResolvedAdbEndpoint,
-    ResolvedInstanceEndpoint, RuntimeHostConfig,
+    CatalogGeneration, CatalogPreview, CatalogPreviewRequest, ExecutionBackendProvider,
+    ExecutionBackendRegistry, ResolvedAdbEndpoint, ResolvedInstanceEndpoint, RuntimeHostConfig,
+    preview_policy_catalog_transition,
 };
 use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider};
 use config::InstanceBindingKey;
@@ -17,8 +18,11 @@ use std::path::Path;
 
 const CHECK_CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v1";
 /// Inputs this command cannot validate: vision model content is read and hashed only when a
-/// model is first used (Workflow #360), and nothing under `state_root` is inspected here.
-const NOT_CHECKED: [&str; 2] = ["vision_model_content", "state_root"];
+/// model is first used (Workflow #360). Since Workflow #361 C3 the state root is read
+/// read-only; `state_root_absent` is added when it does not exist.
+const NOT_CHECKED: [&str; 1] = ["vision_model_content"];
+/// Added to `not_checked` when the configured state root does not exist (Workflow #361 C3).
+const STATE_ROOT_ABSENT_NOT_CHECKED: &str = "state_root_absent";
 /// Added to `not_checked` when a `resource_package` is a directory whose name is not a content
 /// digest: the field carries no reference to admit such a directory against (Workflow #288).
 const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
@@ -33,9 +37,10 @@ const DEVICE_PATH_NAMES: [&str; 5] = [
     "maatouch_path",
 ];
 
-/// Loads, assembles and validates a configuration exactly as startup would, then stops
-/// before the first side effect: nothing under `state_root` is created, read or locked,
-/// no ledger is opened and no socket is bound.
+/// Loads, assembles and validates a configuration exactly as startup would, then previews
+/// startup's catalog plan against the state root's ledger, read-only (Workflow #361 C3):
+/// nothing under `state_root` is created, locked or written, no owner lock is taken and no
+/// socket is bound.
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     if arguments.len() > 3 {
         return Err(ActingdError::config("check_config_usage_invalid"));
@@ -123,7 +128,30 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             adb_default,
             vision,
         };
-        summarize(&config_path, &checked, &resource_packages)
+        let mut report = summarize(&config_path, &checked, &resource_packages)?;
+        // Workflow #361 C3: the plan startup would make, from the ledger read-only.
+        let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {
+            state_root: checked.host.state_root(),
+            catalog: policy.as_ref().map(|policy| &policy.catalog),
+            transition: policy
+                .as_ref()
+                .and_then(|policy| policy.catalog_transition.as_ref()),
+            approval_ids: policy
+                .as_ref()
+                .map_or(&[][..], |policy| policy.catalog_approval_ids.as_slice()),
+        })
+        .map_err(|refused| {
+            let code = refused.code();
+            rejection = Some(Rejection::PolicyState(Box::new(refused)));
+            (code, "policy_state")
+        })?;
+        report["policy_plan"] = policy_plan_report(&preview);
+        if !preview.state_root_present()
+            && let Some(not_checked) = report["not_checked"].as_array_mut()
+        {
+            not_checked.push(json!(STATE_ROOT_ABSENT_NOT_CHECKED));
+        }
+        Ok(report)
     });
     let (report, result) = match checked {
         Ok(report) => (report, Ok(())),
@@ -134,6 +162,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 let (detail, message) = match rejection {
                     Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
                     Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
+                    Rejection::PolicyState(refused) => (
+                        json!({
+                            "operation": refused.operation(),
+                            "message": refused.to_string(),
+                        }),
+                        refused.to_string(),
+                    ),
                     Rejection::Vision(refused) => (
                         json!({ "message": refused.message }),
                         refused.message.clone(),
@@ -186,6 +221,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
 enum Rejection {
     ResourcePackage(config::ResourcePackageRejection),
     AdbInstall(config::ac_adb::AdbInstallRejection),
+    /// Workflow #361 C3: startup's catalog plan refused, or the state root unreadable.
+    PolicyState(Box<actingcommand_runtime_host::RuntimeHostError>),
     Vision(config::VisionRefusal),
     VisionFolders(Vec<InvalidModelFolder>),
 }
@@ -208,6 +245,37 @@ struct CheckedAssembly {
     adb_default: Option<config::ac_adb::AdbDefault>,
     /// Workflow #360: the listed vision root; `None` when `vision` is absent.
     vision: Option<serde_json::Value>,
+}
+
+/// Workflow #361 C3: `policy_plan`, startup's catalog plan as previewed from the ledger.
+fn policy_plan_report(preview: &CatalogPreview) -> serde_json::Value {
+    let generation = |generation: Option<&CatalogGeneration>| {
+        generation.map_or(serde_json::Value::Null, |generation| {
+            json!({
+                "catalog_id": generation.catalog_id(),
+                "catalog_version": generation.catalog_version(),
+                "catalog_hash": generation.catalog_hash(),
+            })
+        })
+    };
+    let ids = |records: &[actingcommand_contract::ApprovalDecisionRecord]| {
+        records
+            .iter()
+            .map(|record| record.approval_id().to_owned())
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "state": if preview.state_root_present() { "read" } else { "state_root_absent" },
+        "active": generation(preview.active()),
+        "driver": if preview.configured().is_some() { "on" } else { "off" },
+        "configured": generation(preview.configured()),
+        "plan": preview.plan().map(|plan| plan.as_str()),
+        "approvals": preview.approvals().map(|approvals| json!({
+            "record": ids(approvals.record()),
+            "reapprove": ids(approvals.reapprove()),
+            "revoke": ids(approvals.revoke()),
+        })),
+    })
 }
 
 /// The vision root as listed: its path, execution provider and every model folder.

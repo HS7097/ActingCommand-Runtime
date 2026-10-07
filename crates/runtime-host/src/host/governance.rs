@@ -203,7 +203,12 @@ impl HostShared {
             ));
         }
         let approvals = self.recover_approval_projection("plan_policy_catalog_approvals")?;
-        crate::catalog_plan::plan_catalog_approvals(&approvals, lineage, generation, approval_ids)
+        crate::catalog_plan::plan_catalog_approvals(
+            Some(&approvals),
+            lineage,
+            generation,
+            approval_ids,
+        )
     }
 
     /// The complete ledger-verified approval projection, recovered under the governance write

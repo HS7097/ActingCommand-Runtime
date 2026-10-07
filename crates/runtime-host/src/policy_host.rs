@@ -2,6 +2,10 @@
 
 //! Runtime-owned catalog generations and replayable policy admission state.
 
+mod catalog_preview;
+pub use catalog_preview::{
+    CatalogPreview, CatalogPreviewRequest, preview_policy_catalog_transition,
+};
 mod catalog_transaction;
 pub(crate) use catalog_transaction::catalog_ledger_error;
 mod planning_transaction;
@@ -3286,6 +3290,19 @@ impl CatalogStore {
             memo: Mutex::new(CatalogMemo::default()),
         };
         Ok(store)
+    }
+
+    /// Workflow #361 C3: the same store over an existing state root, read only: no directory
+    /// is created and nothing is staged or migrated.
+    fn open_read_only(state_root: &Path, state: Arc<RuntimeStateStore>) -> Self {
+        let root = state_root.join("policy").join("catalogs");
+        Self {
+            legacy_active_pointer: root.join(ACTIVE_POINTER_FILE),
+            generations: root.join(GENERATIONS_DIR),
+            root,
+            state,
+            memo: Mutex::new(CatalogMemo::default()),
+        }
     }
 
     fn stage(&self, sources: &CatalogSources) -> RuntimeHostResult<LoadedCatalog> {
