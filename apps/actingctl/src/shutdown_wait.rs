@@ -4,12 +4,12 @@
 //! owner journal record and that its process exited. It writes nothing and takes no file lock.
 
 use crate::ActingctlError;
+use crate::process_probe::pid_alive;
 use actingcommand_contract::{OWNER_JOURNAL_LIMIT, RuntimeShutdownTarget};
 use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -126,38 +126,6 @@ fn observe_journal(
     (observed.active, observed.revision) = (Some(active), Some(revision));
     observed.closed_at_unix_ms = closed_at_unix_ms;
     Ok(())
-}
-
-/// No liveness helper exists in actingctl's dependencies and unsafe code is forbidden here, so
-/// this asks the platform process lister: `tasklist` on Windows (exit 0 either way; a match is a
-/// CSV row whose second field is the pid), POSIX `ps` elsewhere (no match: non-zero, no output).
-fn pid_alive(pid: u32) -> Result<bool, String> {
-    let pid_text = pid.to_string();
-    #[cfg(windows)]
-    let output = Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output();
-    #[cfg(not(windows))]
-    let output = Command::new("ps")
-        .args(["-p", &pid_text, "-o", "pid="])
-        .output();
-    let output = output.map_err(|error| format!("process lister did not run: {error}"))?;
-    let listed = String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-        line.split(',')
-            .take(2)
-            .any(|field| field.trim().trim_matches('"') == pid_text)
-    });
-    if listed {
-        return Ok(true);
-    }
-    if output.status.success() || output.stderr.is_empty() {
-        return Ok(false);
-    }
-    Err(format!(
-        "process lister failed: status={} stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    ))
 }
 
 fn failure(code: &'static str, detail: Value) -> ActingctlError {
