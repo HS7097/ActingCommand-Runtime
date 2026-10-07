@@ -240,8 +240,11 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
         .expect("age the FATAL log");
 
     // A formal start clears the exhaustion; after a formal close the watchdog stays down.
+    // The killed owner's runtime-info is still there, so readiness is the watchdog's own
+    // `alive`: the new owner holds the lock and answers (review M1); until then it is
+    // `owner_lock_held`.
     let mut runtime = support::RuntimeChild::spawn(&fixture.state, "c4_runtime_child_process");
-    runtime.wait_ready(&fixture.state);
+    fixture.wait_alive();
     let report = assert_decision(fixture.watchdog(&["run-once"]), 0, "alive");
     assert_eq!(report["budget"]["exhausted_since_unix_ms"], Value::Null);
     runtime.stop_clean();
