@@ -231,7 +231,7 @@ use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
-use recovery_ladder::{RecoveryLadderAdmission, with_recovery_ladder_staging};
+use recovery_ladder::with_recovery_ladder_staging;
 use requests::{
     ActionFailure, ConnectionFailureContext, ConnectionFailureStage, RequestFailure,
     TaskFailureEvidence, client_fact_conflict, connection_boundary, critical_execution_error,
@@ -1295,7 +1295,6 @@ impl RuntimeHost {
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
-            parked_recovery_ladders: Mutex::new(BTreeMap::new()),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
@@ -2974,11 +2973,10 @@ struct HostShared {
     pending_host_work: Mutex<VecDeque<startup_package::PendingHostWork>>,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
-    // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults), the
-    // per-instance ladder window, and direct-run triggers waiting for their receipt write.
+    // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
+    // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
     recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
-    parked_recovery_ladders: Mutex<BTreeMap<RequestId, recovery_ladder::PendingRecoveryLadder>>,
     // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.

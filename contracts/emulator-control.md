@@ -278,7 +278,7 @@ that belongs to emulator control:
 
 ## Stuck-recovery ladder (slice #316-B4)
 
-A contained task run on a physical instance, direct (`task-run`) or scheduled (policy), whose
+A scheduled (policy) contained task run on a physical instance whose
 `task.failed` terminal carries `failure_code` `contained_task_page_unknown`, any
 `contained_task_recovery_*` code or any `contained_task_home_recovery_*` code (entry recovery /
 return home failed, for example `contained_task_home_recovery_persistently_non_home`) starts a
@@ -288,18 +288,24 @@ instances, startup package runs and the ladder's own rung runs never trigger one
 `contained_task_prerequisite_*` codes a `linear_steps` package's prerequisite gate reports
 itself never trigger one, nor does `contained_task_return_home_entry_unmatched`; a code a
 prerequisite or return-home package reports while it runs is judged by the rule above
-(`contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallback"). The ladder
-never runs on the run's thread: a direct run's trigger waits until its connection wrote the
-failure receipt, a scheduled run's trigger (no client receipt) is admitted as the run returns
-its failure, and the accepted ladder is queued for the scheduling thread of the startup package hook
+(`contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallback"). A direct run
+(`actingctl task-run`, the console's task run, MCP `ac_run_pack`) never starts a ladder
+(Workflow #369-3, coordinator ruling Q1: the ladder exists for the routine; whoever ran it has
+the receipt and decides); nothing is recorded for it. The ladder never runs on the run's thread:
+a scheduled run's trigger (no client receipt) is admitted as the run returns its failure, and
+the accepted ladder is queued for the scheduling thread of the startup package hook
 (`actingcommand-runtime-startup`). `task.failed` and every receipt keep their shape; the
 original task is never re-run.
 
-Ordinary physical-instance backend failures during startup or connection preparation also
+Ordinary physical-instance backend failures during the daemon start's preparation also
 enter this owner after the original temporary resources and installed session backends have
 confirmed disposition, and the preparation lease has been released. The trigger carries
-`stage: startup_preparation | connection_preparation`, the actual preparation event reference
+`stage: startup_preparation`, the actual preparation event reference
 `preparation { sequence, event_id }`, and the original `failure_code`; it has no task/run IDs.
+A connection preparation (`stage: connection_preparation`) is the preparation of a direct
+request (emulator `start` / `restart`, an instance resume, `SelfCheckInstance`); since
+Workflow #369-3 its failure is recorded as before and starts no ladder. Ledgers written
+earlier may still hold ladders with that trigger stage.
 Successful fallback, invalid input parameters/configuration, admission/budget denial,
 owner/ledger failure and unconfirmed resource disposal do not enter this path. Preparation
 performed by the ladder has `stage: recovery_preparation` and cannot trigger another ladder.
