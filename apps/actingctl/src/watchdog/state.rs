@@ -61,6 +61,7 @@ pub(crate) struct StartRecord {
 }
 
 /// What `load` found besides the state itself.
+#[derive(Debug)]
 pub(crate) enum Loaded {
     Fresh,
     Existing,

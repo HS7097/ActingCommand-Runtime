@@ -455,12 +455,13 @@ pub(crate) fn parse_processes(
             match (pid, path) {
                 (None, _) => Some(Err(format!("process row without a pid: {row}"))),
                 (Some(pid), None) => Some(Ok(RuntimeProcess { pid, path: None })),
-                (Some(pid), Some(path)) => path.to_lowercase().starts_with(&prefix).then(|| {
-                    Ok(RuntimeProcess {
+                (Some(pid), Some(path)) => {
+                    let under_root = path.to_lowercase().starts_with(&prefix);
+                    under_root.then_some(Ok(RuntimeProcess {
                         pid,
                         path: Some(path),
-                    })
-                }),
+                    }))
+                }
             }
         })
         .collect()
