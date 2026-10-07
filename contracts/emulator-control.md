@@ -342,9 +342,10 @@ Rungs, in this fixed order, each existing work under the instance lease:
   failed stop fails the rung with its code, recorded as `runtime.failed`. Then the instance's
   startup package is scheduled (`startup_package_scheduled` under the ladder's links, a fresh
   causation id) and run, as after `emulator start`; after the stop an unavailable entry fails
-  the rung instead of skipping it. A startup package that cannot be admitted is run without the
-  stop, so its admission failure is recorded as before. Skipped with `no_startup_package` when
-  none is configured.
+  the rung instead of skipping it. A startup package that cannot be admitted, whose
+  prerequisite chain is refused, or that declares resource readings (a startup run's
+  incompatibility) is run without the stop, so its refusal is recorded as before and the game
+  is left alone. Skipped with `no_startup_package` when none is configured.
 - `emulator_restart`: Stop and then Start through this contract's existing provider control
   path, under one instance admission guard. Each action records `command.received`, then
   `command.validated` or `command.rejected` + `runtime.failed`. Stop must observe the old

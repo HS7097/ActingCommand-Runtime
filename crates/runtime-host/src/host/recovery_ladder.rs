@@ -100,8 +100,9 @@ enum RestartEntry {
     Skip(RecoveryRungSkipReason),
     /// Stop the assigned application, then run the startup package.
     Stop,
-    /// The startup package cannot be admitted: run it without the stop, so its admission
-    /// failure is recorded as before.
+    /// The startup package cannot be admitted, its prerequisite chain is refused, or it is
+    /// incompatible with a startup run: run it without the stop, so its refusal is recorded as
+    /// before.
     RunOnly,
 }
 
@@ -708,8 +709,9 @@ impl HostShared {
     /// path (`stop_assigned_application`), and the startup package is scheduled
     /// (`startup_package_scheduled` under the ladder's links) and run, which launches the game
     /// and confirms its page. A failed stop fails the rung with its code; after the stop the
-    /// rung no longer skips. A startup package that cannot be admitted is run without the stop,
-    /// so its admission failure is recorded as before and the game is left alone.
+    /// rung no longer skips. A startup package that cannot be admitted, or whose prerequisite
+    /// chain or startup compatibility refuses it, is run without the stop, so its refusal is
+    /// recorded as before and the game is left alone.
     fn recovery_application_restart(
         &self,
         pending: &PendingRecoveryLadder,
@@ -740,19 +742,23 @@ impl HostShared {
     }
 
     /// Workflow #369-2 (review M2): the checks the rung's startup package run makes before any
-    /// lease (`run_startup_package`), made before the game is stopped: its admission, a known
-    /// unavailable capture or input channel its entry needs, and the ADB baseline the stop and
-    /// the launch need (30 s, as the run waits).
+    /// lease (`run_startup_package`), made before the game is stopped: its admission, its
+    /// prerequisite chain and its startup compatibility (no resource readings; review L-R5-1),
+    /// a known unavailable capture or input channel its entry needs, and the ADB baseline the
+    /// stop and the launch need (30 s, as the run waits). The run makes the admission
+    /// refusals again and records them as before.
     fn recovery_restart_entry(
         &self,
         pending: &PendingRecoveryLadder,
         request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<RestartEntry> {
+        let material_deadline =
+            Instant::now() + Duration::from_millis(request.response_deadline_ms());
         let prepared = match super::contained_task::prepare_contained_task(
             &pending.instance_alias,
             request,
             self.execution()?.vision_provider(),
-            Instant::now() + Duration::from_millis(request.response_deadline_ms()),
+            material_deadline,
         ) {
             Ok(prepared) => prepared,
             Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
@@ -760,6 +766,19 @@ impl HostShared {
             }
             Err(_) => return Ok(RestartEntry::RunOnly),
         };
+        if let Err(failure) =
+            self.resolve_prerequisite_chain(&pending.instance_alias, &prepared, || {
+                Ok(material_deadline)
+            })
+        {
+            if failure.poison_runtime || failure.error.is_fatal() {
+                return Err(*failure.error);
+            }
+            return Ok(RestartEntry::RunOnly);
+        }
+        if prepared.startup_incompatibility().is_some() {
+            return Ok(RestartEntry::RunOnly);
+        }
         let (capture, input) = prepared.recovery_entry_channels();
         if let Some(reason) = self
             .recovery_entry_unavailable(pending.instance_id, capture, input)?
