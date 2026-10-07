@@ -93,8 +93,9 @@ enum RestartEntry {
     Skip(RecoveryRungSkipReason),
     /// Stop the assigned application, then run the startup package.
     Stop,
-    /// The startup package cannot be admitted: run it without the stop, so its admission
-    /// failure is recorded as before.
+    /// The startup package cannot be admitted, its prerequisite chain is refused, or it is
+    /// incompatible with a startup run: run it without the stop, so its refusal is recorded as
+    /// before.
     RunOnly,
 }
 
@@ -686,8 +687,9 @@ impl HostShared {
     /// path (`stop_assigned_application`), and the startup package is scheduled
     /// (`startup_package_scheduled` under the ladder's links) and run, which launches the game
     /// and confirms its page. A failed stop fails the rung with its code; after the stop the
-    /// rung no longer skips. A startup package that cannot be admitted is run without the stop,
-    /// so its admission failure is recorded as before and the game is left alone.
+    /// rung no longer skips. A startup package that cannot be admitted, or whose prerequisite
+    /// chain or startup compatibility refuses it, is run without the stop, so its refusal is
+    /// recorded as before and the game is left alone.
     fn recovery_application_restart(
         &self,
         pending: &PendingRecoveryLadder,
@@ -718,19 +720,23 @@ impl HostShared {
     }
 
     /// Workflow #369-2 (review M2): the checks the rung's startup package run makes before any
-    /// lease (`run_startup_package`), made before the game is stopped: its admission, a known
-    /// unavailable capture or input channel its entry needs, and the ADB baseline the stop and
-    /// the launch need (30 s, as the run waits).
+    /// lease (`run_startup_package`), made before the game is stopped: its admission, its
+    /// prerequisite chain and its startup compatibility (no resource readings; review L-R5-1),
+    /// a known unavailable capture or input channel its entry needs, and the ADB baseline the
+    /// stop and the launch need (30 s, as the run waits). The run makes the admission
+    /// refusals again and records them as before.
     fn recovery_restart_entry(
         &self,
         pending: &PendingRecoveryLadder,
         request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<RestartEntry> {
+        let material_deadline =
+            Instant::now() + Duration::from_millis(request.response_deadline_ms());
         let prepared = match super::contained_task::prepare_contained_task(
             &pending.instance_alias,
             request,
             self.execution()?.vision_provider(),
-            Instant::now() + Duration::from_millis(request.response_deadline_ms()),
+            material_deadline,
         ) {
             Ok(prepared) => prepared,
             Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
@@ -738,6 +744,19 @@ impl HostShared {
             }
             Err(_) => return Ok(RestartEntry::RunOnly),
         };
+        if let Err(failure) =
+            self.resolve_prerequisite_chain(&pending.instance_alias, &prepared, || {
+                Ok(material_deadline)
+            })
+        {
+            if failure.poison_runtime || failure.error.is_fatal() {
+                return Err(*failure.error);
+            }
+            return Ok(RestartEntry::RunOnly);
+        }
+        if prepared.startup_incompatibility().is_some() {
+            return Ok(RestartEntry::RunOnly);
+        }
         let (capture, input) = prepared.recovery_entry_channels();
         if let Some(reason) = self
             .recovery_entry_unavailable(pending.instance_id, capture, input)?
@@ -1002,11 +1021,15 @@ impl HostShared {
     /// touch.ok`, no failure code), within `deadline`. The admission guard Start held covers the
     /// first attempt; later attempts take it again, and it is released while waiting, so the
     /// policy thread is never blocked by the wait (a failed preparation already withholds the
-    /// instance from policy). A failed preparation is retried only when the existing rule calls
-    /// it recoverable or the ADB baseline does not answer (review M3); every retry first waits
-    /// for the ADB baseline (bounded by `deadline`), then 5 s, 10 s, then 20 s, never past
+    /// instance from policy). The wait runs on the host-work thread, so other instances'
+    /// queued startup packages and ladders wait behind it, for at most the window (review L1).
+    /// A failed preparation is retried only when the existing rule calls it recoverable or the
+    /// ADB baseline does not answer (review M3); every retry first polls the ADB baseline until
+    /// it answers (bounded by `deadline`), then waits 5 s, 10 s, then 20 s, never past
     /// `deadline`. Each attempt is rechecked for admission (pause, shutdown, capacity). Returns
-    /// the current binding and the passing preparation event, or the rung's failure reason.
+    /// the current binding and the passing preparation event, or the rung's failure reason:
+    /// `recovery_android_not_booted` when the window ends before the boot check ever passed
+    /// (so no preparation ran, review L-R4-2), otherwise `recovery_environment_not_ready`.
     fn await_recovery_readiness<'guard>(
         &self,
         pending: &PendingRecoveryLadder,
@@ -1017,11 +1040,13 @@ impl HostShared {
         let alias = pending.instance_alias.as_str();
         let mut held = Some(held);
         let mut retries = 0_usize;
+        let mut prepared = false;
         loop {
             if !self.recovery_admitted(pending)? {
                 return Ok(Err("recovery_admission_denied"));
             }
             if self.recovery_android_booted(pending)? {
+                prepared = true;
                 let admission = match held.take() {
                     Some(admission) => admission,
                     None => lock(instance_guard, "lock_instance_admission")?,
@@ -1048,7 +1073,12 @@ impl HostShared {
             drop(held.take());
             let wait =
                 RECOVERY_READINESS_BACKOFF[retries.min(RECOVERY_READINESS_BACKOFF.len() - 1)];
-            if let Some(reason) = self.await_recovery_retry(alias, wait, deadline)? {
+            let not_ready = if prepared {
+                "recovery_environment_not_ready"
+            } else {
+                "recovery_android_not_booted"
+            };
+            if let Some(reason) = self.await_recovery_retry(alias, wait, deadline, not_ready)? {
                 return Ok(Err(reason));
             }
             retries += 1;
@@ -1090,39 +1120,49 @@ impl HostShared {
         }
     }
 
-    /// Before the next readiness attempt: the ADB baseline answers again (bounded by
-    /// `deadline`), then `wait`, polled every 500 ms for shutdown and install drain (review
-    /// L1). `Some(reason)` ends the rung: shutdown, drain, or no time left in the window.
+    /// Before the next readiness attempt: polls the ADB baseline every 500 ms until it answers
+    /// again, as `await_adb_baseline` does (review M-R4-1), then waits `wait`. Both are bounded
+    /// by `deadline` and check shutdown and install drain at every poll (review L1).
+    /// `Some(reason)` ends the rung: shutdown, drain, or no time left in the window
+    /// (`not_ready`).
     fn await_recovery_retry(
         &self,
         alias: &str,
         wait: Duration,
         deadline: Instant,
+        not_ready: &'static str,
     ) -> RuntimeHostResult<Option<&'static str>> {
         let stopped = || self.fatal.is_shutdown_requested();
-        if let Err(error) = self
-            .execution()?
-            .probe_adb_baseline_until(alias, deadline, &stopped)
-        {
-            if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
-                return Err(RuntimeHostError::execution(LADDER_OPERATION, &error));
+        loop {
+            if let Some(reason) = self.recovery_wait_interrupted()? {
+                return Ok(Some(reason));
             }
-            return Ok(Some(if stopped() {
-                "recovery_ladder_shutdown_requested"
-            } else {
-                "recovery_environment_not_ready"
-            }));
+            if Instant::now() >= deadline {
+                return Ok(Some(not_ready));
+            }
+            match self
+                .execution()?
+                .probe_adb_baseline_until(alias, deadline, &stopped)
+            {
+                Ok(()) => break,
+                Err(error) => {
+                    if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+                        return Err(RuntimeHostError::execution(LADDER_OPERATION, &error));
+                    }
+                    thread::sleep(
+                        RECOVERY_READINESS_POLL
+                            .min(deadline.saturating_duration_since(Instant::now())),
+                    );
+                }
+            }
         }
         let until = Instant::now() + wait;
         if until >= deadline {
-            return Ok(Some("recovery_environment_not_ready"));
+            return Ok(Some(not_ready));
         }
         loop {
-            if stopped() {
-                return Ok(Some("recovery_ladder_shutdown_requested"));
-            }
-            if self.lifecycle_draining()? {
-                return Ok(Some("recovery_ladder_drain_requested"));
+            if let Some(reason) = self.recovery_wait_interrupted()? {
+                return Ok(Some(reason));
             }
             let now = Instant::now();
             if now >= until {
@@ -1130,6 +1170,17 @@ impl HostShared {
             }
             thread::sleep(RECOVERY_READINESS_POLL.min(until - now));
         }
+    }
+
+    /// A readiness wait ends at once on shutdown or an install drain (review L1).
+    fn recovery_wait_interrupted(&self) -> RuntimeHostResult<Option<&'static str>> {
+        if self.fatal.is_shutdown_requested() {
+            return Ok(Some("recovery_ladder_shutdown_requested"));
+        }
+        if self.lifecycle_draining()? {
+            return Ok(Some("recovery_ladder_drain_requested"));
+        }
+        Ok(None)
     }
 
     /// Runs a rung's package; it recovers when the run completes with `success` (its target
