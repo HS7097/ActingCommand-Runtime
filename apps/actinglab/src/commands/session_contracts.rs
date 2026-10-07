@@ -1,6 +1,5 @@
 use crate::{
-    CliOutcome, FlagArgs, GlobalOptions, REQUIRE_SESSION_DAEMON_ENV,
-    TRUSTED_REMOTE_CLIENT_CERT_ENV, TRUSTED_REMOTE_TOKEN_ENV, current_unix_ms,
+    CliOutcome, FlagArgs, GlobalOptions, REQUIRE_SESSION_DAEMON_ENV, current_unix_ms,
     reject_legacy_session_routing,
 };
 use serde_json::{Value, json};
@@ -65,11 +64,9 @@ fn session_throat_policy_payload(
                 "reason": "avoid recursive request requeue inside the resident daemon"
             },
             "trusted_remote": {
-                "status": "reserved",
-                "requires_encryption": true,
-                "requires_authentication": true,
-                "blocked_without_auth_code": "trusted_remote_auth_required",
-                "blocked_without_encryption_code": "trusted_remote_transport_blocked"
+                "status": "retired",
+                "available": false,
+                "reason_code": "trusted_remote_transport_retired"
             }
         },
         "lease_gate": {
@@ -562,20 +559,9 @@ pub(crate) fn session_access_contract() -> Value {
                 "command": "actinglab"
             },
             "trusted_remote": {
-                "status": "reserved",
+                "status": "retired",
                 "available": false,
-                "reason_code": "trusted_remote_transport_reserved",
-                "encryption_required": true,
-                "authentication_required": true,
-                "minimum_transport": "TLS or mutually authenticated local IPC",
-                "token_or_certificate_required": true,
-                "plan_command": "session transport plan [--endpoint <url>]",
-                "auth_env": {
-                    "token": TRUSTED_REMOTE_TOKEN_ENV,
-                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
-                },
-                "blocked_without_auth_code": "trusted_remote_auth_required",
-                "blocked_without_encryption_code": "trusted_remote_transport_blocked"
+                "reason_code": "trusted_remote_transport_retired"
             }
         },
         "daemon_routes": {"status": "retired", "available": false, "reason_code": "legacy_session_authority_retired"},
@@ -590,7 +576,6 @@ pub(crate) fn session_access_contract() -> Value {
             "contract": "session request contract",
             "api": "session request api",
             "transport": "session request transport",
-            "transport_plan": "session request transport plan [--endpoint <url>]",
             "transport_check": "session request transport check --endpoint <url>",
             "capabilities": "session request capabilities",
             "readiness": "session request readiness",
@@ -630,7 +615,6 @@ pub(crate) fn session_access_contract() -> Value {
                     "submit-plan",
                     "validation-plan",
                     "contract",
-                    "transport plan",
                     "transport check",
                     "capabilities",
                     "devices",
@@ -767,20 +751,9 @@ pub(crate) fn session_api_contract() -> Value {
                 "authentication_required": false
             },
             "trusted_remote": {
-                "status": "reserved",
+                "status": "retired",
                 "available": false,
-                "reason_code": "trusted_remote_transport_reserved",
-                "network_listener_implemented": false,
-                "encryption_required": true,
-                "authentication_required": true,
-                "minimum_transport": "TLS or mutually authenticated local IPC",
-                "token_or_certificate_required": true,
-                "auth_env": {
-                    "token": TRUSTED_REMOTE_TOKEN_ENV,
-                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
-                },
-                "blocked_without_auth_code": "trusted_remote_auth_required",
-                "blocked_without_encryption_code": "trusted_remote_transport_blocked"
+                "reason_code": "trusted_remote_transport_retired"
             }
         },
         "daemon_request_queue": {
@@ -845,12 +818,6 @@ pub(crate) fn session_api_contract() -> Value {
                 "query": "session transport",
                 "daemon_query": "session request transport",
                 "schema_version": "session.transport.v0.1",
-                "plan_query": "session transport plan [--endpoint <url>]",
-                "daemon_plan_query": "session request transport plan [--endpoint <url>]",
-                "plan_schema_version": "session.transport_plan.v0.1",
-                "plan_next_actions_field": "next_actions",
-                "plan_trusted_remote_gate_field": "trusted_remote_gate",
-                "plan_trusted_remote_gate_schema_version": "session.trusted_remote_gate.v0.1",
                 "check_query": "session transport check --endpoint <url>",
                 "daemon_check_query": "session request transport check --endpoint <url>",
                 "check_schema_version": "session.transport_check.v0.1"
@@ -1076,7 +1043,7 @@ pub(crate) fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "queue", "bootstrap", "readiness", "throat_policy", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "queue", "bootstrap", "readiness", "throat_policy", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -1230,8 +1197,7 @@ pub(crate) fn session_api_contract() -> Value {
             "missing_or_stale_daemon_code": "runtime_not_running",
             "strict_session_throat_failure_code": "validation_failed",
             "control_without_matching_lease_code": "lab_lease_required",
-            "untrusted_remote_endpoint_code": "trusted_remote_transport_blocked",
-            "missing_trusted_remote_auth_code": "trusted_remote_auth_required",
+            "non_local_endpoint_code": "runtime_endpoint_not_local",
             "severe_errors_fail_loud": true
         },
         "out_of_scope": [
@@ -1364,7 +1330,7 @@ fn session_stream_view_contract() -> Value {
         "input_relay_actions": ["tap", "swipe", "long-tap", "key", "text"],
         "input_relay_event_flags": ["--input-relay", "--input-event", "--relay-event"],
         "input_relay_preflight_command": "session command-check stream --input-event <action,args>",
-        "trusted_remote_long_lived_stream_status": "reserved"
+        "trusted_remote_long_lived_stream_status": "retired"
     })
 }
 
@@ -1377,7 +1343,6 @@ fn session_stream_plan_view_contract() -> Value {
         "stream_preflight_field": "stream_preflight",
         "stream_modes_field": "stream_modes",
         "next_actions_field": "next_actions",
-        "trusted_remote_long_lived_status_field": "stream_modes.trusted_remote_long_lived.status",
         "safe_to_open_stream_field": "safe_to_open_stream",
         "blocked_reason_field": "blockers",
         "does_not_enqueue": true,

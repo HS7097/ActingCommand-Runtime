@@ -1,6 +1,5 @@
 use crate::{
-    CliError, CliOutcome, GlobalOptions, REQUIRE_SESSION_DAEMON_ENV,
-    TRUSTED_REMOTE_CLIENT_CERT_ENV, TRUSTED_REMOTE_TOKEN_ENV, effective_resource_root,
+    CliError, CliOutcome, GlobalOptions, REQUIRE_SESSION_DAEMON_ENV, effective_resource_root,
     exit_code_table, find_files, lab2_cli, package_cli, read_user_config, runtime_debug,
 };
 use serde_json::{Value, json};
@@ -94,7 +93,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
-        command_cap("session transport plan", ["offline"], "available"),
+        command_cap("session transport plan", ["offline"], "retired"),
         command_cap("session transport check", ["offline"], "available"),
         command_cap("session stream", ["running_runtime", "device"], "available"),
         command_cap("session stream check", ["offline"], "available"),
@@ -504,6 +503,9 @@ where
             ("retired", "actinglab_device_authority_retired")
         }
         "retired" if command == "lab arbitrator" => ("retired", "legacy_lab2_arbitrator_retired"),
+        "retired" if command == "session transport plan" => {
+            ("retired", "trusted_remote_transport_retired")
+        }
         "retired" => ("retired", "legacy_session_authority_retired"),
         "reserved" => ("reserved", "handler_reserved"),
         "unavailable" => ("unavailable", "lab_lease_required"),
@@ -593,26 +595,15 @@ pub(crate) fn session_layer_capability_contract() -> Value {
             },
             {
                 "id": "trusted_remote",
-                "status": "reserved",
+                "status": "retired",
                 "available": false,
-                "reason_code": "trusted_remote_transport_reserved",
-                "encryption_required": true,
-                "authentication_required": true,
-                "plan_command": "session transport plan [--endpoint <url>]",
-                "preflight_command": "session transport check --endpoint <url>",
-                "auth_env": {
-                    "token": TRUSTED_REMOTE_TOKEN_ENV,
-                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
-                },
-                "blocked_without_auth_code": "trusted_remote_auth_required",
-                "blocked_without_encryption_code": "trusted_remote_transport_blocked",
-                "reason": "future UI/API channel must be authenticated and encrypted"
+                "reason_code": "trusted_remote_transport_retired"
             }
         ],
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "capture", "stream", "session recover --stale-capture", "session record step --capture", "session record step --current-frame", "session monitor-policy status"],
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "capture", "stream", "session recover --stale-capture", "session record step --capture", "session record step --current-frame", "session monitor-policy status"],
                 "device_affecting_examples": ["capture", "stream", "session record step --capture", "session record step --current-frame"]
             },
             "daemon_state": {
