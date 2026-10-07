@@ -355,7 +355,8 @@ Rungs, in this fixed order, each existing work under the instance lease:
   and released while waiting. The waits stop at once on shutdown
   (`recovery_ladder_shutdown_requested`) or an install drain
   (`recovery_ladder_drain_requested`). Not ready within the window fails the rung
-  `recovery_environment_not_ready`. Skipped with `no_emulator_control` when the instance is
+  `recovery_environment_not_ready`, or `recovery_android_not_booted` when the boot check never
+  passed and so no preparation ran. Skipped with `no_emulator_control` when the instance is
   not discovery-bound. With no startup package the rung and ladder finish
   `environment_ready`. With a package, the rung then schedules it (`startup_package_scheduled`
   under the ladder's links) and runs it; the environment fact remains separate and its

@@ -837,7 +837,9 @@ impl HostShared {
     /// the ADB baseline until it answers (bounded by `deadline`), then waits 5 s, 10 s, then
     /// 20 s, never past `deadline`. Each attempt is rechecked for admission (pause, shutdown,
     /// capacity). Returns
-    /// the current binding and the passing preparation event, or the rung's failure reason.
+    /// the current binding and the passing preparation event, or the rung's failure reason:
+    /// `recovery_android_not_booted` when the window ends before the boot check ever passed
+    /// (so no preparation ran, review L-R4-2), otherwise `recovery_environment_not_ready`.
     fn await_recovery_readiness<'guard>(
         &self,
         pending: &PendingRecoveryLadder,
@@ -848,11 +850,13 @@ impl HostShared {
         let alias = pending.instance_alias.as_str();
         let mut held = Some(held);
         let mut retries = 0_usize;
+        let mut prepared = false;
         loop {
             if !self.recovery_admitted(pending)? {
                 return Ok(Err("recovery_admission_denied"));
             }
             if self.recovery_android_booted(pending)? {
+                prepared = true;
                 let admission = match held.take() {
                     Some(admission) => admission,
                     None => lock(instance_guard, "lock_instance_admission")?,
@@ -879,7 +883,12 @@ impl HostShared {
             drop(held.take());
             let wait =
                 RECOVERY_READINESS_BACKOFF[retries.min(RECOVERY_READINESS_BACKOFF.len() - 1)];
-            if let Some(reason) = self.await_recovery_retry(alias, wait, deadline)? {
+            let not_ready = if prepared {
+                "recovery_environment_not_ready"
+            } else {
+                "recovery_android_not_booted"
+            };
+            if let Some(reason) = self.await_recovery_retry(alias, wait, deadline, not_ready)? {
                 return Ok(Err(reason));
             }
             retries += 1;
@@ -924,12 +933,14 @@ impl HostShared {
     /// Before the next readiness attempt: polls the ADB baseline every 500 ms until it answers
     /// again, as `await_adb_baseline` does (review M-R4-1), then waits `wait`. Both are bounded
     /// by `deadline` and check shutdown and install drain at every poll (review L1).
-    /// `Some(reason)` ends the rung: shutdown, drain, or no time left in the window.
+    /// `Some(reason)` ends the rung: shutdown, drain, or no time left in the window
+    /// (`not_ready`).
     fn await_recovery_retry(
         &self,
         alias: &str,
         wait: Duration,
         deadline: Instant,
+        not_ready: &'static str,
     ) -> RuntimeHostResult<Option<&'static str>> {
         let stopped = || self.fatal.is_shutdown_requested();
         loop {
@@ -937,7 +948,7 @@ impl HostShared {
                 return Ok(Some(reason));
             }
             if Instant::now() >= deadline {
-                return Ok(Some("recovery_environment_not_ready"));
+                return Ok(Some(not_ready));
             }
             match self
                 .execution()?
@@ -957,7 +968,7 @@ impl HostShared {
         }
         let until = Instant::now() + wait;
         if until >= deadline {
-            return Ok(Some("recovery_environment_not_ready"));
+            return Ok(Some(not_ready));
         }
         loop {
             if let Some(reason) = self.recovery_wait_interrupted()? {
