@@ -996,12 +996,15 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         fs::write(&package_path, &bytes).unwrap();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
+        // Workflow #371-3: an entry that matches at once takes one frame; one that never
+        // matches waits its window before it fails.
         if explicit_home {
-            state.fail_capture_on.store(2, Ordering::Release);
-            state
-                .transient_capture_failure
-                .store(true, Ordering::Release);
-            if !starts_home {
+            if starts_home {
+                state.fail_capture_on.store(2, Ordering::Release);
+                state
+                    .transient_capture_failure
+                    .store(true, Ordering::Release);
+            } else {
                 state
                     .transition_capture_after_capture
                     .store(1, Ordering::Release);
@@ -1033,7 +1036,11 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .query_persisted_events_for_test(EventQuery::default())
             .unwrap();
         assert_eq!(state.input_count.load(Ordering::Acquire), 0);
-        assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+        if explicit_home && !starts_home {
+            assert!(state.capture_count.load(Ordering::Acquire) >= 1);
+        } else {
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+        }
         assert_eq!(
             vision.ocr_calls.load(Ordering::Acquire),
             u64::from(declared_page == "home" && starts_home)
