@@ -113,6 +113,7 @@ pub(crate) fn run_session_recover(global: &GlobalOptions, args: &[String]) -> Cl
             dry_run,
             max_rounds: startup_max_rounds,
             interval: startup_interval,
+            destructive_clicks: &graph.destructive_clicks,
         });
     }
 
@@ -904,22 +905,38 @@ pub(crate) fn reject_destructive_overlap_input(
     input: &SemanticInput,
     destructive: &[DestructiveClick],
 ) -> CliOutcome<()> {
+    reject_destructive_overlap_at(
+        &format!("navigation edge '{}'", edge.id),
+        Some(edge.from_page.as_str()),
+        input,
+        destructive,
+        &["navigation_only"],
+    )
+}
+
+/// The page-level destructive-region check (Workflow #355 D9). A region without a page or with
+/// page `any` always applies; a page-bound region applies only on `page`, so with no detected
+/// page only the page-agnostic regions apply.
+fn reject_destructive_overlap_at(
+    label: &str,
+    page: Option<&str>,
+    input: &SemanticInput,
+    destructive: &[DestructiveClick],
+    blocked_by: &[&str],
+) -> CliOutcome<()> {
     let rects = semantic_input_rects(input);
     for rect in rects {
         if destructive.iter().any(|other| {
             other
                 .page
                 .as_deref()
-                .is_none_or(|page| page == "any" || page == edge.from_page)
+                .is_none_or(|region| region == "any" || Some(region) == page)
                 && rects_intersect(rect, other.rect)
         }) {
             return Err(CliError::safety_blocked(
                 "navigation_destructive_overlap",
-                format!(
-                    "navigation edge '{}' overlaps a destructive action region",
-                    edge.id
-                ),
-                &["navigation_only"],
+                format!("{label} overlaps a destructive action region"),
+                blocked_by,
             ));
         }
     }
@@ -965,6 +982,34 @@ struct StartupLoginRecovery<'a> {
     dry_run: bool,
     max_rounds: usize,
     interval: Duration,
+    destructive_clicks: &'a [DestructiveClick],
+}
+
+/// Workflow #355 D9: both startup-login taps pass the same destructive-region gate as
+/// navigation edges, against the page detected before the round.
+fn reject_startup_login_destructive_overlap(
+    plan: &StartupLoginPlan,
+    page: &PageDetectionOutcome,
+    destructive: &[DestructiveClick],
+) -> CliOutcome<()> {
+    let page = page.matched.then_some(page.page.as_str());
+    for (action, input) in [
+        ("close_popup", &plan.close_popup),
+        ("continue", &plan.continue_input),
+    ] {
+        let at = match input {
+            SemanticInput::Tap { point, .. } => format!(" at ({},{})", point.x, point.y),
+            SemanticInput::TargetCenter { .. } | SemanticInput::Drag { .. } => String::new(),
+        };
+        reject_destructive_overlap_at(
+            &format!("startup-login {action}{at}"),
+            page,
+            input,
+            destructive,
+            &["maintenance_recovery", "startup_login"],
+        )?;
+    }
+    Ok(())
 }
 
 fn run_session_startup_login_recover(ctx: StartupLoginRecovery<'_>) -> CliOutcome<Value> {
@@ -988,6 +1033,7 @@ fn run_session_startup_login_recover(ctx: StartupLoginRecovery<'_>) -> CliOutcom
         }));
     }
     if ctx.dry_run {
+        reject_startup_login_destructive_overlap(&plan, &ctx.start, ctx.destructive_clicks)?;
         return Ok(json!({
             "status": "planned",
             "mode": "startup_login_recovery",
@@ -1004,6 +1050,7 @@ fn run_session_startup_login_recover(ctx: StartupLoginRecovery<'_>) -> CliOutcom
     let mut steps = Vec::new();
     let mut last = ctx.start;
     for round in 1..=plan.max_rounds {
+        reject_startup_login_destructive_overlap(&plan, &last, ctx.destructive_clicks)?;
         let close_device = send_semantic_input(ctx.global, ctx.config, &plan.close_popup)?;
         let continue_device = send_semantic_input(ctx.global, ctx.config, &plan.continue_input)?;
         thread::sleep(plan.interval);
