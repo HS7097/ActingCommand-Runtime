@@ -22,6 +22,8 @@ before `--state-root` parsing, like `mcp-serve`; no other command changes.
 |---|---|
 | `status` | Read-only: what `run-once` from the task would decide now, plus attention states (below). It writes nothing and takes no lock but a momentary shared probe of `install\writer.lock`, only when a start would be considered. |
 | `run-once [--from-task]` | One tick. `--from-task` is passed only by the launcher; it selects the start method and enables the gap grace. |
+| `install` | Registers or refreshes the task (below) and creates `<root>\watchdog\`. Idempotent. |
+| `uninstall` | Deletes the task; every file under `<root>\watchdog\` stays. `was_registered` says whether there was one. The root need not be a working installation any more. |
 
 When the process runs with an inherited installation (through the fixed entry
 `<root>\runtime\actingctl.exe`), its root must be `--root`; otherwise
@@ -157,9 +159,52 @@ program, so it opens no console window, and uses std only. It:
 
 It reads no slot material and takes no slot occupancy.
 
+## Task
+
+`install` registers a per-user task through `schtasks.exe` (actingctl has no COM
+access: unsafe code is forbidden there).
+
+- **Preconditions**, each refused with exit 13: an A/B installation;
+  `<root>\runtime\actingctl.exe` and `<root>\tools\actingwatch.exe` exist
+  (`watchdog_launcher_missing`: deploy the Runtime and Tools that carry the watchdog
+  first); the selected config's state root resolves; acsetup's writer lock is free
+  at that moment (`watchdog_installer_busy`).
+- **State**: `<root>\watchdog\` is created. A valid `state.json` is kept, a document
+  of another schema version is set aside as in "Files", an unreadable one is renamed
+  `state.json.unreadable-<ms>`; each with a WARN line. The end of the last task tick
+  is set to the install time, so the first task tick opens no gap grace.
+- **Name**: `ActingCommand Runtime watchdog <fp12>` in the root folder `\`, `fp12` the
+  first 12 hex digits of SHA-256 over the plain install root, lowercased. Alice's
+  tasks live in `\`; a subfolder could need elevation.
+- **Principal**: the current user's SID (`whoami /user`), `InteractiveToken`,
+  `LeastPrivilege`. No password is stored and no elevation is needed.
+- **Definition**, written to `<root>\watchdog\task.xml` as UTF-16LE with a BOM and
+  `encoding="UTF-16"`: a `TimeTrigger` from the install time (UTC) repeating every
+  `PT1M` with no duration; `IgnoreNew`; no battery conditions; `StartWhenAvailable`
+  false; `ExecutionTimeLimit` `PT5M` with hard termination allowed; not hidden;
+  priority 7; no `RestartOnFailure` (a failure stays visible, and the next minute
+  retries anyway); action `<root>\tools\actingwatch.exe` with the working directory
+  `<root>` and no arguments. The description names the root and how to remove it.
+- **Registration**: `schtasks /Create /TN <name> /XML <task.xml> /F`; a non-zero exit
+  is `watchdog_task_register_failed` (13) with schtasks' text.
+- **Check**: `schtasks /Query /TN <name> /XML` must show the same command
+  (case-insensitive), interval `PT1M`, logon type `InteractiveToken`, no run level
+  other than `LeastPrivilege` (Task Scheduler omits the default) and no
+  `<Enabled>false</Enabled>`; otherwise `watchdog_task_mismatch` (14).
+- The log gets `INFO watchdog_installed task=<name> user=<sid>`; `uninstall` writes
+  `INFO watchdog_uninstalled task=<name>` when it deleted one.
+
+`status` reads the task read-only: the same `/Query /XML` check, and from `/Query /FO
+CSV /V /NH` the columns 4, 6 and 7 (status, last run time, last result) raw, since
+Task Scheduler localises them. A missing task (`task_missing`), or one that is
+disabled or differs (`task_mismatch`), is attention 14.
+
+Without the product, a registered task fails every minute (the launcher is gone,
+0x80070002 in its last result): run `uninstall` before removing an installation.
+
 ## Files
 
-`<root>\watchdog\`, created by `run-once` when missing:
+`<root>\watchdog\`, created by `run-once` or `install` when missing:
 
 | File | Content |
 |---|---|
@@ -167,6 +212,7 @@ It reads no slot material and takes no slot occupancy.
 | `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v1`: `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `outcome`, `generation`, `actingd_pid`, `owner_epoch`). Written to a temporary file and renamed. Readers ignore unknown fields. A document of another schema version is renamed `state.json.other-schema-<ms>` with a WARN line and replaced by a fresh state; a corrupt document is `watchdog_state_unreadable` (13). |
 | `actingd-<unix_ms>.log` | stdout and stderr of each start. |
 | `run.lock` | Held exclusively by a tick; a second concurrent tick answers `run_in_progress` (exit 0). |
+| `task.xml` | The definition `install` registered last. |
 
 `state.json` is not a ledger structure and no Runtime component reads it (coordinator
 ruling on #374, M7: an operational file outside the ledger, recorded as a deviation
@@ -181,12 +227,13 @@ note on #374).
 | 11 | `budget_exhausted` | the same |
 | 12 | `start_failed` | `start_due` (gone without a formal close, the next tick starts it), or the last start since the last formal start failed |
 | 13 | misconfigured | the same |
+| 14 | — | `task_missing` or `task_mismatch`: the task is not registered, is disabled, or differs from what `install` writes |
 | 15 | `runtime_process_without_owner` | the same |
 | 16 | — | `repeated_restarts`: 2 or more watchdog starts within 24 hours and since the last formal start |
 | 17 | — | `formal_close_unlogged`: no candidate log was written between the closed epoch's start and its close plus 2 s, so a FATAL of an unlogged start would be invisible |
 
 `status` lists every attention state under `attention` and exits with the first of
-13, 10, 11, 15, 12, 16, 17. Usage errors exit 1. The launcher adds 20, 21, 22 and 23
+13, 10, 11, 15, 12, 14, 16, 17. `install` exits 0, 13 or 14; `uninstall` 0 or 13. Usage errors exit 1. The launcher adds 20, 21, 22 and 23
 (above) and passes every other code through.
 
 ## Starters and logs

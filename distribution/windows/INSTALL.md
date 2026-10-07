@@ -350,7 +350,9 @@ terminal, use the same private state root for the existing control commands:
 .\actingctl.exe request-shutdown --state-root <private-state-root>
 ```
 
-These are manual commands; the artifact registers no service or startup task.
+These are manual commands; the artifact registers no service or startup task by
+itself. `actingctl watchdog install` registers the Runtime watchdog's per-user task
+on request (see "Runtime watchdog").
 Wait for normal daemon exit and the existing shutdown/closure facts. A request
 receipt alone does not establish that every resource has been released.
 
@@ -373,16 +375,26 @@ case stays down loudly. At most 3 starts in 30 minutes; then it stays down until
 formal start.
 
 ```powershell
+<root>\runtime\actingctl.exe watchdog install --root <root>
 <root>\runtime\actingctl.exe watchdog status --root <root>
 <root>\runtime\actingctl.exe watchdog run-once --root <root>
+<root>\runtime\actingctl.exe watchdog uninstall --root <root>
 ```
+
+`install`, from a normal (not elevated) PowerShell of the user the Runtime runs
+for, registers the task `ActingCommand Runtime watchdog <12 hex digits>` in Task
+Scheduler's root folder: every minute, the user's interactive session, least
+privilege, no second instance while one runs, at most five minutes, no battery
+conditions, no restart on failure. It needs `<root>\tools\actingwatch.exe` (Tools
+of this release or later) and refuses while acsetup holds its writer lock. Run it
+again to refresh the task; `uninstall` removes it and keeps the files.
 
 `status` is read-only and exits 0 when healthy, otherwise with the attention code
 of the contract (10 FATAL hold, 11 budget exhausted, 12 a start is due or failed,
-13 misconfigured, 15 a Runtime process without the owner lock, 16 repeated
-restarts, 17 a formal close no log covers). `run-once` is one tick; run by hand it
-starts the Runtime through WMI with a hidden window. A scheduled task runs
-`<root>\tools\actingwatch.exe` every minute, a GUI-subsystem launcher that opens no
+13 misconfigured, 14 the task is missing, disabled or different, 15 a Runtime
+process without the owner lock, 16 repeated restarts, 17 a formal close no log
+covers). `run-once` is one tick; run by hand it starts the Runtime through WMI with
+a hidden window. The task runs `<root>\tools\actingwatch.exe` every minute, a GUI-subsystem launcher that opens no
 window and runs `<root>\runtime\actingctl.exe watchdog run-once --root <root>
 --from-task` hidden. The launcher exits 20 when it is not at
 `<root>\tools\actingwatch.exe`, 21 when `<root>\watchdog\` is missing, 22 when the
@@ -391,8 +403,8 @@ returns the tick's code. While acsetup holds the writer lock it does nothing.
 
 The watchdog writes only under `<root>\watchdog\`: `watchdog.log` (one line per
 change, start or error; the record to read), `state.json` (its budget and
-log-on-change memory), `actingd-<ms>.log` (each start's stdout and stderr) and
-`run.lock`. It writes nothing into the ledger. Task Scheduler's history of a
+log-on-change memory), `actingd-<ms>.log` (each start's stdout and stderr),
+`run.lock` and `task.xml` (the definition last registered). It writes nothing into the ledger. Task Scheduler's history of a
 per-minute task turns over within days; it shows the last runs, `watchdog.log`
 keeps the record.
 
@@ -400,8 +412,10 @@ Every program that starts the Runtime should log its stdout and stderr into an
 `actingd-*.log` in the root, so that a FATAL is seen; a Runtime started without
 one shows only as `formal_close_unlogged` (17) in `status` after it stops.
 Switching back to a slot whose `actingctl.exe` predates the watchdog makes every
-tick fail with that program's usage error until a newer slot is selected; disable
-the task first (`schtasks /Change /TN "<task name>" /DISABLE`).
+tick fail with that program's usage error until a newer slot is selected; run
+`watchdog uninstall` first, or disable the task
+(`schtasks /Change /TN "<task name>" /DISABLE`). Before removing an installation,
+run `watchdog uninstall`: without the product the task fails every minute.
 
 ## Upgrade boundary
 
