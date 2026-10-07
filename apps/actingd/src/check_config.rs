@@ -38,9 +38,9 @@ const DEVICE_PATH_NAMES: [&str; 5] = [
 ];
 
 /// Loads, assembles and validates a configuration exactly as startup would, then previews
-/// startup's catalog plan against the state root's ledger, read-only (Workflow #361 C3):
-/// nothing under `state_root` is created, locked or written, no owner lock is taken and no
-/// socket is bound.
+/// startup's catalog plan against the state root's ledger, read-only (Workflow #361 C3): the
+/// database is never written, no lock is taken (no owner lock) and nothing is staged, and no
+/// socket is bound. SQLite may leave the `-wal` / `-shm` sidecars of a cleanly stopped root.
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     if arguments.len() > 3 {
         return Err(ActingdError::config("check_config_usage_invalid"));
@@ -130,6 +130,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         };
         let mut report = summarize(&config_path, &checked, &resource_packages)?;
         // Workflow #361 C3: the plan startup would make, from the ledger read-only.
+        let previewing = std::time::Instant::now();
         let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {
             state_root: checked.host.state_root(),
             catalog: policy.as_ref().map(|policy| &policy.catalog),
@@ -142,7 +143,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         })
         .map_err(|refused| {
             let code = refused.code();
-            rejection = Some(Rejection::PolicyState(Box::new(refused)));
+            let elapsed_ms = u64::try_from(previewing.elapsed().as_millis()).unwrap_or(u64::MAX);
+            rejection = Some(Rejection::PolicyState(Box::new(refused), elapsed_ms));
             (code, "policy_state")
         })?;
         report["policy_plan"] = policy_plan_report(&preview);
@@ -162,13 +164,28 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 let (detail, message) = match rejection {
                     Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
                     Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
-                    Rejection::PolicyState(refused) => (
-                        json!({
-                            "operation": refused.operation(),
-                            "message": refused.to_string(),
-                        }),
-                        refused.to_string(),
-                    ),
+                    Rejection::PolicyState(refused, elapsed_ms) => {
+                        // Review P6: a refused plan carries its remedy; a ledger or state
+                        // failure is named by its code and operation only.
+                        let remedy = if refused.is_fatal() {
+                            None
+                        } else {
+                            refused.native_detail()
+                        };
+                        let message = match remedy {
+                            Some(remedy) => format!("{refused}: {remedy}"),
+                            None => refused.to_string(),
+                        };
+                        (
+                            json!({
+                                "operation": refused.operation(),
+                                "message": message,
+                                "remedy": remedy,
+                                "elapsed_ms": elapsed_ms,
+                            }),
+                            message,
+                        )
+                    }
                     Rejection::Vision(refused) => (
                         json!({ "message": refused.message }),
                         refused.message.clone(),
@@ -221,8 +238,9 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
 enum Rejection {
     ResourcePackage(config::ResourcePackageRejection),
     AdbInstall(config::ac_adb::AdbInstallRejection),
-    /// Workflow #361 C3: startup's catalog plan refused, or the state root unreadable.
-    PolicyState(Box<actingcommand_runtime_host::RuntimeHostError>),
+    /// Workflow #361 C3: startup's catalog plan refused, or the state root unreadable, with
+    /// the time the preview ran before it failed (review P4).
+    PolicyState(Box<actingcommand_runtime_host::RuntimeHostError>, u64),
     Vision(config::VisionRefusal),
     VisionFolders(Vec<InvalidModelFolder>),
 }
@@ -249,6 +267,7 @@ struct CheckedAssembly {
 
 /// Workflow #361 C3: `policy_plan`, startup's catalog plan as previewed from the ledger.
 fn policy_plan_report(preview: &CatalogPreview) -> serde_json::Value {
+    let phases = preview.phases();
     let generation = |generation: Option<&CatalogGeneration>| {
         generation.map_or(serde_json::Value::Null, |generation| {
             json!({
@@ -275,6 +294,14 @@ fn policy_plan_report(preview: &CatalogPreview) -> serde_json::Value {
             "reapprove": ids(approvals.reapprove()),
             "revoke": ids(approvals.revoke()),
         })),
+        // Review P4: the time of each phase, so a slow ledger read is measured, not guessed.
+        "phase_ms": {
+            "compile": phases.compile_ms,
+            "ledger": phases.ledger_ms,
+            "projection": phases.projection_ms,
+            "approvals": phases.approvals_ms,
+            "total": phases.total_ms,
+        },
     })
 }
 
