@@ -9,6 +9,7 @@
 
 mod agent_dispatcher;
 mod approval;
+mod catalog_plan;
 mod emulator_control;
 mod error;
 mod events;
@@ -49,6 +50,9 @@ pub use time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock};
 
 pub use actingcommand_scheduler::SchedulerConfig;
 pub use agent_dispatcher::AgentDispatcherConfig;
+pub use catalog_plan::{
+    CatalogApprovalPlan, CatalogTransitionPlan, CatalogTransitionPlanKind, CatalogTransitionRequest,
+};
 pub use emulator_control::admit_emulator_capabilities;
 pub use error::*;
 pub use host::*;
@@ -60,10 +64,11 @@ pub use performance_control::{
 pub use planning::MaintenanceLedgerQuery;
 pub use policy_control::PolicyExecutionInput;
 pub use policy_host::{
-    CatalogGeneration, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
+    CatalogGeneration, CatalogPreview, CatalogPreviewPhases, CatalogPreviewRequest,
+    PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
     PolicyEvaluationCost, PolicyEvaluationExecution, PolicyEvaluationMeasurement,
     PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason, PolicyRunContext,
-    PolicyTrigger,
+    PolicyTrigger, preview_policy_catalog_transition,
 };
 pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;

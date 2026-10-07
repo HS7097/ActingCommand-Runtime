@@ -2,12 +2,17 @@
 
 //! Runtime-owned catalog generations and replayable policy admission state.
 
+mod catalog_preview;
+pub use catalog_preview::{
+    CatalogPreview, CatalogPreviewPhases, CatalogPreviewRequest, preview_policy_catalog_transition,
+};
 mod catalog_transaction;
 pub(crate) use catalog_transaction::catalog_ledger_error;
 mod planning_transaction;
 use planning_transaction::planning_state_error;
 pub(crate) use planning_transaction::planning_transaction_error;
 
+use crate::catalog_plan::CatalogLineage;
 use crate::failure_identity::SuspensionLiftView;
 use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
@@ -83,6 +88,21 @@ impl CatalogGeneration {
 
     pub fn catalog_hash(&self) -> &str {
         &self.catalog_hash
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_plan_test(
+        catalog_id: &str,
+        catalog_version: u64,
+        catalog_hash: &str,
+    ) -> Self {
+        Self {
+            schema_version: CATALOG_STATE_SCHEMA.to_owned(),
+            catalog_id: catalog_id.to_owned(),
+            catalog_version,
+            catalog_hash: catalog_hash.to_owned(),
+            sources: Vec::new(),
+        }
     }
 }
 
@@ -785,6 +805,9 @@ fn instance_arbitration_ranks(
 pub(crate) struct PolicyHost {
     store: CatalogStore,
     active: Option<LoadedCatalog>,
+    /// Workflow #361 A: every generation that was active, rebuilt from the ledger at open and
+    /// extended by each published transition.
+    lineage: CatalogLineage,
     cadence: PolicyCadenceState,
     seen_dispatches: BTreeMap<String, SeenDispatch>,
     dispatch_order: BTreeMap<u64, String>,
@@ -817,10 +840,11 @@ impl PolicyHost {
     ) -> RuntimeHostResult<Self> {
         let store = CatalogStore::open(state_root, state)?;
         store.migrate_legacy_active_pointer(ledger, events)?;
-        let active = store.load_verified_active(ledger)?;
+        let (active, lineage) = store.load_verified_active(ledger)?;
         let mut host = Self {
             store,
             active,
+            lineage,
             cadence: PolicyCadenceState::new(cadence)?,
             seen_dispatches: BTreeMap::new(),
             dispatch_order: BTreeMap::new(),
@@ -1191,8 +1215,18 @@ impl PolicyHost {
     }
 
     pub(crate) fn publish_active(&mut self, catalog: LoadedCatalog) {
+        self.lineage.record(
+            &catalog.generation.catalog_id,
+            catalog.generation.catalog_version,
+            &catalog.generation.catalog_hash,
+        );
         self.active = Some(catalog);
         self.cadence.catalog_changed();
+    }
+
+    /// Workflow #361 A: every generation that was active in this ledger.
+    pub(crate) fn lineage(&self) -> &CatalogLineage {
+        &self.lineage
     }
 
     pub(crate) fn evaluate(
@@ -3256,6 +3290,19 @@ impl CatalogStore {
             memo: Mutex::new(CatalogMemo::default()),
         };
         Ok(store)
+    }
+
+    /// Workflow #361 C3: the same store over an existing state root, read only: no directory
+    /// is created and nothing is staged or migrated.
+    fn open_read_only(state_root: &Path, state: Arc<RuntimeStateStore>) -> Self {
+        let root = state_root.join("policy").join("catalogs");
+        Self {
+            legacy_active_pointer: root.join(ACTIVE_POINTER_FILE),
+            generations: root.join(GENERATIONS_DIR),
+            root,
+            state,
+            memo: Mutex::new(CatalogMemo::default()),
+        }
     }
 
     fn stage(&self, sources: &CatalogSources) -> RuntimeHostResult<LoadedCatalog> {

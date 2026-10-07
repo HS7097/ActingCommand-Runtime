@@ -1155,8 +1155,6 @@ impl Fixture {
             .env("ACTINGCOMMAND_ADB_PATH", &self.fake_adb)
             .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &self.runtime_root)
             .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
-            .env_remove("ACTINGLAB_TRUSTED_REMOTE_TOKEN")
-            .env_remove("ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT")
             .output()
             .expect("run actinglab")
     }

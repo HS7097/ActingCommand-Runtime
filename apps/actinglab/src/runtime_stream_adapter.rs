@@ -168,7 +168,8 @@ fn run_stream_check(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
             }
         },
         "trusted_channel": {
-            "status": "reserved",
+            "status": "retired",
+            "reason_code": "trusted_remote_transport_retired",
             "long_lived_stream_implemented": false
         },
         "blockers": if require_fresh {
@@ -224,9 +225,10 @@ fn build_stream_response(
             "dry_run": dry_run
         },
         "trusted_channel": {
-            "status": "reserved",
+            "status": "retired",
+            "reason_code": "trusted_remote_transport_retired",
             "long_lived_stream_implemented": false,
-            "reason": "trusted remote long-lived stream transport is not implemented; this command is a bounded local CLI stream"
+            "reason": "trusted remote transport was retired; this command is a bounded local CLI stream"
         },
         "contract": contract,
         "input_relay": input_relay,

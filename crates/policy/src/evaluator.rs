@@ -3192,6 +3192,15 @@ fn evaluate_predicate(
                     },
                 }));
             }
+            // Workflow #355 D12: an observed kind the predicate does not compare makes this
+            // predicate Unknown; it no longer fails the whole evaluation.
+            if fact_kind(&observation.value) != fact_kind(value) {
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: scope.clone(),
+                    fact_key: fact_key.clone(),
+                    reason: "type_mismatch".to_owned(),
+                }));
+            }
             Ok(PredicateEvaluation {
                 truth: if compare_fact_values(&observation.value, *comparison, value)? {
                     PredicateTruth::True
@@ -3260,11 +3269,11 @@ fn evaluate_predicate(
                 }));
             }
             let FactValue::RecordList(records) = &observation.value else {
-                return Err(PolicyEvaluationError::type_mismatch(format!(
-                    "record deadline fact '{}:{}' must be a record_list",
-                    scope_key(scope),
-                    fact_key
-                )));
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: scope.clone(),
+                    fact_key: fact_key.clone(),
+                    reason: "type_mismatch".to_owned(),
+                }));
             };
             let cutoff = time.unix_ms.checked_add(*within_ms).ok_or_else(|| {
                 PolicyEvaluationError::overflow(format!(
@@ -3277,20 +3286,20 @@ fn evaluate_predicate(
             let mut next_wake = fresh_until
                 .and_then(|expiration| expiration.checked_add(1))
                 .filter(|expiration| *expiration > time.unix_ms);
-            for (index, record) in records.iter().enumerate() {
-                let value = record.get(timestamp_field).ok_or_else(|| {
-                    PolicyEvaluationError::invalid(format!(
-                        "record deadline fact '{}:{}' item {index} is missing field '{timestamp_field}'",
-                        scope_key(scope),
-                        fact_key
-                    ))
-                })?;
+            for record in records {
+                let Some(value) = record.get(timestamp_field) else {
+                    return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                        scope: scope.clone(),
+                        fact_key: fact_key.clone(),
+                        reason: "field_missing".to_owned(),
+                    }));
+                };
                 let FactScalar::TimestampMs(deadline) = value else {
-                    return Err(PolicyEvaluationError::type_mismatch(format!(
-                        "record deadline fact '{}:{}' item {index} field '{timestamp_field}' must be timestamp_ms",
-                        scope_key(scope),
-                        fact_key
-                    )));
+                    return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                        scope: scope.clone(),
+                        fact_key: fact_key.clone(),
+                        reason: "type_mismatch".to_owned(),
+                    }));
                 };
                 if *deadline > time.unix_ms && *deadline <= cutoff {
                     actionable = true;
@@ -3358,6 +3367,13 @@ fn evaluate_predicate(
                     scope: decision_scope.clone(),
                     fact_key: format!("outcome.{task_id}.{outcome_key}"),
                     reason: "outcome_expired".to_owned(),
+                }));
+            }
+            if fact_kind(&observation.value) != fact_kind(value) {
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: decision_scope.clone(),
+                    fact_key: format!("outcome.{task_id}.{outcome_key}"),
+                    reason: "type_mismatch".to_owned(),
                 }));
             }
             let mut result = PredicateEvaluation::known(
