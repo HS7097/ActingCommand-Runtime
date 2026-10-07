@@ -67,7 +67,7 @@ impl HostShared {
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
-        if catalog.generation() != &plan.generation {
+        if *catalog.generation() != plan.generation {
             return Err(RuntimeHostError::fatal(
                 "catalog_plan_generation_mismatch",
                 "apply_policy_catalog_transition",
