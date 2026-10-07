@@ -832,11 +832,12 @@ impl HostShared {
     /// touch.ok`, no failure code), within `deadline`. The admission guard Start held covers the
     /// first attempt; later attempts take it again, and it is released while waiting, so the
     /// policy thread is never blocked by the wait (a failed preparation already withholds the
-    /// instance from policy). A failed preparation is retried only when the existing rule calls
-    /// it recoverable or the ADB baseline does not answer (review M3); every retry first polls
-    /// the ADB baseline until it answers (bounded by `deadline`), then waits 5 s, 10 s, then
-    /// 20 s, never past `deadline`. Each attempt is rechecked for admission (pause, shutdown,
-    /// capacity). Returns
+    /// instance from policy). The wait runs on the host-work thread, so other instances'
+    /// queued startup packages and ladders wait behind it, for at most the window (review L1).
+    /// A failed preparation is retried only when the existing rule calls it recoverable or the
+    /// ADB baseline does not answer (review M3); every retry first polls the ADB baseline until
+    /// it answers (bounded by `deadline`), then waits 5 s, 10 s, then 20 s, never past
+    /// `deadline`. Each attempt is rechecked for admission (pause, shutdown, capacity). Returns
     /// the current binding and the passing preparation event, or the rung's failure reason:
     /// `recovery_android_not_booted` when the window ends before the boot check ever passed
     /// (so no preparation ran, review L-R4-2), otherwise `recovery_environment_not_ready`.
