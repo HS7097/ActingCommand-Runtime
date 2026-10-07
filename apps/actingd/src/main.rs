@@ -130,6 +130,10 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     if let Some(released) = host.owner_released_by_exit() {
         println!("actingd {released}");
     }
+    // Workflow #361 B1: each scheduling pause the start restored or dropped.
+    for line in host.scheduling_pause_restore() {
+        println!("actingd {line}");
+    }
     let initial_policy_cycle = (|| {
         let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::contained_task::{SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, SchedulingPauseDeadlines};
+use super::scheduling_pause::{PauseOrigin, pause_row};
 use super::*;
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
@@ -120,9 +121,11 @@ impl TrustedPolicyDispatchStore {
     }
 }
 
-/// Workflow #191 ps1: the operator's scheduling pauses. They live in memory only, so a
-/// restart forgets them, and they have no expiry. The global pause and every instance pause
-/// hold their own revision; setting or lifting a gate bumps the revision of its scope.
+/// Workflow #191 ps1: the operator's scheduling pauses. They have no expiry. The global pause
+/// and every instance pause hold their own revision; setting or lifting a gate bumps the
+/// revision of its scope. Since Workflow #361 B1 the held pauses are also the runtime fact
+/// `host.scheduling_pause` (`scheduling_pause.rs`), recorded before the gate changes, and a
+/// restart restores them.
 #[derive(Clone, Default)]
 pub(super) struct SchedulingPauseTable {
     global_revision: u64,
@@ -133,6 +136,8 @@ pub(super) struct SchedulingPauseTable {
     /// cancelled and whose client has not reset the instance yet (`SafeReset`). An instance
     /// pause hands the device back only once none is left.
     client_resets: BTreeMap<String, BTreeSet<ConnectionId>>,
+    /// Workflow #361 B1: where each held pause came from (`None` is the global pause).
+    origins: BTreeMap<Option<String>, PauseOrigin>,
 }
 
 impl SchedulingPauseTable {
@@ -149,7 +154,89 @@ impl SchedulingPauseTable {
                 .collect(),
             instances,
             client_resets: BTreeMap::new(),
+            origins: BTreeMap::new(),
         }
+    }
+
+    /// Workflow #361 B1: the rows of `host.scheduling_pause` for the held pauses, the global
+    /// pause first, then the instance pauses by alias.
+    pub(super) fn persisted_rows(&self) -> RuntimeHostResult<Vec<BTreeMap<String, FactScalar>>> {
+        let origin = |scope: Option<String>| {
+            self.origins.get(&scope).ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "scheduling_pause_origin_missing",
+                    "persist_scheduling_pause",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })
+        };
+        let mut rows = Vec::with_capacity(self.instances.len() + 1);
+        if let Some(pause) = &self.global {
+            rows.push(pause_row(
+                None,
+                &pause.reason_code,
+                pause.since_unix_ms,
+                origin(None)?,
+            ));
+        }
+        for (alias, pause) in &self.instances {
+            rows.push(pause_row(
+                Some(alias),
+                &pause.reason_code,
+                pause.since_unix_ms,
+                origin(Some(alias.clone()))?,
+            ));
+        }
+        Ok(rows)
+    }
+
+    pub(super) const fn holds_global(&self) -> bool {
+        self.global.is_some()
+    }
+
+    pub(super) fn holds_instance(&self, instance_alias: &str) -> bool {
+        self.instances.contains_key(instance_alias)
+    }
+
+    pub(super) fn holds_pauses(&self) -> bool {
+        self.global.is_some() || !self.instances.is_empty()
+    }
+
+    /// Workflow #361 B1: gives `origin` to every held pause that has none (the pauses an
+    /// installer-held start restored from its transition).
+    pub(super) fn adopt_origins(&mut self, origin: &PauseOrigin) {
+        if self.global.is_some() {
+            self.origins.entry(None).or_insert_with(|| origin.clone());
+        }
+        for alias in self.instances.keys() {
+            self.origins
+                .entry(Some(alias.clone()))
+                .or_insert_with(|| origin.clone());
+        }
+    }
+
+    pub(super) fn set_global(&mut self, state: SchedulingPauseState, origin: PauseOrigin) {
+        self.global_revision = state.revision;
+        self.global = Some(state);
+        self.origins.insert(None, origin);
+    }
+
+    fn lift_global(&mut self) -> RuntimeHostResult<u64> {
+        self.global = None;
+        self.origins.remove(&None);
+        next_scheduling_pause_revision(&mut self.global_revision)
+    }
+
+    pub(super) fn set_instance(
+        &mut self,
+        instance_alias: &str,
+        state: InstancePauseState,
+        origin: PauseOrigin,
+    ) {
+        self.instance_revisions
+            .insert(instance_alias.to_owned(), state.revision);
+        self.instances.insert(instance_alias.to_owned(), state);
+        self.origins.insert(Some(instance_alias.to_owned()), origin);
     }
 
     pub(super) fn validate_install_scopes(
@@ -235,8 +322,14 @@ impl SchedulingPauseTable {
         self.instances.get(instance_alias).cloned()
     }
 
-    fn lift_instance(&mut self, instance_alias: &str) -> RuntimeHostResult<u64> {
+    #[cfg(test)]
+    pub(super) fn instance_states(&self) -> BTreeMap<String, InstancePauseState> {
+        self.instances.clone()
+    }
+
+    pub(super) fn lift_instance(&mut self, instance_alias: &str) -> RuntimeHostResult<u64> {
         self.instances.remove(instance_alias);
+        self.origins.remove(&Some(instance_alias.to_owned()));
         next_scheduling_pause_revision(
             self.instance_revisions
                 .entry(instance_alias.to_owned())
@@ -1646,21 +1739,32 @@ impl HostShared {
             .runtime_clock_sample()
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
+        // Workflow #361 B1: the persist gate orders the record of the pauses a change leads to
+        // before the change itself; a failed record leaves the gate as it was.
+        let origin = PauseOrigin::set_in(self.owner_epoch)?;
         let (instance_alias, instance_id, revision) = match scope {
             SchedulingPauseScope::Global => {
-                let mut table = lock(&self.scheduling_pause, "pause_global_scheduling")?;
-                if table.global.is_some() {
+                let _persist = lock(
+                    &self.scheduling_pause_persist_gate,
+                    "persist_global_scheduling_pause",
+                )?;
+                let mut prospective =
+                    lock(&self.scheduling_pause, "pause_global_scheduling")?.clone();
+                if prospective.global.is_some() {
                     return Err(scheduling_pause_denied(
                         "scheduling_already_paused",
                         "pause_scheduling",
                     ));
                 }
-                let revision = next_scheduling_pause_revision(&mut table.global_revision)?;
-                table.global = Some(SchedulingPauseState {
+                let revision = next_scheduling_pause_revision(&mut prospective.global_revision)?;
+                let state = SchedulingPauseState {
                     revision,
                     reason_code: reason_code.to_owned(),
                     since_unix_ms,
-                });
+                };
+                prospective.set_global(state.clone(), origin.clone());
+                self.persist_scheduling_pauses(&prospective)?;
+                lock(&self.scheduling_pause, "pause_global_scheduling")?.set_global(state, origin);
                 return Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
@@ -1673,27 +1777,36 @@ impl HostShared {
             }
             SchedulingPauseScope::Instance { instance_alias } => {
                 let instance_id = self.resolve_instance(instance_alias)?.instance_id();
-                let mut table = lock(&self.scheduling_pause, "pause_instance_scheduling")?;
-                if table.instances.contains_key(instance_alias) {
+                let _persist = lock(
+                    &self.scheduling_pause_persist_gate,
+                    "persist_instance_scheduling_pause",
+                )?;
+                let mut prospective =
+                    lock(&self.scheduling_pause, "pause_instance_scheduling")?.clone();
+                if prospective.instances.contains_key(instance_alias) {
                     return Err(scheduling_pause_denied(
                         "scheduling_already_paused",
                         "pause_scheduling",
                     ));
                 }
                 let revision = next_scheduling_pause_revision(
-                    table
+                    prospective
                         .instance_revisions
                         .entry(instance_alias.clone())
                         .or_default(),
                 )?;
-                table.instances.insert(
-                    instance_alias.clone(),
-                    InstancePauseState {
-                        revision,
-                        reason_code: reason_code.to_owned(),
-                        since_unix_ms,
-                        stage: InstancePauseStage::Draining,
-                    },
+                let state = InstancePauseState {
+                    revision,
+                    reason_code: reason_code.to_owned(),
+                    since_unix_ms,
+                    stage: InstancePauseStage::Draining,
+                };
+                prospective.set_instance(instance_alias, state.clone(), origin.clone());
+                self.persist_scheduling_pauses(&prospective)?;
+                lock(&self.scheduling_pause, "pause_instance_scheduling")?.set_instance(
+                    instance_alias,
+                    state,
+                    origin,
                 );
                 (instance_alias, instance_id, revision)
             }
@@ -1731,15 +1844,12 @@ impl HostShared {
                     drained: Some(drained),
                 },
             }),
-            // No half-open pause: a failed stage lifts the gate it closed.
-            Err(failure) => {
-                match lock(&self.scheduling_pause, "lift_failed_instance_pause")
-                    .and_then(|mut table| table.lift_instance(instance_alias))
-                {
-                    Ok(_) => Err(failure),
-                    Err(error) => Err(failure.replace_with_poison(error)),
-                }
-            }
+            // No half-open pause: a failed stage lifts the gate it closed, and the persisted
+            // pause with it (Workflow #361 B1); a failed record poisons the request.
+            Err(failure) => match self.lift_failed_instance_pause(instance_alias) {
+                Ok(()) => Err(failure),
+                Err(error) => Err(failure.replace_with_poison(error)),
+            },
         }
     }
 
@@ -1875,20 +1985,28 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         let SchedulingPauseScope::Instance { instance_alias } = scope else {
             let revision = {
-                let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
-                check_scheduling_pause_expectation(
-                    expected,
-                    self.owner_epoch,
-                    table.global_revision,
+                let _persist = lock(
+                    &self.scheduling_pause_persist_gate,
+                    "persist_global_scheduling_resume",
                 )?;
-                if table.global.is_none() {
-                    return Err(scheduling_pause_denied(
-                        "scheduling_not_paused",
-                        "resume_scheduling",
-                    ));
-                }
-                table.global = None;
-                next_scheduling_pause_revision(&mut table.global_revision)?
+                let mut prospective = {
+                    let table = lock(&self.scheduling_pause, "resume_scheduling")?;
+                    check_scheduling_pause_expectation(
+                        expected,
+                        self.owner_epoch,
+                        table.global_revision,
+                    )?;
+                    if table.global.is_none() {
+                        return Err(scheduling_pause_denied(
+                            "scheduling_not_paused",
+                            "resume_scheduling",
+                        ));
+                    }
+                    table.clone()
+                };
+                prospective.lift_global()?;
+                self.persist_scheduling_pauses(&prospective)?;
+                lock(&self.scheduling_pause, "resume_scheduling")?.lift_global()?
             };
             return Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
@@ -1906,37 +2024,46 @@ impl HostShared {
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
         let revision = {
-            let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
-            check_scheduling_pause_expectation(
-                expected,
-                self.owner_epoch,
-                table
-                    .instance_revisions
-                    .get(instance_alias)
-                    .copied()
-                    .unwrap_or(0),
+            let _persist = lock(
+                &self.scheduling_pause_persist_gate,
+                "persist_instance_scheduling_resume",
             )?;
-            match table.instances.get(instance_alias).map(|state| state.stage) {
-                None => {
-                    return Err(scheduling_pause_denied(
-                        "scheduling_not_paused",
-                        "resume_scheduling",
-                    ));
+            let mut prospective = {
+                let table = lock(&self.scheduling_pause, "resume_scheduling")?;
+                check_scheduling_pause_expectation(
+                    expected,
+                    self.owner_epoch,
+                    table
+                        .instance_revisions
+                        .get(instance_alias)
+                        .copied()
+                        .unwrap_or(0),
+                )?;
+                match table.instances.get(instance_alias).map(|state| state.stage) {
+                    None => {
+                        return Err(scheduling_pause_denied(
+                            "scheduling_not_paused",
+                            "resume_scheduling",
+                        ));
+                    }
+                    Some(InstancePauseStage::Draining) => {
+                        return Err(scheduling_pause_denied(
+                            "scheduling_pause_draining",
+                            "resume_scheduling",
+                        ));
+                    }
+                    Some(InstancePauseStage::Paused) => {
+                        return Err(scheduling_pause_denied(
+                            "scheduling_pause_releasing",
+                            "resume_scheduling",
+                        ));
+                    }
+                    Some(InstancePauseStage::Released) => table.clone(),
                 }
-                Some(InstancePauseStage::Draining) => {
-                    return Err(scheduling_pause_denied(
-                        "scheduling_pause_draining",
-                        "resume_scheduling",
-                    ));
-                }
-                Some(InstancePauseStage::Paused) => {
-                    return Err(scheduling_pause_denied(
-                        "scheduling_pause_releasing",
-                        "resume_scheduling",
-                    ));
-                }
-                Some(InstancePauseStage::Released) => table.lift_instance(instance_alias)?,
-            }
+            };
+            prospective.lift_instance(instance_alias)?;
+            self.persist_scheduling_pauses(&prospective)?;
+            lock(&self.scheduling_pause, "resume_scheduling")?.lift_instance(instance_alias)?
         };
         let selfcheck =
             self.reconnect_resumed_instance(request, instance_alias, instance_id, &admission)?;

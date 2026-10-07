@@ -401,18 +401,28 @@ pub fn suspension_report(
                 "decision_id": latest.decision_id,
                 "run_id": current_run.as_ref().map(identifier_text),
             });
-            let lift = procedure_ref
-                .and_then(|procedure_ref| view.lifted(procedure_ref, paused_digest, layers));
-            if let Some(lift) = lift {
-                let effective = if pending_restart {
-                    "pending_restart"
-                } else {
-                    "active"
-                };
+            // Workflow #361 M6: an interrupted settlement is lifted by the restart that
+            // recorded it, whatever the configuration.
+            let lift = if failure.error_code == crate::policy_control::POLICY_SETTLEMENT_INTERRUPTED
+            {
+                Some(("restart".to_owned(), "active"))
+            } else {
+                procedure_ref
+                    .and_then(|procedure_ref| view.lifted(procedure_ref, paused_digest, layers))
+                    .map(|lift| {
+                        let effective = if pending_restart {
+                            "pending_restart"
+                        } else {
+                            "active"
+                        };
+                        (lift.label(), effective)
+                    })
+            };
+            if let Some((lifted_by, effective)) = lift {
                 lifted.push(json!({
                     "task_id": task_id,
                     "instance_id": instance_id,
-                    "lifted_by": lift.label(),
+                    "lifted_by": lifted_by,
                     "effective": effective,
                     "paused": paused,
                     "package": package,

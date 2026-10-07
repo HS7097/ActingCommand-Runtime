@@ -139,7 +139,10 @@ severe. The task terminal, its severity and the `application.*` records are unch
 startup reconciliation still settles from the terminal's severity.
 
 A severe failure, a sensitive task, an exceeded runtime budget and an interrupted settlement
-pause at the first failure, as before.
+pause at the first failure, as before. Since Workflow #361 M6 an interrupted settlement (a
+scheduled run the daemon's own end cut short, settled at the next start as
+`policy_settlement_interrupted`) is recorded the same way but does not hold the pair: it is
+no failure of the task, so the restart that recorded it lifts it (see "Lifting").
 
 ## Settlement of an accumulating failure
 
@@ -191,12 +194,16 @@ from the paused dispatch:
   change), then its digest as for a `p` layer.
 
 A procedure that is no longer bound never lifts. The configuration is the one the daemon read
-at startup, so an update takes effect after a restart. The next dispatch is admitted as usual;
+at startup, so an update takes effect after a restart. An interrupted settlement
+(`policy_settlement_interrupted`) is lifted without a package update (Workflow #361 M6): the
+next dispatch of the pair is admitted as usual, within its loop and activity budgets (the
+interrupted admission already counted against them). The next dispatch is admitted as usual;
 a linear task that fails again starts a new streak, since `M` or a layer changed. A page-graph
 task keeps its code, so the same failure pauses it again at once. A suspension in an older
-ledger, including an interrupted settlement or an exceeded budget, is lifted by a changed main
-package digest too. There is no manual lift; `actingctl task-run` is not gated by the policy
-and does not lift a suspension.
+ledger, including an exceeded budget, is lifted by a changed main package digest too; one of an
+interrupted settlement in an older ledger is lifted at the next start of this Runtime. There is
+no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
+suspension.
 
 ## `actingd suspended`
 
@@ -227,7 +234,7 @@ stdout is one JSON object:
        "changed_cells_milli":0,"digest_mean_milli":0,"ccoeff":1.0,"ccoeff_error":null}},
    "lifts_when":"main_digest_changes_or_any_layer_changes",
    "takeover":"actingctl task-run --state-root <root> --instance <instance> --package <package> --package-ref <package-ref>"}],
- "lifted":[{"task_id":"...","instance_id":"...","lifted_by":"main_digest|layer:<n>",
+ "lifted":[{"task_id":"...","instance_id":"...","lifted_by":"main_digest|layer:<n>|restart",
    "effective":"active|pending_restart","paused":{},"package":{}}],
  "repeating":[{"task_id":"...","instance_id":"...","error_code":"...","failure_code":"...",
    "step":{},"latest":{"execution_sequence":0,"run_id":"..."},
@@ -244,7 +251,8 @@ stdout is one JSON object:
   unreadable artifact gives `status` `unavailable` with its reason.
 - `lifted`: each pair paused by its latest execution whose suspension the configuration lifts
   and that was not dispatched again. `effective` is `pending_restart` when the configuration
-  file changed after the daemon's start, else `active`.
+  file changed after the daemon's start, else `active`. An interrupted settlement is listed
+  here with `lifted_by` `restart` and `effective` `active` (Workflow #361 M6).
 - `repeating`: each pair whose latest execution is a failure that does not accumulate and whose
   previous execution failed with the same identity prefix: a prerequisite or return-home
   package, the restart segment or the device failing again and again.
@@ -273,5 +281,5 @@ Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 - The same cause can give a different `K` on days with and without an optional popup (the last
   `StepStarted` differs), which delays the pause by one more rerun.
 - The startup reconciliation records the original code, so the next failure starts a new
-  streak and is rerun once more; an interrupted settlement pauses at once and only a package
-  update lifts it.
+  streak and is rerun once more; an interrupted settlement is recorded as a pause and lifted by
+  the same restart (Workflow #361 M6).
