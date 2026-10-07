@@ -83,6 +83,23 @@ impl ApprovalProjection {
                 ..EventQuery::default()
             })
             .map_err(|_| approval_fatal("approval_projection_query_failed"))?;
+        let projection = Self::from_events(&events, state)?;
+        if persist {
+            projection
+                .state
+                .recover_approval_projections(&events)
+                .map_err(approval_state_error)?;
+        }
+        Ok(projection)
+    }
+
+    /// The projection of `events`, the approval decisions of one ledger in ledger order, with
+    /// the same checks as recovery; nothing is persisted (Workflow #361 C3 reads it from the
+    /// read-only evidence ledger).
+    pub(crate) fn from_events(
+        events: &[PersistedEvent],
+        state: Arc<RuntimeStateStore>,
+    ) -> RuntimeHostResult<Self> {
         let mut projection = Self {
             active: BTreeMap::new(),
             recent: BTreeMap::new(),
@@ -90,16 +107,10 @@ impl ApprovalProjection {
             latest: BTreeMap::new(),
             state,
         };
-        for event in &events {
+        for event in events {
             projection.apply(event)?;
         }
         projection.validate_capacity()?;
-        if persist {
-            projection
-                .state
-                .recover_approval_projections(&events)
-                .map_err(approval_state_error)?;
-        }
         Ok(projection)
     }
 

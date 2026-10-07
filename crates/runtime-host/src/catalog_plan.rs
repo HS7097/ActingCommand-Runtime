@@ -270,8 +270,10 @@ pub(crate) fn catalog_approval_superseded(
 ///   target) fails with `policy_catalog_approval_conflict`;
 /// - every active catalog approval `generation` supersedes is revoked with reason
 ///   `catalog_superseded`.
+///
+/// `approvals` is `None` for a state root without a ledger: nothing was ever decided.
 pub(crate) fn plan_catalog_approvals(
-    approvals: &ApprovalProjection,
+    approvals: Option<&ApprovalProjection>,
     lineage: &CatalogLineage,
     generation: &CatalogGeneration,
     approval_ids: &[String],
@@ -290,7 +292,11 @@ pub(crate) fn plan_catalog_approvals(
             CONFIGURED_CATALOG_APPROVAL_REASON,
         )
         .map_err(|_| refused("policy_catalog_approval_invalid"))?;
-        match approvals.latest_decision(approval_id)? {
+        let latest = match approvals {
+            Some(approvals) => approvals.latest_decision(approval_id)?,
+            None => None,
+        };
+        match latest {
             None => plan.record.push(decision),
             Some(existing) if existing == decision => {}
             Some(existing)
@@ -305,7 +311,10 @@ pub(crate) fn plan_catalog_approvals(
             Some(_) => return Err(refused("policy_catalog_approval_conflict")),
         }
     }
-    for superseded in approvals.superseded_catalog_approvals(lineage, generation) {
+    let superseded = approvals
+        .map(|approvals| approvals.superseded_catalog_approvals(lineage, generation))
+        .unwrap_or_default();
+    for superseded in superseded {
         plan.revoke.push(
             ApprovalDecisionRecord::new(
                 superseded.approval_id(),

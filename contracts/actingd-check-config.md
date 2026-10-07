@@ -9,12 +9,15 @@ root") and the instance resource package admission (see "Instance resource
 package"), the same checks as startup's first step, reports
 the MuMu install root startup would use (resolved read-only when `mumu_root` is
 not configured, see "MuMu install root") and the state of the install root's
-adb, then drops the assembly. It never
-stats, creates or reads anything under `state_root`, never opens the ledger,
-never acquires `owner.lock`, never binds a socket and records no lifecycle
-failure. A passing check is not a startup: the daemon's own startup path
-remains the only authority on the state root, and a vision model's content is
-read and hashed only when the model is first used.
+adb, then previews startup's catalog plan against the state root (see
+"Catalog plan") and drops the assembly. It reads the ledger read-only: it never
+writes the database, takes no lock (no owner lock, no slot change) and stages
+nothing under `state_root`, binds no socket and records no lifecycle failure, so
+it runs beside a running daemon. On a cleanly stopped root SQLite may leave the
+database's `-wal` / `-shm` sidecars behind, as every read-only reader of the
+database does. A passing check is not a startup: the daemon's own startup path remains
+the only authority on the state root, and a vision model's content is read and
+hashed only when the model is first used.
 
 ## Invocation
 
@@ -85,7 +88,7 @@ When present, the manifest carries `policy.catalog_transition.kind` and
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_model_content","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_model_content"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"],"policy_plan":{"state":"read","active":null,"driver":"off","configured":null,"plan":null,"approvals":null,"phase_ms":{"compile":0,"ledger":12,"projection":3,"approvals":1,"total":16}}}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -231,8 +234,9 @@ terminal with the chosen eligibility basis in the original eviction intent.
     `boolean`, `duration_ms`).
 - `not_checked` lists what this command did not validate. It always starts
   with `vision_model_content` (a model's files are read, hashed and loaded only
-  on its first use, see "Vision root") and `state_root` (nothing under it is
-  inspected). `resource_package_directory_declarations` is appended when at
+  on its first use, see "Vision root"). `state_root_absent` is appended when
+  the configured state root does not exist (see "Catalog plan"); an existing
+  state root is read. `resource_package_directory_declarations` is appended when at
   least one instance's `resource_package` is a directory whose name is not a
   content digest: its existence is checked, its declarations are not (see
   "Instance resource package"). A digest-named directory is admitted in full and
@@ -283,13 +287,16 @@ adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `RuntimeHostConfig::validate` codes), `vision` (`vision_root_unavailable`,
 `vision_root_in_program_slot`, `vision_runtime_unavailable`,
 `vision_models_empty`, `vision_model_folder_invalid`, see "Vision root") or
-`resource_package` (`resource_package_missing`, `resource_package_invalid`), in
+`resource_package` (`resource_package_missing`, `resource_package_invalid`) or
+`policy_state` (startup's catalog plan refused, or the state root unreadable, see
+"Catalog plan"), in
 that order. The
 secret fingerprint salt is never printed.
 
 A `resource_package` failure, an `adb_install_missing` /
-`adb_install_mismatch` failure (stage `assemble`, see "Default ADB") and a
-`vision` failure also carry `error.detail`; no other failure does:
+`adb_install_mismatch` failure (stage `assemble`, see "Default ADB"), a
+`vision` failure and a `policy_state` failure (see "Catalog plan") also carry
+`error.detail`; no other failure does:
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"resource_package_invalid","stage":"resource_package","detail":{"alias":"node.a","path":"D:/runtime/packages/neutral.zip","loader_code":"contained_task_admission_failed","loader_message":"fatal containment error: missing package entry: resources/operations/task/task.json"}}}
@@ -302,6 +309,60 @@ or a digest-named package directory, and `null` otherwise. A changed or missing
 file in a digest-named directory reports `loader_code`
 `content_directory_digest_mismatch` with the expected and actual digests and the
 file count in `loader_message`.
+
+## Catalog plan
+
+Workflow #361 C3. After every other check passed, the command previews the
+catalog plan startup would make (see "Catalog Lineage" in
+`contracts/scheduling/README.md` and the driver's approval rules in
+`contracts/client-interactions.md`), with the same decision and approval
+functions. It opens the state root's ledger through the lock-free evidence
+reader (SQLite read-only, without referenced material and without the owner
+lock), reads the State documents through a read-only view of the same database
+and the catalog generations from their immutable directories; the configured
+catalog is compiled in memory, nothing is staged. The ledger read is bounded to
+60 seconds, well under the 90 seconds `acsetup` gives this command, so a slow
+read fails with the reader's own `ledger_read_budget_exceeded` at stage
+`policy_state`. A missing state root is previewed as a fresh one; an existing root
+without any state material (`runtime-state.sqlite`, `runtime-state.key`,
+`ledger`, `release-blobs`, `artifacts`) reads as a fresh one too.
+
+The result carries `policy_plan`:
+
+```json
+{"policy_plan":{"state":"read","active":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"driver":"on","configured":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"plan":"unchanged","approvals":{"record":[],"reapprove":[],"revoke":[]},"phase_ms":{"compile":40,"ledger":21000,"projection":900,"approvals":300,"total":22240}}}
+```
+
+- `state` is `read` or `state_root_absent`.
+- `active` is the generation the ledger projects as active (also the last
+  active one while the driver is off), or `null`.
+- `driver` is `off` without a `policy` section; `configured`, `plan` and
+  `approvals` are then `null`.
+- `plan` is `unchanged`, `first`, `forward`, `switch` or `rollback`.
+- `approvals` lists the approval ids startup would record, approve again and
+  revoke.
+- `phase_ms` is the time of each phase in milliseconds: `compile` (the
+  configured catalog), `ledger` (reading and authenticating every ledger
+  record), `projection` (the State documents, the catalog lineage and the active
+  generation), `approvals` (the approval decisions, the plan and its approvals)
+  and `total`. A fresh or absent state root reads no ledger.
+
+A refusal fails the check at stage `policy_state` with the code startup would
+fail with (`catalog_activation_not_newer`,
+`catalog_transition_expectation_mismatch`, `catalog_replace_version_not_newer`,
+`policy_catalog_approval_conflict`, `policy_catalog_approval_invalid`), and an
+unreadable state root with the reader's own code, or
+`policy_state_ledger_incomplete`, `catalog_active_source_mismatch`,
+`catalog_legacy_pointer_pending` (a pre-migration active-pointer file that only
+startup migrates). Such a failure carries `error.detail`
+`{ "operation": ..., "message": ..., "remedy": ..., "elapsed_ms": ... }`:
+`remedy` is the plan refusal's own hint, or `null` (a
+`catalog_activation_not_newer` names the `replace` transition, expecting the
+active hash, that would switch or roll back instead), and `elapsed_ms` the time
+the preview ran before it failed. Since `acsetup --commit-config` runs the
+selected slot's `check-config` before it commits, a CAS mismatch, a wrong
+approval or an approval conflict stops the commit before the installation or
+the running daemon changes.
 
 ## Vision root
 
