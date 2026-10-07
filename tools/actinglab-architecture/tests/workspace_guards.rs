@@ -4596,6 +4596,10 @@ const RUNTIME_DATABASE_CONSTRUCTORS: &[(&str, &str)] = &[
         "runtime-host: the owner unlock record opens the existing database",
     ),
     (
+        "crates/runtime-host/src/policy_host/catalog_preview.rs::read_state -> RuntimeDatabase",
+        "runtime-host: the check-config catalog plan preview opens the existing database read-only (Workflow #361 C3)",
+    ),
+    (
         "crates/runtime-state/src/store.rs::RuntimeStateStore::open_database -> RuntimeDatabase",
         "runtime-state: fresh storage opens with the state-owned schema",
     ),
@@ -4939,6 +4943,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("resource_targets", &["HostShared"]),
     host_module("runtime_facts", &["HostShared"]),
     host_module("saved_artifact_ocr", &["HostShared"]),
+    host_module("scheduling_pause", &["HostShared"]),
     host_module("signatures", &["HostShared"]),
     host_module("startup_package", &["HostShared"]),
     host_module("state_control", &["HostShared"]),
