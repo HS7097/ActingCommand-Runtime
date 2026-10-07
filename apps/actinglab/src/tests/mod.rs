@@ -3,8 +3,6 @@ use super::*;
 mod contained_semantic;
 #[path = "semantic_fixture.rs"]
 mod semantic_fixture;
-#[path = "test_env.rs"]
-mod test_env;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
