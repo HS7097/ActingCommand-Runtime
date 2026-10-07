@@ -4943,6 +4943,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("resource_targets", &["HostShared"]),
     host_module("runtime_facts", &["HostShared"]),
     host_module("saved_artifact_ocr", &["HostShared"]),
+    host_module("scheduling_pause", &["HostShared"]),
     host_module("signatures", &["HostShared"]),
     host_module("startup_package", &["HostShared"]),
     host_module("state_control", &["HostShared"]),
