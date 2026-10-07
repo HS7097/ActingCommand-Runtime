@@ -79,16 +79,24 @@ Each interface has one fixed form of check:
 - **Negotiation**, for a live exchange between two running programs, or a
   document that its writer produces in whichever revision its reader takes: the
   two ranges intersect, and the exchange uses the highest common revision.
+  When more than two parties share one document in one revision, the
+  negotiation is over all of them at once: every party's range holds one common
+  revision (the greatest `min` is at most the least `max`), and the document is
+  in a revision of that intersection.
 
-Checking pairs is enough. Under containment one revision, the writer's `max`,
-lies in every reader's range. Under negotiation the two parties settle on one
-value.
+Checking pairs is enough for containment and for a negotiation between two
+parties. Under containment one revision, the writer's `max`, lies in every
+reader's range. Under a two-party negotiation the two settle on one value. It is
+not enough for a document with three or more parties: two pairwise negotiations
+can settle on different revisions, so such a document is checked over all its
+parties together. `actingd-config` is the one such interface in v1: acsetup
+writes the configuration, the console edits it, and actingd reads it.
 
 ## Vocabulary (v1)
 
 | Interface | Check | Who writes, who reads | Rev | Meaning | Anchor |
 |---|---|---|---|---|---|
-| `actingd-config` | negotiation | acsetup and the console write the configuration; actingd reads it | 1 | `actingcommand.actingd.config.v1` with `vision_provider_manifest` and no `vision` section | `apps/actingd/src/config.rs`, the vision fields |
+| `actingd-config` | negotiation, three parties | acsetup writes the configuration, the console edits it, actingd reads it; one revision common to all three | 1 | `actingcommand.actingd.config.v1` with `vision_provider_manifest` and no `vision` section | `apps/actingd/src/config.rs`, the vision fields |
 | | | | 2 | the same schema string; a `vision` section; `vision_provider_manifest` refused (#360) | same |
 | `install-selection` | containment | acsetup writes `install/active.json`; actingd, actingctl, the Tools, acui and the fixed entries (acforward) read it | 1 | `actingcommand.install-selection.v1` | `crates/actingcommand-contract/src/installation.rs`, `INSTALL_SELECTION_SCHEMA` |
 | `install-control` | negotiation | acsetup drives a shutdown and a start; actingd answers | 0 | cold: `actingctl request-shutdown --wait`, and a start without `--install-held` | `apps/actingctl`, `request-shutdown` |
@@ -194,7 +202,7 @@ I and the bundles B work together. The edges:
 
 | Interface | Check |
 |---|---|
-| `actingd-config` | I ∩ R* (I writes R*'s configuration); U* ∩ R* (the console edits it); I ∩ Rp (I reads the current configuration) |
+| `actingd-config` | I ∩ U* ∩ R* is not empty, one check over the three (I writes R*'s configuration, the console edits it, R* reads it; the pairs I ∩ R* and U* ∩ R* alone are not enough), and acsetup writes the configuration in a revision of it; I ∩ Rp (I reads the current configuration) |
 | `install-selection` | I.max in R* and in U* (they read what I writes); where U's acsetup becomes the fixed manager (fresh install, first migration, upgrade), also U.max in R |
 | `install-control` | I ∩ Rp to close it, I ∩ R* to start it; the highest common revision is used, and 0 means the cold protocol |
 | `ledger` | Rp.max in R*; Rp.max and R*.max in U* |
