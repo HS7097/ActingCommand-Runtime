@@ -362,6 +362,8 @@ impl CatalogStore {
     /// keeps the id at a higher version or changes the id; a successful `catalog.rolled_back`
     /// keeps the id at a lower version, or returns to a generation of another id that was
     /// active before (Workflow #361 A). Every other sequence is fatal.
+    // Interface anchor `ledger` revision 2 (contracts/component-interfaces.md): raise its revision
+    // in distribution/windows/component-interfaces.json when older readers can no longer read this.
     pub(super) fn fold_catalog_events(
         &self,
         events: &[PersistedEvent],

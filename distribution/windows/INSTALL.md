@@ -461,3 +461,16 @@ move `runtime\` and `tools\` aside as whole directories and move the ones in
 `previous\` back; when renaming `ui\` fails, move its entries out one by one and
 the previous ones in one by one. Rolling back to an earlier v0.10.x, whose
 `previous\tools` already holds `platform-tools`, needs no configuration edit.
+
+Rolling the Runtime back from v0.11.3 or later to v0.11.2 or earlier is not
+supported. From v0.11.3 the Runtime declares `ledger` [1, 2], while the earlier
+Runtimes read only `ledger` 1 (`contracts/component-interfaces.md`, "No Runtime
+rollback across `ledger` 2"). acsetup therefore refuses `--rollback` to a slot
+whose Runtime is v0.11.2 or earlier, whatever the ledger holds: it names the
+`ledger` edge, exits with code 1 and changes nothing. Switching
+`install/active.json` back by hand skips that check, and the earlier Runtime's
+`ledger-maintenance verify` does not catch the difference. Once the ledger
+holds a catalog `replace` across catalog ids, that Runtime stops at its first
+start with `catalog_generation_source_conflict`; without one it starts but
+ignores a persisted scheduling pause and runs unpaused. Its `check-config` also
+refuses a configuration that names `policy.catalog_transition`.
