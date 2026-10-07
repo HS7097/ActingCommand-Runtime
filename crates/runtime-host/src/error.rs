@@ -288,6 +288,15 @@ impl RuntimeHostError {
         self.lifecycle.resource_targets_rejection.as_deref()
     }
 
+    /// The bounded native detail, if any. The ledger keeps it under its declared sensitivity;
+    /// a process shell prints it only for refusals whose detail it knows to carry no device or
+    /// vendor output, such as the catalog plan's remedy (Workflow #361 A).
+    pub fn native_detail(&self) -> Option<&str> {
+        self.diagnostics()
+            .native_detail()
+            .map(actingcommand_contract::LifecycleNativeDetail::text)
+    }
+
     /// A refused `ApplyResourceTargets` document: non-fatal `InvalidRequest`, host code
     /// `resource_targets_rejected`, carrying the field-positioned rejection.
     pub(crate) fn resource_targets_rejected(
