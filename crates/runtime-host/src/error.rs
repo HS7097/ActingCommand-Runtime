@@ -109,12 +109,15 @@ impl PartialEq for RuntimeHostError {
 impl Eq for RuntimeHostError {}
 
 impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
-    fn from(_: actingcommand_policy::PolicyEvaluationError) -> Self {
+    fn from(error: actingcommand_policy::PolicyEvaluationError) -> Self {
+        // Workflow #355 D12: keep the policy code and message so the lifecycle record names
+        // the failing fact or overflow.
         Self::request(
             "policy_evaluation_rejected",
             "evaluate_policy_cycle",
             RuntimeErrorCode::InvalidRequest,
         )
+        .with_native_detail(format!("{}: {}", error.code(), error.message()))
     }
 }
 
