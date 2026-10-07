@@ -505,6 +505,8 @@ impl BundleIndexV3 {
     }
 }
 
+// Interface anchor `package` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when packs need what older readers lack.
 /// Version-specific shapes keep required v3 fields mandatory and keep v2 strict.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]

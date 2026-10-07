@@ -556,13 +556,14 @@ The install root is judged once per assembly from the running executable
 alone: `R` is two levels above the canonical path of the `actingd` executable,
 and `R` is an install root only when `R\runtime\BUILD-MANIFEST.json` is a file
 (the same evidence acsetup takes for "installed"). The install root's adb is
-then `R\tools\platform-tools\adb.exe`. acsetup's upgrade staging directory
-(`.staging-<ms>\runtime\`, `\ui\`, `\tools\`) has the same shape, so the
-`check-config` that acsetup runs with the staged `actingd` before it swaps
-anything sees and checks the staged adb; the Runtime has no special case for
-it. A development build, the H3 check of the exact-SHA build and a staging
-directory named after the zip files (older acsetup) are no install root and
-behave as before.
+then `R\tools\platform-tools\adb.exe`. Under the A/B layout an `actingd` in
+`<root>\<A|B>\runtime` holds its slot lock, and the install root is the root
+`<root>` that the lock names: its adb is `<root>\tools\platform-tools\adb.exe`,
+never a slot's (Workflow #359). acsetup runs `check-config` with the `actingd`
+of the slot it prepares, so that check sees and hashes the root's adb; acsetup
+runs nothing from its staging directory. A development build, the H3 check of
+the exact-SHA build and a staging directory named after the zip files (older
+acsetup) are no install root and behave as before.
 
 Explicit instances (`serial`, or `host` and `port`):
 

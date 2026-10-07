@@ -45,6 +45,8 @@ mod material_read;
 pub use material_read::*;
 use std::net::{IpAddr, SocketAddr};
 
+// Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when older peers can no longer use these two.
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v1";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
