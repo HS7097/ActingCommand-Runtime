@@ -4358,6 +4358,93 @@ fn session_recover_startup_login_dry_run_reads_resource_file() {
 }
 
 #[test]
+fn one_off_355_s4_startup_login_taps_pass_the_destructive_gate() {
+    let _guard = env_lock();
+    let _app_env = set_isolated_app_env();
+    unsafe {
+        set_missing_config_env();
+        env::remove_var(SESSION_STATE_ENV);
+        env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+    }
+    for overlap in [true, false] {
+        let temp = semantic_resource_root(overlap);
+        fs::write(
+            temp.path().join("STARTUP-LOGIN.md"),
+            "# startup\n| 弹窗关闭 × | (1205, 67) |\n| 推进/点击继续 | (11, 21) |\n",
+        )
+        .unwrap();
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+        let touch_log = temp.path().join("fake-touch.json");
+        let root = temp.path().to_str().unwrap().to_owned();
+        let scene_arg = scene.to_str().unwrap().to_owned();
+        let mut dry_args = vec![
+            "--json",
+            "--dry-run",
+            "--resource-root",
+            root.as_str(),
+            "--game",
+            "arknights",
+            "--server",
+            "cn",
+            "session",
+            "recover",
+            "--startup-login",
+            "--to",
+            "home",
+            "--scene",
+            scene_arg.as_str(),
+        ];
+        let dry = run_cli(dry_args.clone(), true);
+        dry_args.retain(|arg| *arg != "--dry-run");
+        dry_args.extend([
+            "--capture",
+            "--startup-max-rounds",
+            "1",
+            "--startup-interval-ms",
+            "0",
+        ]);
+        unsafe {
+            env::set_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG", &touch_log);
+        }
+        let real = run_cli(dry_args, true);
+        unsafe {
+            env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+        }
+        let code = |result: &CliResult| {
+            result
+                .envelope
+                .error
+                .as_ref()
+                .map(|error| error.code.clone())
+                .unwrap_or_default()
+        };
+        println!(
+            "one-off #355 S4: overlap={overlap} dry-run exit={} code={:?}; real exit={} code={:?} touch_log_written={}",
+            dry.exit_code(),
+            code(&dry),
+            real.exit_code(),
+            code(&real),
+            touch_log.exists()
+        );
+        if overlap {
+            assert_eq!(dry.exit_code(), 3, "{}", dry.envelope_json());
+            assert_eq!(code(&dry), "navigation_destructive_overlap");
+            assert_eq!(real.exit_code(), 3, "{}", real.envelope_json());
+            assert_eq!(code(&real), "navigation_destructive_overlap");
+            assert!(!touch_log.exists(), "no input may be sent");
+            println!(
+                "one-off #355 S4: real message = {}",
+                real.envelope.error.as_ref().unwrap().message
+            );
+        } else {
+            assert_eq!(dry.exit_code(), 0, "{}", dry.envelope_json());
+            assert_ne!(code(&real), "navigation_destructive_overlap");
+        }
+    }
+}
+
+#[test]
 fn session_recover_startup_login_missing_resource_is_fatal() {
     let temp = semantic_resource_root(false);
     let scene = temp.path().join("standby.png");
