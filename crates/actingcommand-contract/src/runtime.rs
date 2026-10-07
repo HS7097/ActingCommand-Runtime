@@ -1297,7 +1297,8 @@ pub struct RuntimeInstanceStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     game_id: Option<String>,
     /// The operator's scheduling pause of this instance (Workflow #191 ps1); absent when
-    /// the instance is not paused. Held in memory only: it never survives a restart.
+    /// the instance is not paused. Persisted since Workflow #361 B1 and restored at the next
+    /// start at revision 1 in the new owner epoch, at stage `released`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pause: Option<InstancePauseState>,
 }
@@ -1453,7 +1454,8 @@ pub struct RuntimeControlPlaneStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<crate::RuntimeStateSource>,
     /// The operator's global scheduling pause (Workflow #191 ps1); absent when scheduling is
-    /// not globally paused. Held in memory only: it never survives a restart.
+    /// not globally paused. Persisted since Workflow #361 B1 and restored at the next start at
+    /// revision 1 in the new owner epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scheduling_pause: Option<SchedulingPauseState>,
 }

@@ -191,6 +191,7 @@ mod resource_targets;
 mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
+mod scheduling_pause;
 mod signatures;
 mod startup_package;
 mod state_control;
@@ -833,6 +834,8 @@ pub struct RuntimeHost {
     info: RuntimeInfo,
     info_path: PathBuf,
     owner_released_by_exit: Option<crate::PriorOwnerReleasedByExit>,
+    /// Workflow #361 B1: one line per scheduling pause this start restored or dropped.
+    scheduling_pause_restore: Vec<String>,
     shared: Option<Arc<HostShared>>,
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
@@ -905,6 +908,8 @@ impl RuntimeHost {
             journal,
             released_by_exit,
         } = OwnerGuard::acquire(&config.state_root, events.issuer(), started_at_unix_ms)?;
+        // Workflow #361 B1: the owner before this one, named by a restored pause.
+        let previous_owner_epoch = journal.last().map(|record| record.owner_epoch);
         let mut fresh_storage = true;
         for material in [
             "runtime-state.sqlite",
@@ -1291,6 +1296,7 @@ impl RuntimeHost {
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeMap::new()),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
+            scheduling_pause_persist_gate: Mutex::new(()),
             startup_packages: OnceLock::new(),
             pending_host_work: Mutex::new(VecDeque::new()),
             resource_packages: config.resource_packages,
@@ -1318,6 +1324,7 @@ impl RuntimeHost {
             info,
             info_path,
             owner_released_by_exit: released_by_exit,
+            scheduling_pause_restore: Vec::new(),
             shared: Some(Arc::clone(&shared)),
             accept_thread: None,
             sweep_thread: None,
@@ -1468,6 +1475,8 @@ impl RuntimeHost {
             shared.expire_agent_sessions()?;
             shared.check_install_preparation()?;
             shared.restore_install_pauses()?;
+            host.scheduling_pause_restore =
+                shared.restore_scheduling_pauses(held_startup, previous_owner_epoch)?;
             shared.prepare_physical_instances_on_start()?;
             shared.check_install_preparation()?;
             lock(&shared.performance, "sample_capacity_before_business")?
@@ -1556,6 +1565,13 @@ impl RuntimeHost {
     /// The previous owner this start released because its process had exited, if any.
     pub const fn owner_released_by_exit(&self) -> Option<crate::PriorOwnerReleasedByExit> {
         self.owner_released_by_exit
+    }
+
+    /// Workflow #361 B1: one line per scheduling pause this start restored
+    /// (`scheduling_pause_restored scope=<global|instance:alias> since=<ms>`) or dropped
+    /// (`scheduling_pause_dropped scope=instance:<alias> reason=instance_not_registered`).
+    pub fn scheduling_pause_restore(&self) -> &[String] {
+        &self.scheduling_pause_restore
     }
 
     /// The daemon checks fatal_error first, then returns through its owned close path.
@@ -1655,6 +1671,24 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
         self.work_ref("read_superseded_catalog_approvals")?
             .superseded_catalog_approvals(generation)
+    }
+
+    /// Workflow #361 B1: the held scheduling pauses, global and per instance alias.
+    #[cfg(test)]
+    pub(crate) fn scheduling_pauses_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        Option<actingcommand_contract::SchedulingPauseState>,
+        BTreeMap<String, actingcommand_contract::InstancePauseState>,
+    )> {
+        let table = lock(
+            &self
+                .shared_ref("read_scheduling_pauses_for_test")?
+                .scheduling_pause,
+            "read_scheduling_pauses_for_test",
+        )?
+        .clone();
+        Ok((table.global_state(), table.instance_states()))
     }
 
     #[cfg(test)]
@@ -2988,8 +3022,12 @@ struct HostShared {
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
-    // Workflow #191 ps1: the operator's scheduling pauses (memory only, no expiry).
+    // Workflow #191 ps1: the operator's scheduling pauses (no expiry; since Workflow #361 B1
+    // persisted as `host.scheduling_pause`).
     scheduling_pause: Mutex<SchedulingPauseTable>,
+    /// Workflow #361 B1: orders each pause, resume and restore with the record of the pauses
+    /// it leads to.
+    scheduling_pause_persist_gate: Mutex<()>,
     // Slice #316-B3: startup packages by registered instance, and the work handed to the
     // host's own scheduling thread (startup packages; since #316-B4 also recovery ladders).
     startup_packages: OnceLock<BTreeMap<InstanceId, ContainedTaskRequest>>,

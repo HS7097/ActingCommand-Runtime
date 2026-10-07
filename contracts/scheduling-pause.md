@@ -217,12 +217,46 @@ since_unix_ms }` while the global pause holds, and each `RuntimeInstanceStatus` 
 its instance is paused. Both fields are absent otherwise (additive wire: a
 `deny_unknown_fields` reader must move to this contract before it reads a paused status).
 
-## No persistence, no expiry
+## Persistence, no expiry
 
-Pauses live in the host's memory only: a restart starts unpaused. A pause has no TTL; only
-`ResumeScheduling` lifts it. The ledger event set is unchanged: a pause or resume leaves its
-trace in the request receipt, the refused dispatch admissions, the terminals of the runs it
-stopped, the device close's existing records (an instance outside the multi-Nemu gate) and the
+A pause has no TTL; only `ResumeScheduling` lifts it. Since Workflow #361 B1 a pause survives a
+restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Runtime`,
+`record_list`, no lifetime; `contracts/runtime-fact-store.md`), one row per held pause:
+`scope` (`global` or `instance`), `instance_alias` (instance rows), `reason_code`,
+`since_unix_ms` (`timestamp_ms`), `set_in_owner_epoch` and, on a restored row,
+`restored_from_owner_epoch`. An empty list means nothing is paused; a ledger without the fact
+(any ledger older than this rule) starts unpaused, as before.
+
+- **Write before change.** A pause records the rows it leads to before it closes the gate; a
+  resume records the rows without its scope before it lifts the gate. Pause, resume and the
+  restore are ordered by one persist gate. A refused record fails the request with
+  `scheduling_pause_persist_failed` (`Failed`, `LedgerFailure`) and the gate stays as it was; a
+  failed append poisons the Runtime as every runtime-fact append does. A process that dies
+  between the record and the gate change restarts on the side the operator asked for. A failed
+  instance pause stage lifts its gate and records the rows without it; if that record fails
+  the request poisons the Runtime.
+- **Restore at start.** A start that is not installer-held reads the fact before any physical
+  instance is prepared and before the policy driver: the global pause comes back at revision 1
+  in the new owner epoch, an instance pause at revision 1 with stage `released`, so the startup
+  preparation, which skips a released instance pause, leaves its device untouched.
+  Reason and `since` are kept. A pause of an alias that is no longer registered is dropped. The
+  restored rows are recorded again with `restored_from_owner_epoch` (the owner epoch before
+  this start); that record is the ledger trace of the restore and of every dropped row.
+  `actingd` prints one stdout line per pause: `actingd scheduling_pause_restored
+  scope=<global|instance:alias> since=<ms>` or `actingd scheduling_pause_dropped
+  scope=instance:<alias> reason=instance_not_registered`. A malformed fact fails the start
+  (`scheduling_pause_fact_invalid`).
+- **Installer-held starts** keep the pauses their install transition carried
+  (`host.install_transition.pauses`) and record them as `host.scheduling_pause`.
+- **Conditional resume** after a restart needs the restored pause's new owner epoch and
+  revision 1, read from `Status`.
+- **Older Runtimes** ignore the fact: a switch back to one starts unpaused, and a resume made
+  there does not clear the fact, so the next start of this Runtime restores that pause again
+  (visible in `Status` and in the stdout line); resume it once more.
+
+The ledger event set is unchanged: besides the fact records, a pause or resume leaves its trace
+in the request receipt, the refused dispatch admissions, the terminals of the runs it stopped,
+the device close's existing records (an instance outside the multi-Nemu gate) and the
 reconnect's existing close and open records.
 
 ## CLI
