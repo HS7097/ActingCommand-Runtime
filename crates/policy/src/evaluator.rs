@@ -6597,6 +6597,185 @@ mod tests {
     }
 
     #[test]
+    fn one_off_355_s3_mistyped_observation_is_unknown_not_an_abort() {
+        const HOUR_MS: u64 = 3_600_000;
+        let scope = ScopeSelector::Instance {
+            instance_id: "fixture-instance-a".to_owned(),
+        };
+        let run = |trigger: serde_json::Value,
+                   extra_fact: Option<(&str, FactValue)>,
+                   outcome: Option<FactValue>| {
+            let catalog = two_task_catalog(|tasks| {
+                tasks[0]["trigger"] = trigger;
+                tasks[1]["trigger"] = due_clock();
+                tasks[0]["feedback_stop"] = false_fact();
+                tasks[1]["feedback_stop"] = false_fact();
+            });
+            let mut facts = base_facts();
+            if let Some((fact_key, value)) = extra_fact {
+                facts.facts.push(ObservedFact {
+                    scope: scope.clone(),
+                    fact_key: fact_key.to_owned(),
+                    value,
+                    observed_at_unix_ms: NOW,
+                    expires_at_unix_ms: None,
+                    confidence_milli: 1_000,
+                });
+            }
+            if let Some(value) = outcome {
+                facts.outcomes.push(ObservedOutcome {
+                    task_id: "fixture.observe".to_owned(),
+                    instance_id: "fixture-instance-a".to_owned(),
+                    outcome_key: "completed".to_owned(),
+                    value,
+                    observed_at_unix_ms: NOW,
+                    expires_at_unix_ms: None,
+                    activity_window_id: None,
+                });
+            }
+            evaluate(
+                &catalog,
+                &facts,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+                3,
+            )
+            .expect("a mistyped observation no longer fails the evaluation")
+        };
+        let record_deadline = serde_json::json!({
+            "kind": "record_deadline",
+            "scope": {"kind": "instance", "instance_id": "fixture-instance-a"},
+            "fact_key": "inventory.expiring_items",
+            "timestamp_field": "expires_at_unix_ms",
+            "within_ms": 48 * HOUR_MS,
+            "max_age_ms": 1000
+        });
+        let cases = [
+            (
+                "fact expects string, observed integer",
+                serde_json::json!({
+                    "kind": "fact",
+                    "scope": {"kind": "instance", "instance_id": "fixture-instance-a"},
+                    "fact_key": "fixture.label",
+                    "comparison": "eq",
+                    "value": {"type": "string", "value": "ready"},
+                    "max_age_ms": null
+                }),
+                Some(("fixture.label", FactValue::Integer(7))),
+                None,
+                "fixture.label",
+                "type_mismatch",
+            ),
+            (
+                "outcome expects boolean, observed integer",
+                serde_json::json!({
+                    "kind": "outcome", "task_id": "fixture.observe", "outcome_key": "completed",
+                    "comparison": "eq", "value": {"type": "boolean", "value": true}
+                }),
+                None,
+                Some(FactValue::Integer(1)),
+                "outcome.fixture.observe.completed",
+                "type_mismatch",
+            ),
+            (
+                "record deadline over an integer",
+                record_deadline.clone(),
+                Some(("inventory.expiring_items", FactValue::Integer(5))),
+                None,
+                "inventory.expiring_items",
+                "type_mismatch",
+            ),
+            (
+                "record deadline item without its field",
+                record_deadline.clone(),
+                Some((
+                    "inventory.expiring_items",
+                    FactValue::RecordList(vec![BTreeMap::from([(
+                        "other_field".to_owned(),
+                        FactScalar::TimestampMs(NOW + HOUR_MS),
+                    )])]),
+                )),
+                None,
+                "inventory.expiring_items",
+                "field_missing",
+            ),
+            (
+                "record deadline item field of another kind",
+                record_deadline,
+                Some((
+                    "inventory.expiring_items",
+                    FactValue::RecordList(vec![BTreeMap::from([(
+                        "expires_at_unix_ms".to_owned(),
+                        FactScalar::Integer(5),
+                    )])]),
+                )),
+                None,
+                "inventory.expiring_items",
+                "type_mismatch",
+            ),
+        ];
+        for (case, trigger, fact, outcome, fact_key, reason) in cases {
+            let result = run(trigger, fact, outcome);
+            let mistyped = decision_for(&result, "fixture.observe", "fixture-instance-a");
+            assert_eq!(mistyped.eligibility, EligibilityState::Unknown, "{case}");
+            assert_eq!(
+                mistyped.detection_suggestions[0].fact_key, fact_key,
+                "{case}"
+            );
+            assert_eq!(mistyped.detection_suggestions[0].reason, reason, "{case}");
+            assert!(
+                result
+                    .dispatch_intents
+                    .iter()
+                    .all(|intent| intent.task_id != "fixture.observe"),
+                "{case}"
+            );
+            assert!(
+                result
+                    .dispatch_intents
+                    .iter()
+                    .any(|intent| intent.task_id == "fixture.observe-secondary"),
+                "{case}"
+            );
+            println!(
+                "one-off #355 S3: {case}: fixture.observe Unknown {fact_key}.{reason}; dispatched {:?}",
+                result
+                    .dispatch_intents
+                    .iter()
+                    .map(|intent| intent.task_id.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+        let error = compare_fact_values(
+            &FactValue::Integer(1),
+            Comparison::Contains,
+            &FactValue::Integer(1),
+        )
+        .expect_err("contains on two integers is still the catalog's error");
+        assert_eq!(error.code(), "policy_evaluation_fact_type_mismatch");
+        println!(
+            "one-off #355 S3: contains on two integers -> {}: {}",
+            error.code(),
+            error.message()
+        );
+        let error = compare_fact_values(
+            &FactValue::String("a".to_owned()),
+            Comparison::LessThan,
+            &FactValue::String("b".to_owned()),
+        )
+        .expect_err("ordered comparison on two strings is still the catalog's error");
+        assert_eq!(error.code(), "policy_evaluation_fact_type_mismatch");
+        println!(
+            "one-off #355 S3: less_than on two strings -> {}: {}",
+            error.code(),
+            error.message()
+        );
+    }
+
+    #[test]
     fn pure_evaluator_source_has_no_runtime_side_effect_authority() {
         let source = include_str!("evaluator.rs")
             .split("#[cfg(test)]")

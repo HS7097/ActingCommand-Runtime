@@ -759,6 +759,53 @@ fn policy_evaluation_rejects_future_observed_outcome() {
 }
 
 #[test]
+fn one_off_355_s3_policy_rejection_keeps_policy_code_and_message() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(
+        POLICY_NOW_UNIX_MS,
+        POLICY_NOW_UNIX_MS,
+    ));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("future-outcome runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate future-outcome catalog");
+    let mut facts = policy_facts();
+    facts.outcomes[0].observed_at_unix_ms = POLICY_NOW_UNIX_MS + 1;
+    let error = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            12_203,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect_err("future observed outcome must remain fail-closed");
+    assert_eq!(error.code(), "policy_evaluation_rejected");
+    let detail = error
+        .diagnostics()
+        .native_detail()
+        .expect("policy detail is kept")
+        .text()
+        .to_owned();
+    assert!(
+        detail.starts_with("policy_evaluation_") && detail.contains(": "),
+        "{detail}"
+    );
+    println!("one-off #355 S3: policy_evaluation_rejected native detail = {detail}");
+    host.close().expect("close future-outcome host");
+}
+
+#[test]
 fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition() {
     let effect_key = "opaque-effect-result";
     let no_effect_key = "opaque-no-effect-result";
