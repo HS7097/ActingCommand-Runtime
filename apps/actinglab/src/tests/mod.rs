@@ -17,7 +17,6 @@ use semantic_fixture::{
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-use test_env::TrustedRemoteEnvGuard;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -927,14 +926,14 @@ fn session_contract_is_offline_access_contract() {
         Some("available")
     );
     assert_eq!(
-        data.pointer("/entrypoints/trusted_remote/authentication_required")
-            .and_then(Value::as_bool),
-        Some(true)
+        data.pointer("/entrypoints/trusted_remote/status")
+            .and_then(Value::as_str),
+        Some("retired")
     );
     assert_eq!(
-        data.pointer("/entrypoints/trusted_remote/auth_env/token")
+        data.pointer("/entrypoints/trusted_remote/reason_code")
             .and_then(Value::as_str),
-        Some(TRUSTED_REMOTE_TOKEN_ENV)
+        Some("trusted_remote_transport_retired")
     );
     assert_eq!(
         data.pointer("/safety/control_requests_require_matching_lease")
@@ -1021,19 +1020,19 @@ fn session_api_is_offline_api_contract() {
         Some("available")
     );
     assert_eq!(
-        data.pointer("/access_channels/trusted_remote/authentication_required")
-            .and_then(Value::as_bool),
-        Some(true)
+        data.pointer("/access_channels/trusted_remote/status")
+            .and_then(Value::as_str),
+        Some("retired")
     );
     assert_eq!(
-        data.pointer("/access_channels/trusted_remote/network_listener_implemented")
+        data.pointer("/access_channels/trusted_remote/available")
             .and_then(Value::as_bool),
         Some(false)
     );
     assert_eq!(
-        data.pointer("/access_channels/trusted_remote/blocked_without_auth_code")
+        data.pointer("/access_channels/trusted_remote/reason_code")
             .and_then(Value::as_str),
-        Some("trusted_remote_auth_required")
+        Some("trusted_remote_transport_retired")
     );
     assert_eq!(
         data.pointer("/daemon_request_queue/submit_modes/no_wait/flag")
@@ -1373,31 +1372,6 @@ fn session_api_is_offline_api_contract() {
         Some("session transport check --endpoint <url>")
     );
     assert_eq!(
-        data.pointer("/envelopes/transport_view/plan_query")
-            .and_then(Value::as_str),
-        Some("session transport plan [--endpoint <url>]")
-    );
-    assert_eq!(
-        data.pointer("/envelopes/transport_view/plan_schema_version")
-            .and_then(Value::as_str),
-        Some("session.transport_plan.v0.1")
-    );
-    assert_eq!(
-        data.pointer("/envelopes/transport_view/plan_next_actions_field")
-            .and_then(Value::as_str),
-        Some("next_actions")
-    );
-    assert_eq!(
-        data.pointer("/envelopes/transport_view/plan_trusted_remote_gate_field")
-            .and_then(Value::as_str),
-        Some("trusted_remote_gate")
-    );
-    assert_eq!(
-        data.pointer("/envelopes/transport_view/plan_trusted_remote_gate_schema_version")
-            .and_then(Value::as_str),
-        Some("session.trusted_remote_gate.v0.1")
-    );
-    assert_eq!(
         data.pointer("/envelopes/transport_view/check_schema_version")
             .and_then(Value::as_str),
         Some("session.transport_check.v0.1")
@@ -1723,9 +1697,9 @@ fn session_api_is_offline_api_contract() {
         Some("deferred_code")
     );
     assert_eq!(
-        data.pointer("/failure_contract/untrusted_remote_endpoint_code")
+        data.pointer("/failure_contract/non_local_endpoint_code")
             .and_then(Value::as_str),
-        Some("trusted_remote_transport_blocked")
+        Some("runtime_endpoint_not_local")
     );
 }
 
@@ -1744,29 +1718,14 @@ fn session_transport_is_offline_transport_contract() {
         Some("retired")
     );
     assert_eq!(
-        data.pointer("/channels/trusted_remote/encryption_required")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        data.pointer("/channels/trusted_remote/auth_env/client_certificate")
+        data.pointer("/channels/trusted_remote/status")
             .and_then(Value::as_str),
-        Some(TRUSTED_REMOTE_CLIENT_CERT_ENV)
+        Some("retired")
     );
     assert_eq!(
-        data.pointer("/channels/trusted_remote/preflight_command")
+        data.pointer("/channels/trusted_remote/reason_code")
             .and_then(Value::as_str),
-        Some("session transport check --endpoint <url>")
-    );
-    assert_eq!(
-        data.pointer("/channels/trusted_remote/plan_command")
-            .and_then(Value::as_str),
-        Some("session transport plan [--endpoint <url>]")
-    );
-    assert_eq!(
-        data.pointer("/safety/remote_transport_must_not_start_without_authentication")
-            .and_then(Value::as_bool),
-        Some(true)
+        Some("trusted_remote_transport_retired")
     );
 }
 

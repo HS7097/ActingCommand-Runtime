@@ -45,7 +45,7 @@ pub(super) fn stream_contract_json(
         "safety": {
             "session_layer_only_throat": true,
             "ui_must_not_directly_touch_adb_or_device": true,
-            "trusted_remote_long_lived_stream": "reserved"
+            "trusted_remote_long_lived_stream": "retired"
         }
     })
 }

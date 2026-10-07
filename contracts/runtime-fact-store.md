@@ -467,6 +467,13 @@ the backend self-check facts (source `device-proxy` or `capture`).
     `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`,
     "Environment overrides").
 
+- `host.scheduling_pause` (Workflow #361 B1) — runtime scope, `record_list`,
+  no lifetime: the operator's held scheduling pauses, one row per pause
+  (`scope`, `instance_alias`, `reason_code`, `since_unix_ms`,
+  `set_in_owner_epoch`, `restored_from_owner_epoch`), recorded before every
+  pause or resume changes the gate and again by the start that restores them
+  (`contracts/scheduling-pause.md`, "Persistence, no expiry").
+
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of
 the snapshot and `actingctl status --config` returns just the two (see "Read

@@ -899,3 +899,107 @@ fn complete_owner_journal_corruption_is_fatal() {
     assert_eq!(error.code(), "owner_record_invalid");
     assert!(error.is_fatal());
 }
+
+/// Workflow #361 B1: a global and an instance scheduling pause survive a restart (revision 1,
+/// reason and `since` kept, the instance pause released, one restore line each), and pauses
+/// resumed before a restart are not restored.
+#[test]
+fn scheduling_pauses_survive_a_restart_until_resumed() {
+    use actingcommand_contract::{InstancePauseStage, SchedulingPauseScope};
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let start = |root: &TempDir| {
+        RuntimeHost::start(
+            config(root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                registered_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("runtime host")
+    };
+    let scopes = || {
+        [
+            SchedulingPauseScope::Global,
+            SchedulingPauseScope::Instance {
+                instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
+            },
+        ]
+    };
+    let host = start(&root);
+    assert!(host.scheduling_pause_restore().is_empty());
+    let mut client = TestClient::connect(&host);
+    for scope in scopes() {
+        let request = client.request(RuntimeOperation::PauseScheduling {
+            scope,
+            reason_code: "restart_check".to_owned(),
+            drain_timeout_ms: 1_000,
+        });
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{receipt:?}"
+        );
+    }
+    drop(client);
+    let (paused_global, paused_instances) = host.scheduling_pauses_for_test().expect("held pauses");
+    let paused_global = paused_global.expect("global pause");
+    let paused_instance = paused_instances
+        .get(POLICY_INSTANCE_ALIAS)
+        .expect("instance pause")
+        .clone();
+    host.close().expect("close host");
+
+    let reopened = start(&root);
+    assert_eq!(
+        reopened.scheduling_pause_restore(),
+        [
+            format!(
+                "scheduling_pause_restored scope=global since={}",
+                paused_global.since_unix_ms
+            ),
+            format!(
+                "scheduling_pause_restored scope=instance:{POLICY_INSTANCE_ALIAS} since={}",
+                paused_instance.since_unix_ms
+            ),
+        ]
+    );
+    let (global, instances) = reopened
+        .scheduling_pauses_for_test()
+        .expect("restored pauses");
+    let global = global.expect("restored global pause");
+    assert_eq!(global.revision, 1);
+    assert_eq!(global.reason_code, "restart_check");
+    assert_eq!(global.since_unix_ms, paused_global.since_unix_ms);
+    let instance = instances
+        .get(POLICY_INSTANCE_ALIAS)
+        .expect("restored instance pause");
+    assert_eq!(instance.revision, 1);
+    assert_eq!(instance.reason_code, "restart_check");
+    assert_eq!(instance.since_unix_ms, paused_instance.since_unix_ms);
+    assert_eq!(instance.stage, InstancePauseStage::Released);
+    let mut client = TestClient::connect(&reopened);
+    for scope in scopes() {
+        let request = client.request(RuntimeOperation::ResumeScheduling {
+            scope,
+            expected: None,
+        });
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{receipt:?}"
+        );
+    }
+    drop(client);
+    reopened.close().expect("close reopened host");
+
+    let restarted = start(&root);
+    assert!(restarted.scheduling_pause_restore().is_empty());
+    let (global, instances) = restarted.scheduling_pauses_for_test().expect("pauses");
+    assert!(global.is_none());
+    assert!(instances.is_empty());
+    restarted.close().expect("close restarted host");
+}

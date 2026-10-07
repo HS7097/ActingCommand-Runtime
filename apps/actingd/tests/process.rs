@@ -2662,6 +2662,325 @@ fn policy_startup_rejects_approval_ids_that_do_not_match_the_catalog() {
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 }
 
+/// Workflow #361 C1/C2: what the first policy cycle or the approval driver used to refuse
+/// after catalog activation is refused by `check-config` and by a direct start alike, before
+/// the state root holds any record.
+#[test]
+fn policy_configuration_is_refused_before_any_catalog_record() {
+    fn set_approval_ref(state_root: &Path, config: &mut Value, approval_id: &str) {
+        for name in ["tasks.json", "pools.json", "activity.json", "timeline.json"] {
+            let path = state_root.join("policy").join(name);
+            let mut document: Value =
+                serde_json::from_slice(&fs::read(&path).expect("read policy document"))
+                    .expect("decode policy document");
+            document["catalog"]["approval_refs"] = json!([approval_id]);
+            fs::write(
+                &path,
+                serde_json::to_vec_pretty(&document).expect("policy document JSON"),
+            )
+            .expect("write policy document");
+        }
+        config["policy"]["catalog_approval_ids"] = json!([approval_id]);
+    }
+    type Mutation = fn(&Path, &mut Value);
+    let cases: [(&str, Mutation, &str); 6] = [
+        (
+            "approval id without prefix",
+            |state_root, config| set_approval_ref(state_root, config, "fixture-a"),
+            "policy_catalog_approval_invalid",
+        ),
+        (
+            "approval id as a URL",
+            |state_root, config| {
+                set_approval_ref(state_root, config, "https://approvals.example/fixture-a")
+            },
+            "policy_catalog_approval_invalid",
+        ),
+        (
+            "extra policy instance",
+            |_, config| {
+                let mut extra = config["policy"]["facts"]["instances"][0].clone();
+                extra["instance_id"] = json!("fixture-instance-extra");
+                config["policy"]["facts"]["instances"]
+                    .as_array_mut()
+                    .expect("policy instances")
+                    .push(extra);
+            },
+            "policy_instance_set_mismatch",
+        ),
+        (
+            "missing policy instance",
+            |_, config| config["policy"]["facts"]["instances"] = json!([]),
+            "policy_instance_set_mismatch",
+        ),
+        (
+            "unknown host",
+            |_, config| {
+                config["policy"]["facts"]["instances"][0]["host_id"] =
+                    json!("fixture-host-unknown");
+            },
+            "policy_instance_host_unknown",
+        ),
+        (
+            "missing manifest entry",
+            |state_root, _| {
+                let path = state_root.join("policy").join("tasks.json");
+                let mut tasks: Value =
+                    serde_json::from_slice(&fs::read(&path).expect("read policy tasks"))
+                        .expect("decode policy tasks");
+                tasks["tasks"][0]["procedure_ref"] = json!("procedure.unbound");
+                fs::write(
+                    &path,
+                    serde_json::to_vec_pretty(&tasks).expect("policy tasks JSON"),
+                )
+                .expect("write policy tasks");
+            },
+            "procedure_manifest_entry_missing",
+        ),
+    ];
+    for (case, mutate, code) in cases {
+        let root = TempDir::new().expect("tempdir");
+        let config_path = root.path().join("actingd.json");
+        write_policy_execution_config(
+            &config_path,
+            root.path(),
+            instance_id(),
+            &[vec![0, 0, 255, 0, 255, 0]],
+            0,
+        );
+        let mut config: Value =
+            serde_json::from_slice(&fs::read(&config_path).expect("read policy config"))
+                .expect("decode policy config");
+        mutate(root.path(), &mut config);
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).expect("policy config JSON"),
+        )
+        .expect("write policy config");
+        let config_argument = config_path.to_str().expect("config path");
+
+        let checked = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+            .args(["check-config", "--config", config_argument])
+            .output()
+            .expect("run actingd check-config");
+        assert!(!checked.status.success(), "{case}: check-config must fail");
+        let report: Value = serde_json::from_slice(&checked.stdout)
+            .unwrap_or_else(|error| panic!("{case}: check-config report: {error}"));
+        assert_eq!(report["status"], "failed", "{case}");
+        assert_eq!(report["error"]["code"], code, "{case}");
+        assert_eq!(report["error"]["stage"], "assemble", "{case}");
+
+        let started = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+            .args(["--config", config_argument])
+            .output()
+            .expect("run actingd");
+        assert!(!started.status.success(), "{case}: startup must fail");
+        assert!(
+            String::from_utf8_lossy(&started.stderr).contains(code),
+            "{case}: {}",
+            String::from_utf8_lossy(&started.stderr)
+        );
+        assert!(!root.path().join(RUNTIME_INFO_FILE).exists(), "{case}");
+        assert!(
+            !root.path().join("runtime-state.sqlite").exists(),
+            "{case}: no ledger may be opened"
+        );
+    }
+}
+
+/// Workflow #361 C3: `check-config` previews startup's catalog plan from the ledger, read-only:
+/// a missing state root, a fresh one, `unchanged` beside the running daemon that holds the
+/// owner lock, a refused `replace` and an approval conflict at stage `policy_state` exactly as
+/// startup refuses them, a planned forward step, and no change to the state database.
+#[test]
+fn check_config_previews_the_catalog_plan_read_only() {
+    fn check(config_path: &Path) -> (bool, Value) {
+        let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+            .args([
+                "check-config",
+                "--config",
+                config_path.to_str().expect("config path"),
+            ])
+            .output()
+            .expect("run actingd check-config");
+        let report = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "check-config report: {error}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        (output.status.success(), report)
+    }
+    fn write_variant(root: &Path, name: &str, config: &Value) -> PathBuf {
+        let path = root.join(name);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(config).expect("config variant JSON"),
+        )
+        .expect("write config variant");
+        path
+    }
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    configure_policy_clock_at(root.path(), unix_ms_now() + 3_600_000);
+    let config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config JSON");
+
+    let mut absent = config.clone();
+    absent["state_root"] = json!(root.path().join("missing-state"));
+    let (passed, report) = check(&write_variant(root.path(), "absent.json", &absent));
+    assert!(passed, "{report}");
+    assert_eq!(report["policy_plan"]["state"], "state_root_absent");
+    assert_eq!(report["policy_plan"]["plan"], "first");
+    assert!(
+        report["not_checked"]
+            .as_array()
+            .expect("not_checked")
+            .contains(&json!("state_root_absent"))
+    );
+    assert!(!root.path().join("missing-state").exists());
+
+    let (passed, report) = check(&config_path);
+    assert!(passed, "{report}");
+    assert_eq!(report["policy_plan"]["state"], "read");
+    assert_eq!(report["policy_plan"]["driver"], "on");
+    assert_eq!(report["policy_plan"]["active"], Value::Null);
+    assert_eq!(report["policy_plan"]["plan"], "first");
+    assert_eq!(
+        report["policy_plan"]["approvals"]["record"],
+        json!(["approval:fixture-a"])
+    );
+    let configured_hash = report["policy_plan"]["configured"]["catalog_hash"].clone();
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    let started = Instant::now();
+    while client
+        .query_events(
+            EventQuery {
+                event_type: Some(EventType::ApprovalDecision),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Concise,
+        )
+        .expect("query approvals")
+        .is_empty()
+    {
+        assert!(
+            child.0.try_wait().expect("process state").is_none(),
+            "actingd exited during policy initialization"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "policy initialization recorded no approval"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(client);
+
+    // Beside the running daemon, which holds the owner lock.
+    let (passed, report) = check(&config_path);
+    assert!(passed, "{report}");
+    assert_eq!(report["policy_plan"]["plan"], "unchanged");
+    assert_eq!(
+        report["policy_plan"]["active"]["catalog_hash"],
+        configured_hash
+    );
+    assert_eq!(
+        report["policy_plan"]["approvals"],
+        json!({"record": [], "reapprove": [], "revoke": []})
+    );
+
+    // Version 2 of the catalog, first with the approval id version 1 already holds.
+    let next_root = root.path().join("policy-next");
+    fs::create_dir(&next_root).expect("create next policy directory");
+    let write_next = |approval_id: &str| {
+        for name in ["tasks.json", "pools.json", "activity.json", "timeline.json"] {
+            let mut document: Value = serde_json::from_slice(
+                &fs::read(root.path().join("policy").join(name)).expect("read policy document"),
+            )
+            .expect("policy document JSON");
+            document["catalog"]["catalog_version"] = json!(2);
+            document["catalog"]["approval_refs"] = json!([approval_id]);
+            fs::write(
+                next_root.join(name),
+                serde_json::to_vec_pretty(&document).expect("next policy document JSON"),
+            )
+            .expect("write next policy document");
+        }
+    };
+    let mut next = config.clone();
+    next["policy"]["catalog"] = json!({
+        "tasks": "policy-next/tasks.json",
+        "pools": "policy-next/pools.json",
+        "activity": "policy-next/activity.json",
+        "timeline": "policy-next/timeline.json"
+    });
+    write_next("approval:fixture-a");
+    let (passed, report) = check(&write_variant(root.path(), "conflict.json", &next));
+    assert!(!passed, "{report}");
+    assert_eq!(report["error"]["code"], "policy_catalog_approval_conflict");
+    assert_eq!(report["error"]["stage"], "policy_state");
+
+    write_next("approval:fixture-a2");
+    next["policy"]["catalog_approval_ids"] = json!(["approval:fixture-a2"]);
+    let mut stale = next.clone();
+    stale["policy"]["catalog_transition"] = json!({
+        "kind": "replace",
+        "expected_active_catalog_hash": format!("sha256:{}", "0".repeat(64))
+    });
+    let (passed, report) = check(&write_variant(root.path(), "stale.json", &stale));
+    assert!(!passed, "{report}");
+    assert_eq!(
+        report["error"]["code"],
+        "catalog_transition_expectation_mismatch"
+    );
+    assert_eq!(report["error"]["stage"], "policy_state");
+
+    let (passed, report) = check(&write_variant(root.path(), "forward.json", &next));
+    assert!(passed, "{report}");
+    assert_eq!(report["policy_plan"]["plan"], "forward");
+    assert_eq!(
+        report["policy_plan"]["approvals"],
+        json!({
+            "record": ["approval:fixture-a2"],
+            "reapprove": [],
+            "revoke": ["approval:fixture-a"]
+        })
+    );
+
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
+    let names = |path: &Path| {
+        fs::read_dir(path)
+            .expect("list state root")
+            .map(|entry| entry.expect("state root entry").file_name())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let database = root.path().join("runtime-state.sqlite");
+    let before = (
+        names(root.path()),
+        Sha256::digest(fs::read(&database).expect("read state database")),
+    );
+    let (passed, report) = check(&config_path);
+    assert!(passed, "{report}");
+    assert_eq!(report["policy_plan"]["plan"], "unchanged");
+    let after = (
+        names(root.path()),
+        Sha256::digest(fs::read(&database).expect("read state database")),
+    );
+    assert_eq!(before, after, "check-config must not write the state root");
+}
+
 fn connect(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(
         RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)

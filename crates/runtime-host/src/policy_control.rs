@@ -18,6 +18,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MILLIS_PER_MINUTE: i128 = 60_000;
 const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
+/// The failure code of a scheduled run that the daemon's own end cut short, recorded by the
+/// startup reconciliation (`policy_outcome.rs`).
+pub(crate) const POLICY_SETTLEMENT_INTERRUPTED: &str = "policy_settlement_interrupted";
+
+/// Workflow #361 M6, review P5: whether a paused failure is the first interrupted settlement
+/// of its pair in a row, which the restart that recorded it lifts. The count is rebuilt by
+/// replay, so nothing persisted changes.
+pub(crate) fn interruption_lifted_by_restart(error_code: &str, consecutive: u16) -> bool {
+    error_code == POLICY_SETTLEMENT_INTERRUPTED && consecutive == 1
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyExecutionInput {
@@ -113,12 +123,19 @@ impl PolicyControlState {
         }
     }
 
-    /// Whether the pair's suspension is lifted under `lift` (§12.7).
+    /// Whether the pair's suspension is lifted under `lift` (§12.7). Workflow #361 M6: a run
+    /// the daemon's own end cut short (`policy_settlement_interrupted`) is no failure of the
+    /// task, so its suspension does not outlive the restart that recorded it. Review P5: only
+    /// the first such interruption in a row; a second one in a row (a task that may itself end
+    /// the daemon) keeps the pair paused until its package changes, as before.
     fn suspension_lifted(
         failure: &FailureStreak,
         intent: &DispatchIntent,
         lift: Option<&SuspensionLiftView<'_>>,
     ) -> bool {
+        if interruption_lifted_by_restart(&failure.error_code, failure.count) {
+            return true;
+        }
         let (Some(view), Some(paused_on)) = (lift, failure.paused_on.as_ref()) else {
             return false;
         };
@@ -1182,6 +1199,54 @@ mod tests {
                 .expect("commit failure");
             now = failure.retry_at_unix_ms.unwrap_or(now + 100);
         }
+    }
+
+    /// Workflow #361 M6: the startup reconciliation still records an interrupted run as a
+    /// severe, paused failure, and the next admission of the pair is not held by it. Review
+    /// P5: a second interruption in a row holds the pair as before.
+    #[test]
+    fn interrupted_settlement_does_not_hold_the_pair() {
+        let catalog = catalog();
+        let mut state = PolicyControlState::default();
+        let mut interrupt = |suffix: u64, now: u64| {
+            let interrupted = intent(&catalog, suffix);
+            let admission = state
+                .preview_admission(&catalog, &interrupted, now)
+                .expect("admission preview");
+            let data = state
+                .preview_execution(
+                    &catalog,
+                    &interrupted,
+                    &admission,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: now + 100,
+                        runtime_ms: 0,
+                    },
+                    &PolicyExecutionInput::Failed {
+                        error_code: POLICY_SETTLEMENT_INTERRUPTED.to_owned(),
+                        class: PolicyFailureClass::Severe,
+                    },
+                    &unavailable(now + 100),
+                )
+                .expect("interrupted settlement");
+            let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
+                panic!("expected failure")
+            };
+            assert_eq!(failure.disposition, PolicyFailureDisposition::PausedTask);
+            state
+                .commit_execution(&catalog, &interrupted, &admission, &data)
+                .expect("commit interrupted settlement");
+            state
+                .preview_admission(&catalog, &intent(&catalog, suffix + 1), now + 100)
+                .map(|_| ())
+                .map_err(|error| error.code())
+        };
+        assert_eq!(interrupt(1, NOW), Ok(()), "the pair is admitted again");
+        assert_eq!(
+            interrupt(2, NOW + 100),
+            Err("policy_task_paused"),
+            "a second interruption in a row holds the pair"
+        );
     }
 
     #[test]

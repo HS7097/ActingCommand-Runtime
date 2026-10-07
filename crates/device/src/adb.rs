@@ -9,7 +9,7 @@ use crate::{
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceResourceCloseOutcome,
     DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence, DeviceResult,
 };
-use actingcommand_contract::FencedWrite;
+use actingcommand_contract::{CaptureWmSizeKind, FencedWrite};
 use std::ffi::OsString;
 use std::io::{self, Read};
 #[cfg(windows)]
@@ -528,6 +528,99 @@ impl Adb {
         }
         Ok(output)
     }
+}
+
+/// One reading of `adb shell wm size` (Workflow #355 D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WmSize {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) kind: CaptureWmSizeKind,
+}
+
+/// The one `adb shell wm size` parser, shared by the DroidCast start, the capture geometry read
+/// and the touch bounds (Workflow #355 D5).
+///
+/// `wm size` prints `Physical size: WxH` and, while a size override is set, a second line
+/// `Override size: WxH`. Which of the two sizes screencap, DroidCast and `input` each follow under
+/// an override has not been verified on a device, so when both lines are present and the sizes
+/// differ this fails loud with `wm_size_override_unsupported` instead of picking one: capture and
+/// touch refuse such a display. Physical alone reads as Physical; equal Physical and Override sizes
+/// and a lone Override line read as Override; one line without a label (or with another label)
+/// reads as Unlabelled. Any other shape, and a malformed or zero dimension, fails loud and names
+/// the full output.
+pub(crate) fn parse_wm_size(output: &str) -> DeviceResult<WmSize> {
+    let mut physical = None;
+    let mut override_size = None;
+    let mut unlabelled = Vec::new();
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let (label, value) = line
+            .split_once(':')
+            .map_or(("", line), |(label, value)| (label.trim(), value));
+        let size = parse_wm_dimensions(value, output)?;
+        let slot = match label {
+            "Physical size" => &mut physical,
+            "Override size" => &mut override_size,
+            _ => {
+                unlabelled.push(size);
+                continue;
+            }
+        };
+        if slot.replace(size).is_some() {
+            return Err(DeviceError::fatal(format!(
+                "adb wm size output repeats the line '{label}': {output}"
+            )));
+        }
+    }
+    let (width, height, kind) = match (physical, override_size, unlabelled.as_slice()) {
+        (None, None, [(width, height)]) => (*width, *height, CaptureWmSizeKind::Unlabelled),
+        (Some((width, height)), None, []) => (width, height, CaptureWmSizeKind::Physical),
+        (None, Some((width, height)), []) => (width, height, CaptureWmSizeKind::Override),
+        (Some(physical), Some(overridden), []) if physical == overridden => {
+            (overridden.0, overridden.1, CaptureWmSizeKind::Override)
+        }
+        (Some((physical_width, physical_height)), Some((override_width, override_height)), []) => {
+            return Err(DeviceError::fatal(format!(
+                "wm_size_override_unsupported: adb wm size reports Physical {physical_width}x{physical_height} and Override {override_width}x{override_height}; capture and touch refuse a display whose size is overridden: {output}"
+            )));
+        }
+        _ => {
+            return Err(DeviceError::fatal(format!(
+                "failed to parse adb wm size output: {output}"
+            )));
+        }
+    };
+    Ok(WmSize {
+        width,
+        height,
+        kind,
+    })
+}
+
+fn parse_wm_dimensions(value: &str, output: &str) -> DeviceResult<(u32, u32)> {
+    let (width, height) = value.trim().split_once('x').ok_or_else(|| {
+        DeviceError::fatal(format!("failed to parse adb wm size dimensions: {output}"))
+    })?;
+    let width = width.trim().parse::<u32>().map_err(|err| {
+        DeviceError::fatal(format!(
+            "invalid adb wm width '{width}' in adb wm size output: {err}"
+        ))
+    })?;
+    let height = height.trim().parse::<u32>().map_err(|err| {
+        DeviceError::fatal(format!(
+            "invalid adb wm height '{height}' in adb wm size output: {err}"
+        ))
+    })?;
+    if width == 0 || height == 0 {
+        return Err(DeviceError::fatal(format!(
+            "adb wm size returned zero dimension: {width}x{height}"
+        )));
+    }
+    Ok((width, height))
 }
 
 /// Pure parse of `dumpsys activity activities`: the package of the first

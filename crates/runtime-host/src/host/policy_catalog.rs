@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::catalog_plan::{
+    CatalogTransitionPlan, CatalogTransitionPlanKind, CatalogTransitionRequest,
+    decide_catalog_transition,
+};
 
 impl HostShared {
     pub(super) fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
@@ -15,6 +19,92 @@ impl HostShared {
         sources: &CatalogSources,
     ) -> RuntimeHostResult<CatalogGeneration> {
         self.activate_policy_catalog_with_authorization(sources, None)
+    }
+
+    /// Workflow #361 C2, A: stages the configured catalog's generation, decides its transition
+    /// against the active generation and the lineage (`catalog_plan::decide_catalog_transition`)
+    /// and plans the approvals the policy driver records for it. Nothing is recorded in the
+    /// ledger.
+    pub(super) fn plan_policy_catalog_transition(
+        &self,
+        sources: &CatalogSources,
+        request: Option<&CatalogTransitionRequest>,
+        approval_ids: &[String],
+    ) -> RuntimeHostResult<CatalogTransitionPlan> {
+        let (generation, active, lineage) = {
+            let policy = lock(self.policy()?, "plan_policy_catalog_transition")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
+            let catalog = policy.stage(sources)?;
+            (
+                catalog.generation().clone(),
+                policy.active_generation(),
+                policy.lineage().clone(),
+            )
+        };
+        let kind = decide_catalog_transition(active.as_ref(), &lineage, &generation, request)?;
+        let approvals = self.plan_catalog_approvals(&lineage, &generation, approval_ids)?;
+        Ok(CatalogTransitionPlan {
+            kind,
+            generation,
+            active,
+            approvals,
+        })
+    }
+
+    /// Workflow #361 C2, A: records a planned transition. The generation active when the plan
+    /// was made must still be active (`catalog_active_generation_changed` otherwise);
+    /// `unchanged` records nothing, `rollback` records the existing `catalog.rolled_back`
+    /// transaction and the others `catalog.activated`, each with that generation as its
+    /// compare-and-swap expectation.
+    pub(super) fn apply_policy_catalog_transition(
+        &self,
+        plan: &CatalogTransitionPlan,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        let (catalog, active) = {
+            let policy = lock(self.policy()?, "apply_policy_catalog_transition")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
+            (
+                policy.load_generation(plan.generation.catalog_hash())?,
+                policy.active_generation(),
+            )
+        };
+        if active != plan.active {
+            return Err(RuntimeHostError::request(
+                "catalog_active_generation_changed",
+                "apply_policy_catalog_transition",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        if *catalog.generation() != plan.generation {
+            return Err(RuntimeHostError::fatal(
+                "catalog_plan_generation_mismatch",
+                "apply_policy_catalog_transition",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        match plan.kind {
+            CatalogTransitionPlanKind::Unchanged => Ok(plan.generation.clone()),
+            CatalogTransitionPlanKind::First
+            | CatalogTransitionPlanKind::Forward
+            | CatalogTransitionPlanKind::Switch => self.switch_policy_catalog(
+                catalog,
+                active,
+                EventAction::CatalogActivate,
+                CatalogTransitionTarget::Activated,
+                None,
+            ),
+            CatalogTransitionPlanKind::Rollback => self.switch_policy_catalog(
+                catalog,
+                active,
+                EventAction::CatalogRollback,
+                CatalogTransitionTarget::RolledBack,
+                None,
+            ),
+        }
     }
 
     pub(super) fn activate_policy_catalog_with_authorization(
@@ -56,11 +146,15 @@ impl HostShared {
         )
     }
 
+    /// Workflow #361 A: rolls back to `catalog_hash`, a generation that was active before, on
+    /// top of the transition plan (`replace` expecting the active generation). The active
+    /// generation itself returns unchanged; any other plan than `rollback` is
+    /// `catalog_rollback_not_older`. Records no approval.
     pub(super) fn rollback_policy_catalog(
         &self,
         catalog_hash: &str,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        let (catalog, previous) = {
+        let (catalog, previous, lineage) = {
             let policy = lock(self.policy()?, "load_policy_catalog_rollback")?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
@@ -73,27 +167,31 @@ impl HostShared {
                 )
             })?;
             let catalog = policy.load_generation(catalog_hash)?;
-            (catalog, previous)
+            (catalog, previous, policy.lineage().clone())
         };
-        if catalog.generation().catalog_hash() == previous.catalog_hash() {
-            return Ok(previous);
-        }
-        if catalog.generation().catalog_id() != previous.catalog_id()
-            || catalog.generation().catalog_version() >= previous.catalog_version()
-        {
-            return Err(RuntimeHostError::request(
+        let request = CatalogTransitionRequest::replace(previous.catalog_hash());
+        match decide_catalog_transition(
+            Some(&previous),
+            &lineage,
+            catalog.generation(),
+            Some(&request),
+        )? {
+            CatalogTransitionPlanKind::Unchanged => Ok(previous),
+            CatalogTransitionPlanKind::Rollback => self.switch_policy_catalog(
+                catalog,
+                Some(previous),
+                EventAction::CatalogRollback,
+                CatalogTransitionTarget::RolledBack,
+                None,
+            ),
+            CatalogTransitionPlanKind::First
+            | CatalogTransitionPlanKind::Forward
+            | CatalogTransitionPlanKind::Switch => Err(RuntimeHostError::request(
                 "catalog_rollback_not_older",
                 "rollback_policy_catalog",
                 RuntimeErrorCode::InvalidRequest,
-            ));
+            )),
         }
-        self.switch_policy_catalog(
-            catalog,
-            Some(previous),
-            EventAction::CatalogRollback,
-            CatalogTransitionTarget::RolledBack,
-            None,
-        )
     }
 
     pub(super) fn switch_policy_catalog(

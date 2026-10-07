@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::adb::{Adb, AdbConfig, EnvOverrides, stop_child};
+use crate::adb::{Adb, AdbConfig, EnvOverrides, WmSize, parse_wm_size, stop_child};
 use crate::mumu::{
     mumu_root_from_path, nemu_configured_adb_class, resolve_mumu_backend_paths,
     resolve_mumu_backend_paths_for_running_target,
@@ -1626,13 +1626,11 @@ impl DroidcastRawBackend {
             CaptureBackendName::DroidcastRaw,
         )?;
         let wm_output = adb.screen_size(&self.serial)?;
-        let (width, height) = parse_screen_size(&wm_output)?;
-        let selected_token = wm_output.split_whitespace().find(|part| part.contains('x'));
-        let selected_label = selected_token
-            .and_then(|token| wm_output.lines().find(|line| line.contains(token)))
-            .and_then(|line| line.split_once(':').map(|(label, _)| label))
-            .unwrap_or("");
-        let size_kind = wm_size_kind(selected_label);
+        let WmSize {
+            width,
+            height,
+            kind: size_kind,
+        } = parse_wm_size(&wm_output)?;
         if self.started {
             return Ok((width, height, size_kind));
         }
@@ -3240,28 +3238,6 @@ fn nul_terminated_utf16_path(path: &Path) -> DeviceResult<Vec<u16>> {
     Ok(wide)
 }
 
-fn parse_screen_size(text: &str) -> DeviceResult<(u32, u32)> {
-    let raw = text
-        .split_whitespace()
-        .find(|part| part.contains('x'))
-        .ok_or_else(|| DeviceError::fatal(format!("failed to parse adb wm size output: {text}")))?;
-    let (width, height) = raw.split_once('x').ok_or_else(|| {
-        DeviceError::fatal(format!("failed to parse adb wm size dimensions: {text}"))
-    })?;
-    let width = width
-        .parse::<u32>()
-        .map_err(|err| DeviceError::fatal(format!("invalid adb wm width '{width}': {err}")))?;
-    let height = height
-        .parse::<u32>()
-        .map_err(|err| DeviceError::fatal(format!("invalid adb wm height '{height}': {err}")))?;
-    if width == 0 || height == 0 {
-        return Err(DeviceError::fatal(format!(
-            "adb wm size returned zero dimension: {width}x{height}"
-        )));
-    }
-    Ok((width, height))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeviceRotation {
     R0,
@@ -3341,14 +3317,6 @@ fn geometry_extent(width: u32, height: u32) -> DeviceResult<CaptureExtent> {
         .ok_or_else(|| DeviceError::fatal("capture geometry contains a zero dimension"))
 }
 
-fn wm_size_kind(label: &str) -> CaptureWmSizeKind {
-    match label.trim() {
-        "Physical size" => CaptureWmSizeKind::Physical,
-        "Override size" => CaptureWmSizeKind::Override,
-        _ => CaptureWmSizeKind::Unlabelled,
-    }
-}
-
 fn observed_rotation(
     rotation: DeviceRotation,
     source: CaptureRotationSource,
@@ -3371,15 +3339,11 @@ fn read_adb_capture_geometry(
     deadline: Instant,
 ) -> DeviceResult<CaptureGeometryObservation> {
     let output = adb.run_until(&["-s", serial, "shell", "wm", "size"], deadline)?;
-    // Reuse the original input bounds interpretation, including Override selection.
-    let bounds = crate::touch::touch_bounds_from_screen_size(&output.stdout)?;
-    let width = bounds.max_x as u32;
-    let height = bounds.max_y as u32;
-    let label = output
-        .stdout
-        .rsplit_once(':')
-        .and_then(|(prefix, _)| prefix.lines().last())
-        .unwrap_or("");
+    let WmSize {
+        width,
+        height,
+        kind: wm_size_kind,
+    } = parse_wm_size(&output.stdout)?;
     let (rotation, rotation_source) =
         read_device_rotation_with_source(adb, serial, Some(deadline))?;
     geometry_remaining(deadline)?;
@@ -3389,7 +3353,7 @@ fn read_adb_capture_geometry(
         source: CaptureGeometrySource::AdbDefaultDisplay {
             serial: serial.to_string(),
             wm_extent: geometry_extent(width, height)?,
-            wm_size_kind: wm_size_kind(label),
+            wm_size_kind,
         },
         logical_display_extent: geometry_extent(logical_width, logical_height)?,
         rotation: observed_rotation(rotation, rotation_source),
@@ -4589,8 +4553,12 @@ mod tests {
     #[test]
     fn parses_screen_size() {
         assert_eq!(
-            parse_screen_size("Physical size: 1280x720").expect("screen size"),
-            (1280, 720)
+            parse_wm_size("Physical size: 1280x720").expect("screen size"),
+            WmSize {
+                width: 1280,
+                height: 720,
+                kind: CaptureWmSizeKind::Physical,
+            }
         );
     }
 
@@ -4602,7 +4570,7 @@ mod tests {
             "Physical size: 0x720",
             "Physical size: 1280x0",
         ] {
-            assert_fatal(parse_screen_size(text));
+            assert_fatal(parse_wm_size(text).map(|size| (size.width, size.height)));
         }
     }
 

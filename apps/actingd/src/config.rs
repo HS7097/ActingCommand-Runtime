@@ -4,9 +4,10 @@ use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
 use actingcommand_contract::{
-    ContainedTaskRecoveryBinding, ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion,
-    InstanceId, InstanceResourcePackage, InstanceResourcePackageKind, PackageRef,
-    RuntimeConfigManifest, digest_named,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRecoveryBinding,
+    ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion, InstanceId,
+    InstanceResourcePackage, InstanceResourcePackageKind, PackageRef, RuntimeConfigManifest,
+    digest_named,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
@@ -21,11 +22,11 @@ use actingcommand_policy::{
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
 };
 use actingcommand_runtime_host::{
-    AgentDispatcherConfig, DiscoverySpec, ExecutionBackendProvider, ExecutionBackendRegistration,
-    ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy, InstanceMode, InstanceSpec,
-    PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
-    ProcedureManifest, ProviderAssembly, RecognitionVisionProvider, RuntimeHostConfig,
-    RuntimeHostError, VisionFfiProvider, VisionSpec,
+    AgentDispatcherConfig, CatalogTransitionRequest, DiscoverySpec, ExecutionBackendProvider,
+    ExecutionBackendRegistration, ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy,
+    InstanceMode, InstanceSpec, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
+    ProcedureBinding, ProcedureManifest, ProviderAssembly, RecognitionVisionProvider,
+    RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionModelListing,
@@ -511,6 +512,42 @@ struct PolicyConfigFile {
     catalog: PolicyCatalogConfigFile,
     catalog_approval_ids: Vec<String>,
     procedure_manifest: Vec<ProcedureBindingConfigFile>,
+    /// Workflow #361 A: the explicit transition to another catalog id or to a generation that
+    /// was active before; absent means the forward-only rule.
+    #[serde(default)]
+    catalog_transition: Option<CatalogTransitionConfigFile>,
+}
+
+/// `policy.catalog_transition` (Workflow #361 A): `kind` is `replace`, and the transition is
+/// applied only while `expected_active_catalog_hash` is the active generation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CatalogTransitionConfigFile {
+    kind: String,
+    expected_active_catalog_hash: String,
+}
+
+impl CatalogTransitionConfigFile {
+    fn request(&self) -> Result<CatalogTransitionRequest, &'static str> {
+        if self.kind != "replace" {
+            return Err("catalog_transition_kind_unknown");
+        }
+        let canonical = self
+            .expected_active_catalog_hash
+            .strip_prefix("sha256:")
+            .is_some_and(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            });
+        if !canonical {
+            return Err("catalog_transition_invalid");
+        }
+        Ok(CatalogTransitionRequest::replace(
+            self.expected_active_catalog_hash.clone(),
+        ))
+    }
 }
 
 #[derive(Deserialize)]
@@ -780,6 +817,8 @@ pub(super) struct PolicyBootstrap {
     pub(super) state_root: PathBuf,
     pub(super) catalog_approval_ids: Vec<String>,
     pub(super) catalog: CatalogSources,
+    /// Workflow #361 A: the configured `replace` transition, if any.
+    pub(super) catalog_transition: Option<CatalogTransitionRequest>,
     pub(super) scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
     pub(super) registry_modes: BTreeMap<String, ScheduledExecutionMode>,
     pub(super) cadence: PolicyCadence,
@@ -1055,6 +1094,10 @@ impl ActingdConfigFile {
                 );
             }
         }
+        let configured_aliases = instances
+            .iter()
+            .map(|instance| instance.alias.clone())
+            .collect::<BTreeSet<_>>();
         let instances = instances
             .into_iter()
             .map(InstanceConfig::backend)
@@ -1080,6 +1123,7 @@ impl ActingdConfigFile {
             .unwrap_or_default();
         if let Some(policy) = policy.as_ref() {
             policy.validate_registry_modes(&provider)?;
+            policy.validate_instance_identities(&configured_aliases)?;
         }
         let policy_state_root = self.state_root.clone();
         let policy_cadence = PolicyCadence::default();
@@ -1128,6 +1172,9 @@ impl ActingdConfigFile {
             governance_allowed_clients_explicit: self.governance.is_some(),
             agent_dispatcher: agent_dispatcher_budget,
             policy_configured: policy.is_some(),
+            catalog_transition: policy
+                .as_ref()
+                .and_then(|policy| policy.catalog_transition.as_ref()),
             vision_provider_configured: provider.vision.is_some(),
             instances_count: provider.instance_count(),
             instances_deferred_count: provider.deferred.len(),
@@ -1146,6 +1193,7 @@ impl ActingdConfigFile {
                 state_root: policy_state_root,
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
+                catalog_transition: policy.catalog_transition,
                 scheduled_tasks: policy.scheduled_tasks,
                 registry_modes: provider.modes(),
                 cadence: policy_cadence,
@@ -1194,6 +1242,7 @@ struct PolicyAssembly {
     procedure_manifest: ProcedureManifest,
     catalog_approval_ids: Vec<String>,
     catalog: CatalogSources,
+    catalog_transition: Option<CatalogTransitionRequest>,
     scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
     scheduled_instance_scopes: Vec<(String, String)>,
 }
@@ -1238,6 +1287,39 @@ impl PolicyConfigFile {
         {
             return Err("policy_catalog_approval_mismatch");
         }
+        // Workflow #361 C1: every configured id must be one the policy driver can record: the
+        // approval decision record's own rule (`approval:` prefix, `[a-z0-9._:-]`), checked
+        // here so a refused id stops before the catalog is activated.
+        for approval_id in &self.catalog_approval_ids {
+            ApprovalDecisionRecord::new(
+                approval_id.clone(),
+                ApprovalDisposition::Approved,
+                ApprovalTarget::Catalog {
+                    catalog_hash: compiled.catalog_hash().to_owned(),
+                    catalog_version: compiled.summary().catalog_version,
+                },
+                "configured_catalog_approval",
+            )
+            .map_err(|_| "policy_catalog_approval_invalid")?;
+        }
+        // Workflow #361 C1: every catalog task's procedure is bound by the manifest; evaluation
+        // binding would otherwise refuse its first intent after activation.
+        if compiled
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .any(|task| procedure_manifest.binding(&task.procedure_ref).is_none())
+        {
+            return Err("procedure_manifest_entry_missing");
+        }
+        // Workflow #361 A, C1: the transition's shape; whether it applies is decided against
+        // the ledger at startup (and previewed by `check-config`).
+        let catalog_transition = self
+            .catalog_transition
+            .as_ref()
+            .map(CatalogTransitionConfigFile::request)
+            .transpose()?;
         let scheduled_instance_scopes = compiled
             .catalog()
             .tasks
@@ -1261,6 +1343,7 @@ impl PolicyConfigFile {
             procedure_manifest,
             catalog_approval_ids: self.catalog_approval_ids,
             catalog,
+            catalog_transition,
             scheduled_tasks,
             scheduled_instance_scopes,
         })
@@ -1268,6 +1351,38 @@ impl PolicyConfigFile {
 }
 
 impl PolicyAssembly {
+    /// Workflow #361 C1: the policy input authority check of the first cycle
+    /// (`policy_instance_metadata_untrusted`, `policy_resource_metadata_untrusted`), made at
+    /// assembly: the policy instance set equals the configured alias set, and every policy
+    /// instance's host is in `resources.hosts`.
+    fn validate_instance_identities(
+        &self,
+        configured_aliases: &BTreeSet<String>,
+    ) -> Result<(), &'static str> {
+        let instances = &self.inputs.facts().instances;
+        let policy_aliases = instances
+            .iter()
+            .map(|instance| instance.instance_id.clone())
+            .collect::<BTreeSet<_>>();
+        if policy_aliases != *configured_aliases {
+            return Err("policy_instance_set_mismatch");
+        }
+        let hosts = self
+            .inputs
+            .resources()
+            .hosts
+            .iter()
+            .map(|host| host.host_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if instances
+            .iter()
+            .any(|instance| !hosts.contains(instance.host_id.as_str()))
+        {
+            return Err("policy_instance_host_unknown");
+        }
+        Ok(())
+    }
+
     fn validate_registry_modes(&self, provider: &ConfiguredProvider) -> Result<(), &'static str> {
         for (procedure_ref, instance_alias) in &self.scheduled_instance_scopes {
             let scheduled = self
