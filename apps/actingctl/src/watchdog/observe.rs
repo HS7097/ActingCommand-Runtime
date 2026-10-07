@@ -292,8 +292,9 @@ pub(crate) fn live_owner(
     })
 }
 
-/// The logs a FATAL is searched in: `actingd-*.log` in the root (acsetup, the logon script,
-/// the coordinator's scripts) and in `<root>\watchdog` (the watchdog's own starts).
+/// The logs a FATAL is searched in: `actingd-*.log` in the given directories (the root for
+/// acsetup, a logon script and an operator's restart script; `<root>\watchdog` for the
+/// watchdog's own starts; the console's log directory).
 fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Failure> {
     let mut logs = Vec::new();
     for directory in directories {
@@ -413,32 +414,53 @@ pub(crate) fn writer_lock(root: &Path) -> Result<WriterProbe, Failure> {
     }
 }
 
-/// P (review H2): processes named `actingcommand-actingd.exe` whose executable is under the
-/// root, or whose path cannot be read. Queried through CIM, only when a start is considered.
-pub(crate) fn runtime_processes(root_plain: &Path) -> Result<Vec<RuntimeProcess>, String> {
+/// The console starts actingd with its log in `%LOCALAPPDATA%\ActingCommand\logs`; the task runs
+/// as the same user.
+pub(crate) fn console_log_directory() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|directory| !directory.is_empty())
+        .map(|directory| PathBuf::from(directory).join("ActingCommand").join("logs"))
+}
+
+/// What the start rows read from the machine in one hidden PowerShell: P (review H2), the
+/// processes named `actingcommand-actingd.exe` whose executable is under the root or whose
+/// path cannot be read, and the last boot time (for the gap grace).
+pub(crate) struct HostProbe {
+    pub(crate) processes: Vec<RuntimeProcess>,
+    pub(crate) boot_unix_ms: Option<u64>,
+}
+
+pub(crate) fn host_probe(root_plain: &Path) -> Result<HostProbe, String> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $found = @(Get-CimInstance -ClassName Win32_Process -Filter \"Name='actingcommand-actingd.exe'\" | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath } })\n\
+        $boot = ([DateTimeOffset](Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime).ToUnixTimeMilliseconds()\n\
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
-        [Console]::Out.Write((ConvertTo-Json -InputObject $found -Compress))\n";
+        [Console]::Out.Write((ConvertTo-Json -InputObject ([pscustomobject]@{ boot_unix_ms = $boot; processes = $found }) -Compress -Depth 4))\n";
     let output = powershell::run(SCRIPT, &[], Duration::from_secs(60))?;
-    parse_processes(&output, root_plain)
+    parse_host_probe(&output, root_plain)
+}
+
+pub(crate) fn parse_host_probe(output: &str, root_plain: &Path) -> Result<HostProbe, String> {
+    let value: Value = serde_json::from_str(output.trim())
+        .map_err(|error| format!("host probe output is not JSON: {error}"))?;
+    let boot_unix_ms = value["boot_unix_ms"]
+        .as_u64()
+        .ok_or_else(|| format!("host probe output lacks boot_unix_ms: {value}"))?;
+    Ok(HostProbe {
+        processes: parse_processes(&value["processes"], root_plain)?,
+        boot_unix_ms: Some(boot_unix_ms),
+    })
 }
 
 pub(crate) fn parse_processes(
-    output: &str,
+    value: &Value,
     root_plain: &Path,
 ) -> Result<Vec<RuntimeProcess>, String> {
-    let text = output.trim();
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
-    let value: Value = serde_json::from_str(text)
-        .map_err(|error| format!("process query output is not JSON: {error}"))?;
     let rows = match value {
-        Value::Array(rows) => rows,
+        Value::Array(rows) => rows.clone(),
         Value::Null => Vec::new(),
-        row => vec![row],
+        row => vec![row.clone()],
     };
     let prefix = format!(
         "{}\\",
@@ -545,17 +567,19 @@ mod tests {
     #[test]
     fn processes_count_under_the_root_or_without_a_path() {
         let root = Path::new(r"C:\Install");
-        assert_eq!(parse_processes("", root), Ok(Vec::new()));
-        assert_eq!(parse_processes("[]", root), Ok(Vec::new()));
-        let rows = r#"[{"pid":1,"path":"c:\\install\\A\\runtime\\actingcommand-actingd.exe"},{"pid":2,"path":"C:\\Installer\\runtime\\actingcommand-actingd.exe"},{"pid":3,"path":null}]"#;
-        let found = parse_processes(rows, root).expect("rows");
+        let probe = |text: &str| parse_host_probe(text, root);
+        let empty = probe(r#"{"boot_unix_ms":5,"processes":[]}"#).expect("empty");
+        assert_eq!((empty.processes, empty.boot_unix_ms), (Vec::new(), Some(5)));
+        let rows = r#"{"boot_unix_ms":5,"processes":[{"pid":1,"path":"c:\\install\\A\\runtime\\actingcommand-actingd.exe"},{"pid":2,"path":"C:\\Installer\\runtime\\actingcommand-actingd.exe"},{"pid":3,"path":null}]}"#;
+        let found = probe(rows).expect("rows").processes;
         assert_eq!(
             found.iter().map(|process| process.pid).collect::<Vec<_>>(),
             [1, 3]
         );
-        let single = r#"{"pid":4,"path":"C:\\Install\\runtime\\actingcommand-actingd.exe"}"#;
-        assert_eq!(parse_processes(single, root).expect("row").len(), 1);
-        assert!(parse_processes("not json", root).is_err());
+        let single = r#"{"boot_unix_ms":5,"processes":{"pid":4,"path":"C:\\Install\\runtime\\actingcommand-actingd.exe"}}"#;
+        assert_eq!(probe(single).expect("row").processes.len(), 1);
+        assert!(probe("not json").is_err());
+        assert!(probe(r#"{"processes":[]}"#).is_err());
     }
 
     #[test]

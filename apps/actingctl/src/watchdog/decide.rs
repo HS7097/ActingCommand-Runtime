@@ -12,11 +12,15 @@ pub(crate) const BUDGET_STARTS: usize = 3;
 /// `status` reports repeated restarts from this many watchdog starts within a day.
 pub(crate) const REPEATED_RESTARTS: usize = 2;
 pub(crate) const DAY_MS: u64 = 24 * 60 * 60 * 1000;
-/// A task tick after a gap longer than this (logon, reboot, resume) opens the grace.
-pub(crate) const GAP_MS: u64 = 180 * 1000;
-/// The grace lets a logon starter (Alice's logon script, acsetup's autostart) win the race.
+/// A task tick more than this after the end of the previous one (one and a half tick
+/// periods: a logon, a reboot, a resume) opens the grace. A scheduled reboot leaves gaps of
+/// about 100-180 s, so a tick from before the current boot opens it as well.
+pub(crate) const GAP_MS: u64 = 90 * 1000;
+/// The grace leaves a logon starter (a logon script, acsetup's autostart) time to start the
+/// Runtime itself, before the watchdog considers a start.
 pub(crate) const GRACE_MS: u64 = 300 * 1000;
-/// A Runtime process under the root without the owner lock for this long is an error.
+/// A Runtime process under the root without the owner lock for this long is an error, and so
+/// is (in `status`) an owner lock held this long without an answering owner.
 pub(crate) const PROCESS_WITHOUT_OWNER_MS: u64 = 10 * 60 * 1000;
 /// A start that has not answered within this window is a start timeout.
 pub(crate) const READY_TIMEOUT_MS: u64 = 180 * 1000;
@@ -94,6 +98,8 @@ pub(crate) struct StartProbes {
     pub(crate) selection_changed: bool,
     /// Runtime processes whose executable is under the root, or whose path is unknown.
     pub(crate) processes: Vec<RuntimeProcess>,
+    /// When the machine last booted, read in the same probe as the processes.
+    pub(crate) boot_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,11 +335,18 @@ fn starts_since(state: &WatchdogState, floor_unix_ms: u64) -> usize {
         .count()
 }
 
-/// The gap grace (review L5): measured from the end of the previous task tick; the first
-/// tick ever has none.
-pub(crate) fn grace_after_gap(last_task_tick_end: Option<u64>, now_unix_ms: u64) -> Option<u64> {
+/// The gap grace (review L5): opened when the previous task tick ended more than `GAP_MS`
+/// ago or before the current boot; the first tick ever has none.
+pub(crate) fn grace_after_gap(
+    last_task_tick_end: Option<u64>,
+    now_unix_ms: u64,
+    boot_unix_ms: Option<u64>,
+) -> Option<u64> {
     last_task_tick_end
-        .filter(|end| now_unix_ms.saturating_sub(*end) > GAP_MS)
+        .filter(|end| {
+            now_unix_ms.saturating_sub(*end) > GAP_MS
+                || boot_unix_ms.is_some_and(|boot| *end < boot)
+        })
         .map(|_| now_unix_ms.saturating_add(GRACE_MS))
 }
 
@@ -399,6 +412,7 @@ mod tests {
             writer_busy: false,
             selection_changed: false,
             processes: Vec::new(),
+            boot_unix_ms: None,
         }
     }
 
@@ -602,13 +616,32 @@ mod tests {
     }
 
     #[test]
-    fn grace_opens_only_after_a_gap_between_task_ticks() {
-        assert_eq!(grace_after_gap(None, NOW), None);
-        assert_eq!(grace_after_gap(Some(NOW - GAP_MS), NOW), None);
+    fn grace_opens_after_a_gap_or_a_boot_between_task_ticks() {
+        let boot_long_ago = Some(NOW - DAY_MS);
+        // The first tick ever, and ordinary ticks a minute apart, have none.
+        assert_eq!(grace_after_gap(None, NOW, Some(NOW - 1_000)), None);
         assert_eq!(
-            grace_after_gap(Some(NOW - GAP_MS - 1), NOW),
+            grace_after_gap(Some(NOW - 60_000), NOW, boot_long_ago),
+            None
+        );
+        assert_eq!(
+            grace_after_gap(Some(NOW - GAP_MS), NOW, boot_long_ago),
+            None
+        );
+        // The measured gaps of a scheduled reboot, 120 s and 180 s, open it.
+        for gap in [120_000, 180_000] {
+            assert_eq!(
+                grace_after_gap(Some(NOW - gap), NOW, boot_long_ago),
+                Some(NOW + GRACE_MS)
+            );
+        }
+        // So does a previous tick from before the current boot, however short the gap.
+        assert_eq!(
+            grace_after_gap(Some(NOW - 61_000), NOW, Some(NOW - 30_000)),
             Some(NOW + GRACE_MS)
         );
+        // An unknown boot time leaves the gap rule alone.
+        assert_eq!(grace_after_gap(Some(NOW - 61_000), NOW, None), None);
     }
 
     #[test]

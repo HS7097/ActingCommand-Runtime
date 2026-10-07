@@ -50,8 +50,9 @@ pub(crate) fn append(
         })
 }
 
-/// Whether the log's last line is `<code>` with `code=<value>`; a misconfiguration found
-/// before the state is readable is written once, not every minute.
+/// Whether the log's last structured line is `<code>` with `code=<value>`; a misconfiguration
+/// found before the state is readable is written once, not every minute. Lines the launcher
+/// appended from a tick's stderr are skipped.
 pub(crate) fn last_line_matches(directory: &Path, code: &str, value: &str) -> bool {
     let mut tail = Vec::new();
     let read = File::open(directory.join(LOG_FILE)).and_then(|mut file| {
@@ -66,10 +67,22 @@ pub(crate) fn last_line_matches(directory: &Path, code: &str, value: &str) -> bo
     String::from_utf8_lossy(&tail)
         .lines()
         .rev()
-        .find(|line| !line.trim().is_empty())
+        .find(|line| structured(line))
         .is_some_and(|line| {
             line.split(' ').nth(3) == Some(code) && line.split(' ').any(|field| field == wanted)
         })
+}
+
+/// `<RFC3339 UTC> <unix_ms> <LEVEL> <code> …`, as `append` writes it.
+fn structured(line: &str) -> bool {
+    let mut fields = line.split(' ');
+    fields.next().is_some_and(|time| time.ends_with('Z'))
+        && fields
+            .next()
+            .is_some_and(|millis| millis.parse::<u64>().is_ok())
+        && fields
+            .next()
+            .is_some_and(|level| matches!(level, "INFO" | "WARN" | "ERROR"))
 }
 
 fn format_line(now_unix_ms: u64, level: Level, code: &str, fields: &[(&str, String)]) -> String {
@@ -145,5 +158,33 @@ mod tests {
             ),
             "2025-10-07T01:20:00.123Z 1759800000123 WARN watchdog_started_runtime method=breakaway log=\"C:\\Install Root\\watchdog\\actingd-1.log\" line=\"FATAL actingd: \\\"x\\\"\"\n"
         );
+    }
+
+    #[test]
+    fn a_repeated_misconfiguration_looks_past_lines_from_stderr() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        append(
+            directory.path(),
+            1_759_800_000_123,
+            Level::Error,
+            "watchdog_misconfigured",
+            &[("code", "watchdog_layout_unknown".to_owned())],
+        )
+        .expect("append");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(directory.path().join(LOG_FILE))
+            .and_then(|mut file| file.write_all(b"ERROR actingctl watchdog: stderr\n"))
+            .expect("stderr line");
+        assert!(last_line_matches(
+            directory.path(),
+            "watchdog_misconfigured",
+            "watchdog_layout_unknown"
+        ));
+        assert!(!last_line_matches(
+            directory.path(),
+            "watchdog_misconfigured",
+            "watchdog_root_mismatch"
+        ));
     }
 }

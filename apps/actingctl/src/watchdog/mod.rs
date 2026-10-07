@@ -67,6 +67,8 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
         eprintln!("FATAL actingctl watchdog: {USAGE}");
         return Some(ExitCode::FAILURE);
     };
+    // Under the task, stderr goes into watchdog.log: the summary line is for a person only.
+    let summary = !matches!(subcommand, Subcommand::RunOnce { from_task: true });
     let (report, exit) = match subcommand {
         Subcommand::Status => status(&root),
         Subcommand::RunOnce { from_task } => run_once(&root, from_task),
@@ -82,7 +84,7 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if let Err(error) = written {
         eprintln!("ERROR actingctl watchdog: cannot write the report: {error}");
     }
-    if exit != 0 {
+    if exit != 0 && summary {
         eprintln!(
             "actingctl watchdog: {} exit {exit}",
             report["code"].as_str().unwrap_or("unknown")
@@ -143,7 +145,7 @@ impl Tick {
                     modified_unix_ms, ..
                 },
             ) => observe::fatal_after(
-                &[installation.root.clone(), watchdog_dir.to_path_buf()],
+                &log_directories(&installation.root, watchdog_dir),
                 modified_unix_ms.saturating_sub(decide::CLOCK_SLACK_MS),
             )?,
             _ => None,
@@ -187,6 +189,7 @@ impl Tick {
                             writer_busy: true,
                             selection_changed: false,
                             processes: Vec::new(),
+                            boot_unix_ms: None,
                         },
                         None,
                     ));
@@ -206,27 +209,35 @@ impl Tick {
                     writer_busy: false,
                     selection_changed: true,
                     processes: Vec::new(),
+                    boot_unix_ms: None,
                 },
                 guard,
             ));
         }
-        let processes =
-            observe::runtime_processes(&self.installation.root_plain).map_err(|detail| {
-                Decision::StartFailed {
-                    code: "process_probe_failed".to_owned(),
-                    detail,
-                }
-            })?;
-        self.processes = Some(processes.clone());
+        let probe = observe::host_probe(&self.installation.root_plain).map_err(|detail| {
+            Decision::StartFailed {
+                code: "process_probe_failed".to_owned(),
+                detail,
+            }
+        })?;
+        self.processes = Some(probe.processes.clone());
         Ok((
             StartProbes {
                 writer_busy: false,
                 selection_changed: false,
-                processes,
+                processes: probe.processes,
+                boot_unix_ms: probe.boot_unix_ms,
             },
             guard,
         ))
     }
+}
+
+/// Where Runtime logs are searched: the root, `<root>\watchdog` and the console's log directory.
+fn log_directories(root: &Path, watchdog_dir: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![root.to_path_buf(), watchdog_dir.to_path_buf()];
+    directories.extend(observe::console_log_directory());
+    directories
 }
 
 fn watchdog_dir(root: &Path) -> Result<(PathBuf, PathBuf), Failure> {
@@ -246,22 +257,29 @@ fn status(root: &Path) -> (Value, u8) {
     let now = now_unix_ms();
     let (root, directory) = match watchdog_dir(root) {
         Ok(paths) => paths,
-        Err(failure) => return misconfigured_report(None, failure, false),
+        Err(failure) => return misconfigured_report(None, failure, false, false),
     };
     let plain_root = observe::plain_path(&root).display().to_string();
     let (mut state, loaded) = match state::load(&directory, &plain_root) {
         Ok(loaded) => loaded,
-        Err(failure) => return misconfigured_report(Some(&directory), failure, false),
+        Err(failure) => return misconfigured_report(Some(&directory), failure, false, false),
     };
     let mut tick = match Tick::observe(&root, &directory) {
         Ok(tick) => tick,
-        Err(failure) => return misconfigured_report(Some(&directory), failure, false),
+        Err(failure) => return misconfigured_report(Some(&directory), failure, false, false),
     };
     let decision = match decide::decide_observed(&tick.observed(), &state) {
         Stage::Decided(decision) => decision,
         Stage::ConsiderStart => match tick.probe_start() {
             Ok((probes, guard)) => {
                 drop(guard);
+                if let Some(until) = decide::grace_after_gap(
+                    state.last_task_tick_end_unix_ms,
+                    now,
+                    probes.boot_unix_ms,
+                ) {
+                    state.grace_until_unix_ms = Some(until);
+                }
                 decide::decide_start(&probes, &state, now, true)
             }
             Err(decision) => decision,
@@ -278,12 +296,22 @@ fn status(root: &Path) -> (Value, u8) {
     if decision.exit_code() != 0 {
         attention.push((decision.key(), decision.exit_code()));
     }
+    // An owner lock that nothing answering holds for 10 minutes (an error-report dialog, a
+    // start that never publishes runtime-info) is attention like row 7b'; run-once stays 0.
+    if matches!(decision, Decision::OwnerLockHeld { .. })
+        && state.last_decision.as_deref() == Some("owner_lock_held")
+        && state
+            .decision_since_unix_ms
+            .is_some_and(|since| now.saturating_sub(since) >= decide::PROCESS_WITHOUT_OWNER_MS)
+    {
+        attention.push(("owner_lock_held_without_answer".to_owned(), 15));
+    }
     // Review M2 (ii): a close no log covers may hide a FATAL of an unlogged start.
     let mut close_evidence = None;
     if let (Decision::FormalClose { .. }, Some(record)) = (&decision, tick.record()) {
         let evidence = match record.closed_at_unix_ms {
             Some(closed_at) => observe::close_logged(
-                &[root.clone(), directory.clone()],
+                &log_directories(&root, &directory),
                 record.started_at_unix_ms,
                 closed_at,
             ),
@@ -337,7 +365,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
     let now = now_unix_ms();
     let (root, directory) = match watchdog_dir(root) {
         Ok(paths) => paths,
-        Err(failure) => return misconfigured_report(None, failure, true),
+        Err(failure) => return misconfigured_report(None, failure, true, from_task),
     };
     // Review M6: the directory is created on demand; `install` is not a precondition.
     if let Err(error) = fs::create_dir_all(&directory) {
@@ -345,7 +373,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
             "watchdog_directory_unavailable",
             format!("{}: {error}", directory.display()),
         );
-        return misconfigured_report(None, failure, true);
+        return misconfigured_report(None, failure, true, from_task);
     }
     let run_lock = match OpenOptions::new()
         .read(true)
@@ -360,7 +388,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
                 "watchdog_run_lock_failed",
                 format!("{}: {error}", directory.join(RUN_LOCK).display()),
             );
-            return misconfigured_report(Some(&directory), failure, true);
+            return misconfigured_report(Some(&directory), failure, true, from_task);
         }
     };
     match run_lock.try_lock() {
@@ -377,7 +405,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
                 "watchdog_run_lock_failed",
                 format!("{}: {error}", directory.join(RUN_LOCK).display()),
             );
-            return misconfigured_report(Some(&directory), failure, true);
+            return misconfigured_report(Some(&directory), failure, true, from_task);
         }
     }
     let plain_root = observe::plain_path(&root).display().to_string();
@@ -395,31 +423,27 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
                     ],
                 )
             }) {
-                return misconfigured_report(Some(&directory), failure, true);
+                return misconfigured_report(Some(&directory), failure, true, from_task);
             }
             state
         }
         Ok((state, _)) => state,
-        Err(failure) => return misconfigured_report(Some(&directory), failure, true),
+        Err(failure) => return misconfigured_report(Some(&directory), failure, true, from_task),
     };
     let previous_key = state.last_decision.clone();
     state.root = plain_root;
     state.last_tick_unix_ms = Some(now);
-    if from_task && let Some(until) = decide::grace_after_gap(state.last_task_tick_end_unix_ms, now)
-    {
-        state.grace_until_unix_ms = Some(until);
-    }
     let (decision, tick, logged) = tick_once(&root, &directory, &mut state, now, from_task);
     if let Err(failure) =
         record_decision(&directory, &mut state, &decision, previous_key, logged, now)
     {
-        return misconfigured_report(Some(&directory), failure, true);
+        return misconfigured_report(Some(&directory), failure, true, from_task);
     }
     if from_task {
         state.last_task_tick_end_unix_ms = Some(now_unix_ms());
     }
     if let Err(failure) = state::save(&directory, &state) {
-        return misconfigured_report(Some(&directory), failure, true);
+        return misconfigured_report(Some(&directory), failure, true, from_task);
     }
     drop(run_lock);
     let exit = decision.exit_code();
@@ -461,6 +485,16 @@ fn tick_once(
             } else {
                 Some(state.process_present_since_unix_ms.unwrap_or(now))
             };
+            // The gap grace: a task tick after a logon, reboot or resume.
+            if from_task
+                && let Some(until) = decide::grace_after_gap(
+                    state.last_task_tick_end_unix_ms,
+                    now,
+                    probes.boot_unix_ms,
+                )
+            {
+                state.grace_until_unix_ms = Some(until);
+            }
             let decision = decide::decide_start(&probes, state, now, from_task);
             if let Decision::BudgetExhausted { since_unix_ms } = decision {
                 state.exhausted_since_unix_ms = Some(since_unix_ms);
@@ -658,7 +692,11 @@ fn record_decision(
             "watchdog_owner_retained_unconfirmed",
             vec![
                 ("owner_epoch", owner_epoch.clone()),
-                ("next", "actingd unlock-owner".to_owned()),
+                (
+                    "next",
+                    "start formally; startup releases a retained owner whose process has exited"
+                        .to_owned(),
+                ),
             ],
         ),
         Decision::FatalHold(fatal) => (
@@ -813,24 +851,38 @@ fn report(
 
 /// A misconfiguration found before the state could be read or written. `run-once` writes the
 /// line unless the log's last line already says the same; `status` writes nothing.
-fn misconfigured_report(directory: Option<&Path>, failure: Failure, write: bool) -> (Value, u8) {
+fn misconfigured_report(
+    directory: Option<&Path>,
+    failure: Failure,
+    write: bool,
+    quiet: bool,
+) -> (Value, u8) {
     let mut logged = Value::Null;
+    // Under the task (`quiet`) stderr also lands in watchdog.log: it repeats nothing the log
+    // already holds.
+    let mut in_log = false;
     if let Some(directory) = directory {
         let fields = [
             ("code", failure.code.clone()),
             ("detail", failure.detail.clone()),
         ];
-        if write
-            && !log::last_line_matches(directory, "watchdog_misconfigured", &failure.code)
-            && let Err(error) = log::append(
-                directory,
-                now_unix_ms(),
-                Level::Error,
-                "watchdog_misconfigured",
-                &fields,
-            )
-        {
-            eprintln!("ERROR actingctl watchdog: {}: {}", error.code, error.detail);
+        if write {
+            if log::last_line_matches(directory, "watchdog_misconfigured", &failure.code) {
+                in_log = true;
+            } else {
+                match log::append(
+                    directory,
+                    now_unix_ms(),
+                    Level::Error,
+                    "watchdog_misconfigured",
+                    &fields,
+                ) {
+                    Ok(()) => in_log = true,
+                    Err(error) => {
+                        eprintln!("ERROR actingctl watchdog: {}: {}", error.code, error.detail);
+                    }
+                }
+            }
         }
         logged = json!(
             observe::plain_path(&directory.join(log::LOG_FILE))
@@ -838,10 +890,12 @@ fn misconfigured_report(directory: Option<&Path>, failure: Failure, write: bool)
                 .to_string()
         );
     }
-    eprintln!(
-        "ERROR actingctl watchdog: {}: {}",
-        failure.code, failure.detail
-    );
+    if !(quiet && in_log) {
+        eprintln!(
+            "ERROR actingctl watchdog: {}: {}",
+            failure.code, failure.detail
+        );
+    }
     let decision = failure.decision();
     (
         json!({
