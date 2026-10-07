@@ -278,6 +278,7 @@ jobs:
           & cargo build --locked --release --target x86_64-pc-windows-msvc `
             --bin actingcommand-actingd `
             --bin actingctl `
+            --bin actingwatch `
             --bin actinglab `
             --bin actingledger `
             --bin actingcommand-vision-provider-check `
@@ -528,7 +529,8 @@ jobs:
             'actinglab.exe',
             'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
-            'actingcommand-device-test.exe'
+            'actingcommand-device-test.exe',
+            'actingwatch.exe'
           )
           # Workflow #337: the official platform-tools files the fetch step verified, under platform-tools/.
           $platformToolsFiles = @(
@@ -619,7 +621,8 @@ jobs:
             }
             if ($PlatformToolsLayout) {
               # Workflow #360: v2 is v1 without the retired vision provider DLL.
-              $manifest.tools_payload_layout = 'platform-tools-v2'
+              # Workflow #374: v3 is v2 plus the watchdog launcher actingwatch.exe.
+              $manifest.tools_payload_layout = 'platform-tools-v3'
             }
             $manifest.interfaces = $interfaces
             $manifestPath = Join-Path $Directory 'BUILD-MANIFEST.json'
@@ -637,12 +640,7 @@ jobs:
             'INSTALL.md',
             'RELEASE-NOTES.md'
           ) -SourceDirectory (Join-Path $PWD 'distribution/windows') -Destination $runtimeDir
-          Copy-BuildFiles -Names @(
-            'actinglab.exe',
-            'actingledger.exe',
-            'actingcommand-vision-provider-check.exe',
-            'actingcommand-device-test.exe'
-          ) -Destination $toolsDir
+          Copy-BuildFiles -Names $toolFiles -Destination $toolsDir
           New-Item -ItemType Directory -Path (Join-Path $toolsDir 'platform-tools') | Out-Null
           Copy-BuildFiles -Names $platformToolsFiles -SourceDirectory $env:PLATFORM_TOOLS_DIR -Destination $toolsDir
           New-BuildManifest `
@@ -668,6 +666,145 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "runtime_artifact_dir=$runtimeDir"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tools_artifact_name=$toolsArtifactName"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "tools_artifact_dir=$toolsDir"
+
+      - name: Watchdog smoke
+        shell: pwsh
+        env:
+          RUNTIME_ARTIFACT_DIR: ${{ steps.stage.outputs.runtime_artifact_dir }}
+          TOOLS_ARTIFACT_DIR: ${{ steps.stage.outputs.tools_artifact_dir }}
+        run: |
+          # Workflow #374: this build's watchdog on an A/B root laid out from the staged
+          # artifacts. The fixed entries are this build's Runtime programs themselves (the
+          # forwarding entry is a UI program), without BUILD-MANIFEST.json, so they run as
+          # plain programs and actingctl reads install\active.json for the watchdog.
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $root = Join-Path $env:RUNNER_TEMP 'watchdog-smoke'
+          $runtime = Join-Path $root 'runtime'
+          $tools = Join-Path $root 'tools'
+          $state = Join-Path $root 'state'
+          $generation = Join-Path $root 'install\generations\1'
+          New-Item -ItemType Directory -Path $runtime, $tools, $state, $generation, (Join-Path $root 'A') -Force | Out-Null
+          foreach ($name in @('actingcommand-actingd.exe', 'actingctl.exe')) {
+            Copy-Item -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR $name) -Destination $runtime
+          }
+          Copy-Item -Path (Join-Path $env:TOOLS_ARTIFACT_DIR '*') -Destination $tools -Recurse
+          $utf8 = [Text.UTF8Encoding]::new($false)
+          $members = $utf8.GetBytes('{"smoke":"watchdog"}')
+          [IO.File]::WriteAllBytes((Join-Path $root 'A\MEMBERS.json'), $members)
+          $config = Get-Content -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR 'actingd.config.example.json') -Raw | ConvertFrom-Json
+          $config.state_root = $state
+          $config.secret_fingerprint_salt = 'watchdog-smoke-salt-0123456789'
+          $configPath = Join-Path $generation 'actingd.config.json'
+          $configBytes = $utf8.GetBytes(($config | ConvertTo-Json -Depth 10))
+          [IO.File]::WriteAllBytes($configPath, $configBytes)
+          foreach ($lock in @('slot-A.lock', 'writer.lock')) {
+            [IO.File]::WriteAllBytes((Join-Path $root "install\$lock"), [byte[]]::new(0))
+          }
+          function Get-Sha256Hex([byte[]] $Bytes) {
+            [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+          }
+          $selection = [ordered]@{
+            schema_version = 'actingcommand.install-selection.v1'
+            slot = 'A'
+            generation = 1
+            members = [ordered]@{ path = 'A/MEMBERS.json'; sha256 = (Get-Sha256Hex $members) }
+            config = [ordered]@{ path = 'install/generations/1/actingd.config.json'; sha256 = (Get-Sha256Hex $configBytes) }
+          }
+          [IO.File]::WriteAllText((Join-Path $root 'install\active.json'), ($selection | ConvertTo-Json -Depth 4 -Compress), $utf8)
+          $ctl = Join-Path $runtime 'actingctl.exe'
+          $launcher = Join-Path $tools 'actingwatch.exe'
+          if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+            throw 'watchdog_smoke_failed: the Tools artifact holds no actingwatch.exe'
+          }
+
+          function Invoke-Watchdog([string] $Subcommand, [int] $Expected) {
+            $text = (& $ctl watchdog $Subcommand --root $root | Out-String)
+            $exit = $LASTEXITCODE
+            Write-Host "watchdog $Subcommand exit ${exit}: $($text.Trim())"
+            if ($exit -ne $Expected) {
+              throw "watchdog_smoke_failed: watchdog $Subcommand exited $exit, expected $Expected"
+            }
+            return ($text | ConvertFrom-Json)
+          }
+          # The task's own action: the launcher, waited for itself only.
+          function Invoke-Launcher {
+            $process = Start-Process -FilePath $launcher -WorkingDirectory $root -PassThru
+            $null = $process.Handle
+            if (-not $process.WaitForExit(300000)) {
+              throw 'watchdog_smoke_failed: actingwatch.exe did not finish within 5 minutes'
+            }
+            Write-Host "actingwatch.exe exit $($process.ExitCode)"
+            if ($process.ExitCode -ne 0) {
+              throw "watchdog_smoke_failed: actingwatch.exe exited $($process.ExitCode)"
+            }
+          }
+          function Get-SmokeRuntimes {
+            @(Get-CimInstance -ClassName Win32_Process -Filter "Name='actingcommand-actingd.exe'" |
+              Where-Object { -not $_.ExecutablePath -or $_.ExecutablePath.StartsWith("$root\", [StringComparison]::OrdinalIgnoreCase) })
+          }
+
+          try {
+            # 1. A formal start with a log.
+            $formal = Start-Process -FilePath (Join-Path $runtime 'actingcommand-actingd.exe') `
+              -ArgumentList @('--config', "`"$configPath`"") -WorkingDirectory $root -NoNewWindow -PassThru `
+              -RedirectStandardOutput (Join-Path $root 'actingd-formal.out.log') `
+              -RedirectStandardError (Join-Path $root 'actingd-formal.err.log')
+            $null = $formal.Handle
+            $deadline = [DateTime]::UtcNow.AddSeconds(120)
+            do {
+              Start-Sleep -Milliseconds 500
+              $text = (& $ctl watchdog status --root $root | Out-String)
+              $alive = ($LASTEXITCODE -eq 0 -and ($text | ConvertFrom-Json).decision -ceq 'alive')
+            } until ($alive -or $formal.HasExited -or [DateTime]::UtcNow -gt $deadline)
+            if (-not $alive) {
+              throw "watchdog_smoke_failed: the formal start did not come up (exited=$($formal.HasExited)): $text"
+            }
+            # 2. A first tick by hand creates <root>\watchdog and observes the formal start.
+            $null = Invoke-Watchdog 'run-once' 0
+            # 3. An unexpected end.
+            Stop-Process -Id $formal.Id -Force
+            $formal.WaitForExit()
+            # 4. One launcher tick starts the Runtime again.
+            Invoke-Launcher
+            $status = Invoke-Watchdog 'status' 0
+            if ($status.decision -cne 'alive' -or $status.detail.started_by_watchdog -ne $true) {
+              throw 'watchdog_smoke_failed: the Runtime is not alive as the watchdog started it'
+            }
+            $log = Get-Content -LiteralPath (Join-Path $root 'watchdog\watchdog.log') -Raw
+            Write-Host "watchdog.log:`n$log"
+            $started = @($log -split "`n" | Where-Object { $_ -cmatch ' WARN watchdog_started_runtime .* method=(breakaway|wmi) ' })
+            if ($started.Count -ne 1) {
+              throw 'watchdog_smoke_failed: no single watchdog_started_runtime line naming its method'
+            }
+            # 5. A formal close.
+            $shutdown = (& $ctl request-shutdown --state-root $state --wait 60 | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+              throw "watchdog_smoke_failed: request-shutdown exited ${LASTEXITCODE}: $shutdown"
+            }
+            Write-Host "request-shutdown: $($shutdown.Trim())"
+            # 6. The next launcher tick leaves it down.
+            Invoke-Launcher
+            $status = Invoke-Watchdog 'status' 0
+            if ($status.decision -cne 'formal_close') {
+              throw "watchdog_smoke_failed: expected formal_close, got $($status.decision)"
+            }
+            $left = @(Get-SmokeRuntimes)
+            if ($left.Count -ne 0) {
+              throw "watchdog_smoke_failed: actingd runs after the formal close: $($left.ProcessId -join ',')"
+            }
+            $starts = @(Get-ChildItem -LiteralPath (Join-Path $root 'watchdog') -Filter 'actingd-*.log')
+            if ($starts.Count -ne 1) {
+              throw "watchdog_smoke_failed: expected one start log, found $($starts.Count)"
+            }
+            Write-Host 'watchdog smoke passed'
+          } finally {
+            # 7. Stop any smoke Runtime still running.
+            foreach ($process in @(Get-SmokeRuntimes)) {
+              Write-Host "watchdog smoke stopping actingd pid $($process.ProcessId)"
+              Stop-Process -Id $process.ProcessId -Force -ErrorAction Continue
+            }
+          }
 
       # Actions artifacts are acceptance builds only; a release run publishes the Release instead.
       - name: Upload Runtime artifact

@@ -145,6 +145,24 @@ line on success:
 
 `WARN watchdog_started_runtime generation=<g> method=<breakaway|wmi> pid=<actingd pid> owner_epoch=<e> log=<path> previous_epoch=<J epoch> previous_pid=<J pid> ready_ms=<n>`
 
+## Launcher
+
+`<root>\tools\actingwatch.exe`, shipped in the Tools artifact (layout
+`platform-tools-v3`), is the program Task Scheduler runs. It is a GUI-subsystem
+program, so it opens no console window, and uses std only. It:
+
+1. requires to be `<root>\tools\actingwatch.exe` itself, else exits 20;
+2. opens `<root>\watchdog\watchdog.log` for appending, else (no directory) exits 21;
+3. tries `install\writer.lock` shared: held by acsetup, it exits 0 and runs nothing;
+   free, it keeps it for the tick, so acsetup cannot replace the launcher or the fixed
+   entry meanwhile; a lock that cannot be probed is exit 23;
+4. runs `<root>\runtime\actingctl.exe watchdog run-once --root <root> --from-task`
+   with `CREATE_NO_WINDOW`, stdin and stdout NUL, stderr appended to the log and the
+   working directory `<root>`, and exits with its code; a fixed entry that cannot run
+   appends `ERROR actingwatch: cannot run <path>: <error>` and exits 22.
+
+It reads no slot material and takes no slot occupancy.
+
 ## Files
 
 `<root>\watchdog\`, created by `run-once` when missing:
@@ -174,7 +192,8 @@ on #374).
 | 17 | — | `formal_close_unlogged`: no candidate log was written between the closed epoch's start and its close plus 2 s, so a FATAL of an unlogged start would be invisible |
 
 `status` lists every attention state under `attention` and exits with the first of
-13, 10, 11, 15, 12, 16, 17. Usage errors exit 1.
+13, 10, 11, 15, 12, 16, 17. Usage errors exit 1. The launcher adds 20, 21, 22 and 23
+(above) and passes every other code through.
 
 ## Starters and logs
 

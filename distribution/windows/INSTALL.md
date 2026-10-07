@@ -61,15 +61,17 @@ their manifest. An explicit unknown, empty or non-string layout is rejected;
 
 Tools use their separate artifact (`-ArtifactKind Tools`,
 `actingcommand-tools-<sha>`). Its manifest declares
-`tools_payload_layout: "platform-tools-v2"`: the root holds `actinglab.exe`,
+`tools_payload_layout: "platform-tools-v3"`: the root holds `actinglab.exe`,
 `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe` and `BUILD-MANIFEST.json`, and the one
-subdirectory `platform-tools` holds the official Android platform-tools 37.0.1
-files `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
-`source.properties`. The manifest binds all nine payload files (paths use `/`).
-The OCR engine is linked into `actingcommand-actingd.exe`, so no vision provider
-DLL ships (Workflow #360). Historical Tools artifacts with
-`platform-tools-v1` also carry `ac_fastdeploy_ppocr.dll` (ten files), and those
+`actingcommand-device-test.exe`, the watchdog launcher `actingwatch.exe` (see
+"Runtime watchdog") and `BUILD-MANIFEST.json`, and the one subdirectory
+`platform-tools` holds the official Android platform-tools 37.0.1 files `adb.exe`,
+`AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. The
+manifest binds all ten payload files (paths use `/`). The OCR engine is linked
+into `actingcommand-actingd.exe`, so no vision provider DLL ships (Workflow #360).
+Historical Tools artifacts with `platform-tools-v2` have the same files without
+`actingwatch.exe` (nine files), those with `platform-tools-v1` have the
+`platform-tools-v2` files plus `ac_fastdeploy_ppocr.dll` (ten files), and those
 without the layout field have only five root files; any other layout is
 rejected.
 
@@ -124,7 +126,10 @@ return distinct errors. `release(self)` reports an explicit unlock error; droppi
 the handle or terminating its process releases the OS occupancy.
 
 All six Runtime/Tools binary entrypoints take process-lifetime read occupancy,
-including direct slot entry. An `InstalledProcess` clone retains shared occupancy
+including direct slot entry. The watchdog launcher `actingwatch.exe` is the one
+exception: it reads no slot material and takes no slot occupancy; it only runs the
+fixed entry `<root>\runtime\actingctl.exe`, whose forwarded slot `actingctl.exe`
+takes it. An `InstalledProcess` clone retains shared occupancy
 with its immutable inputs. MCP children receive the same snapshot and acquire
 their own occupancy for their full process lifetimes, including after MCP exits.
 UI and stable forwarding consumers use this same contract. acsetup must also
@@ -371,6 +376,54 @@ Tools artifact supplies `actingledger.exe` for the existing read-only ledger
 commands. Preserve errors and the associated ledger facts; when startup or the
 ledger itself is unavailable, retain the daemon's original `FATAL actingd:` line
 and nonzero exit result. Do not treat a startup line as proof of device execution.
+
+## Runtime watchdog
+
+`actingctl watchdog` (`contracts/runtime-watchdog.md`, Workflow #374) starts the
+Runtime of an A/B installation again when it is gone without a formal close (a
+crash, a closed console window, an end in Task Manager, a reboot). It never starts
+a Runtime that was closed formally (`request-shutdown`, an acsetup transition),
+that is alive, while acsetup holds `install\writer.lock`, or whose last
+`actingd-*.log` ends in a `FATAL actingd:` or `FATAL acforward:` line; that last
+case stays down loudly. At most 3 starts in 30 minutes; then it stays down until a
+formal start.
+
+```powershell
+<root>\runtime\actingctl.exe watchdog status --root <root>
+<root>\runtime\actingctl.exe watchdog run-once --root <root>
+```
+
+`status` is read-only and exits 0 when healthy, otherwise with the attention code
+of the contract (10 FATAL hold, 11 budget exhausted, 12 a start is due or failed,
+13 misconfigured, 15 a Runtime process without the owner lock, 16 repeated
+restarts, 17 a formal close no log covers). `run-once` is one tick; run by hand it
+starts the Runtime through WMI with a hidden window. A scheduled task runs
+`<root>\tools\actingwatch.exe` every minute, a GUI-subsystem launcher that opens no
+window and runs `<root>\runtime\actingctl.exe watchdog run-once --root <root>
+--from-task` hidden. The launcher exits 20 when it is not at
+`<root>\tools\actingwatch.exe`, 21 when `<root>\watchdog\` is missing, 22 when the
+fixed entry cannot run and 23 when the writer lock cannot be probed; otherwise it
+returns the tick's code. While acsetup holds the writer lock it does nothing. The
+other way round, the launcher holds that lock shared for its tick (about a second;
+up to three minutes while a start waits for readiness): an acsetup run that begins
+then stops at once with "Installation/configuration writer is occupied" and changes
+nothing. Run acsetup again.
+
+The watchdog writes only under `<root>\watchdog\`: `watchdog.log` (one line per
+change, start or error; the record to read), `state.json` (its budget and
+log-on-change memory), `actingd-<ms>.log` (each start's stdout and stderr) and
+`run.lock`. It writes nothing into the ledger. Task Scheduler's history of a
+per-minute task turns over within days; it shows the last runs, `watchdog.log`
+keeps the record.
+
+Every program that starts the Runtime should log its stdout and stderr into an
+`actingd-*.log` in the root (the console's own logs in
+`%LOCALAPPDATA%\ActingCommand\logs` count as well), so that a FATAL is seen; a
+Runtime started without one shows only as `formal_close_unlogged` (17) in `status`
+after it stops.
+Switching back to a slot whose `actingctl.exe` predates the watchdog makes every
+tick fail with that program's usage error until a newer slot is selected; disable
+the task first (`schtasks /Change /TN "<task name>" /DISABLE`).
 
 ## Upgrade boundary
 
