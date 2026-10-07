@@ -5,12 +5,12 @@
 //! A scheduled contained task run on a physical instance that commits `task.failed` with
 //! `contained_task_page_unknown`, a `contained_task_recovery_*` or a
 //! `contained_task_home_recovery_*` code starts a ladder for its instance, unless the
-//! instance's `stuck_recovery` is off. A direct run (CLI or console task-run, MCP
-//! `ac_run_pack`) never starts one, nor does the failed connection preparation of a direct
-//! request (Workflow #369-3, coordinator ruling Q1: the ladder exists for the routine). The
-//! ladder never runs on the run's own thread: a scheduled run's trigger is admitted when the
-//! run returned, and the accepted ladder waits in the startup package queue for the host's
-//! scheduling thread.
+//! instance's `stuck_recovery` is off. A direct task run (CLI or console task-run, MCP
+//! `ac_run_pack`) never starts one (Workflow #369-3, coordinator rulings Q1 and P1: the ladder
+//! exists for the routine). A failed daemon-start or connection preparation (emulator start or
+//! restart, resume, self-check) still starts one. The ladder never runs on the run's own
+//! thread: a scheduled run's trigger is admitted when the run returned, and the accepted
+//! ladder waits in the startup package queue for the host's scheduling thread.
 //!
 //! The rungs, in this fixed order, are existing work under the instance lease:
 //! `return_home` runs the failed run's bound recovery package as a standalone contained task
@@ -220,15 +220,12 @@ impl HostShared {
             .entry(instance_id)
             .or_default()
             .preparation = Some(event);
-        // Workflow #369-3 (coordinator ruling Q1, review M4): a connection preparation is the
-        // preparation of a direct request (emulator start or restart, resume, self-check), so
-        // its failure starts no ladder; only a daemon start's preparation does.
+        // Workflow #369-3 (coordinator ruling P1): the direct-run exemption covers task runs
+        // only, which make no preparation of their own. A failed daemon-start or connection
+        // preparation (emulator start or restart, resume, self-check) still starts a ladder, as
+        // before: nothing else retries those. Only the ladder's own preparation never does.
         if !recoverable
-            || matches!(
-                stage,
-                RecoveryTriggerStage::RecoveryPreparation
-                    | RecoveryTriggerStage::ConnectionPreparation
-            )
+            || stage == RecoveryTriggerStage::RecoveryPreparation
             || self.fatal.is_shutdown_requested()
         {
             return Ok(event);
