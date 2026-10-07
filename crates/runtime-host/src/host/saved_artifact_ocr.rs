@@ -7,7 +7,9 @@ use actingcommand_contract::{
     SavedArtifactOcrSource,
 };
 use actingcommand_execution_kernel::{ExternallyVerifiedBundle, evaluate_saved_artifact_ocr};
-use actingcommand_ledger::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig};
+use actingcommand_ledger::{
+    GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerReadExtent,
+};
 use std::time::{Duration, Instant};
 
 impl HostShared {
@@ -189,11 +191,29 @@ impl HostShared {
         };
         let dimensions = (frame.frame_width(), frame.frame_height());
         let source_sensitivity = captured.sensitivity();
+        // Workflow #363 (review F5): take out what the report needs, then release the prefix
+        // evidence before the PNG read, so its memory does not stay through package load and
+        // OCR.
+        let writer_owner_id = snapshot
+            .writer_metadata()
+            .readable()
+            .map(|writer| writer.owner_id().to_owned());
+        let through_event_id =
+            *snapshot.events()[usize::try_from(input.source.through_sequence - 1)
+                .map_err(|error| source_error("saved_source_position_invalid", error))?]
+            .event_id();
+        let storage_backend = snapshot.backend();
+        let read_complete = snapshot.read_complete();
+        let storage_snapshot = snapshot
+            .segment()
+            .map(|source| source.storage_snapshot().clone());
+        let material_checked = snapshot.material_checked();
+        drop(snapshot);
         check_deadline(deadline)?;
         // The only material read: length and SHA-256 are verified as it is read.
         let png_started = Instant::now();
         let image = read_projected_verified(&root, &input.source.artifact).map_err(|error| {
-            unavailable_source_artifact(&root, &input.source, &snapshot, &error, deadline)
+            unavailable_source_artifact(&root, &input.source, extent, &error, deadline)
         })?;
         let png_read = png_started.elapsed();
         let package_started = Instant::now();
@@ -300,7 +320,7 @@ impl HostShared {
         check_deadline(deadline)?;
         let links = request.event_links(None, None, None);
         // A segment source verified all referenced material at open.
-        let material_scope = if snapshot.material_checked() {
+        let material_scope = if material_checked {
             "all_referenced"
         } else {
             "requested_frame"
@@ -311,13 +331,12 @@ impl HostShared {
             "source": input.source, "source_sensitivity": source_sensitivity,
             "source_ledger": {
                 "canonical_root": source_ledger,
-                "writer_owner_id": snapshot.writer_metadata().readable().map(|writer| writer.owner_id()),
-                "through_event_id": snapshot.events()[usize::try_from(input.source.through_sequence - 1)
-                    .map_err(|error| source_error("saved_source_position_invalid", error))?].event_id(),
-                "storage_backend": snapshot.backend(),
+                "writer_owner_id": writer_owner_id,
+                "through_event_id": through_event_id,
+                "storage_backend": storage_backend,
                 // Physical completeness of segment files; an SQLite source reports true.
-                "read_complete": snapshot.read_complete(),
-                "storage_snapshot": snapshot.segment().map(|source| source.storage_snapshot()),
+                "read_complete": read_complete,
+                "storage_snapshot": storage_snapshot,
                 // Workflow #363: what this request read from the source.
                 "source_read": {
                     "declared_through_sequence": input.source.through_sequence,
@@ -500,7 +519,7 @@ fn prove_source<'a>(
 fn unavailable_source_artifact(
     root: &Path,
     source: &SavedArtifactOcrSource,
-    snapshot: &GlobalLedgerEvidence,
+    extent: GlobalLedgerReadExtent,
     error: &actingcommand_artifact_store::ArtifactStoreError,
     deadline: Instant,
 ) -> RuntimeHostError {
@@ -509,7 +528,6 @@ fn unavailable_source_artifact(
         "source artifact {identity} ({}): {error}",
         source.artifact.sha256
     );
-    let extent = snapshot.read_extent();
     let head = extent.head_sequence;
     if extent.through_sequence >= head {
         return source_error(
