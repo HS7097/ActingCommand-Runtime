@@ -401,10 +401,12 @@ pub fn suspension_report(
                 "decision_id": latest.decision_id,
                 "run_id": current_run.as_ref().map(identifier_text),
             });
-            // Workflow #361 M6: an interrupted settlement is lifted by the restart that
-            // recorded it, whatever the configuration.
-            let lift = if failure.error_code == crate::policy_control::POLICY_SETTLEMENT_INTERRUPTED
-            {
+            // Workflow #361 M6: the first interrupted settlement in a row is lifted by the
+            // restart that recorded it, whatever the configuration (review P5).
+            let lift = if crate::policy_control::interruption_lifted_by_restart(
+                &failure.error_code,
+                failure.consecutive_same_error,
+            ) {
                 Some(("restart".to_owned(), "active"))
             } else {
                 procedure_ref
