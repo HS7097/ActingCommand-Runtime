@@ -507,20 +507,29 @@ fn read_segment_snapshots(
     Ok((snapshots, storage))
 }
 
+/// The detail names the bound that tripped (Workflow #363). Callers may pass 0 for a count
+/// they do not track, so the counts after a deadline are only those given at this check.
 pub(super) fn check_read_budget(
     budget: Option<(u64, usize, Instant)>,
     bytes: u64,
     events: usize,
 ) -> GlobalLedgerResult<()> {
-    if budget.is_some_and(|(max_bytes, max_events, deadline)| {
-        bytes > max_bytes || events > max_events || Instant::now() >= deadline
-    }) {
-        return Err(GlobalLedgerError::request(
-            "ledger_read_budget_exceeded",
-            "read_only_snapshot",
-        ));
-    }
-    Ok(())
+    let Some((max_bytes, max_events, deadline)) = budget else {
+        return Ok(());
+    };
+    let detail = if bytes > max_bytes {
+        format!("bytes {bytes} > {max_bytes}")
+    } else if events > max_events {
+        format!("events {events} > {max_events}")
+    } else if Instant::now() >= deadline {
+        format!("deadline reached at check (bytes={bytes}, events={events})")
+    } else {
+        return Ok(());
+    };
+    Err(
+        GlobalLedgerError::request("ledger_read_budget_exceeded", "read_only_snapshot")
+            .with_detail(detail),
+    )
 }
 
 pub(super) fn read_writer_metadata(

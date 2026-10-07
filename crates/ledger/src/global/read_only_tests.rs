@@ -36,7 +36,7 @@ fn b3_storage_snapshot_keeps_physical_tail_and_unverified_segments() {
         .append(event(EventLinksDraft::default()))
         .expect("third");
     ledger.close().expect("close writer");
-    // Specification: Workflow #269 SAVED-ARTIFACT-OCR-v1 native-reader budgets.
+    // Specification: native-reader byte, event and deadline budgets of the segment reader.
     let before_budget_reads = tree_bytes(root);
     for (bytes, events, deadline) in [
         (
