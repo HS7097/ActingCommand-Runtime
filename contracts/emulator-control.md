@@ -419,10 +419,14 @@ running instance gets the usual start preparation only.
   thread that also runs startup packages and recovery ladders. The host already answers; the
   starts never delay `runtime-info.json`. Until its emulator runs, a pending instance stays
   unavailable to the policy, as before.
-- **Network first.** Before the first start the thread waits, at most 600 s, until a TCP
-  connection to the operating system's connectivity check host (`www.msftconnecttest.com:80`,
-  connected and closed, nothing sent) succeeds, polling every 5 s. When the network does not
-  answer in time every remaining start is refused with `emulator_autostart_network_unready`.
+- **Network first.** Before the first start the thread waits, at most 600 s, until the
+  operating system's connectivity status reports internet access, read every 5 s (on Windows
+  `GetNetworkConnectivityHint`; internet access and constrained internet access count). The
+  Runtime opens no connection and resolves no name: the status is the one the operating
+  system's own connectivity indicator keeps. When the status is unknown (the operating system
+  reports an unknown level, the query fails or does not exist) the starts go on without
+  waiting. When no internet access is reported in time every remaining start is refused with
+  `emulator_autostart_network_unready`.
 - **Pauses.** A start is skipped while a scheduling pause holds the global gate or the
   instance's gate, also one restored at this start (`scheduling-pause.md`): no emulator and no
   startup package start. The refusal code is `emulator_autostart_scheduling_paused`; the
@@ -441,7 +445,11 @@ running instance gets the usual start preparation only.
   Workflow #369-3); later scheduled runs keep their own ladder. Only a fatal failure (a ledger
   append) stops the host.
 - **Report.** `actingd` prints `actingd emulator_autostart_queued instances=<n>` when it queues
-  the starts and one line per instance as it is handled: `actingd emulator_autostart_started
+  the starts; once per entry the network wait's outcome: `actingd
+  emulator_autostart_network_ready waited_ms=<ms>`, `actingd
+  emulator_autostart_network_status_unknown reason=<reason> os_error=<code|none>
+  starting_without_wait` or `actingd emulator_autostart_network_unready waited_ms=<ms>`; and
+  one line per instance as it is handled: `actingd emulator_autostart_started
   instance=<alias>`, `actingd emulator_autostart_failed instance=<alias> code=<code>` (also
   `code=emulator_autostart_preparation_failed` when the emulator started but its connection
   preparation did not pass) or `actingd emulator_autostart_skipped instance=<alias>
