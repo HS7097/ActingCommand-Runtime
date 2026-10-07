@@ -51,7 +51,8 @@ features. A known `identity` feature carries `value` (business ID), `variant`, `
 For current numeric attributes, `value: "ocr_integer"` requires
 `integer: {min, max, format?, minimum_confidence_milli}`. It reuses the existing
 `OcrUnsignedIntegerFormat` parser after whitespace trim. `format` defaults to `ascii_decimal`;
-`comma_grouped` and `current_capacity` keep their existing semantics. Bounds satisfy
+`comma_grouped`, `current_capacity` and `times_prefixed` keep their
+`ocr-fields.md` semantics. Bounds satisfy
 `0 <= min <= max <= 2^53-1`; confidence is 1..=1000. The result is a real integer, not a milli
 quantity. Missing/low confidence and failed parsing produce typed Unknown. `passed` and
 `measure_milli` retain their existing meanings, including OCR confidence for `measure_milli`.
