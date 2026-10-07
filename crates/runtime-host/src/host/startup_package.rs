@@ -22,7 +22,8 @@
 //!
 //! A configured package is scheduled after `start` / `restart` when connection preparation
 //! succeeds; an instance without one has no package scheduled. A daemon already running at startup
-//! schedules nothing: only the two control actions do.
+//! schedules nothing: only the two control actions do, and since Workflow #361 B2 a configured
+//! emulator start (`emulator_autostart`) of an instance that was stopped at daemon start.
 //!
 //! Slice #316-B4: the same queue and thread also carry stuck-recovery ladders
 //! (`recovery_ladder`), which run their rung packages through this module's runner.
@@ -38,6 +39,8 @@ const STARTUP_PACKAGE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(super) enum PendingHostWork {
     StartupPackage(PendingStartupPackage),
     RecoveryLadder(Box<super::recovery_ladder::PendingRecoveryLadder>),
+    /// Workflow #361 B2: configured emulator starts (`emulator_autostart`).
+    EmulatorAutostart(super::emulator_autostart::PendingEmulatorAutostart),
 }
 
 /// Which host-scheduled package a run is: the typed admission codes and the failure record
@@ -136,6 +139,7 @@ pub(super) fn startup_package_loop(shared: Arc<HostShared>) -> RuntimeHostResult
                 shared.run_pending_startup_package(&pending).map(|_| ())
             }
             PendingHostWork::RecoveryLadder(pending) => shared.run_recovery_ladder(&pending),
+            PendingHostWork::EmulatorAutostart(pending) => shared.run_emulator_autostart(&pending),
         };
         if let Err(error) = result {
             shared.fatal.mark(error.clone())?;

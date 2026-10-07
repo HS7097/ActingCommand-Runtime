@@ -520,7 +520,7 @@ impl HostShared {
 
     /// Appends `command.rejected` then the `runtime.failed` record (exit code, native detail,
     /// primary detail) through the required-failure path; the rejected event is the terminal.
-    fn emulator_control_failure(
+    pub(super) fn emulator_control_failure(
         &self,
         links: EventLinksDraft,
         event_action: EventAction,

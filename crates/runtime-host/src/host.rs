@@ -157,6 +157,7 @@ mod backend_open;
 mod client_events;
 mod contained_task;
 mod device_diagnostic;
+mod emulator_autostart;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
@@ -404,6 +405,9 @@ pub struct RuntimeHostConfig {
     /// Per instance alias: the stuck-recovery ladder settings (slice #316-B4); an instance
     /// without an entry uses the defaults (enabled, 600 s cool-down).
     stuck_recovery: BTreeMap<String, actingcommand_contract::InstanceStuckRecovery>,
+    /// Workflow #361 B2: the aliases whose stopped emulator the host starts after policy
+    /// initialization, in configuration order.
+    emulator_autostart: Vec<String>,
     /// Workflow #336 L2b: per package id, the locator and content reference of a package a
     /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
     /// run resolves it; not a configuration fact.
@@ -440,6 +444,7 @@ impl RuntimeHostConfig {
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
+            emulator_autostart: Vec::new(),
             prerequisite_packages: BTreeMap::new(),
             return_home_packages: BTreeMap::new(),
         }
@@ -605,6 +610,20 @@ impl RuntimeHostConfig {
         &self,
     ) -> &BTreeMap<String, actingcommand_contract::InstanceStuckRecovery> {
         &self.stuck_recovery
+    }
+
+    /// Workflow #361 B2: the instances, by alias in configuration order, whose stopped
+    /// emulator the host starts once `RuntimeHost::queue_emulator_autostart` is called. An
+    /// alias that is not a registered physical instance fails startup with
+    /// `emulator_autostart_instance_unknown` / `emulator_autostart_requires_physical_instance`.
+    pub fn with_emulator_autostart(mut self, emulator_autostart: Vec<String>) -> Self {
+        self.emulator_autostart = emulator_autostart;
+        self
+    }
+
+    /// The configured emulator starts, by alias in configuration order.
+    pub fn emulator_autostart(&self) -> &[String] {
+        &self.emulator_autostart
     }
 
     /// Installs the prerequisite packages, keyed by package id (Workflow #336 L2b). A
@@ -817,6 +836,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &self.resource_packages.keys().collect::<Vec<_>>(),
             )
             .field("stuck_recovery", &self.stuck_recovery)
+            .field("emulator_autostart", &self.emulator_autostart)
             .field(
                 "prerequisite_packages",
                 &(!self.prerequisite_packages.is_empty()).then_some("<runtime-owned>"),
@@ -1301,6 +1321,9 @@ impl RuntimeHost {
             pending_host_work: Mutex::new(VecDeque::new()),
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
+            emulator_autostart: OnceLock::new(),
+            emulator_autostart_deferred: Mutex::new(BTreeSet::new()),
+            emulator_autostart_reports: Mutex::new(Vec::new()),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             parked_recovery_ladders: Mutex::new(BTreeMap::new()),
             prerequisite_packages: config.prerequisite_packages,
@@ -1390,6 +1413,10 @@ impl RuntimeHost {
                 &config.stuck_recovery,
                 &registered_instances,
             )?;
+            let emulator_autostart = emulator_autostart::resolve_emulator_autostart(
+                &config.emulator_autostart,
+                &registered_instances,
+            )?;
             let monitor_registry = MonitorRegistry::open(
                 &config.state_root,
                 registered_instances
@@ -1456,6 +1483,7 @@ impl RuntimeHost {
             installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
             installation::set_prepared(&shared.startup_packages, startup_packages)?;
             installation::set_prepared(&shared.stuck_recovery, stuck_recovery)?;
+            installation::set_prepared(&shared.emulator_autostart, emulator_autostart)?;
             *lock(&shared.registered_instances, "prepare_registered_instances")? =
                 registered_instances;
             *lock(
@@ -1573,6 +1601,23 @@ impl RuntimeHost {
     /// (`scheduling_pause_dropped scope=instance:<alias> reason=instance_not_registered`).
     pub fn scheduling_pause_restore(&self) -> &[String] {
         &self.scheduling_pause_restore
+    }
+
+    /// Workflow #361 B2: queues the configured emulator starts as host work on the startup
+    /// thread; the daemon calls this once, after policy initialization succeeded. Returns how
+    /// many instances were queued.
+    pub fn queue_emulator_autostart(&self) -> RuntimeHostResult<usize> {
+        self.shared_ref("queue_emulator_autostart")?
+            .queue_emulator_autostart()
+    }
+
+    /// Workflow #361 B2: the report lines of the configured starts since the last call
+    /// (`emulator_autostart_started instance=<alias>`,
+    /// `emulator_autostart_failed instance=<alias> code=<code>`,
+    /// `emulator_autostart_skipped instance=<alias> reason=scheduling_paused`).
+    pub fn take_emulator_autostart_reports(&self) -> RuntimeHostResult<Vec<String>> {
+        self.shared_ref("take_emulator_autostart_reports")?
+            .take_emulator_autostart_reports()
     }
 
     /// The daemon checks fatal_error first, then returns through its owned close path.
@@ -3038,6 +3083,11 @@ struct HostShared {
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults), the
     // per-instance ladder window, and direct-run triggers waiting for their receipt write.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
+    // Workflow #361 B2: the configured emulator starts in configuration order, the starts a
+    // scheduling pause deferred until its resume, and the report lines for the daemon.
+    emulator_autostart: OnceLock<Vec<InstanceId>>,
+    emulator_autostart_deferred: Mutex<BTreeSet<InstanceId>>,
+    emulator_autostart_reports: Mutex<Vec<String>>,
     recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
     parked_recovery_ladders: Mutex<BTreeMap<RequestId, recovery_ladder::PendingRecoveryLadder>>,
     // Workflow #336 L2b: the prerequisite packages by package id, read at startup.

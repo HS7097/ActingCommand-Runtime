@@ -215,12 +215,13 @@ terminal with the chosen eligibility basis in the original eviction intent.
     `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.*`,
     `performance_monitor.sample_interval_ms` and `mumu_manager.*`. Per
     configured instance, in declaration order (Workflow #318, cfg3):
-    `instance.<instance_id>.stuck_recovery` (boolean) and
-    `instance.<instance_id>.stuck_recovery_cooldown_secs` (integer), keyed by
+    `instance.<instance_id>.stuck_recovery` (boolean),
+    `instance.<instance_id>.stuck_recovery_cooldown_secs` (integer) and, since
+    Workflow #361 B2, `instance.<instance_id>.start_emulator` (boolean), keyed by
     the registry's bounded `instance_id` (`instance_<32 hex>`; an alias may
     exceed the 128-byte key bound), each `explicit` when the instance named
-    the field. The two keys per instance count against the 256-parameter
-    bound, so a configuration of more than about 100 instances fails with
+    the field. The three keys per instance count against the 256-parameter
+    bound, so a configuration of more than about 70 instances fails with
     `config_manifest_invalid`. Every
     value is read back from the assembled `RuntimeHostConfig` (Workflow #318,
     cfg2), never copied from a library `Default`; a host that cannot report
@@ -271,6 +272,7 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `policy_catalog_approval_invalid`, `procedure_manifest_entry_missing`,
 `policy_instance_set_mismatch`, `policy_instance_host_unknown`,
 `catalog_transition_kind_unknown`, `catalog_transition_invalid`,
+`start_emulator_requires_discovery_binding`,
 `procedure_package_not_regular`,
 `procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
@@ -621,7 +623,13 @@ Checked here, without discovery:
   `nemu_paired_input_configuration_missing`, `nemu_app_index_invalid`);
 - alias and application identity as the execution registry accepts them
   (`instance_registration_invalid`), and duplicate aliases or instance ids
-  (`duplicate_instance_alias` / `duplicate_instance_id`).
+  (`duplicate_instance_alias` / `duplicate_instance_id`);
+- Workflow #361 B2: the optional `start_emulator` (boolean, default `false`) is
+  allowed only on a discovery-bound instance
+  (`start_emulator_requires_discovery_binding`); a discovery-bound entry of the
+  result carries `start_emulator`. The daemon starts such an instance's stopped
+  emulator after policy initialization (`contracts/emulator-control.md`,
+  "Configured start at daemon start"); this command starts nothing.
 
 Still deferred to startup, because each needs the discovery result
 (`contracts/provider-startup.md`): the `MuMuManager` version floor and

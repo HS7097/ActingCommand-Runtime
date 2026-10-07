@@ -60,6 +60,9 @@ pub(super) struct InstanceParameters {
     pub(super) alias: String,
     pub(super) stuck_recovery_explicit: bool,
     pub(super) stuck_recovery_cooldown_secs_explicit: bool,
+    /// Workflow #361 B2: the effective `start_emulator` and whether the file named it.
+    pub(super) start_emulator: bool,
+    pub(super) start_emulator_explicit: bool,
 }
 
 pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest, &'static str> {
@@ -280,6 +283,11 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
                 key: format!("{prefix}.stuck_recovery_cooldown_secs"),
                 value: FactScalar::Integer(i64::from(settings.cooldown_secs)),
                 source: explicit_or_default(instance.stuck_recovery_cooldown_secs_explicit),
+            },
+            ConfigParameter {
+                key: format!("{prefix}.start_emulator"),
+                value: FactScalar::Boolean(instance.start_emulator),
+                source: explicit_or_default(instance.start_emulator_explicit),
             },
         ]);
     }

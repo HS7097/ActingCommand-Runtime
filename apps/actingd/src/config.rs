@@ -617,6 +617,10 @@ struct InstanceConfig {
     /// `1..=86400`).
     #[serde(default)]
     stuck_recovery_cooldown_secs: Option<u32>,
+    /// Workflow #361 B2: `true` lets the daemon start this instance's emulator when it is
+    /// stopped at daemon start (default `false`); discovery-bound instances only.
+    #[serde(default)]
+    start_emulator: Option<bool>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// The daemon-level `device_paths`, copied in by `assemble` so a deferred instance
@@ -1042,6 +1046,7 @@ impl ActingdConfigFile {
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
         let mut stuck_recovery = BTreeMap::new();
+        let mut emulator_autostart = Vec::new();
         let mut instance_parameters = Vec::with_capacity(instances.len());
         for instance in &mut instances {
             instance.device_paths = device_paths.clone();
@@ -1065,6 +1070,14 @@ impl ActingdConfigFile {
                 .validate()
                 .map_err(|_| "stuck_recovery_cooldown_invalid")?;
             stuck_recovery.insert(instance.alias.clone(), settings);
+            // Workflow #361 B2: only a discovery-bound instance has an emulator to start.
+            let start_emulator = instance.start_emulator.unwrap_or(false);
+            if start_emulator {
+                if instance.fixture_backend.is_some() || instance.binding_key()?.is_none() {
+                    return Err("start_emulator_requires_discovery_binding");
+                }
+                emulator_autostart.push(instance.alias.clone());
+            }
             instance_parameters.push(manifest::InstanceParameters {
                 instance_id: instance.instance_id,
                 alias: instance.alias.clone(),
@@ -1072,6 +1085,8 @@ impl ActingdConfigFile {
                 stuck_recovery_cooldown_secs_explicit: instance
                     .stuck_recovery_cooldown_secs
                     .is_some(),
+                start_emulator,
+                start_emulator_explicit: instance.start_emulator.is_some(),
             });
             if let Some(path) = instance.resource_package.take() {
                 // An empty path stays empty so admission reports it missing.
@@ -1149,6 +1164,7 @@ impl ActingdConfigFile {
         host = host
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
+            .with_emulator_autostart(emulator_autostart)
             .with_prerequisite_packages(prerequisite_packages)
             .with_return_home_packages(return_home_packages);
         // Every effective value is read back from `host`; the file only says what it named.
@@ -2460,6 +2476,36 @@ mod tests {
         assert_eq!(
             config.assemble().err(),
             Some("application_identity_missing")
+        );
+    }
+
+    /// Workflow #361 B2: only a discovery-bound instance has an emulator the daemon can start.
+    #[test]
+    fn start_emulator_requires_a_discovery_binding() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.instance",
+                "instance_id": id.transport(),
+                "application_id": "neutral.application",
+                "adb_path": "adb",
+                "port": 16384,
+                "touch_backend": "maatouch",
+                "capture_backend": "adb",
+                "start_emulator": true
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        assert_eq!(
+            config.assemble().err(),
+            Some("start_emulator_requires_discovery_binding")
         );
     }
 

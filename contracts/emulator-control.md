@@ -15,6 +15,10 @@ application lifecycle inside a running instance (`ApplicationLifecycle`) is unch
   there is no policy that restarts the emulator by itself. The startup package (slice
   #316-B3, "Startup package hook" below) is the one thing a successful `start` / `restart`
   sets in motion: a configuration-declared, fully ledgered contained task, not a restart.
+  The Runtime drives the same actions itself on two paths only, neither of them a request:
+  the stuck-recovery ladder ("Stuck-recovery ladder" below) and the configured start at daemon
+  start ("Configured start at daemon start" below). The origin gate for requests is
+  unchanged.
 - The instance must be a registered physical instance (`fixture_execution_scope_forbidden`
   otherwise).
 
@@ -401,6 +405,48 @@ Host configuration: `RuntimeHostConfig::with_stuck_recovery` takes the settings 
 alias (an instance without an entry uses the defaults); `validate` refuses an invalid alias or
 a cool-down outside `1..=86400` with `invalid_stuck_recovery`, and startup refuses an alias
 that is not registered with `stuck_recovery_instance_unknown` (both fatal).
+
+## Configured start at daemon start (Workflow #361 B2)
+
+An instance configured with `"start_emulator": true` (`actingd` configuration, default
+`false`; discovery-bound instances only, `start_emulator_requires_discovery_binding`
+otherwise; manifest parameter `instance.<instance_id>.start_emulator`) whose emulator is stopped
+when the daemon starts (its ADB endpoint is pending) is started by the Runtime itself. A
+running instance gets the usual start preparation only.
+
+- **When.** `actingd` queues the configured starts once, after policy initialization succeeded
+  (without a `policy` section, right after the host started), as host work on the startup
+  thread that also runs startup packages and recovery ladders. The host already answers; the
+  starts never delay `runtime-info.json`. Until its emulator runs, a pending instance stays
+  unavailable to the policy, as before.
+- **Network first.** Before the first start the thread waits, at most 600 s, until a TCP
+  connection to the operating system's connectivity check host (`www.msftconnecttest.com:80`,
+  connected and closed, nothing sent) succeeds, polling every 5 s. When the network does not
+  answer in time every remaining start is refused with `emulator_autostart_network_unready`.
+- **Pauses.** A start is skipped while a scheduling pause holds the global gate or the
+  instance's gate, also one restored at this start (`scheduling-pause.md`): no emulator and no
+  startup package start. The refusal code is `emulator_autostart_scheduling_paused`; the
+  `ResumeScheduling` that lifts the last pause holding the instance queues its start again.
+- **Order and path.** Instances start one after another in configuration order. Each start is
+  the ladder's path: a Runtime-origin `command.received` (action `emulator.start`), then the
+  same fence, close, provider `start`, binding, ADB baseline, `command.validated` or
+  `command.rejected` + `runtime.failed`, `runtime.instance_bound`, connection preparation with
+  its self-check, and the instance's startup package scheduled as after a manual `start`. A
+  takeover cooldown is waited out (at most 60 s) instead of refusing the start.
+- **Failure is loud, not fatal.** A refused or failed start writes the existing
+  `command.rejected` + `runtime.failed` pair; the instance stays unavailable and the other
+  instances are still started. Only a fatal failure (a ledger append) stops the host.
+- **Report.** `actingd` prints `actingd emulator_autostart_queued instances=<n>` when it queues
+  the starts and one line per instance as it is handled: `actingd emulator_autostart_started
+  instance=<alias>`, `actingd emulator_autostart_failed instance=<alias> code=<code>` or
+  `actingd emulator_autostart_skipped instance=<alias> reason=scheduling_paused`.
+
+Host configuration: `RuntimeHostConfig::with_emulator_autostart` takes the aliases in
+configuration order; startup refuses an alias that is not registered
+(`emulator_autostart_instance_unknown`) or a fixture instance
+(`emulator_autostart_requires_physical_instance`), both fatal; `RuntimeHost::
+queue_emulator_autostart` queues the starts and `take_emulator_autostart_reports` drains the
+report lines.
 
 ## Client and CLI
 

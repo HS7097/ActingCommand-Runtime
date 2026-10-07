@@ -355,6 +355,8 @@ fn summarize(
                     "startup_package": startup_package,
                     "stuck_recovery": stuck_recovery.enabled,
                     "stuck_recovery_cooldown_secs": stuck_recovery.cooldown_secs,
+                    // Workflow #361 B2: started by the daemon when stopped at its start.
+                    "start_emulator": checked.host.emulator_autostart().contains(&alias),
                 }));
             }
             let resolved = registry

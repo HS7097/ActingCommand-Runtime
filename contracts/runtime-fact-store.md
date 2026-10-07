@@ -458,8 +458,9 @@ the backend self-check facts (source `device-proxy` or `capture`).
     Workflow #318 cfg3 every configured instance, in declaration order, adds
     `instance.<instance_id>.stuck_recovery` (`boolean`) and
     `instance.<instance_id>.stuck_recovery_cooldown_secs` (`integer`), read
-    back from the host's per-instance stuck-recovery settings and `explicit`
-    when the instance named the field; they are keyed by the registry's bounded
+    back from the host's per-instance stuck-recovery settings, and (Workflow
+    #361 B2) `instance.<instance_id>.start_emulator` (`boolean`), each
+    `explicit` when the instance named the field; they are keyed by the registry's bounded
     `instance_id` (`instance_<32 hex>`), never by the alias, which may exceed
     the 128-byte key bound. `allow_env_overrides` (`boolean`, default `false`)
     reports whether the `ACTINGCOMMAND_*` environment fallbacks are read; the

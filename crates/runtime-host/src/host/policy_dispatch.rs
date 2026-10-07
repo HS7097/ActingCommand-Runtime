@@ -2008,6 +2008,8 @@ impl HostShared {
                 self.persist_scheduling_pauses(&prospective)?;
                 lock(&self.scheduling_pause, "resume_scheduling")?.lift_global()?
             };
+            // Workflow #361 B2: a configured start the pause deferred runs now.
+            self.requeue_deferred_emulator_autostart()?;
             return Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
                 terminal: None,
@@ -2065,6 +2067,8 @@ impl HostShared {
             self.persist_scheduling_pauses(&prospective)?;
             lock(&self.scheduling_pause, "resume_scheduling")?.lift_instance(instance_alias)?
         };
+        // Workflow #361 B2: a configured start the pause deferred runs now.
+        self.requeue_deferred_emulator_autostart()?;
         let selfcheck =
             self.reconnect_resumed_instance(request, instance_alias, instance_id, &admission)?;
         Ok(OperationSuccess {

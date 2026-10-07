@@ -162,6 +162,25 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
             );
         }
     };
+    // Workflow #361 B2: the configured emulator starts run as host work from here on, after
+    // policy initialization and while the host already answers.
+    match host.queue_emulator_autostart() {
+        Ok(0) => {}
+        Ok(queued) => println!("actingd emulator_autostart_queued instances={queued}"),
+        Err(error) => {
+            let mut error = ActingdError::runtime(error);
+            error.stage = Some("emulator_autostart");
+            let recorded = error
+                .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
+            let closed = host.close();
+            return combine_monitor_results(
+                Err(error.with_recording_result(recorded)),
+                Ok(()),
+                Ok(()),
+                closed.map_err(ActingdError::runtime),
+            );
+        }
+    }
     println!(
         "actingd ready pid={} host={} port={}",
         host.runtime_info().pid(),
@@ -454,9 +473,22 @@ fn validate_scheduled_execution_mode(
     Ok(())
 }
 
+/// Workflow #361 B2: prints the report lines of the configured emulator starts.
+fn print_emulator_autostart_reports(host: &RuntimeHost) -> Result<(), ActingdError> {
+    for line in host
+        .take_emulator_autostart_reports()
+        .map_err(ActingdError::runtime)?
+    {
+        writeln!(std::io::stdout().lock(), "actingd {line}")
+            .map_err(|_| ActingdError::process("emulator_autostart_report_failed"))?;
+    }
+    Ok(())
+}
+
 fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
     loop {
         thread::sleep(HEALTH_POLL_INTERVAL);
+        print_emulator_autostart_reports(&host)?;
         match host.fatal_error() {
             Ok(Some(error)) | Err(error) => {
                 let error = ActingdError::runtime(error);
@@ -552,6 +584,9 @@ fn monitor_policy(
         }
         if driver.is_finished() {
             break Err(ActingdError::process("policy_driver_stopped"));
+        }
+        if let Err(error) = print_emulator_autostart_reports(&host) {
+            break Err(error);
         }
         let request = match RuntimeSubscriptionRequest::new(
             EventQuery::default(),
