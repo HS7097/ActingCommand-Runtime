@@ -131,6 +131,8 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 
+// Interface anchor `ledger` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when older readers can no longer read this.
 pub const GLOBAL_EVENT_SCHEMA_VERSION: &str = "actingcommand.event.v2";
 
 /// The complete identity of an existing semantic run fact. This read-only value is neither

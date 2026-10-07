@@ -11,6 +11,8 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+// Interface anchor `install-selection` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when older peers can no longer read this.
 pub const INSTALL_SELECTION_SCHEMA: &str = "actingcommand.install-selection.v1";
 pub const INSTALL_SELECTION_PATH: &str = "install/active.json";
 pub const INSTALL_ROOT_ENV: &str = "ACTINGCOMMAND_INSTALL_ROOT";
@@ -478,6 +480,8 @@ impl InstallTransitionTicket {
     }
 }
 
+// Interface anchor `install-control` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when older peers can no longer use this.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InstallTransitionAction {

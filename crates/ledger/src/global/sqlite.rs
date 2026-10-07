@@ -39,6 +39,8 @@ mod release_source;
 mod views;
 pub use release_source::*;
 
+// Interface anchor `ledger` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when older readers can no longer read this.
 const FORMAL_FORMAT_VERSION: i64 = 1;
 const SCHEMA: &str = "actingcommand.sqlite-ledger.v1";
 const INTEGER_ENCODING: &str = "ordered-u64-v1";
