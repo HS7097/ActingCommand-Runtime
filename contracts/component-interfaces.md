@@ -107,7 +107,7 @@ writes the configuration, the console edits it, and actingd reads it.
 | `runtime-client` | negotiation | the console requests; actingd answers | 1 | requests `actingcommand.runtime.request.v3`, receipts `actingcommand.runtime.receipt.v1` | `crates/actingcommand-contract/src/runtime.rs` |
 | `package` | containment | a bundle writes packs; actingd runs them, and acsetup admits them before it places them | 1 | packages as the v0.11.x execution kernel admits them: `content-directory.v1` and legacy zip references; bundle index v1, v2 and v3 | `crates/actingcommand-contract/src/package.rs`, `BundleIndex` |
 | | | | 2 | revision 1 plus the OCR unsigned-integer format `times_prefixed` (#369/#371, Runtime v0.11.3), in an OCR field's `value.format` (`contracts/ocr-fields.md`) and in a resource reading's `value.format` (`contracts/resource-readings.md`); the contract crate before v0.11.3 has no such format, so a Runtime up to v0.11.2 refuses a pack that declares it at admission. A bundle whose packs use it declares `package` [2, 2] | `crates/actingcommand-contract/src/taskflow.rs`, `OcrUnsignedIntegerFormat` |
-| `tools-layout` | derived | never declared | 1, 2 | the Tools manifest's `tools_payload_layout`: `platform-tools-v1` is 1, `platform-tools-v2` is 2 | `.github/workflows/windows-remote-build.yml` |
+| `tools-layout` | derived | never declared | 1, 2, 3 | the Tools manifest's `tools_payload_layout`: `platform-tools-v1` is 1, `platform-tools-v2` is 2, `platform-tools-v3` (layout 2 plus `actingwatch.exe`, #374) is 3 | `.github/workflows/windows-remote-build.yml` |
 
 The console reads no package, so it is not a `package` reader. What a pack's run
 records is covered by `ledger` and `runtime-client`.
@@ -145,6 +145,9 @@ Each change since v0.11.2 was checked against these interfaces:
 - `install-selection`, `install-control` and `runtime-client` do not move. Their
   anchors changed by comments only; the status's pause fields keep their shape
   and are now restored after a restart (#642).
+- `tools-layout` 3 comes from #374, which adds `actingwatch.exe` to the Tools.
+  It is derived from the Tools manifest and never declared, so neither the
+  declaration nor the known table changes for it.
 
 ## Bump rule
 
@@ -245,7 +248,7 @@ I and the bundles B work together. The edges:
 | `ledger` | Rp.max in R*; Rp.max and R*.max in U* |
 | `runtime-client` | U* ∩ R* |
 | `package` | B.max in R* and in I |
-| new slot | a Runtime laid into a new slot needs `tools-layout` 2, `actingd-config` containing 2 and `install-selection` containing 1: a slot is the program core only (#359, #360), and an earlier Runtime looks for its tools inside its slot |
+| new slot | a Runtime laid into a new slot needs `tools-layout` 2 or 3, `actingd-config` containing 2 and `install-selection` containing 1: a slot is the program core only (#359, #360), and an earlier Runtime looks for its tools inside its slot |
 
 | Operation | R*, U* | Rp | Bundles | New slot |
 |---|---|---|---|---|
