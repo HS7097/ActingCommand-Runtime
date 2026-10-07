@@ -12,6 +12,11 @@ publish = false
 name = "actingctl"
 path = "src/main.rs"
 
+# Workflow #374: the GUI-subsystem launcher the watchdog's scheduled task runs; std only.
+[[bin]]
+name = "actingwatch"
+path = "src/watch_launcher.rs"
+
 [features]
 default = ["mcp"]
 # Workflow #338: `actingctl mcp-serve` / `mcp-config`. Without it the CLI is unchanged.

@@ -16,8 +16,8 @@ MuMu/Nemu, model, provider, or Runtime binaries.
   `actingctl.exe`, `actingd.config.example.json`, `INSTALL.md`, and `RELEASE-NOTES.md`;
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
   `actingledger.exe`,
-  `actingcommand-vision-provider-check.exe` and `actingcommand-device-test.exe`,
-  plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
+  `actingcommand-vision-provider-check.exe`, `actingcommand-device-test.exe` and
+  the watchdog launcher `actingwatch.exe` (Workflow #374), plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
   `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
   `source.properties`. The OCR engine is linked into `actingcommand-actingd.exe`;
   no vision provider DLL is built or staged (Workflow #360).
@@ -48,11 +48,13 @@ Explicit unknown, empty or non-string layouts fail; an incomplete distribution
 cannot fall back to the two-file layout. Both layouts retain the flat directory,
 exact case/path, complete declared/physical set, size/hash and source checks.
 
-Tools manifests declare `tools_payload_layout: "platform-tools-v2"`, which requires
-exactly the nine Tools payloads listed above (manifest paths use `/`) and allows no
-directory other than `platform-tools`. Historical `platform-tools-v1` manifests
-require the same files plus `ac_fastdeploy_ppocr.dll`, and historical Tools
-manifests without this field still require exactly the five flat files. An explicit unknown, empty or
+Tools manifests declare `tools_payload_layout: "platform-tools-v3"`, which requires
+exactly the ten Tools payloads listed above (manifest paths use `/`) and allows no
+directory other than `platform-tools`. Historical `platform-tools-v2` manifests
+require the same files without `actingwatch.exe`, historical `platform-tools-v1`
+manifests require the `platform-tools-v2` files plus `ac_fastdeploy_ppocr.dll`, and
+historical Tools manifests without this field still require exactly the five flat
+files. An explicit unknown, empty or
 non-string layout fails, a Runtime manifest may not declare a Tools layout, and a
 Tools manifest may not declare a Runtime layout.
 

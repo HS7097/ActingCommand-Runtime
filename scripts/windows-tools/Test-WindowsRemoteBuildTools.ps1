@@ -227,6 +227,7 @@ function New-ArtifactFixture {
             @{ name = 'actingledger.exe'; content = 'synthetic actingledger payload' },
             @{ name = 'actingcommand-vision-provider-check.exe'; content = 'synthetic provider-check payload' },
             @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' },
+            @{ name = 'actingwatch.exe'; content = 'synthetic watchdog launcher payload' },
             @{ name = 'platform-tools/adb.exe'; content = 'synthetic adb payload' },
             @{ name = 'platform-tools/AdbWinApi.dll'; content = 'synthetic AdbWinApi payload' },
             @{ name = 'platform-tools/AdbWinUsbApi.dll'; content = 'synthetic AdbWinUsbApi payload' },
@@ -261,7 +262,7 @@ function New-ArtifactFixture {
     if ($ArtifactKind -ceq 'Runtime') {
         $manifest.runtime_payload_layout = 'distribution-v1'
     } else {
-        $manifest.tools_payload_layout = 'platform-tools-v2'
+        $manifest.tools_payload_layout = 'platform-tools-v3'
     }
     Write-Utf8NoBom -Path (Join-Path $directory 'BUILD-MANIFEST.json') -Text (($manifest | ConvertTo-Json -Depth 8) + "`n")
     if ($CorruptPayload) {
@@ -388,7 +389,7 @@ try {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
     $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe'',\s*''actingd\.config\.example\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
-    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe''\s*\)'
+    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe'',\s*''actingwatch\.exe''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
     foreach ($retired in @(
@@ -398,7 +399,7 @@ try {
     )) {
         Assert-True -Condition (-not $workflowText.Contains($retired)) -Message "workflow still builds or stages the retired vision provider: '$retired'"
     }
-    Assert-True -Condition $workflowText.Contains("'platform-tools-v2'") -Message 'workflow Tools manifest does not declare platform-tools-v2'
+    Assert-True -Condition $workflowText.Contains("'platform-tools-v3'") -Message 'workflow Tools manifest does not declare platform-tools-v3'
     foreach ($field in @(
         'repository', 'commit_sha', 'tree_sha', 'cargo_lock_sha256', 'rust_toolchain',
         'target', 'configuration', 'workflow_run_id', 'workflow_run_attempt',
@@ -459,7 +460,7 @@ try {
     $toolsJson = & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsOutput -GhExecutable $fakeGh
     $tools = $toolsJson | ConvertFrom-Json -Depth 20
     Assert-True -Condition ($tools.status -ceq 'PASS') -Message 'Tools artifact verification did not report PASS'
-    Assert-True -Condition (@($tools.verified_files).Count -eq 9) -Message 'Tools artifact verifier did not freeze exactly nine platform-tools-v2 payloads'
+    Assert-True -Condition (@($tools.verified_files).Count -eq 10) -Message 'Tools artifact verifier did not freeze exactly ten platform-tools-v3 payloads'
     $adbFixture = Get-Item -LiteralPath (Join-Path $toolsOutput 'platform-tools/adb.exe') -ErrorAction Stop
     Assert-True -Condition ($adbFixture.Length -gt 0) -Message 'Tools artifact platform-tools payload is missing or empty'
     Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $toolsOutput 'ac_fastdeploy_ppocr.dll'))) -Message 'Tools artifact still carries the retired vision provider'
