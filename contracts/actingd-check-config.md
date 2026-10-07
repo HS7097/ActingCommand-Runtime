@@ -76,7 +76,8 @@ refused as everywhere else. Whether the transition applies is decided against th
 (see "Catalog Lineage" in `contracts/scheduling/README.md`): startup refuses
 `catalog_transition_expectation_mismatch` when the expected hash is not the active generation,
 `catalog_replace_version_not_newer` for a never-active generation of a catalog id at or below
-a version of that id that was active, and `catalog_activation_not_newer` without the field.
+a version of that id that was active, and `catalog_activation_not_newer` without the field
+(its detail names the `replace` transition, expecting the active hash, that would apply).
 When present, the manifest carries `policy.catalog_transition.kind` and
 `policy.catalog_transition.expected_active_catalog_hash` (`explicit`).
 

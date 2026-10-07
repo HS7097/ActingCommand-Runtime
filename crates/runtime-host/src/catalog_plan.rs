@@ -206,7 +206,20 @@ pub(crate) fn decide_catalog_transition(
         return Ok(CatalogTransitionPlanKind::Forward);
     }
     match expects_active {
-        None => Err(refused("catalog_activation_not_newer")),
+        // Review P6: the refusal names the explicit transition that would apply instead.
+        None => Err(refused("catalog_activation_not_newer").with_native_detail(format!(
+            "active catalog {} v{} ({}); configured catalog {} v{} ({}) is not a higher version \
+             of the active catalog id; to switch the catalog id or roll back to a generation \
+             that was active, set policy.catalog_transition {{\"kind\":\"replace\",\
+             \"expected_active_catalog_hash\":\"{}\"}}",
+            active.catalog_id(),
+            active.catalog_version(),
+            active.catalog_hash(),
+            configured.catalog_id(),
+            configured.catalog_version(),
+            configured.catalog_hash(),
+            active.catalog_hash(),
+        ))),
         Some(false) => Err(refused("catalog_transition_expectation_mismatch")),
         Some(true) if lineage.contains(configured.catalog_hash()) => {
             Ok(CatalogTransitionPlanKind::Rollback)
