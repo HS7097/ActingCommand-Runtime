@@ -4,7 +4,8 @@
 //! touching the state root. The ledger is read through the lock-free evidence reader (SQLite
 //! read-only, no owner lock, no referenced material), the State documents through a read-only
 //! view of the same database and the catalog generations from their immutable directories,
-//! so the preview runs beside a running daemon and creates, locks and writes nothing. The
+//! so the preview runs beside a running daemon: it takes no lock, never writes the database and
+//! stages nothing (SQLite may leave the `-wal` / `-shm` sidecars of a cleanly stopped root). The
 //! decision and the approval plan are the functions startup uses.
 
 use super::catalog_transaction::catalog_projection_events;
@@ -18,9 +19,10 @@ use actingcommand_ledger::GlobalLedgerEvidenceConfig;
 use std::time::Duration;
 
 const OPERATION: &str = "preview_policy_catalog";
-/// How long the preview may spend reading the ledger (a check is not allowed to stall a
-/// configuration commit indefinitely).
-const PREVIEW_LEDGER_DEADLINE: Duration = Duration::from_secs(120);
+/// How long the preview may spend reading the ledger. Review P4: well under the 90 s that
+/// `acsetup` gives `check-config`, so a slow read ends as the reader's own typed refusal
+/// (`ledger_read_budget_exceeded`) and not as the caller's kill.
+const PREVIEW_LEDGER_DEADLINE: Duration = Duration::from_secs(60);
 /// The materials whose absence makes a state root fresh, as at startup.
 const STATE_MATERIALS: [&str; 5] = [
     "runtime-state.sqlite",
@@ -47,6 +49,23 @@ pub struct CatalogPreview {
     configured: Option<CatalogGeneration>,
     plan: Option<CatalogTransitionPlanKind>,
     approvals: Option<CatalogApprovalPlan>,
+    phases: CatalogPreviewPhases,
+}
+
+/// Review P4: how long each phase of the preview took, in milliseconds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CatalogPreviewPhases {
+    /// Compiling the configured catalog in memory.
+    pub compile_ms: u64,
+    /// Reading and authenticating the ledger through the evidence reader.
+    pub ledger_ms: u64,
+    /// Opening the State documents, projecting the catalog lineage and loading the active
+    /// generation.
+    pub projection_ms: u64,
+    /// Projecting the approval decisions and deciding the plan and its approvals.
+    pub approvals_ms: u64,
+    /// The whole preview.
+    pub total_ms: u64,
 }
 
 impl CatalogPreview {
@@ -75,6 +94,15 @@ impl CatalogPreview {
     pub fn approvals(&self) -> Option<&CatalogApprovalPlan> {
         self.approvals.as_ref()
     }
+
+    /// How long each phase took.
+    pub fn phases(&self) -> CatalogPreviewPhases {
+        self.phases
+    }
+}
+
+fn elapsed_ms(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The ledger-derived inputs of the plan.
@@ -91,6 +119,8 @@ struct StateSnapshot {
 pub fn preview_policy_catalog_transition(
     preview: &CatalogPreviewRequest<'_>,
 ) -> RuntimeHostResult<CatalogPreview> {
+    let started = Instant::now();
+    let mut phases = CatalogPreviewPhases::default();
     let configured = preview
         .catalog
         .map(|sources| {
@@ -99,12 +129,13 @@ pub fn preview_policy_catalog_transition(
                 .map_err(|_| request("catalog_compile_failed", OPERATION))
         })
         .transpose()?;
+    phases.compile_ms = elapsed_ms(started);
     let state_root_present = preview
         .state_root
         .try_exists()
         .map_err(|_| fatal("state_root_inspect_failed", OPERATION))?;
     let snapshot = if state_root_present {
-        read_state(preview.state_root)?
+        read_state(preview.state_root, &mut phases)?
     } else {
         None
     };
@@ -117,6 +148,7 @@ pub fn preview_policy_catalog_transition(
         ),
         None => (None, &empty, None),
     };
+    let planning = Instant::now();
     let (plan, planned_approvals) = match &configured {
         None => (None, None),
         Some(configured) => {
@@ -126,18 +158,24 @@ pub fn preview_policy_catalog_transition(
             (Some(kind), Some(planned))
         }
     };
+    phases.approvals_ms = phases.approvals_ms.saturating_add(elapsed_ms(planning));
+    phases.total_ms = elapsed_ms(started);
     Ok(CatalogPreview {
         state_root_present,
         active: active.cloned(),
         configured,
         plan,
         approvals: planned_approvals,
+        phases,
     })
 }
 
 /// Reads the active generation, the lineage and the approval projection of an existing state
 /// root; `None` for a root without any state material.
-fn read_state(state_root: &Path) -> RuntimeHostResult<Option<StateSnapshot>> {
+fn read_state(
+    state_root: &Path,
+    phases: &mut CatalogPreviewPhases,
+) -> RuntimeHostResult<Option<StateSnapshot>> {
     let mut fresh = true;
     for material in STATE_MATERIALS {
         if state_root
@@ -151,6 +189,7 @@ fn read_state(state_root: &Path) -> RuntimeHostResult<Option<StateSnapshot>> {
     if fresh {
         return Ok(None);
     }
+    let reading = Instant::now();
     let ledger = GlobalLedger::open_evidence(
         GlobalLedgerEvidenceConfig::new(state_root)
             .sqlite_material_not_read()
@@ -161,6 +200,8 @@ fn read_state(state_root: &Path) -> RuntimeHostResult<Option<StateSnapshot>> {
     if !ledger.is_complete() {
         return Err(fatal("policy_state_ledger_incomplete", OPERATION));
     }
+    phases.ledger_ms = elapsed_ms(reading);
+    let projecting = Instant::now();
     let database = actingcommand_runtime_database::RuntimeDatabase::open_existing(state_root, true)
         .map_err(|error| {
             RuntimeHostError::fatal(
@@ -202,12 +243,15 @@ fn read_state(state_root: &Path) -> RuntimeHostResult<Option<StateSnapshot>> {
     if pointer != projected {
         return Err(fatal("catalog_active_source_mismatch", OPERATION));
     }
+    phases.projection_ms = elapsed_ms(projecting);
+    let approving = Instant::now();
     let mut approval_events = ledger.query(&EventQuery {
         event_type: Some(EventType::ApprovalDecision),
         ..EventQuery::default()
     });
     approval_events.sort_by_key(PersistedEvent::sequence);
     let approvals = ApprovalProjection::from_events(&approval_events, state)?;
+    phases.approvals_ms = elapsed_ms(approving);
     Ok(Some(StateSnapshot {
         active: pointer,
         lineage,

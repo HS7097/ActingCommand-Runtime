@@ -203,7 +203,21 @@ fn initialize_policy(
             policy.catalog_transition.as_ref(),
             &policy.catalog_approval_ids,
         )
-        .map_err(ActingdError::runtime)?;
+        .map_err(|refused| {
+            // Review P6: a refused plan (not a ledger or state failure) prints its remedy on
+            // the FATAL line, for example the explicit `catalog_transition` that a
+            // `catalog_activation_not_newer` needs.
+            let remedy = if refused.is_fatal() {
+                None
+            } else {
+                refused.native_detail().map(str::to_owned)
+            };
+            let error = ActingdError::runtime(refused);
+            match remedy {
+                Some(remedy) => error.with_detail(remedy),
+                None => error,
+            }
+        })?;
     let generation = plan.generation();
     let governance = RuntimeClient::connect(
         RuntimeClientConfig::new(&policy.state_root, EventActor::User, EventSource::Ui)

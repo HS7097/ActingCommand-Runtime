@@ -228,7 +228,9 @@ before it records anything, in this order:
 value, and the transition is recorded under the same compare-and-swap
 (`catalog_active_generation_changed` when another transition won). The field may stay in the
 configuration after it was applied: the next start finds the same hash and plans `unchanged`.
-Proposal promotion stays forward-only. Replay accepts exactly these records: a successful
+A `catalog_activation_not_newer` refusal names the active and the configured generation and the
+`replace` transition, expecting the active hash, that would switch or roll back instead; `actingd`
+prints it on its `FATAL` line. Proposal promotion stays forward-only. Replay accepts exactly these records: a successful
 `catalog.activated` keeps the id at a higher version or changes the id, a successful
 `catalog.rolled_back` keeps the id at a lower version or returns to a generation of another id
 that was active before; every other sequence stays `catalog_generation_source_conflict`. Every
