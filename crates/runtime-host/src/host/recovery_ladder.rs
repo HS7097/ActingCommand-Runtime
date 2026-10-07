@@ -2,13 +2,15 @@
 
 //! The stuck-recovery ladder (Runtime slice #316-B4).
 //!
-//! A direct or scheduled contained task run on a physical instance that commits `task.failed`
-//! with `contained_task_page_unknown`, a `contained_task_recovery_*` or a
+//! A scheduled contained task run on a physical instance that commits `task.failed` with
+//! `contained_task_page_unknown`, a `contained_task_recovery_*` or a
 //! `contained_task_home_recovery_*` code starts a ladder for its instance, unless the
-//! instance's `stuck_recovery` is off. The ladder never runs on the
-//! run's own thread: a direct run's trigger is parked until its connection wrote the receipt,
-//! a scheduled run's trigger is admitted when the run returned, and the accepted ladder waits
-//! in the startup package queue for the host's scheduling thread.
+//! instance's `stuck_recovery` is off. A direct task run (CLI or console task-run, MCP
+//! `ac_run_pack`) never starts one (Workflow #369-3, coordinator rulings Q1 and P1: the ladder
+//! exists for the routine). A failed daemon-start or connection preparation (emulator start or
+//! restart, resume, self-check) still starts one. The ladder never runs on the run's own
+//! thread: a scheduled run's trigger is admitted when the run returned, and the accepted
+//! ladder waits in the startup package queue for the host's scheduling thread.
 //!
 //! The rungs, in this fixed order, are existing work under the instance lease:
 //! `return_home` runs the failed run's bound recovery package as a standalone contained task
@@ -52,16 +54,7 @@ const RECOVERY_READINESS_BACKOFF: [Duration; 3] = [
 /// Workflow #369-1 (review L1): how often a readiness wait checks shutdown and install drain.
 const RECOVERY_READINESS_POLL: Duration = Duration::from_millis(500);
 
-/// Where a staged trigger goes.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum RecoveryLadderAdmission {
-    /// Parked until the connection wrote the receipt of the trigger request.
-    AfterReceipt,
-    /// Admitted right away.
-    Now,
-}
-
-/// One triggered ladder, parked or queued for the scheduling thread.
+/// One triggered ladder, queued for the scheduling thread.
 #[derive(Clone)]
 pub(super) struct PendingRecoveryLadder {
     instance_id: InstanceId,
@@ -227,6 +220,10 @@ impl HostShared {
             .entry(instance_id)
             .or_default()
             .preparation = Some(event);
+        // Workflow #369-3 (coordinator ruling P1): the direct-run exemption covers task runs
+        // only, which make no preparation of their own. A failed daemon-start or connection
+        // preparation (emulator start or restart, resume, self-check) still starts a ladder, as
+        // before: nothing else retries those. Only the ladder's own preparation never does.
         if !recoverable
             || stage == RecoveryTriggerStage::RecoveryPreparation
             || self.fatal.is_shutdown_requested()
@@ -309,15 +306,14 @@ impl HostShared {
         Ok(capacity)
     }
 
-    /// Takes the run's committed `task.failed` terminal and, when it triggers a ladder,
-    /// parks or admits one for the instance.
+    /// Takes a scheduled run's committed `task.failed` terminal and, when it triggers a ladder,
+    /// admits one for the instance.
     pub(super) fn stage_recovery_ladder(
         &self,
         control: &ContainedRunControl,
         request: &ValidatedRuntimeRequest<'_>,
         resolved: &RegisteredInstance,
         task_request: &ContainedTaskRequest,
-        admission: RecoveryLadderAdmission,
     ) -> RuntimeHostResult<()> {
         let Some(terminal) = control.take_failed_terminal()? else {
             return Ok(());
@@ -375,28 +371,7 @@ impl HostShared {
             causation_id,
             cooldown_ms: u64::from(settings.cooldown_secs) * 1_000,
         };
-        match admission {
-            RecoveryLadderAdmission::Now => self.admit_recovery_ladder(pending),
-            RecoveryLadderAdmission::AfterReceipt => {
-                lock(&self.parked_recovery_ladders, "park_recovery_ladder")?
-                    .insert(request.request_id(), pending);
-                Ok(())
-            }
-        }
-    }
-
-    /// Admits the ladder a request parked, once its receipt was written (or the write
-    /// failed). Nothing parked is a no-op.
-    pub(super) fn release_parked_recovery_ladder(
-        &self,
-        request_id: RequestId,
-    ) -> RuntimeHostResult<()> {
-        let parked =
-            lock(&self.parked_recovery_ladders, "release_recovery_ladder")?.remove(&request_id);
-        match parked {
-            Some(pending) => self.admit_recovery_ladder(pending),
-            None => Ok(()),
-        }
+        self.admit_recovery_ladder(pending)
     }
 
     /// Queues the ladder, or records why it is suppressed: one already queued or running

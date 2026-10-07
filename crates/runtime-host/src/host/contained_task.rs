@@ -4668,15 +4668,10 @@ impl HostShared {
             }) => self.await_client_reset(instance_alias, connection_id),
             _ => Ok(()),
         };
-        // Slice #316-B4: parked until the connection has written this request's receipt.
-        let staged = self.stage_recovery_ladder(
-            &active_run.control,
-            request,
-            &resolved,
-            task_request,
-            RecoveryLadderAdmission::AfterReceipt,
-        );
-        with_recovery_ladder_staging(executed, awaited.and(staged))
+        // Workflow #369-3 (coordinator ruling Q1): a direct run (CLI or console task-run, MCP
+        // `ac_run_pack`) never starts the stuck-recovery ladder; whoever ran it has the receipt
+        // and decides. Only scheduled runs stage one.
+        with_recovery_ladder_staging(executed, awaited)
     }
 
     fn package_material_deadline(
@@ -5247,13 +5242,8 @@ impl HostShared {
         );
         // Slice #316-B4: a scheduled run has no client receipt; its failure returns to the
         // policy driver on this thread while the ladder waits on the scheduling thread.
-        let staged = self.stage_recovery_ladder(
-            &active_run.control,
-            &validated,
-            &resolved,
-            task_request,
-            RecoveryLadderAdmission::Now,
-        );
+        let staged =
+            self.stage_recovery_ladder(&active_run.control, &validated, &resolved, task_request);
         let success = with_recovery_ladder_staging(executed, staged)?;
         Ok((task_request_message, success))
     }

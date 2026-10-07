@@ -236,7 +236,6 @@ impl HostShared {
             .is_empty()
             && lock(&self.queued_requests, "check_install_queue")?.is_empty()
             && lock(&self.pending_host_work, "check_install_host_work")?.is_empty()
-            && lock(&self.parked_recovery_ladders, "check_install_parked_work")?.is_empty()
             && !lock(&self.recovery_ladders, "check_install_recovery_work")?
                 .values()
                 .any(recovery_ladder::RecoveryLadderWindow::is_running)
