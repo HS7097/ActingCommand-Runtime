@@ -5597,10 +5597,6 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_field("RuntimeEndpointPolicy::host", DeclaredVisibility::Super),
             glue_field("RuntimeEndpointPolicy::port", DeclaredVisibility::Super),
             glue_field("RuntimeEndpointPolicy::channel", DeclaredVisibility::Super),
-            glue_field(
-                "RuntimeEndpointPolicy::auth_material",
-                DeclaredVisibility::Super,
-            ),
             glue_owner(
                 "RuntimeEndpointChannel",
                 SymbolKind::Enum,
@@ -5610,12 +5606,9 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_fn("runtime_endpoint_check"),
             glue_fn("runtime_endpoint_policy"),
             glue_fn("runtime_endpoint_policy_json"),
-            glue_private_fn("trusted_remote_auth_material"),
-            glue_fn("env_var_non_empty"),
             glue_fn("runtime_tcp_available"),
             glue_private_fn("parse_endpoint_host_port"),
             glue_private_fn("parse_endpoint_parts"),
-            glue_private_fn("is_loopback_host"),
         ],
         forbidden_in: MAIN_ONLY,
         allowed_callers: &[
@@ -5628,8 +5621,8 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
         invariants: &[],
         required_tests: &[],
         tolerated_elsewhere: &[],
-        reason: "the Runtime endpoint policy (channel, trusted-remote auth material, TCP probe) \
-                 is owned by runtime_endpoint.rs; main.rs only declares the private module",
+        reason: "the Runtime endpoint policy (local-only channel, TCP probe) is owned by \
+                 runtime_endpoint.rs; main.rs only declares the private module",
     },
     // actinglab_cli_result_glue_stays_out_of_main
     GlueDeclaration {
