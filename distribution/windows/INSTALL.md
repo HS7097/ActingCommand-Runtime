@@ -85,12 +85,22 @@ file's pinned size and SHA-256 (`scripts/windows-tools/windows-tool-sources.v1.j
 `<install root>\tools\platform-tools\adb.exe` is the adb that an instance without
 `adb_path` (key omitted) uses.
 
+Both manifests also carry `interfaces`, copied unchanged from
+`distribution/windows/component-interfaces.json`: the revisions of the
+configuration, the installation selection, the installation control, the
+ledger, the client protocol and the package format that this build reads and
+writes (`contracts/component-interfaces.md`). acsetup combines a Runtime, a UI
+and resource bundles by these declarations, not by release pairs, and refuses a
+combination whose interfaces do not fit before it changes anything.
+
 ## Prepare private configuration
 
 ### A/B installation inputs and Host control
 
-An A/B installation selects `<root>/A/{runtime,tools,ui}` or
-`<root>/B/{runtime,tools,ui}` through `<root>/install/active.json`.
+An A/B installation selects the program core `<root>/A/{runtime,ui}` or
+`<root>/B/{runtime,ui}` through `<root>/install/active.json`. `tools\`,
+`vision\`, `packages\` and `state\` stay at the install root and are shared by
+both slots (Workflow #359, #360).
 `actingcommand-contract::InstallSelection` defines this input: schema
 `actingcommand.install-selection.v1`, slot, positive generation, and SHA-256
 references for the slot's `MEMBERS.json` and private generation config/provider
@@ -102,9 +112,10 @@ The stable launcher supplies `ACTINGCOMMAND_INSTALL_ROOT` and
 program. Each process verifies and retains those inputs. Direct slot entry also
 checks that the selected slot matches its executable. The fixed configuration
 argument `<root>/actingd.config.json` resolves to the pinned private generation.
-MCP subprocesses inherit that same selection and use that slot's tools; restart
-the MCP process to select another generation. ADB subprocesses use the installation
-root as their working directory and retain the existing slot tool hash checks.
+MCP subprocesses inherit that same selection and use `<root>\tools`, the tools of
+the install root that their slot lock names; restart the MCP process to select
+another generation. ADB subprocesses use the installation root as their working
+directory, and the adb hash check reads the root's `tools\platform-tools`.
 
 acsetup creates and permanently retains the empty `install/slot-A.lock` and
 `slot-B.lock` locators. `InstallSlotLock::try_shared(root, slot)` opens an existing
@@ -271,12 +282,15 @@ An install root is the layout acsetup installs: `<install root>\runtime\` holds
 this Runtime artifact with its `BUILD-MANIFEST.json`, and `<install root>\tools\`
 the Tools artifact. The daemon recognises it from its own executable path alone
 (two levels above `actingcommand-actingd.exe`, `runtime\BUILD-MANIFEST.json` must
-be a file). So any directory named `runtime` that holds this Runtime artifact
-makes its parent an install root, whoever laid it out: an acsetup install,
-acsetup's upgrade staging directory (the check acsetup runs with the staged
-Runtime then uses the staged adb), or a hand layout such as `<dir>\runtime\` +
-`<dir>\tools\`. A hand layout that should keep using the MuMu adb must give the
-Runtime directory another name or declare `adb_path` on every instance.
+be a file). Under the A/B layout a program in `<root>\<A|B>\runtime` holds its
+slot lock and takes `tools\` from the install root `<root>` that the lock names,
+never from its slot (Workflow #359); acsetup runs `check-config` with the actingd
+of the slot it prepares, so that check reads the root's adb. So any directory
+named `runtime` that holds this Runtime artifact makes its parent an install
+root, whoever laid it out: an acsetup install or a hand layout such as
+`<dir>\runtime\` + `<dir>\tools\`. A hand layout that should keep using the MuMu
+adb must give the Runtime directory another name or declare `adb_path` on every
+instance.
 
 When the daemon runs from an install root, an instance without `adb_path`
 (explicit or discovery-bound) uses `<install root>\tools\platform-tools\adb.exe`.
@@ -315,16 +329,18 @@ which adb the Runtime uses.
 
 Sharing the adb server (port 5037) with other tools:
 
-- Do not point ALAS, MAA or other tools at the install root's adb. An upgrade
-  moves `tools\` into `previous\`, so that path does not exist until the new
-  Tools are laid out and their adb calls fail meanwhile; an adb server they
-  started keeps running from `previous\`, and until it stops every later upgrade
-  warns that the older previous version could not be removed. To use 37.0.1
-  there as well, keep a separate byte-identical copy elsewhere.
-- Do not change into `tools\`, `tools\platform-tools\` or `runtime\` and start
-  adb or `actingcommand-actingd.exe` by hand there. The adb server started that
-  way keeps that directory as its working directory, and an upgrade then stops
-  and restores everything because the directory cannot be moved.
+- Do not point ALAS, MAA or other tools at the install root's adb. Under the
+  A/B layout an upgrade replaces a root `tools\` file only when its content
+  changed, and keeps every file it replaces under
+  `install\root-tools-<generation>\` (`install\initial-backup-<generation>\tools\`
+  at the first migration from the old layout). An adb server another tool
+  started from the root's adb still runs from that file, and the upgrade then
+  stops before the Runtime is touched. To use 37.0.1 there as well, keep a
+  separate byte-identical copy elsewhere.
+- Do not change into a slot directory (`A\`, `B\` or anything below them) and
+  start adb or `actingcommand-actingd.exe` by hand there. The adb server started
+  that way keeps that directory as its working directory, and a later upgrade
+  that lays out that slot stops because the directory cannot be moved.
 - An adb client reuses a running server whose protocol version equals its own
   (the third field of the first line of `adb version`, `41` for 37.0.1) and
   otherwise kills and restarts it. This has not been measured with several adb

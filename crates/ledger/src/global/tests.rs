@@ -2670,3 +2670,5 @@ pub(super) mod sealed_global_ledger;
 
 #[path = "tests/sqlite_contract.rs"]
 pub(super) mod sqlite_contract;
+#[path = "tests/sqlite_prefix.rs"]
+mod sqlite_prefix;

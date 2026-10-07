@@ -7,7 +7,9 @@ use actingcommand_contract::{
     SavedArtifactOcrSource,
 };
 use actingcommand_execution_kernel::{ExternallyVerifiedBundle, evaluate_saved_artifact_ocr};
-use actingcommand_ledger::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig};
+use actingcommand_ledger::{
+    GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerReadExtent,
+};
 use std::time::{Duration, Instant};
 
 impl HostShared {
@@ -116,8 +118,16 @@ impl HostShared {
         check_deadline(deadline)?;
         let mut verification_error = None;
         let mut verified_bytes = 0_u64;
+        // Workflow #363: an SQLite source is read only through the declared prefix, bounded
+        // by that prefix and this request's deadline, and no artifact is read at open; the
+        // selected frame is the only material read (below). A segment source is read whole.
+        let ledger_started = Instant::now();
         let snapshot = GlobalLedger::open_evidence(
-            GlobalLedgerEvidenceConfig::new(&root).with_budget(64 * 1024 * 1024, 100_000, deadline),
+            GlobalLedgerEvidenceConfig::new(&root)
+                .with_deadline(deadline)
+                .sqlite_material_not_read()
+                .sqlite_prefix(input.source.through_sequence),
+            // Called only for a segment source: the SQLite record path reads no material.
             |reference| {
                 let result = (|| {
                     check_deadline(deadline)?;
@@ -147,18 +157,25 @@ impl HostShared {
                 Some(detail) => format!("{error}: {detail}"),
                 None => error.to_string(),
             };
-            source_error(error.code(), detail)
+            // A declared prefix beyond the authenticated source head is an invalid prefix.
+            let code = match error.code() {
+                "ledger_prefix_beyond_head" => "saved_source_incomplete",
+                code => code,
+            };
+            source_error(code, detail)
         })?;
+        let ledger_open = ledger_started.elapsed();
         if let Some(error) = verification_error {
             return Err(error);
         }
+        let extent = snapshot.read_extent();
         if snapshot.corrupt_tail().is_some()
             || !snapshot.read_complete()
             || snapshot
                 .writer_metadata()
                 .readable()
                 .is_none_or(|writer| writer.active())
-            || input.source.through_sequence > snapshot.latest_sequence()
+            || input.source.through_sequence > extent.head_sequence
         {
             return Err(source_error(
                 "saved_source_incomplete",
@@ -174,9 +191,32 @@ impl HostShared {
         };
         let dimensions = (frame.frame_width(), frame.frame_height());
         let source_sensitivity = captured.sensitivity();
+        // Workflow #363 (review F5): take out what the report needs, then release the prefix
+        // evidence before the PNG read, so its memory does not stay through package load and
+        // OCR.
+        let writer_owner_id = snapshot
+            .writer_metadata()
+            .readable()
+            .map(|writer| writer.owner_id().to_owned());
+        let through_event_id =
+            *snapshot.events()[usize::try_from(input.source.through_sequence - 1)
+                .map_err(|error| source_error("saved_source_position_invalid", error))?]
+            .event_id();
+        let storage_backend = snapshot.backend();
+        let read_complete = snapshot.read_complete();
+        let storage_snapshot = snapshot
+            .segment()
+            .map(|source| source.storage_snapshot().clone());
+        let material_checked = snapshot.material_checked();
+        drop(snapshot);
         check_deadline(deadline)?;
-        let image = read_projected_verified(&root, &input.source.artifact)
-            .map_err(|error| source_error(error.code(), error))?;
+        // The only material read: length and SHA-256 are verified as it is read.
+        let png_started = Instant::now();
+        let image = read_projected_verified(&root, &input.source.artifact).map_err(|error| {
+            unavailable_source_artifact(&root, &input.source, extent, &error, deadline)
+        })?;
+        let png_read = png_started.elapsed();
+        let package_started = Instant::now();
         let bundle = if input.expected_sha256.is_directory_source() {
             let provider = self.execution()?.vision_provider().ok_or_else(|| {
                 source_error(
@@ -230,9 +270,12 @@ impl HostShared {
             )
             .map_err(|error| source_error("saved_ocr_package_invalid", error))?
         };
+        let package_load = package_started.elapsed();
         check_deadline(deadline)?;
+        let ocr_started = Instant::now();
         let evaluated =
             evaluate_saved_artifact_ocr(&bundle, &image, dimensions, &input.target_id, deadline);
+        let ocr = ocr_started.elapsed();
         let reports = match &evaluated {
             Ok(value) => &value.ppocr_diagnostics,
             Err(error) => error.ppocr_diagnostics(),
@@ -276,21 +319,47 @@ impl HostShared {
         };
         check_deadline(deadline)?;
         let links = request.event_links(None, None, None);
+        // A segment source verified all referenced material at open.
+        let material_scope = if material_checked {
+            "all_referenced"
+        } else {
+            "requested_frame"
+        };
         let report = serde_json::json!({
             "schema_version": "actingcommand.runtime.saved-artifact-ocr.v1",
             "request_id": request.request_id(), "correlation_id": request.correlation_id(),
             "source": input.source, "source_sensitivity": source_sensitivity,
             "source_ledger": {
                 "canonical_root": source_ledger,
-                "writer_owner_id": snapshot.writer_metadata().readable().map(|writer| writer.owner_id()),
-                "through_event_id": snapshot.events()[usize::try_from(input.source.through_sequence - 1)
-                    .map_err(|error| source_error("saved_source_position_invalid", error))?].event_id(),
-                "storage_backend": snapshot.backend(),
-                "read_complete": snapshot.read_complete(),
-                "storage_snapshot": snapshot.segment().map(|source| source.storage_snapshot()),
+                "writer_owner_id": writer_owner_id,
+                "through_event_id": through_event_id,
+                "storage_backend": storage_backend,
+                // Physical completeness of segment files; an SQLite source reports true.
+                "read_complete": read_complete,
+                "storage_snapshot": storage_snapshot,
+                // Workflow #363: what this request read from the source.
+                "source_read": {
+                    "declared_through_sequence": input.source.through_sequence,
+                    "read_through_sequence": extent.through_sequence,
+                    "head_sequence": extent.head_sequence,
+                    "events_read": extent.event_count,
+                    "ledger_bytes_read": extent.ledger_bytes,
+                    "material_scope": material_scope,
+                },
             },
             "package_sha256": input.expected_sha256, "target_id": input.target_id,
             "observation": observation,
+            // Workflow #363: wall time per phase, recorded for the deadline horizon.
+            "phase_ms": {
+                "ledger_open": milliseconds(ledger_open),
+                "ledger_sql_read": extent.phases.map(|phases| milliseconds(phases.sql_read)),
+                "ledger_verify": extent.phases.map(|phases| milliseconds(phases.verify)),
+                "ledger_retention_restore":
+                    extent.phases.map(|phases| milliseconds(phases.retention_restore)),
+                "png_read": milliseconds(png_read),
+                "package_load": milliseconds(package_load),
+                "ocr": milliseconds(ocr),
+            },
         });
         let report_bytes = serde_json::to_vec(&report)
             .map_err(|error| source_error("saved_ocr_serialization_failed", error))?;
@@ -393,6 +462,10 @@ fn prove_source<'a>(
             })?;
         match artifact.availability() {
             actingcommand_ledger::ArtifactAvailability::Available(_) => {}
+            // Workflow #363: material was deliberately not read at open; the selected frame
+            // alone is verified by length and SHA-256 when it is read.
+            actingcommand_ledger::ArtifactAvailability::Unrecorded
+                if !snapshot.material_checked() => {}
             actingcommand_ledger::ArtifactAvailability::Evicted(_) => {
                 return Err(source_error(
                     "saved_source_artifact_evicted",
@@ -437,6 +510,99 @@ fn prove_source<'a>(
         ));
     }
     Ok(captured)
+}
+
+/// Workflow #363: a prefix read does not see an eviction recorded after the prefix. When the
+/// selected PNG cannot be read and the source head lies beyond the prefix, the source is
+/// reopened once through its authenticated head, still reading no material, so that an
+/// authorized eviction is reported as such and not as file loss.
+fn unavailable_source_artifact(
+    root: &Path,
+    source: &SavedArtifactOcrSource,
+    extent: GlobalLedgerReadExtent,
+    error: &actingcommand_artifact_store::ArtifactStoreError,
+    deadline: Instant,
+) -> RuntimeHostError {
+    let identity = serde_json::to_string(&source.artifact.artifact_id).unwrap_or_default();
+    let read = format!(
+        "source artifact {identity} ({}): {error}",
+        source.artifact.sha256
+    );
+    let head = extent.head_sequence;
+    if extent.through_sequence >= head {
+        return source_error(
+            error.code(),
+            format!("{read}; no eviction recorded through head {head}"),
+        );
+    }
+    let current = match GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(root)
+            .with_deadline(deadline)
+            .sqlite_material_not_read()
+            .sqlite_prefix(head),
+        |_| None,
+    ) {
+        Ok(current) => current,
+        Err(reopen) => {
+            return source_error(
+                error.code(),
+                format!(
+                    "{read}; eviction check through head {head} failed: {reopen}: {}",
+                    reopen.detail().unwrap_or("no detail")
+                ),
+            );
+        }
+    };
+    let availability = source
+        .created
+        .sequence
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| current.events().get(index))
+        .filter(|event| *event.event_id() == source.created.event_id)
+        .and_then(|event| {
+            event
+                .artifacts()
+                .iter()
+                .find(|artifact| artifact.project(true) == source.artifact)
+        })
+        .map(|artifact| artifact.availability());
+    let recorded = |position: u64| {
+        format!(
+            "eviction recorded at {position} after through_sequence {}; {read}",
+            source.through_sequence
+        )
+    };
+    match availability {
+        Some(actingcommand_ledger::ArtifactAvailability::Evicted(proof)) => source_error(
+            "saved_source_artifact_evicted",
+            recorded(
+                proof
+                    .outcome
+                    .map_or(proof.intent.sequence, |outcome| outcome.sequence),
+            ),
+        ),
+        Some(actingcommand_ledger::ArtifactAvailability::PendingEviction(proof)) => source_error(
+            "saved_source_artifact_pending_eviction",
+            recorded(proof.intent.sequence),
+        ),
+        Some(actingcommand_ledger::ArtifactAvailability::FailedEviction(proof)) => source_error(
+            "saved_source_artifact_eviction_failed",
+            recorded(
+                proof
+                    .outcome
+                    .map_or(proof.intent.sequence, |outcome| outcome.sequence),
+            ),
+        ),
+        _ => source_error(
+            error.code(),
+            format!("{read}; no eviction recorded through head {head}"),
+        ),
+    }
+}
+
+fn milliseconds(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
 }
 
 fn same_root(left: &Path, right: &Path) -> bool {

@@ -230,6 +230,55 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_integer_times_prefixed_accepts_one_optional_multiplier_prefix() {
+        use serde_json::json;
+
+        let source = json!({
+            "type":"unsigned_integer","min":0,"max":9999,"format":"times_prefixed"
+        });
+        let declared: OcrFieldType = serde_json::from_value(source.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&declared).unwrap(), source);
+        let OcrFieldType::UnsignedInteger { min, max, format } = declared else {
+            panic!("unsigned integer declaration expected");
+        };
+        assert_eq!(format, OcrUnsignedIntegerFormat::TimesPrefixed);
+        for (text, expected) in [("x2", 2), ("\u{00D7}6", 6), ("X10", 10), ("1", 1)] {
+            assert_eq!(format.parse(text, min, max), Ok(expected), "{text}");
+        }
+        for text in ["<1", "x", "x 2", "xx2", "2x", "x-2", "\u{00D7}"] {
+            assert_eq!(
+                format.parse(text, min, max),
+                Err(OcrFieldReason::InvalidInteger),
+                "{text}"
+            );
+        }
+        assert_eq!(format.parse("", min, max), Err(OcrFieldReason::Empty));
+        assert_eq!(
+            format.parse("x10000", min, max),
+            Err(OcrFieldReason::OutOfRange)
+        );
+        for other in [
+            OcrUnsignedIntegerFormat::AsciiDecimal,
+            OcrUnsignedIntegerFormat::CommaGrouped,
+            OcrUnsignedIntegerFormat::CurrentCapacity,
+        ] {
+            assert_eq!(
+                other.parse("x2", min, max),
+                Err(OcrFieldReason::InvalidInteger)
+            );
+        }
+        let reading: ResourceReadingType = serde_json::from_value(source).unwrap();
+        assert_eq!(
+            reading,
+            ResourceReadingType::UnsignedInteger {
+                min: 0,
+                max: 9999,
+                format: OcrUnsignedIntegerFormat::TimesPrefixed,
+            }
+        );
+    }
+
+    #[test]
     fn declared_suffix_extraction_preserves_exact_dictionary_input() {
         use serde_json::json;
         let rule_json = json!({"mode":"strip_declared_suffix_v1","suffix":[
