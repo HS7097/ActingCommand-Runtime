@@ -563,7 +563,16 @@ hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's own details 
 failure without a detail is recorded by the terminal alone, as before. The gate
 carries a prerequisite or return-home package's own failure out as its code, with its detail
 only for a recognition failure or an unknown page ("Prerequisite packages" above). A page-graph
-package's failure is recorded as before.
+package's failure is recorded as before, except a failed step confirmation (Workflow #371-2):
+`page_confirmation_failed`, and an operation that decides Fail with no recovery left, which is
+`contained_task_error_page_reached` when the page seen after it is a declared error page and
+`contained_task_step_unconfirmed` otherwise (both were `contained_task_requires_scheduler`). These
+three get the same `runtime.failed` record, with the detail `operation=<id> attempts=<n>
+after_page=<page|<unrecognized>> hit_error_page=<bool>`; for the two new codes it is followed,
+on a confirmation timeout, by ` confirm_elapsed_ms=<e> confirm_limit_ms=<l>`.
+`contained_task_requires_scheduler` remains for a run the state machine pauses or hands to a
+successor and for the stability step limit. None of these codes starts the stuck-recovery
+ladder.
 
 ## Failure codes
 
