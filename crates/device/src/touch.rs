@@ -1433,27 +1433,19 @@ fn touch_bounds_for_backend(
 }
 
 pub(crate) fn touch_bounds_from_screen_size(screen_size: &str) -> DeviceResult<TouchBounds> {
-    let (_, dimensions) = screen_size.rsplit_once(':').unwrap_or(("", screen_size));
-    let (width, height) = dimensions.trim().split_once('x').ok_or_else(|| {
+    let size = crate::adb::parse_wm_size(screen_size)?;
+    let max_x = i32::try_from(size.width).map_err(|_| {
         DeviceError::fatal(format!(
-            "failed to parse touch screen bounds from adb wm size output: {screen_size}"
+            "touch screen width {} does not fit i32 in adb wm size output: {screen_size}",
+            size.width
         ))
     })?;
-    let max_x = width.trim().parse::<i32>().map_err(|err| {
+    let max_y = i32::try_from(size.height).map_err(|_| {
         DeviceError::fatal(format!(
-            "invalid touch screen width '{width}' in adb wm size output: {err}"
+            "touch screen height {} does not fit i32 in adb wm size output: {screen_size}",
+            size.height
         ))
     })?;
-    let max_y = height.trim().parse::<i32>().map_err(|err| {
-        DeviceError::fatal(format!(
-            "invalid touch screen height '{height}' in adb wm size output: {err}"
-        ))
-    })?;
-    if max_x <= 0 || max_y <= 0 {
-        return Err(DeviceError::fatal(format!(
-            "touch screen bounds must be positive, got {max_x}x{max_y}"
-        )));
-    }
     Ok(TouchBounds { max_x, max_y })
 }
 

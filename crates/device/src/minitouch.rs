@@ -902,31 +902,19 @@ fn verify_minitouch_device(
 }
 
 fn screen_bounds_from_device(device: &DeviceInfo) -> DeviceResult<ScreenBounds> {
-    let (_, dimensions) = device
-        .screen_size
-        .rsplit_once(':')
-        .unwrap_or(("", &device.screen_size));
-    let (width, height) = dimensions.trim().split_once('x').ok_or_else(|| {
+    let size = crate::adb::parse_wm_size(&device.screen_size)?;
+    let width = i32::try_from(size.width).map_err(|_| {
         DeviceError::fatal(format!(
-            "failed to parse minitouch screen bounds from adb wm size output: {}",
-            device.screen_size
+            "minitouch screen width {} does not fit i32 in adb wm size output: {}",
+            size.width, device.screen_size
         ))
     })?;
-    let width = width.trim().parse::<i32>().map_err(|err| {
+    let height = i32::try_from(size.height).map_err(|_| {
         DeviceError::fatal(format!(
-            "invalid minitouch screen width '{width}' in adb wm size output: {err}"
+            "minitouch screen height {} does not fit i32 in adb wm size output: {}",
+            size.height, device.screen_size
         ))
     })?;
-    let height = height.trim().parse::<i32>().map_err(|err| {
-        DeviceError::fatal(format!(
-            "invalid minitouch screen height '{height}' in adb wm size output: {err}"
-        ))
-    })?;
-    if width <= 0 || height <= 0 {
-        return Err(DeviceError::fatal(format!(
-            "minitouch screen bounds must be positive, got {width}x{height}"
-        )));
-    }
     Ok(ScreenBounds { width, height })
 }
 
