@@ -62,6 +62,11 @@ const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
 const MAX_PREREQUISITE_PACKAGE_ID_BYTES: usize = 256;
 const PREREQUISITE_ENTRY_UNMATCHED: &str = "contained_task_prerequisite_entry_unmatched";
+/// Workflow #371-2: a page-graph step whose operation decided Fail after its postcondition was
+/// not confirmed, without a declared error page.
+const STEP_UNCONFIRMED: &str = "contained_task_step_unconfirmed";
+/// Workflow #371-2: a page-graph step whose operation decided Fail on a declared error page.
+const ERROR_PAGE_REACHED: &str = "contained_task_error_page_reached";
 const RETURN_HOME_ENTRY_UNMATCHED: &str = "contained_task_return_home_entry_unmatched";
 const MAX_STABILITY_PIXEL_BYTES: usize = 4;
 const MAX_POST_ADMISSION_OCR_FRAMES: u32 = 256;
@@ -2215,6 +2220,11 @@ impl PreparedContainedTask {
         }
     }
 
+    /// The host's home entry check. Workflow #371-3: without target consensus it looks at
+    /// frames of the required page, one every capture interval, until the page matches or
+    /// `min(step_timeout, task_timeout)` is spent (each frame at the `CapturePage` boundary, each
+    /// sleep at `PageRecognitionWait`); a runtime without the production checkpoint keeps the
+    /// single frame. A pack with target consensus keeps its single consensus verdict.
     pub fn recognize_required_home<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2222,19 +2232,19 @@ impl PreparedContainedTask {
         let page = self
             .required_home_entry_page()
             .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_required"))?;
+        let started = Instant::now();
+        let budget = Duration::from_millis(
+            self.control
+                .step_timeout()
+                .milliseconds
+                .min(self.control.task_timeout().milliseconds),
+        );
+        let timing = ContainedTaskTimingContext::new(
+            started,
+            started + budget,
+            actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
+        );
         if !self.evaluator.pack().target_consensus.is_empty() {
-            let started = Instant::now();
-            let timing = ContainedTaskTimingContext::new(
-                started,
-                started
-                    + Duration::from_millis(
-                        self.control
-                            .step_timeout()
-                            .milliseconds
-                            .min(self.control.task_timeout().milliseconds),
-                    ),
-                actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
-            );
             return self
                 .capture_frame(
                     runtime,
@@ -2246,60 +2256,44 @@ impl PreparedContainedTask {
                 )
                 .map(|observation| observation.is_some_and(|value| value.page_label == page));
         }
-        let frame = runtime
-            .capture()
-            .map_err(ContainedTaskRunError::operation::<R>)?;
-        self.control.resolution.validate_frame(&frame)?;
-        runtime
-            .record(ContainedTaskTrace::CaptureCompleted {
-                width: frame.width,
-                height: frame.height,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        let candidate_pages = vec![page.to_owned()];
-        runtime
-            .record(ContainedTaskTrace::RecognitionStarted {
-                candidate_pages: candidate_pages.clone(),
-                width: frame.width,
-                height: frame.height,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        let result = self
-            .detector
-            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page);
-        let results = Ok(vec![PageOutcome {
-            index: 0,
-            page_id: page.to_owned(),
-            result,
-        }]);
-        runtime
-            .record_page_evaluations("home_preflight", &results, None)
-            .map_err(ContainedTaskRunError::Boundary)?;
-        let evaluation = results
-            .into_iter()
-            .flatten()
-            .next()
-            .expect("single page")
-            .result
-            .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    "contained_task_recognition_failed",
-                    error.to_string(),
-                )
-                .with_ppocr_diagnostics(error.ppocr_diagnostics())
-            })?;
-        let matched = evaluation.matched;
-        let targets = recognized_targets(&self.evaluator, &evaluation)?;
-        runtime
-            .record(ContainedTaskTrace::RecognitionCompleted {
-                candidate_pages,
-                page_label: matched.then(|| page.to_owned()),
-                width: frame.width,
-                height: frame.height,
-                targets,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(matched)
+        let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
+        loop {
+            let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
+            let identity = runtime.task_boundary_identity(boundary);
+            let capture_started = Instant::now();
+            let matched = self.recognize_entry_frame(runtime, page, timing);
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started: capture_started,
+                ended: Instant::now(),
+                succeeded: matched.is_ok(),
+            });
+            if matched? {
+                return Ok(true);
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= budget
+                || !runtime
+                    .candidate_sampling_checkpoint()
+                    .map_err(ContainedTaskRunError::operation::<R>)?
+            {
+                return Ok(false);
+            }
+            let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
+            let identity = runtime.task_boundary_identity(boundary);
+            let wait_started = Instant::now();
+            thread::sleep(interval.min(budget.saturating_sub(elapsed)));
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started: wait_started,
+                ended: Instant::now(),
+                succeeded: true,
+            });
+        }
     }
 
     /// Workflow #336 L2b: one observation of the first step's page. Declared target samples
@@ -2667,12 +2661,14 @@ impl PreparedContainedTask {
         let mut observation = if entry == ContainedTaskEntry::Ordinary
             && let Some(required_page) = self.required_home_entry_page()
         {
-            Some(
-                self.capture_page(runtime, ocr_collector, Some(required_page), entry_timing)?
-                    .ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_home_entry_not_matched")
-                    })?,
-            )
+            Some(self.await_ordinary_home_entry(
+                runtime,
+                ocr_collector,
+                required_page,
+                step_timeout.min(task_timeout),
+                capture_interval,
+                entry_timing,
+            )?)
         } else if initial_application.is_some() {
             self.capture_page(runtime, ocr_collector, None, entry_timing)?
         } else {
@@ -3202,9 +3198,13 @@ impl PreparedContainedTask {
                                             }
                                             RunOperationFailureDecision::Fail(_) => {
                                                 return Err(ContainedTaskError::with_detail(
-                                                    "contained_task_requires_scheduler",
-                                                    format!(
-                                                        "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                                    ERROR_PAGE_REACHED,
+                                                    confirmation_failure_detail(
+                                                        &operation_id,
+                                                        attempt,
+                                                        fresh.as_ref(),
+                                                        true,
+                                                        None,
                                                     ),
                                                 )
                                                 .into());
@@ -3273,10 +3273,19 @@ impl PreparedContainedTask {
                                     &operation_id,
                                     failed_observation.as_ref(),
                                 )?;
+                                // Workflow #371-2: the code says which confirmation failed.
                                 return Err(ContainedTaskError::with_detail(
-                                    "contained_task_requires_scheduler",
-                                    format!(
-                                        "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                    if hit_error_page {
+                                        ERROR_PAGE_REACHED
+                                    } else {
+                                        STEP_UNCONFIRMED
+                                    },
+                                    confirmation_failure_detail(
+                                        &operation_id,
+                                        attempt,
+                                        failed_observation.as_ref(),
+                                        hit_error_page,
+                                        timing_failure.as_ref(),
                                     ),
                                 )
                                 .with_timing(timing_failure)
@@ -3632,17 +3641,80 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #371-3: the ordinary run's home entry looks at frames, one every capture
+    /// interval, until the required page matches or `budget` (`min(step_timeout,
+    /// task_timeout)`) is spent, and records the entry once: matched, or unmatched with the last
+    /// frame. A pack with target consensus keeps its single consensus verdict, and a runtime
+    /// without the production checkpoint (offline simulation, fixtures) keeps the single-frame
+    /// check; the checkpoint is also asked before every further frame.
+    fn await_ordinary_home_entry<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        page: &str,
+        budget: Duration,
+        interval: Duration,
+        timing: ContainedTaskTimingContext,
+    ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
+        let unmatched = || ContainedTaskError::new("contained_task_home_entry_not_matched");
+        let waits = self.evaluator.pack().target_consensus.is_empty()
+            && runtime
+                .candidate_sampling_checkpoint()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+        let started = Instant::now();
+        let deadline = (started + budget).min(timing.deadline());
+        loop {
+            if let Some(observation) = self.capture_page(
+                runtime,
+                ocr_collector,
+                Some(RequiredEntry { page, waits }),
+                timing,
+            )? {
+                return Ok(observation);
+            }
+            if !waits {
+                return Err(unmatched().into());
+            }
+            let now = Instant::now();
+            if now >= deadline
+                || !runtime
+                    .candidate_sampling_checkpoint()
+                    .map_err(ContainedTaskRunError::operation::<R>)?
+            {
+                runtime
+                    .record(ContainedTaskTrace::EntryRecognition {
+                        required_page: page.to_owned(),
+                        matched: false,
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                return Err(unmatched().into());
+            }
+            let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
+            let identity = runtime.task_boundary_identity(boundary);
+            let wait_started = Instant::now();
+            thread::sleep(interval.min(deadline.saturating_duration_since(now)));
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started: wait_started,
+                ended: Instant::now(),
+                succeeded: true,
+            });
+        }
+    }
+
     fn capture_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
-        required_entry_page: Option<&str>,
+        required_entry: Option<RequiredEntry<'_>>,
         timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         self.capture_frame(
             runtime,
             Some(ocr_collector),
-            required_entry_page,
+            required_entry,
             timing,
             None,
             None,
@@ -3658,7 +3730,7 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         ocr_collector: Option<&mut PostAdmissionOcrCollector<'_>>,
-        required_entry_page: Option<&str>,
+        required_entry: Option<RequiredEntry<'_>>,
         timing: ContainedTaskTimingContext,
         candidates: Option<&[&str]>,
         sampling_deadline: Option<Instant>,
@@ -3962,11 +4034,16 @@ impl PreparedContainedTask {
                     targets,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            if let Some(required_page) = required_entry_page {
-                let matched = page.as_deref() == Some(required_page);
+            if let Some(required) = required_entry {
+                let matched = page.as_deref() == Some(required.page);
+                // Workflow #371-3: inside a bounded entry wait an unmatched frame is no verdict;
+                // the wait records the entry once, matched or at its end.
+                if !matched && required.waits {
+                    return Ok(None);
+                }
                 runtime
                     .record(ContainedTaskTrace::EntryRecognition {
-                        required_page: required_page.to_owned(),
+                        required_page: required.page.to_owned(),
                         matched,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
@@ -4123,6 +4200,14 @@ impl PreparedContainedTask {
     }
 }
 
+/// The entry page an ordinary run requires on its first frame. `waits`: the frame is one of a
+/// bounded entry wait (Workflow #371-3), so an unmatched frame records no entry verdict.
+#[derive(Clone, Copy)]
+struct RequiredEntry<'a> {
+    page: &'a str,
+    waits: bool,
+}
+
 struct PageObservation {
     page_label: String,
     scene: Scene,
@@ -4145,6 +4230,30 @@ fn sample_geometry_matches(
         (None, None) => true,
         _ => false,
     }
+}
+
+/// Workflow #371-2: the detail of a failed step confirmation: the operation, its attempts, the
+/// page seen after it, whether that was a declared error page and, on a confirmation timeout,
+/// the elapsed time and the limit. No recognized text and no coordinates.
+fn confirmation_failure_detail(
+    operation_id: &str,
+    attempts: u32,
+    after: Option<&PageObservation>,
+    hit_error_page: bool,
+    timing: Option<&TaskTimingFailure>,
+) -> String {
+    let after_page = after.map_or("<unrecognized>", |observation| {
+        observation.page_label.as_str()
+    });
+    let timing = timing.map_or_else(String::new, |timing| {
+        format!(
+            " confirm_elapsed_ms={} confirm_limit_ms={}",
+            timing.elapsed_ms, timing.limit_ms
+        )
+    });
+    format!(
+        "operation={operation_id} attempts={attempts} after_page={after_page} hit_error_page={hit_error_page}{timing}"
+    )
 }
 
 enum PostconditionResolution {
@@ -11032,7 +11141,7 @@ mod retry_wiring_tests {
             }
         };
 
-        assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert_eq!(error.code(), "contained_task_step_unconfirmed");
         assert_eq!(runtime.inputs, 6);
         assert_closed_effect_attempts(&runtime, 6);
     }

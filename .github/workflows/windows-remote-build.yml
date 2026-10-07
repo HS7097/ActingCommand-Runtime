@@ -557,6 +557,23 @@ jobs:
             }
           }
 
+          # Workflow #364: the interface declaration both manifests carry unchanged
+          # (contracts/component-interfaces.md). A file that is not a valid v1
+          # declaration stops the build.
+          $interfacesPath = Join-Path $PWD 'distribution/windows/component-interfaces.json'
+          $interfaces = Get-Content -LiteralPath $interfacesPath -Raw | ConvertFrom-Json -Depth 20
+          if ($interfaces.schema_version -cne 'actingcommand.component-interfaces.v1') {
+            throw "component-interfaces.json: schema_version is not actingcommand.component-interfaces.v1: $($interfaces.schema_version)"
+          }
+          foreach ($name in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package')) {
+            $range = @($interfaces.speaks.$name)
+            if ($range.Count -ne 2 -or @($range | Where-Object { "$_" -cnotmatch '\A[0-9]+\z' }).Count -ne 0 -or
+                [int64]"$($range[0])" -gt [int64]"$($range[1])") {
+              throw "component-interfaces.json: speaks.$name is not [min, max] with 0 <= min <= max"
+            }
+          }
+          $interfacesJson = $interfaces | ConvertTo-Json -Depth 20 -Compress
+
           function New-BuildManifest {
             param(
               [Parameter(Mandatory)] [string] $ArtifactName,
@@ -607,6 +624,7 @@ jobs:
               # Workflow #374: v3 is v2 plus the watchdog launcher actingwatch.exe.
               $manifest.tools_payload_layout = 'platform-tools-v3'
             }
+            $manifest.interfaces = $interfaces
             $manifestPath = Join-Path $Directory 'BUILD-MANIFEST.json'
             $json = $manifest | ConvertTo-Json -Depth 6
             [IO.File]::WriteAllText(
@@ -635,6 +653,14 @@ jobs:
             -Directory $toolsDir `
             -Names ($toolFiles + $platformToolsFiles) `
             -PlatformToolsLayout
+          foreach ($directory in @($runtimeDir, $toolsDir)) {
+            $written = (Get-Content -LiteralPath (Join-Path $directory 'BUILD-MANIFEST.json') -Raw |
+              ConvertFrom-Json -Depth 20).interfaces | ConvertTo-Json -Depth 20 -Compress
+            if ($written -cne $interfacesJson) {
+              throw "$(Split-Path -Leaf $directory) BUILD-MANIFEST.json interfaces differ from component-interfaces.json: $written"
+            }
+            Write-Host "$(Split-Path -Leaf $directory) BUILD-MANIFEST.json interfaces: $written"
+          }
 
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "runtime_artifact_name=$runtimeArtifactName"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "runtime_artifact_dir=$runtimeDir"

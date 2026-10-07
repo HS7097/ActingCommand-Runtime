@@ -103,6 +103,8 @@ pub(super) struct ActingdConfigFile {
     /// Workflow #360: the retired v0.3 provider manifest. Kept only so a file that still
     /// names the key, whatever its value, is refused with `vision_provider_manifest_retired`;
     /// the `vision` section replaces it.
+    // Interface anchor `actingd-config` (contracts/component-interfaces.md): raise its revision
+    // in distribution/windows/component-interfaces.json when older writers' files are refused.
     #[serde(
         default,
         rename = "vision_provider_manifest",

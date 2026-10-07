@@ -5,9 +5,9 @@
 //! The install root is recognised from the running executable alone: `R` is two levels
 //! above the canonical `current_exe`, and `R` is an install root only when
 //! `R\runtime\BUILD-MANIFEST.json` is a file, the evidence acsetup itself takes for "installed".
-//! acsetup's upgrade staging directory (`.staging-<ms>\runtime|ui|tools`) has the same shape,
-//! so a staged `check-config` sees the staged adb. Anything else (a development build, H3, an
-//! older acsetup's zip-named staging) is no install root and keeps the earlier behaviour.
+//! acsetup runs nothing from its staging directory: its `check-config` runs with the actingd of
+//! the slot it prepares. Anything else (a development build, H3, an older acsetup's zip-named
+//! staging) is no install root and keeps the earlier behaviour.
 //! Workflow #359: a program in an A/B slot (`<root>\<A|B>\runtime`, holding its slot lock)
 //! takes `tools\` from the install root `<root>` that lock names, not from its slot.
 //!
