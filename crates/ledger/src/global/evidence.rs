@@ -15,6 +15,7 @@ pub struct GlobalLedgerEvidenceConfig {
     root: PathBuf,
     budget: Option<(u64, usize, Instant)>,
     material: EvidenceMaterial,
+    prefix: Option<u64>,
 }
 /// How an SQLite opening treats referenced artifact material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +33,7 @@ impl GlobalLedgerEvidenceConfig {
             root: root.into(),
             budget: None,
             material: EvidenceMaterial::Required,
+            prefix: None,
         }
     }
     /// SQLite only: authenticates records exactly as the default opening, then verifies
@@ -50,6 +52,18 @@ impl GlobalLedgerEvidenceConfig {
     /// material as before.
     pub fn sqlite_material_not_read(mut self) -> Self {
         self.material = EvidenceMaterial::NotRead;
+        self
+    }
+    /// SQLite only (Workflow #363): authenticates the keyed head row, then reads and
+    /// authenticates only events `1..=through_sequence` (a migrated ledger also reads
+    /// through its cutover completion). Later rows are never read, so this opening does
+    /// not establish their integrity, and artifact availability is as of the prefix.
+    /// Requires a record path (`sqlite_material_not_read` or
+    /// `sqlite_material_per_artifact`); a segment root is read whole, as before. A
+    /// `through_sequence` beyond the authenticated head is the request error
+    /// `ledger_prefix_beyond_head`.
+    pub fn sqlite_prefix(mut self, through_sequence: u64) -> Self {
+        self.prefix = Some(through_sequence);
         self
     }
     pub fn with_budget(mut self, bytes: u64, events: usize, deadline: Instant) -> Self {
@@ -78,6 +92,34 @@ struct RecordEvidence {
     events: Vec<PersistedEvent>,
     indexes: projection::EventIndexes,
     material_checked: bool,
+    extent: GlobalLedgerReadExtent,
+}
+
+/// What one evidence opening read (Workflow #363). In memory only; never persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlobalLedgerReadExtent {
+    /// The last authenticated event: for an SQLite prefix read the declared prefix (or a
+    /// migrated root's cutover completion), otherwise the head.
+    pub through_sequence: u64,
+    /// The source's authenticated head when it was opened.
+    pub head_sequence: u64,
+    /// Events read and authenticated.
+    pub event_count: usize,
+    /// Ledger bytes counted by the reader; `None` where the opening does not count them.
+    pub ledger_bytes: Option<u64>,
+    /// Wall time per phase of an SQLite record-path opening; `None` for other paths.
+    pub phases: Option<GlobalLedgerReadPhases>,
+}
+
+/// Wall time per phase of an SQLite record-path opening (Workflow #363).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlobalLedgerReadPhases {
+    /// Head authentication and the row reads.
+    pub sql_read: Duration,
+    /// Row, chain, tag, relation, head and marker authentication.
+    pub verify: Duration,
+    /// Eviction annotation, retention replay and per-artifact restore.
+    pub retention_restore: Duration,
 }
 impl GlobalLedgerEvidence {
     pub fn events(&self) -> &[PersistedEvent] {
@@ -140,6 +182,27 @@ impl GlobalLedgerEvidence {
         match &self.source {
             EvidenceSource::Segment(_) | EvidenceSource::Sqlite(_) => true,
             EvidenceSource::Records(source) => source.material_checked,
+        }
+    }
+    /// The extent of this opening: an SQLite prefix read stops at its declared prefix
+    /// below the authenticated head; every other opening reads through the head.
+    pub fn read_extent(&self) -> GlobalLedgerReadExtent {
+        match &self.source {
+            EvidenceSource::Records(source) => source.extent,
+            EvidenceSource::Segment(source) => GlobalLedgerReadExtent {
+                through_sequence: source.latest_sequence(),
+                head_sequence: source.latest_sequence(),
+                event_count: source.events().len(),
+                ledger_bytes: Some(source.storage_snapshot().read_bytes),
+                phases: None,
+            },
+            EvidenceSource::Sqlite(source) => GlobalLedgerReadExtent {
+                through_sequence: source.latest_sequence(),
+                head_sequence: source.latest_sequence(),
+                event_count: source.events().len(),
+                ledger_bytes: None,
+                phases: None,
+            },
         }
     }
     pub fn writer_metadata(&self) -> &GlobalLedgerWriterMetadataObservation {
@@ -433,9 +496,16 @@ impl GlobalLedger {
     }
 
     /// Reads ledger records and their integrity data without opening referenced artifacts.
+    /// Its projected views verify through the head, so `sqlite_prefix` is refused.
     pub fn open_metadata(
         config: GlobalLedgerEvidenceConfig,
     ) -> GlobalLedgerResult<GlobalLedgerMetadata> {
+        if config.prefix.is_some() {
+            return Err(GlobalLedgerError::request(
+                "ledger_prefix_unsupported",
+                "open_ledger_metadata",
+            ));
+        }
         let ledger_root = config.root.join("ledger");
         let database_exists = config
             .root
@@ -452,7 +522,8 @@ impl GlobalLedger {
         if database_exists || key_exists {
             let database = RuntimeDatabase::open_existing(&config.root, true)?;
             if sqlite::has_schema(&database)? {
-                let (events, sqlite) = sqlite::open_metadata(Arc::new(database), config.budget)?;
+                let (events, sqlite, _) =
+                    sqlite::open_metadata(Arc::new(database), config.budget, None)?;
                 let through_sequence = sqlite.through_sequence;
                 let writer = read_only::read_writer_metadata(&ledger_root)?;
                 return Ok(GlobalLedgerMetadata {
@@ -497,6 +568,13 @@ impl GlobalLedger {
     where
         F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
     {
+        // Workflow #363: a prefix leaves later material facts unread, so it needs a record path.
+        if config.prefix.is_some() && config.material == EvidenceMaterial::Required {
+            return Err(GlobalLedgerError::request(
+                "invalid_evidence_prefix",
+                "open_runtime_evidence",
+            ));
+        }
         let ledger_root = config.root.join("ledger");
         let database_path = config
             .root
@@ -522,8 +600,11 @@ impl GlobalLedger {
                     });
                 }
                 // The same record authentication, ready marker and eviction annotation as
-                // `open_metadata`; material is then restored one artifact at a time.
-                let (metadata, _view) = sqlite::open_metadata(Arc::new(database), config.budget)?;
+                // `open_metadata`; material is then restored one artifact at a time. With a
+                // prefix, records, retention and availability stop at the prefix.
+                let (metadata, _view, read) =
+                    sqlite::open_metadata(Arc::new(database), config.budget, config.prefix)?;
+                let restore_started = Instant::now();
                 let mut check = |count| read_only::check_read_budget(config.budget, 0, count);
                 let retention =
                     retention::RetentionIndex::from_events_checked(&metadata, &mut check)?;
@@ -534,12 +615,24 @@ impl GlobalLedger {
                     check(events.len() + 1)?;
                     events.push(retention.restore_metadata(event, &mut material_verifier)?);
                 }
+                let extent = GlobalLedgerReadExtent {
+                    through_sequence: read.through_sequence,
+                    head_sequence: read.head_sequence,
+                    event_count: events.len(),
+                    ledger_bytes: Some(read.bytes),
+                    phases: Some(GlobalLedgerReadPhases {
+                        sql_read: read.sql_read,
+                        verify: read.verify,
+                        retention_restore: read.annotate + restore_started.elapsed(),
+                    }),
+                };
                 let writer = read_only::read_writer_metadata(&ledger_root)?;
                 return Ok(GlobalLedgerEvidence {
                     source: EvidenceSource::Records(Box::new(RecordEvidence {
                         indexes: projection::EventIndexes::from_events(&events),
                         events,
                         material_checked,
+                        extent,
                     })),
                     writer,
                 });
