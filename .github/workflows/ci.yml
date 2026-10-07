@@ -45,6 +45,12 @@ jobs:
             throw "actingledger build failed with exit code $LASTEXITCODE"
           }
           $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
+          # Workflow #374: the watchdog's process test starts a real actingd through a fixed entry.
+          cargo build --locked -p actingcommand-actingd --bin actingcommand-actingd
+          if ($LASTEXITCODE -ne 0) {
+            throw "actingd build failed with exit code $LASTEXITCODE"
+          }
+          $env:ACTINGCOMMAND_TEST_ACTINGD_EXE = (Resolve-Path -LiteralPath 'target/debug/actingcommand-actingd.exe' -ErrorAction Stop).Path
 
           cargo test --workspace --exclude actingcommand-actingd --exclude actingcommand-runtime-client --no-fail-fast
           $workspaceExitCode = $LASTEXITCODE
