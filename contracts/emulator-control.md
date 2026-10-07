@@ -278,7 +278,7 @@ that belongs to emulator control:
 
 ## Stuck-recovery ladder (slice #316-B4)
 
-A contained task run on a physical instance, direct (`task-run`) or scheduled (policy), whose
+A scheduled (policy) contained task run on a physical instance whose
 `task.failed` terminal carries `failure_code` `contained_task_page_unknown`, any
 `contained_task_recovery_*` code or any `contained_task_home_recovery_*` code (entry recovery /
 return home failed, for example `contained_task_home_recovery_persistently_non_home`) starts a
@@ -288,10 +288,13 @@ instances, startup package runs and the ladder's own rung runs never trigger one
 `contained_task_prerequisite_*` codes a `linear_steps` package's prerequisite gate reports
 itself never trigger one, nor does `contained_task_return_home_entry_unmatched`; a code a
 prerequisite or return-home package reports while it runs is judged by the rule above
-(`contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallback"). The ladder
-never runs on the run's thread: a direct run's trigger waits until its connection wrote the
-failure receipt, a scheduled run's trigger (no client receipt) is admitted as the run returns
-its failure, and the accepted ladder is queued for the scheduling thread of the startup package hook
+(`contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallback"). A direct
+task run (`actingctl task-run`, the console's task run, MCP `ac_run_pack`) never starts a ladder
+(Workflow #369-3, coordinator rulings Q1 and P1: the ladder exists for the routine; whoever ran
+it has the receipt and decides); nothing is recorded for it. The exemption covers task runs
+only; a task run makes no preparation of its own. The ladder never runs on the run's thread:
+a scheduled run's trigger (no client receipt) is admitted as the run returns its failure, and
+the accepted ladder is queued for the scheduling thread of the startup package hook
 (`actingcommand-runtime-startup`). `task.failed` and every receipt keep their shape; the
 original task is never re-run.
 
@@ -300,6 +303,10 @@ enter this owner after the original temporary resources and installed session ba
 confirmed disposition, and the preparation lease has been released. The trigger carries
 `stage: startup_preparation | connection_preparation`, the actual preparation event reference
 `preparation { sequence, event_id }`, and the original `failure_code`; it has no task/run IDs.
+A connection preparation is the one after emulator `start` / `restart` (including the
+`actingctl emulator start` of a logon script), an instance resume or `SelfCheckInstance`; its
+failure keeps starting a ladder (Workflow #369-3, coordinator ruling P1): these are routine
+infrastructure, and nothing else retries them.
 Successful fallback, invalid input parameters/configuration, admission/budget denial,
 owner/ledger failure and unconfirmed resource disposal do not enter this path. Preparation
 performed by the ladder has `stage: recovery_preparation` and cannot trigger another ladder.
@@ -331,22 +338,53 @@ Rungs, in this fixed order, each existing work under the instance lease:
   probe failure, when the admitted actions need ADB, is `recovery_ladder_adb_not_ready`;
   admission refusals keep their `contained_task_package_*` code; failures are recorded as
   `runtime.failed` with category `recovery_ladder`.
-- `application_restart`: the instance's startup package is scheduled
-  (`startup_package_scheduled` under the ladder's links, a fresh causation id) and run, exactly
-  as after `emulator start`. Skipped with `no_startup_package` when none is configured.
+- `application_restart`: the assigned application is restarted (Workflow #369-2, Alice's
+  09-25 ruling "restore home, then restart the application, then restart the emulator"). The
+  checks the startup package's run makes come first: a known unavailable capture or input
+  channel its entry needs skips the rung (`capture_unavailable` / `input_unavailable`), and an
+  ADB baseline that does not answer within 30 s skips it (`adb_unavailable`), with the game
+  untouched. Then the assigned `application_id` is force-stopped by a host-minted
+  `ApplicationLifecycle { stop }` request under the ladder's causation id, with its own lease
+  (`command.received`, `command.validated`, `application.intent`, `application.completed`); a
+  failed stop fails the rung with its code, recorded as `runtime.failed`. Then the instance's
+  startup package is scheduled (`startup_package_scheduled` under the ladder's links, a fresh
+  causation id) and run, as after `emulator start`; after the stop an unavailable entry fails
+  the rung instead of skipping it. A startup package that cannot be admitted, whose
+  prerequisite chain is refused, or that declares resource readings (a startup run's
+  incompatibility) is run without the stop, so its refusal is recorded as before and the game
+  is left alone. Skipped with `no_startup_package` when none is configured.
 - `emulator_restart`: Stop and then Start through this contract's existing provider control
   path, under one instance admission guard. Each action records `command.received`, then
   `command.validated` or `command.rejected` + `runtime.failed`. Stop must observe the old
   process gone before `recovery_instance_stopped` is recorded and Start is considered.
   Admission/fencing is checked again before Start. Stop failure, timeout, ambiguous identity
-  or unconfirmed close ends the rung without Start. Start binds its newly observed port,
-  completes the existing ADB baseline and performs fresh input/capture preparation. Only
-  `capture.ok && touch.ok && failure_code == null` records `recovery_environment_ready`.
-  Skipped with `no_emulator_control` when the instance is not discovery-bound. With no startup
-  package the rung and ladder finish `environment_ready`. With a package, the environment
-  fact remains separate and its ordinary bounded run must reach the package target before
-  the rung and ladder finish `recovered`. Shared managers, ADB servers and other instances
-  are outside this instance control operation.
+  or unconfirmed close ends the rung without Start. Start binds its newly observed port and
+  completes the existing ADB baseline. Then (Workflow #369-1) the rung waits for readiness
+  within 120 s of Start: Android must report a resumed activity (the read-only foreground
+  query of the ADB baseline; no session is opened) and a fresh input/capture preparation
+  (stage `recovery_preparation`) must pass. Only `capture.ok && touch.ok && failure_code ==
+  null` records `recovery_environment_ready`, naming the passing preparation. A failed
+  preparation is retried only when the existing preparation rule calls it recoverable (an
+  ordinary acquisition failure with confirmed disposal and successful cleanup) or the ADB
+  baseline does not answer; any other failure ends the rung `recovery_environment_not_ready`
+  at once. Before every retry the rung polls the ADB baseline every 500 ms until it answers
+  again (bounded by the window), then waits 5 s, 10 s, then 20 s each time, never past the
+  window; each attempt writes its own `instance_preparation_finished` and is rechecked for
+  admission. The instance admission guard is held across Stop, Start and the first attempt,
+  and released while waiting. The waits stop at once on shutdown
+  (`recovery_ladder_shutdown_requested`) or an install drain
+  (`recovery_ladder_drain_requested`). Not ready within the window fails the rung
+  `recovery_environment_not_ready`, or `recovery_android_not_booted` when the boot check never
+  passed and so no preparation ran. The ladder runs on the host's single host-work thread:
+  while the rung waits, queued startup packages and ladders of other instances wait behind it,
+  for at most the window; the policy thread is not blocked. Skipped with
+  `no_emulator_control` when the instance is not discovery-bound. With no startup package the
+  rung and ladder finish `environment_ready`. With a package, the rung then schedules it
+  (`startup_package_scheduled` under the ladder's links) and runs it; the environment fact remains separate and its
+  ordinary bounded run must reach the package target before the rung and ladder finish
+  `recovered`. After the restart, an unavailable capture, input or ADB entry of that run fails
+  the rung instead of skipping it. Shared managers, ADB servers and other instances are
+  outside this instance control operation.
 
 R1/R2 channel eligibility uses the hash-admitted program and current typed backend facts.
 A known failed capture/input channel skips an entry that needs it with `capture_unavailable`

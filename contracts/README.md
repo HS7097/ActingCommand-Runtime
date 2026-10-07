@@ -30,6 +30,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `actinglab-dry-run.md` — the global actinglab `--dry-run`: each command's declared mode (preview, refused, no_effect, mixed), the `dry_run_unsupported` refusal, the preview shapes and the registered bootstrap and transient writes.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
+- `component-interfaces.md` — the `interfaces` declaration in the Runtime, Tools and UI build manifests and in resource bundles: the interface vocabulary and revisions with their code anchors, what a range means, the containment and negotiation checks, the bump rule, the known table for undeclared v0.11.0–v0.11.2 releases and the checks acsetup makes per operation (Workflow #364).
 - `actingd-unlock-owner.md` — offline `actingd unlock-owner`: the operator's confirmation appended as the retained owner epoch's close evidence, the `owner.unlock` fact and its result schema.
 - `owner-journal.md` — the `owner.lock` owner journal: records, the reader's derived state, the in-epoch checkpoint fold, its side-file crash recovery and error codes.
 - `runtime-watchdog.md` — `actingctl watchdog status` / `run-once`: the per-minute tick that starts an A/B installation's Runtime again after an end without a formal close, its decision table, start methods, budget, gap grace, `<root>\watchdog\` files and exit codes.

@@ -33,12 +33,14 @@ use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod release_source;
 mod views;
 pub use release_source::*;
 
+// Interface anchor `ledger` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when older readers can no longer read this.
 const FORMAL_FORMAT_VERSION: i64 = 1;
 const SCHEMA: &str = "actingcommand.sqlite-ledger.v1";
 const INTEGER_ENCODING: &str = "ordered-u64-v1";
@@ -1123,20 +1125,46 @@ impl DurableStorage for SqliteStorage {
     }
 }
 
+/// What one `open_metadata` read and how long each of its phases took (Workflow #363).
+pub(super) struct SqliteMetadataRead {
+    pub(super) through_sequence: u64,
+    pub(super) head_sequence: u64,
+    pub(super) bytes: u64,
+    pub(super) sql_read: Duration,
+    pub(super) verify: Duration,
+    pub(super) annotate: Duration,
+}
+
+/// With `prefix`, only the declared prefix is read and authenticated (`read_prefix_snapshot`);
+/// eviction annotation is then as of that prefix.
 pub(super) fn open_metadata(
     database: Arc<RuntimeDatabase>,
     budget: ReadBudget,
-) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, SqliteViewSnapshot)> {
-    let raw = read_snapshot(&database, budget)?;
+    prefix: Option<u64>,
+) -> GlobalLedgerResult<(
+    Vec<LedgerEventMetadata>,
+    SqliteViewSnapshot,
+    SqliteMetadataRead,
+)> {
+    let started = Instant::now();
+    let raw = match prefix {
+        Some(through) => read_prefix_snapshot(&database, budget, through)?,
+        None => read_snapshot(&database, budget)?,
+    };
+    let sql_read = started.elapsed();
     let bytes = raw.bytes;
+    let bound = raw.bound;
     let marker = SqliteMarker::parse(&raw.meta)?;
+    let verify_started = Instant::now();
     let verified = verify_snapshot_records(&database, raw)?;
+    let verify = verify_started.elapsed();
     if marker.state != "ready" {
         return Err(failure(
             "ledger_candidate_not_production",
             "open_runtime_evidence",
         ));
     }
+    let annotate_started = Instant::now();
     let through_sequence = verified
         .records
         .last()
@@ -1157,6 +1185,15 @@ pub(super) fn open_metadata(
         check_read_budget(budget, bytes, count)
     })?;
     check_read_budget(budget, bytes, events.len())?;
+    let read = SqliteMetadataRead {
+        through_sequence,
+        // A full read authenticated the meta row against its last row.
+        head_sequence: bound.map_or(through_sequence, |bound| bound.head),
+        bytes,
+        sql_read,
+        verify,
+        annotate: annotate_started.elapsed(),
+    };
     Ok((
         events,
         SqliteViewSnapshot {
@@ -1166,6 +1203,7 @@ pub(super) fn open_metadata(
             budget,
             source: LedgerReadSource::Offline,
         },
+        read,
     ))
 }
 
@@ -1818,6 +1856,7 @@ impl VerifiedPrefix {
                 meta,
                 budget,
                 bytes,
+                bound: None,
             },
         ))
     }
@@ -2089,6 +2128,18 @@ struct RawSnapshot {
     meta: SqlRow,
     budget: ReadBudget,
     bytes: u64,
+    /// Present only for `read_prefix_snapshot`.
+    bound: Option<PrefixBound>,
+}
+
+/// Workflow #363: the extent of a prefix read, taken from the keyed head row that was
+/// authenticated in the same read transaction before any history row was read.
+#[derive(Clone, Copy)]
+struct PrefixBound {
+    /// The last row read: the declared prefix, or a migrated root's cutover completion.
+    through: u64,
+    /// The authenticated head, at least `through`.
+    head: u64,
 }
 
 fn read_snapshot(
@@ -2132,6 +2183,87 @@ fn read_formal_snapshot(
     Ok(raw)
 }
 
+/// Workflow #363: `read_snapshot` bounded by a declared prefix. In one read transaction the
+/// keyed meta row is authenticated first, then only the rows `1..=L` of the three tables are
+/// read, where `L` is `through` or, on a migrated root, at least its cutover completion
+/// (the marker check needs it). Rows after `L` are never read.
+fn read_prefix_snapshot(
+    database: &RuntimeDatabase,
+    budget: ReadBudget,
+    through: u64,
+) -> GlobalLedgerResult<RawSnapshot> {
+    check_read_budget(budget, 0, 0)?;
+    let mut connection = database.connection("read_sqlite_snapshot")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+    views::installed(&transaction)?;
+    // The caller found the four ledger tables; their absence now is a fatal inconsistency.
+    let Some((marker, head)) = authenticated_extent(database, &transaction)? else {
+        return Err(failure("ledger_meta_missing", "read_sqlite_prefix"));
+    };
+    if marker.state != "ready" {
+        return Err(failure(
+            "ledger_candidate_not_production",
+            "open_runtime_evidence",
+        ));
+    }
+    if through > head {
+        return Err(
+            GlobalLedgerError::request("ledger_prefix_beyond_head", "read_sqlite_prefix")
+                .with_detail(format!("through_sequence {through} exceeds head {head}")),
+        );
+    }
+    let through = marker
+        .migration
+        .as_ref()
+        .map_or(through, |record| through.max(record.cutover_sequence));
+    let last = encode(through);
+    let mut bytes = 0;
+    let meta = read_meta_with_budget(&transaction, budget, &mut bytes)?;
+    let events = read_rows(
+        &transaction,
+        &format!(
+            "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence<={last} ORDER BY sequence"
+        ),
+        budget,
+        &mut bytes,
+        true,
+    )?;
+    let links = read_rows(
+        &transaction,
+        &format!(
+            "SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence<={last} ORDER BY sequence"
+        ),
+        budget,
+        &mut bytes,
+        false,
+    )?;
+    let artifacts = read_rows(
+        &transaction,
+        &format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence<={last} ORDER BY sequence,ordinal"
+        ),
+        budget,
+        &mut bytes,
+        false,
+    )?;
+    let raw = RawSnapshot {
+        format_version: format_version(&transaction)?,
+        events,
+        links,
+        artifacts,
+        meta,
+        budget,
+        bytes,
+        bound: Some(PrefixBound { through, head }),
+    };
+    transaction
+        .commit()
+        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+    Ok(raw)
+}
+
 fn read_snapshot_connection(
     connection: &Connection,
     budget: ReadBudget,
@@ -2168,6 +2300,7 @@ fn read_snapshot_connection(
         meta,
         budget,
         bytes,
+        bound: None,
     })
 }
 
@@ -2330,7 +2463,8 @@ struct VerifiedSnapshotRecords {
     marker: SqliteMarker,
 }
 
-/// Authenticates the complete ledger snapshot without opening referenced material.
+/// Authenticates the complete ledger snapshot without opening referenced material; for a
+/// prefix read (Workflow #363), the complete prefix and the already authenticated head row.
 fn verify_snapshot_records(
     database: &RuntimeDatabase,
     raw: RawSnapshot,
@@ -2383,16 +2517,23 @@ fn verify_snapshot_records(
     if raw.links != expected_links || raw.artifacts != expected_artifacts {
         return Err(failure("ledger_index_mismatch", "verify_sqlite_relations"));
     }
-    if raw.meta
-        != meta_row_with_marker(
-            database,
-            next,
-            events.last().map_or(0, StoredEventRecord::sequence),
-            head_hash.as_deref(),
-            &marker,
-        )
-    {
-        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+    let last = events.last().map_or(0, StoredEventRecord::sequence);
+    match raw.bound {
+        // Workflow #363: a prefix read authenticates every row through its bound.
+        Some(bound) if last != bound.through => {
+            return Err(failure("ledger_prefix_incomplete", "verify_sqlite_prefix"));
+        }
+        // The keyed head row, authenticated in this read transaction before any history row,
+        // records a head after the prefix; the later rows were not read.
+        Some(bound) if bound.through < bound.head => {}
+        // A full read, or a prefix at the head: the meta row must equal the head computed
+        // from the rows.
+        _ => {
+            if raw.meta != meta_row_with_marker(database, next, last, head_hash.as_deref(), &marker)
+            {
+                return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+            }
+        }
     }
     marker.verify_records(&events, prefix.as_ref())?;
     Ok(VerifiedSnapshotRecords {

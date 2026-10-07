@@ -411,6 +411,8 @@ pub enum OcrUnsignedIntegerFormat {
     AsciiDecimal,
     CommaGrouped,
     CurrentCapacity,
+    /// ASCII decimal digits after at most one optional `x`, `X` or `×` (U+00D7) prefix.
+    TimesPrefixed,
 }
 
 impl OcrUnsignedIntegerFormat {
@@ -460,6 +462,10 @@ impl OcrUnsignedIntegerFormat {
                 decimal(capacity)?;
                 current
             }
+            Self::TimesPrefixed => decimal(
+                text.strip_prefix(|prefix: char| matches!(prefix, 'x' | 'X' | '\u{00D7}'))
+                    .unwrap_or(text),
+            )?,
         };
         if value < min || value > max {
             return Err(OcrFieldReason::OutOfRange);

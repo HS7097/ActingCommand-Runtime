@@ -118,8 +118,11 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             EventSource::Lab,
         ))
         .unwrap();
+        // Workflow #363: the requested frame is the second of three. The first frame lies
+        // inside the declared prefix; the third frame and later events lie after it.
+        let earlier_flow = source_client.observe_readonly("node.a").unwrap();
         let flow = source_client.observe_readonly("node.a").unwrap();
-        let locate = |kind| {
+        let locate = |flow: &actingcommand_runtime_client::RuntimeFlowOutput, kind| {
             flow.events()
                 .iter()
                 .find(|event| {
@@ -131,10 +134,13 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                                 .any(|artifact| artifact.kind == ArtifactKind::CaptureFrame))
                 })
                 .unwrap()
+                .clone()
         };
-        let created = locate(EventType::ArtifactCreated);
-        let verified = locate(EventType::ArtifactVerified);
-        let captured = locate(EventType::CaptureCompleted);
+        let earlier = locate(&earlier_flow, EventType::ArtifactCreated).artifacts[0].clone();
+        let created = locate(&flow, EventType::ArtifactCreated);
+        let verified = locate(&flow, EventType::ArtifactVerified);
+        let captured = locate(&flow, EventType::CaptureCompleted);
+        source_client.observe_readonly("node.a").unwrap();
         let reference = created.artifacts[0].clone();
         let binding = SavedArtifactOcrSource {
             state_root: original.path().to_str().unwrap().into(),
@@ -159,10 +165,22 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         let original_ledger = fs::read(original.path().join("runtime-state.sqlite")).unwrap();
         let original_image =
             fs::read(original.path().join(binding.artifact.object_key().unwrap())).unwrap();
+        let earlier_png = original.path().join(earlier.object_key().unwrap());
+        let used_png = original.path().join(binding.artifact.object_key().unwrap());
+        let earlier_image = fs::read(&earlier_png).unwrap();
+        let source_head = GlobalLedger::open_evidence(
+            actingcommand_ledger::GlobalLedgerEvidenceConfig::new(original.path())
+                .sqlite_material_not_read(),
+            |_| None,
+        )
+        .unwrap()
+        .read_extent()
+        .head_sequence;
+        assert!(source_head > binding.through_sequence);
         let package = neutral_post_admission_ocr_contained_task_package(false);
         let package_path = original.path().join("saved-ocr.zip");
         fs::write(&package_path, &package).unwrap();
-        for mode in 0..7 {
+        for mode in 0..9 {
             let target = TempDir::new().unwrap();
             let state = Arc::new(FakeState::default());
             let vision = Arc::new(FakeVisionProvider {
@@ -203,6 +221,16 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             if mode == 6 {
                 request.source.through_sequence += 100_000;
             }
+            // Mode 7: a frame inside the declared prefix has lost its PNG; only the requested
+            // frame is read. Mode 8: the requested frame's PNG is missing.
+            let moved = match mode {
+                7 => Some((earlier_png.clone(), earlier_png.with_extension("aside"))),
+                8 => Some((used_png.clone(), used_png.with_extension("aside"))),
+                _ => None,
+            };
+            if let Some((path, aside)) = &moved {
+                fs::rename(path, aside).unwrap();
+            }
             let encoded = serde_json::to_vec(&request).unwrap();
             assert_eq!(
                 serde_json::from_slice::<SavedArtifactOcrRequest>(&encoded).unwrap(),
@@ -230,7 +258,12 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 close.join().unwrap().unwrap();
             } else {
                 let result = operation.join().unwrap();
-                if mode == 0 {
+                if let Some((path, aside)) = &moved {
+                    fs::rename(aside, path).unwrap();
+                }
+                if mode == 7 {
+                    result.unwrap().validate().unwrap();
+                } else if mode == 0 {
                     let receipt = result.unwrap();
                     receipt.validate().unwrap();
                     let RuntimeResult::ArtifactRecognized { result } = receipt.result().unwrap()
@@ -262,14 +295,40 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                         stored["source"]["artifact"]["sha256"],
                         binding.artifact.sha256
                     );
+                    // Workflow #363: only the declared prefix and the requested frame were read.
+                    let read = &stored["source_ledger"]["source_read"];
+                    assert_eq!(read["declared_through_sequence"], binding.through_sequence);
+                    assert_eq!(read["read_through_sequence"], binding.through_sequence);
+                    assert_eq!(read["events_read"], binding.through_sequence);
+                    assert_eq!(read["head_sequence"], source_head);
+                    assert_eq!(read["material_scope"], "requested_frame");
+                    assert!(
+                        read["ledger_bytes_read"]
+                            .as_u64()
+                            .is_some_and(|bytes| bytes > 0)
+                    );
+                    assert!(stored["phase_ms"]["ledger_verify"].is_number());
                 } else {
-                    assert!(result.is_err(), "source/provider failure is visible");
+                    let Err(error) = result else {
+                        panic!("source/provider failure is visible")
+                    };
+                    match mode {
+                        6 => assert_eq!(
+                            error.host_failure(),
+                            Some(("saved_source_incomplete", "recognize_artifact"))
+                        ),
+                        8 => assert_eq!(
+                            error.host_failure(),
+                            Some(("artifact_read_failed", "recognize_artifact"))
+                        ),
+                        _ => {}
+                    }
                 }
                 host.close().unwrap();
             }
             assert_eq!(
                 vision.ocr_calls.load(Ordering::Acquire),
-                u64::from(matches!(mode, 0 | 3 | 4))
+                u64::from(matches!(mode, 0 | 3 | 4 | 7))
             );
             assert_eq!(state.capture_open_count.load(Ordering::Acquire), 0);
             assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
@@ -308,8 +367,42 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     .iter()
                     .filter(|event| event.event_type() == EventType::ArtifactVerified)
                     .count(),
-                usize::from(mode == 0 || mode == 4)
+                usize::from(matches!(mode, 0 | 4 | 7))
             );
+            // The client carries only the host code; the native detail is in the target ledger.
+            let native = ledger
+                .events()
+                .iter()
+                .filter_map(|event| match event.payload() {
+                    EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                        outcome,
+                    )) => outcome
+                        .lifecycle_failure()
+                        .and_then(|lifecycle| lifecycle.native_detail())
+                        .map(|detail| detail.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if mode == 6 {
+                let expected = format!(
+                    "through_sequence {} exceeds head {source_head}",
+                    binding.through_sequence + 100_000
+                );
+                assert!(
+                    native.iter().any(|text| text.contains(&expected)),
+                    "{native:?}"
+                );
+            }
+            if mode == 8 {
+                let artifact = serde_json::to_string(&binding.artifact.artifact_id).unwrap();
+                let expected = format!("no eviction recorded through head {source_head}");
+                assert!(
+                    native
+                        .iter()
+                        .any(|text| text.contains(&artifact) && text.contains(&expected)),
+                    "{native:?}"
+                );
+            }
         }
         assert_eq!(
             fs::read(original.path().join("runtime-state.sqlite")).unwrap(),
@@ -319,6 +412,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             fs::read(original.path().join(binding.artifact.object_key().unwrap())).unwrap(),
             original_image
         );
+        assert_eq!(fs::read(&earlier_png).unwrap(), earlier_image);
     }
 
     let mut source = zip::ZipArchive::new(Cursor::new(
@@ -996,12 +1090,15 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         fs::write(&package_path, &bytes).unwrap();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
+        // Workflow #371-3: an entry that matches at once takes one frame; one that never
+        // matches waits its window before it fails.
         if explicit_home {
-            state.fail_capture_on.store(2, Ordering::Release);
-            state
-                .transient_capture_failure
-                .store(true, Ordering::Release);
-            if !starts_home {
+            if starts_home {
+                state.fail_capture_on.store(2, Ordering::Release);
+                state
+                    .transient_capture_failure
+                    .store(true, Ordering::Release);
+            } else {
                 state
                     .transition_capture_after_capture
                     .store(1, Ordering::Release);
@@ -1033,7 +1130,11 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .query_persisted_events_for_test(EventQuery::default())
             .unwrap();
         assert_eq!(state.input_count.load(Ordering::Acquire), 0);
-        assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+        if explicit_home && !starts_home {
+            assert!(state.capture_count.load(Ordering::Acquire) >= 1);
+        } else {
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+        }
         assert_eq!(
             vision.ocr_calls.load(Ordering::Acquire),
             u64::from(declared_page == "home" && starts_home)

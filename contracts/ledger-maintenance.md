@@ -140,8 +140,10 @@ Failed evictions and artifact identity conflicts remain fatal. Segment roots kee
 their existing behavior.
 
 Segment reports retain their original physical meaning. Saved-artifact OCR holds
-the source writer lock, rejects the target root, requires a complete closed
-source and valid through-sequence, and preserves exact artifact/capture causality.
+the source writer lock, rejects the target root, requires a closed source whose
+keyed head row and declared prefix authenticate (a segment source is read whole)
+and a valid through-sequence, and preserves exact artifact/capture causality
+(`contracts/saved-artifact-ocr.md`).
 Package loading and OCR evaluation keep their existing entry semantics.
 
 ## Stage boundary

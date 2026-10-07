@@ -674,7 +674,7 @@ impl HostShared {
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
-        let (check, cooldown_until, _) = self.prepare_instance_connection_with_cooldown(
+        let (check, cooldown_until, _, _) = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
             links,
@@ -730,15 +730,18 @@ impl HostShared {
             admission,
             actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
         )
-        .map(|(selfcheck, _, _)| selfcheck)
+        .map(|(selfcheck, _, _, _)| selfcheck)
     }
 
+    /// The stuck-recovery ladder's preparation (stage `recovery_preparation`): the self-check,
+    /// the `instance_preparation_finished` event, and whether a failure is one the existing
+    /// preparation rule calls recoverable (Workflow #369-1, review M3).
     pub(super) fn prepare_recovery_connection(
         &self,
         resolved: &RegisteredInstance,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
-    ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<TerminalEvent>)> {
+    ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<TerminalEvent>, bool)> {
         self.prepare_instance_connection_with_cooldown(
             &resolved.instance_alias,
             resolved.instance_id(),
@@ -746,11 +749,13 @@ impl HostShared {
             admission,
             actingcommand_contract::RecoveryTriggerStage::RecoveryPreparation,
         )
-        .map(|(check, _, event)| (check, event))
+        .map(|(check, _, event, recoverable)| (check, event, recoverable))
     }
 
     /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover
-    /// cooldown when it refused the preparation lease (`lease_cooldown`, Workflow #191 h2).
+    /// cooldown when it refused the preparation lease (`lease_cooldown`, Workflow #191 h2), and
+    /// whether a failed open is recoverable: an ordinary acquisition failure whose resources
+    /// were disposed and whose cleanup succeeded (the rule a preparation trigger follows).
     fn prepare_instance_connection_with_cooldown(
         &self,
         instance_alias: &str,
@@ -762,6 +767,7 @@ impl HostShared {
         SchedulingResumeSelfCheck,
         Option<u64>,
         Option<TerminalEvent>,
+        bool,
     )> {
         lock(&self.recovery_ladders, "begin_preparation_attempt")?
             .entry(instance_id)
@@ -806,6 +812,7 @@ impl HostShared {
                     scheduling_resume_selfcheck(&[], Some(failure_code)),
                     cooldown_until,
                     None,
+                    false,
                 ));
             }
         };
@@ -928,15 +935,16 @@ impl HostShared {
             self.withhold_policy_instance_availability(instance_id)?;
         }
         let selfcheck = scheduling_resume_selfcheck(&observations, failure_code);
+        let recoverable = recoverable && confirmed && cleanup_succeeded;
         let event = self.record_preparation_finished(
             instance_id,
             links,
             stage,
             &observations,
             &selfcheck,
-            recoverable && confirmed && cleanup_succeeded,
+            recoverable,
         )?;
-        Ok((selfcheck, None, Some(event)))
+        Ok((selfcheck, None, Some(event), recoverable))
     }
 
     /// A preparation step other than an open failed without being fatal (the preparation lease

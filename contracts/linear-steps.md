@@ -390,7 +390,8 @@ scheduled run's refusal is recorded with the policy's lease released, as any oth
 refusal. The admission deadline of a prerequisite package is the run's deadline (for a scheduled
 run, the one the run derives from its request and lease). A prerequisite package's
 `scheduling_outcome` without a designated operation is allowed and ignored. A request's
-`--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only. The
+`--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only,
+which only a scheduled run starts (Workflow #369-3: a direct task run never starts one). The
 map is read when `actingd` starts; a change needs a restart.
 
 **Gate.** A package whose chain is not empty runs through the entry gate instead of starting
@@ -553,6 +554,17 @@ home page, while a `linear_steps` package's final page (a Lab page id such as
 places behave exactly as before; with neither, the rung is skipped (`no_recovery_package`) and
 the home entry fails with `contained_task_home_recovery_binding_missing`.
 
+**Page-graph home entry wait (Workflow #371-3).** The host's page-graph home entry check
+(`EntryRecognition { Initial }`, and `{ PostRecovery }` after the recovery or return-home
+package) no longer looks at one frame. Without target consensus it evaluates the required page
+one frame at a time, every capture interval of the package, until the page passes or
+`min(step_timeout_ms, task timeout)` is spent; each capture is a `CapturePage` boundary and each
+sleep a `PageRecognitionWait` boundary of its own `entry_recovery` budget, and the fact is
+written once with the result. The kernel's own ordinary home entry check waits the same way
+(`contracts/ocr-fields.md`). A pack with target consensus keeps its single consensus verdict,
+and offline simulation keeps the single frame. A run that starts away from home reaches entry
+recovery up to that window later.
+
 **Failure detail.** When the package a run executes is a `linear_steps` package, the kernel
 detail of its task failure is always the native detail of a runtime lifecycle failure record
 (the existing `runtime.failed` with its lifecycle part) written right after the task terminal
@@ -563,7 +575,16 @@ hit_error_page=<bool>` of `page_confirmation_failed`, or the gate's own details 
 failure without a detail is recorded by the terminal alone, as before. The gate
 carries a prerequisite or return-home package's own failure out as its code, with its detail
 only for a recognition failure or an unknown page ("Prerequisite packages" above). A page-graph
-package's failure is recorded as before.
+package's failure is recorded as before, except a failed step confirmation (Workflow #371-2):
+`page_confirmation_failed`, and an operation that decides Fail with no recovery left, which is
+`contained_task_error_page_reached` when the page seen after it is a declared error page and
+`contained_task_step_unconfirmed` otherwise (both were `contained_task_requires_scheduler`). These
+three get the same `runtime.failed` record, with the detail `operation=<id> attempts=<n>
+after_page=<page|<unrecognized>> hit_error_page=<bool>`; for the two new codes it is followed,
+on a confirmation timeout, by ` confirm_elapsed_ms=<e> confirm_limit_ms=<l>`.
+`contained_task_requires_scheduler` remains for a run the state machine pauses or hands to a
+successor and for the stability step limit. None of these codes starts the stuck-recovery
+ladder.
 
 ## Failure codes
 
