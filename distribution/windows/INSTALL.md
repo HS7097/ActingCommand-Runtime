@@ -403,7 +403,8 @@ Scheduler's root folder: every minute, the user's interactive session, least
 privilege, no second instance while one runs, at most five minutes, no battery
 conditions, no restart on failure. It needs `<root>\tools\actingwatch.exe` (Tools
 of this release or later) and refuses while acsetup holds its writer lock. Run it
-again to refresh the task; `uninstall` removes it and keeps the files.
+again to refresh the task; `uninstall` ends a tick in flight, removes the task and
+keeps the files.
 
 `status` is read-only and exits 0 when healthy, otherwise with the attention code
 of the contract (10 FATAL hold, 11 budget exhausted, 12 a start is due or failed,

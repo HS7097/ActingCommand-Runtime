@@ -362,6 +362,11 @@ impl Drop for TaskCleanup {
 
 #[test]
 fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
+    // It registers a real per-minute task: only where CI asks for it, never on a desk.
+    if std::env::var_os("ACTINGCOMMAND_TEST_REGISTER_TASK").is_none() {
+        eprintln!("skipped: ACTINGCOMMAND_TEST_REGISTER_TASK is not set (CI sets it)");
+        return;
+    }
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.root.join("tools")).expect("tools directory");
     fs::copy(
@@ -430,6 +435,7 @@ fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
     // Uninstall removes the task and keeps every file; a second one finds none.
     let report = assert_decision(fixture.watchdog(&["uninstall"]), 0, "uninstalled");
     assert_eq!(report["was_registered"], true);
+    assert_eq!(report["tick_in_progress"], false, "{report}");
     let queried = Command::new("schtasks")
         .args(["/Query", "/TN", &name])
         .output()

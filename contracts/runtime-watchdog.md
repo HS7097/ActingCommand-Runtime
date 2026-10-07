@@ -180,8 +180,9 @@ access: unsafe code is forbidden there).
   `state.json.unreadable-<ms>`; each with a WARN line. The end of the last task tick
   is set to the install time, so the first task tick opens no gap grace.
 - **Name**: `ActingCommand Runtime watchdog <fp12>` in the root folder `\`, `fp12` the
-  first 12 hex digits of SHA-256 over the plain install root, lowercased. Alice's
-  tasks live in `\`; a subfolder could need elevation.
+  first 12 hex digits of SHA-256 over the plain install root without trailing
+  separators, lowercased. The root folder takes a user's own task without elevation;
+  a subfolder could need it.
 - **Principal**: the current user's SID (`whoami /user`), `InteractiveToken`,
   `LeastPrivilege`. No password is stored and no elevation is needed.
 - **Definition**, written to `<root>\watchdog\task.xml` as UTF-16LE with a BOM and
@@ -193,17 +194,28 @@ access: unsafe code is forbidden there).
   `<root>` and no arguments. The description names the root and how to remove it.
 - **Registration**: `schtasks /Create /TN <name> /XML <task.xml> /F`; a non-zero exit
   is `watchdog_task_register_failed` (13) with schtasks' text.
-- **Check**: `schtasks /Query /TN <name> /XML` must show the same command
+- **Check**: the definition Task Scheduler holds (`Export-ScheduledTask`, below) must
+  show the same command
   (case-insensitive), interval `PT1M`, logon type `InteractiveToken`, no run level
   other than `LeastPrivilege` (Task Scheduler omits the default) and no
   `<Enabled>false</Enabled>`; otherwise `watchdog_task_mismatch` (14).
 - The log gets `INFO watchdog_installed task=<name> user=<sid>`; `uninstall` writes
   `INFO watchdog_uninstalled task=<name>` when it deleted one.
 
-`status` reads the task read-only: the same `/Query /XML` check, and from `/Query /FO
-CSV /V /NH` the columns 4, 6 and 7 (status, last run time, last result) raw, since
-Task Scheduler localises them. A missing task (`task_missing`), or one that is
-disabled or differs (`task_mismatch`), is attention 14.
+The task is read through the ScheduledTasks module in a hidden Windows PowerShell that
+answers in UTF-8 JSON (`schtasks` prints in the console code page, which need not be
+UTF-8): `Get-ScheduledTask` in `\`, `Export-ScheduledTask` for the definition and
+`Get-ScheduledTaskInfo` for the run state. `status` reports the definition, `status`
+(the state's name: `Ready`, `Running`, `Disabled`), `last_run_time`, `last_result`
+and `next_run_time`. A missing task (`task_missing`), or one that is disabled or
+differs (`task_mismatch`), is attention 14.
+
+`uninstall` ends a tick in flight (`schtasks /End`; a start it already issued keeps
+running), deletes the task (`schtasks /Delete /F`), then waits up to 200 s for
+`run.lock` and reports `tick_in_progress` if a tick still holds it. When the name is
+not registered it lists `other_watchdog_tasks` in `\`, so a root spelled differently
+than at install can be found. `install` holds `run.lock` (for up to 30 s, else
+`watchdog_run_in_progress`) while it rewrites `state.json`.
 
 Without the product, a registered task fails every minute (the launcher is gone,
 0x80070002 in its last result): run `uninstall` before removing an installation.

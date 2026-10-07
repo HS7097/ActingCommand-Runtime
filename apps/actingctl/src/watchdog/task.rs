@@ -6,11 +6,14 @@
 //! with a BOM, the form `schtasks /Query /XML` declares (`contracts/runtime-watchdog.md`).
 
 use super::Failure;
+use super::powershell;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 use super::powershell::CREATE_NO_WINDOW;
 
@@ -20,9 +23,10 @@ pub(crate) const RUN_LEVEL: &str = "LeastPrivilege";
 pub(crate) const TASK_XML: &str = "task.xml";
 
 /// `ActingCommand Runtime watchdog <fp12>` in the root folder `\`: the first 12 hex digits of
-/// SHA-256 over the plain install root, lowercased.
+/// SHA-256 over the plain install root without trailing separators, lowercased.
 pub(crate) fn task_name(root_plain: &Path) -> String {
-    let digest = Sha256::digest(root_plain.to_string_lossy().to_lowercase().as_bytes());
+    let root = root_plain.to_string_lossy();
+    let digest = Sha256::digest(root.trim_end_matches(['\\', '/']).to_lowercase().as_bytes());
     let fingerprint = digest
         .iter()
         .take(6)
@@ -255,24 +259,96 @@ pub(crate) struct Definition {
     pub(crate) enabled: bool,
 }
 
-pub(crate) enum Registration {
-    /// `schtasks /Query` found no task of that name, or could not read it; its text.
-    Absent(String),
-    Present(Definition),
+/// The run state Task Scheduler reports, read through the ScheduledTasks module.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RunState {
+    /// `Ready`, `Running`, `Disabled`, … (the enum's name, not a localised text).
+    pub(crate) state: Option<String>,
+    pub(crate) last_run_time: Option<String>,
+    pub(crate) last_result: Option<u64>,
+    pub(crate) next_run_time: Option<String>,
 }
 
-pub(crate) fn query(name: &str) -> Result<Registration, Failure> {
-    let output = run(
-        "schtasks.exe",
-        &["/Query", "/TN", name, "/XML"].map(OsStr::new),
+pub(crate) enum Registration {
+    Absent,
+    Present(Definition, RunState),
+}
+
+/// The task as Task Scheduler holds it, through the ScheduledTasks module in a hidden Windows
+/// PowerShell that answers in UTF-8 JSON: its definition (`Export-ScheduledTask`) and its run
+/// state (`Get-ScheduledTaskInfo`). `schtasks /Query` would print in the console code page.
+/// The names of every other watchdog task in the root folder come along, for `uninstall`.
+pub(crate) fn query(name: &str) -> Result<(Registration, Vec<String>), Failure> {
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
+        $ProgressPreference = 'SilentlyContinue'\n\
+        $all = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'ActingCommand Runtime watchdog *' })\n\
+        $task = $all | Where-Object { $_.TaskName -eq $env:AC_WD_TASK } | Select-Object -First 1\n\
+        $out = [ordered]@{ exists = $false; others = @($all | Where-Object { $_.TaskName -ne $env:AC_WD_TASK } | ForEach-Object { [string]$_.TaskName }) }\n\
+        if ($null -ne $task) {\n\
+            $info = Get-ScheduledTaskInfo -InputObject $task\n\
+            $out.exists = $true\n\
+            $out.state = [string]$task.State\n\
+            $out.last_run_time = $(if ($info.LastRunTime) { $info.LastRunTime.ToString('o') } else { $null })\n\
+            $out.last_result = [int64]$info.LastTaskResult\n\
+            $out.next_run_time = $(if ($info.NextRunTime) { $info.NextRunTime.ToString('o') } else { $null })\n\
+            $out.xml = [string](Export-ScheduledTask -TaskPath '\\' -TaskName $env:AC_WD_TASK)\n\
+        }\n\
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
+        [Console]::Out.Write((ConvertTo-Json -InputObject $out -Compress -Depth 4))\n";
+    let output = powershell::run(
+        SCRIPT,
+        &[("AC_WD_TASK", OsStr::new(name))],
+        Duration::from_secs(60),
     )
     .map_err(|detail| Failure::misconfigured("watchdog_task_query_failed", detail))?;
-    if !output.status.success() {
-        return Ok(Registration::Absent(printed(&output)));
+    parse_query(&output)
+}
+
+pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), Failure> {
+    let unreadable = |detail: String| Failure::misconfigured("watchdog_task_query_failed", detail);
+    let value: Value = serde_json::from_str(output.trim())
+        .map_err(|error| unreadable(format!("task query output is not JSON: {error}")))?;
+    let others = match &value["others"] {
+        Value::Array(names) => names
+            .iter()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect(),
+        Value::String(name) => vec![name.clone()],
+        _ => Vec::new(),
+    };
+    let registration = match value["exists"].as_bool() {
+        Some(false) => Registration::Absent,
+        Some(true) => {
+            let xml = value["xml"]
+                .as_str()
+                .ok_or_else(|| unreadable(format!("task query output lacks xml: {value}")))?;
+            let text = |key: &str| value[key].as_str().map(str::to_owned);
+            Registration::Present(
+                parse_definition(xml),
+                RunState {
+                    state: text("state"),
+                    last_run_time: text("last_run_time"),
+                    last_result: value["last_result"].as_u64(),
+                    next_run_time: text("next_run_time"),
+                },
+            )
+        }
+        None => {
+            return Err(unreadable(format!(
+                "task query output lacks exists: {value}"
+            )));
+        }
+    };
+    Ok((registration, others))
+}
+
+/// `schtasks /End`: ends a tick in flight; a task that is not running answers non-zero, which
+/// is reported, not an error.
+pub(crate) fn end(name: &str) -> String {
+    match run("schtasks.exe", &["/End", "/TN", name].map(OsStr::new)) {
+        Ok(output) => format!("{}: {}", output.status, printed(&output)),
+        Err(detail) => detail,
     }
-    Ok(Registration::Present(parse_definition(&decode(
-        &output.stdout,
-    ))))
 }
 
 pub(crate) fn parse_definition(xml: &str) -> Definition {
@@ -331,24 +407,6 @@ pub(crate) fn mismatches(definition: &Definition, root_plain: &Path) -> Vec<Stri
     differences
 }
 
-/// Status, last run time and last result from `schtasks /Query /FO CSV /V /NH`, by column
-/// (4, 6 and 7), raw: Task Scheduler localises them.
-pub(crate) fn run_state(name: &str) -> Option<(String, String, String)> {
-    let output = run(
-        "schtasks.exe",
-        &["/Query", "/TN", name, "/FO", "CSV", "/V", "/NH"].map(OsStr::new),
-    )
-    .ok()
-    .filter(|output| output.status.success())?;
-    let text = decode(&output.stdout);
-    let fields = csv_fields(text.lines().find(|line| !line.trim().is_empty())?);
-    Some((
-        fields.get(3)?.clone(),
-        fields.get(5)?.clone(),
-        fields.get(6)?.clone(),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,10 +458,43 @@ mod tests {
     }
 
     #[test]
+    fn the_task_query_answers_in_json() {
+        let xml = definition_xml(Path::new(r"F:\AC"), "S-1-5-21-1", "2026-10-07T06:50:13Z");
+        let output = serde_json::json!({
+            "exists": true,
+            "others": "ActingCommand Runtime watchdog 000000000000",
+            "state": "Ready",
+            "last_run_time": "2026-10-07T15:51:00.0000000+09:00",
+            "last_result": 0,
+            "next_run_time": null,
+            "xml": xml,
+        })
+        .to_string();
+        let (registration, others) = parse_query(&output).expect("present");
+        assert_eq!(others, ["ActingCommand Runtime watchdog 000000000000"]);
+        let Registration::Present(definition, run) = registration else {
+            panic!("expected a registered task");
+        };
+        assert!(mismatches(&definition, Path::new(r"F:\AC")).is_empty());
+        assert_eq!(
+            (run.state.as_deref(), run.last_result),
+            (Some("Ready"), Some(0))
+        );
+        let (absent, others) = parse_query(r#"{"exists":false,"others":[]}"#).expect("absent");
+        assert!(matches!(absent, Registration::Absent) && others.is_empty());
+        assert!(parse_query("not json").is_err());
+        assert!(parse_query(r#"{"exists":true}"#).is_err());
+    }
+
+    #[test]
     fn names_csv_and_console_output_are_read_as_windows_prints_them() {
         assert_eq!(
             task_name(Path::new(r"F:\AC")),
             task_name(Path::new(r"f:\ac"))
+        );
+        assert_eq!(
+            task_name(Path::new(r"F:\AC")),
+            task_name(Path::new(r"F:\AC\"))
         );
         assert!(task_name(Path::new(r"F:\AC")).starts_with("ActingCommand Runtime watchdog "));
         assert_eq!(task_name(Path::new(r"F:\AC")).len(), 31 + 12);

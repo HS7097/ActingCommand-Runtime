@@ -38,6 +38,8 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
+          # Workflow #374: the watchdog's install test registers a real scheduled task here only.
+          ACTINGCOMMAND_TEST_REGISTER_TASK: '1'
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           cargo build --locked -p actingledger --bin actingledger
