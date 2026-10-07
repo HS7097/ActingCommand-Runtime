@@ -161,6 +161,16 @@ impl HostShared {
         Ok(Some(self.count_work(&mut admission)))
     }
 
+    /// Workflow #369-1 (review L1): whether the host is stopping or an install transition is
+    /// draining it, so a long wait on the host-work thread ends at its next poll.
+    pub(super) fn lifecycle_draining(&self) -> RuntimeHostResult<bool> {
+        let admission = lock(&self.lifecycle_admission, "read_lifecycle_draining")?;
+        Ok(admission.stopping
+            || admission.transition.as_ref().is_some_and(|transition| {
+                matches!(transition.status.phase, Phase::Draining | Phase::Drained)
+            }))
+    }
+
     pub(super) fn request_is_lifecycle_control(operation: &RuntimeOperation) -> bool {
         matches!(
             operation,

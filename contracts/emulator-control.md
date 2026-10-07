@@ -339,14 +339,33 @@ Rungs, in this fixed order, each existing work under the instance lease:
   `command.validated` or `command.rejected` + `runtime.failed`. Stop must observe the old
   process gone before `recovery_instance_stopped` is recorded and Start is considered.
   Admission/fencing is checked again before Start. Stop failure, timeout, ambiguous identity
-  or unconfirmed close ends the rung without Start. Start binds its newly observed port,
-  completes the existing ADB baseline and performs fresh input/capture preparation. Only
-  `capture.ok && touch.ok && failure_code == null` records `recovery_environment_ready`.
-  Skipped with `no_emulator_control` when the instance is not discovery-bound. With no startup
-  package the rung and ladder finish `environment_ready`. With a package, the environment
-  fact remains separate and its ordinary bounded run must reach the package target before
-  the rung and ladder finish `recovered`. Shared managers, ADB servers and other instances
-  are outside this instance control operation.
+  or unconfirmed close ends the rung without Start. Start binds its newly observed port and
+  completes the existing ADB baseline. Then (Workflow #369-1) the rung waits for readiness
+  within 120 s of Start: Android must report a resumed activity (the read-only foreground
+  query of the ADB baseline; no session is opened) and a fresh input/capture preparation
+  (stage `recovery_preparation`) must pass. Only `capture.ok && touch.ok && failure_code ==
+  null` records `recovery_environment_ready`, naming the passing preparation. A failed
+  preparation is retried only when the existing preparation rule calls it recoverable (an
+  ordinary acquisition failure with confirmed disposal and successful cleanup) or the ADB
+  baseline does not answer; any other failure ends the rung `recovery_environment_not_ready`
+  at once. Before every retry the rung polls the ADB baseline every 500 ms until it answers
+  again (bounded by the window), then waits 5 s, 10 s, then 20 s each time, never past the
+  window; each attempt writes its own `instance_preparation_finished` and is rechecked for
+  admission. The instance admission guard is held across Stop, Start and the first attempt,
+  and released while waiting. The waits stop at once on shutdown
+  (`recovery_ladder_shutdown_requested`) or an install drain
+  (`recovery_ladder_drain_requested`). Not ready within the window fails the rung
+  `recovery_environment_not_ready`, or `recovery_android_not_booted` when the boot check never
+  passed and so no preparation ran. The ladder runs on the host's single host-work thread:
+  while the rung waits, queued startup packages and ladders of other instances wait behind it,
+  for at most the window; the policy thread is not blocked. Skipped with
+  `no_emulator_control` when the instance is not discovery-bound. With no startup package the
+  rung and ladder finish `environment_ready`. With a package, the rung then schedules it
+  (`startup_package_scheduled` under the ladder's links) and runs it; the environment fact remains separate and its
+  ordinary bounded run must reach the package target before the rung and ladder finish
+  `recovered`. After the restart, an unavailable capture, input or ADB entry of that run fails
+  the rung instead of skipping it. Shared managers, ADB servers and other instances are
+  outside this instance control operation.
 
 R1/R2 channel eligibility uses the hash-admitted program and current typed backend facts.
 A known failed capture/input channel skips an entry that needs it with `capture_unavailable`

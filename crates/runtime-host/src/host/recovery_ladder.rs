@@ -36,8 +36,20 @@ use actingcommand_contract::{
     RecoveryRungPlan, RecoveryRungSkipReason, RecoveryRungState, RecoveryTriggerStage,
     SchedulingResumeSelfCheck, is_stuck_recovery_trigger,
 };
+use actingcommand_device::DeviceResourceQuiescence;
 
 const LADDER_OPERATION: &str = "run_recovery_ladder";
+/// Workflow #369-1: how long after a confirmed Start the emulator restart rung waits for a
+/// usable environment.
+const RECOVERY_READINESS_WINDOW: Duration = Duration::from_secs(120);
+/// Workflow #369-1: the waits between readiness attempts: 5 s, 10 s, then 20 s each.
+const RECOVERY_READINESS_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(20),
+];
+/// Workflow #369-1 (review L1): how often a readiness wait checks shutdown and install drain.
+const RECOVERY_READINESS_POLL: Duration = Duration::from_millis(500);
 
 /// Where a staged trigger goes.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -662,16 +674,19 @@ impl HostShared {
                 });
             }
         };
-        self.run_recovery_rung_package(&PendingStartupPackage {
-            instance_id: pending.instance_id,
-            instance_alias: pending.instance_alias.clone(),
-            request,
-            causation_id: pending.causation_id,
-            control_request_id: pending.request_id,
-            run: HostPackageRun::ReturnHome,
-            recovery_rung: true,
-            configured_return_home: pending.recovery_configured.clone().map(Box::new),
-        })
+        self.run_recovery_rung_package(
+            &PendingStartupPackage {
+                instance_id: pending.instance_id,
+                instance_alias: pending.instance_alias.clone(),
+                request,
+                causation_id: pending.causation_id,
+                control_request_id: pending.request_id,
+                run: HostPackageRun::ReturnHome,
+                recovery_rung: true,
+                configured_return_home: pending.recovery_configured.clone().map(Box::new),
+            },
+            false,
+        )
     }
 
     /// R2: schedules (`startup_package_scheduled` under the ladder's links) and runs the
@@ -686,11 +701,14 @@ impl HostShared {
             .map_err(|failure| *failure.error)?
             .ok_or_else(|| ladder_invariant("recovery_ladder_startup_package_missing"))?;
         startup.recovery_rung = true;
-        self.run_recovery_rung_package(&startup)
+        self.run_recovery_rung_package(&startup, false)
     }
 
     /// R3: the existing provider confirms the old process gone before the current instance
-    /// is started. One admission guard spans both actions and fresh binding preparation.
+    /// is started. One admission guard spans both actions and the first readiness attempt.
+    /// Workflow #369-1: the rung then waits for a usable environment (`await_recovery_readiness`),
+    /// records `recovery_environment_ready`, and runs the instance's startup package; only that
+    /// run's success recovers the rung.
     fn recovery_emulator_restart(
         &self,
         pending: &PendingRecoveryLadder,
@@ -756,22 +774,27 @@ impl HostShared {
                 )?;
                 continue;
             }
-            let Some((check, Some(preparation))) = driven.preparation else {
-                return Ok(RungAttempt::Failed {
-                    run_id: None,
-                    reason: "recovery_preparation_unconfirmed",
-                });
-            };
-            if !driven.outcome.running
-                || !check.capture.ok
-                || !check.touch.ok
-                || check.failure_code.is_some()
-            {
+            if !driven.outcome.running {
                 return Ok(RungAttempt::Failed {
                     run_id: None,
                     reason: "recovery_environment_not_ready",
                 });
             }
+            let stop = stopped.ok_or_else(|| ladder_invariant("recovery_stop_missing"))?;
+            let (current, preparation) = match self.await_recovery_readiness(
+                pending,
+                &instance_guard,
+                admission,
+                Instant::now() + RECOVERY_READINESS_WINDOW,
+            )? {
+                Ok(ready) => ready,
+                Err(reason) => {
+                    return Ok(RungAttempt::Failed {
+                        run_id: None,
+                        reason,
+                    });
+                }
+            };
             let event = self.append_event_raw(
                 EventSeverity::Info,
                 EventSource::Runtime,
@@ -781,18 +804,20 @@ impl HostShared {
                 RuntimePayloadDraft::lifecycle_observed(
                     self.owner_epoch,
                     RuntimeLifecyclePhase::RecoveryEnvironmentReady {
-                        stop: stopped.ok_or_else(|| ladder_invariant("recovery_stop_missing"))?,
+                        stop,
                         start: driven.terminal,
                         preparation,
                     },
                     AuditInput::new(),
                 ),
             )?;
-            drop(admission);
-            return match driven.startup_package {
+            let startup = self
+                .prepare_startup_package(&current, pending.links.clone(), pending.request_id)
+                .map_err(|failure| *failure.error)?;
+            return match startup {
                 Some(mut startup) => {
                     startup.recovery_rung = true;
-                    self.run_recovery_rung_package(&startup)
+                    self.run_recovery_rung_package(&startup, true)
                 }
                 None => Ok(RungAttempt::EnvironmentReady {
                     event: terminal(&event),
@@ -802,11 +827,181 @@ impl HostShared {
         Err(ladder_invariant("recovery_start_missing"))
     }
 
+    /// Workflow #369-1: after a confirmed Start, waits until Android reports a resumed activity
+    /// (the read-only boot check, review M5) and a fresh preparation passes (`capture.ok &&
+    /// touch.ok`, no failure code), within `deadline`. The admission guard Start held covers the
+    /// first attempt; later attempts take it again, and it is released while waiting, so the
+    /// policy thread is never blocked by the wait (a failed preparation already withholds the
+    /// instance from policy). The wait runs on the host-work thread, so other instances'
+    /// queued startup packages and ladders wait behind it, for at most the window (review L1).
+    /// A failed preparation is retried only when the existing rule calls it recoverable or the
+    /// ADB baseline does not answer (review M3); every retry first polls the ADB baseline until
+    /// it answers (bounded by `deadline`), then waits 5 s, 10 s, then 20 s, never past
+    /// `deadline`. Each attempt is rechecked for admission (pause, shutdown, capacity). Returns
+    /// the current binding and the passing preparation event, or the rung's failure reason:
+    /// `recovery_android_not_booted` when the window ends before the boot check ever passed
+    /// (so no preparation ran, review L-R4-2), otherwise `recovery_environment_not_ready`.
+    fn await_recovery_readiness<'guard>(
+        &self,
+        pending: &PendingRecoveryLadder,
+        instance_guard: &'guard Mutex<()>,
+        held: MutexGuard<'guard, ()>,
+        deadline: Instant,
+    ) -> RuntimeHostResult<Result<(RegisteredInstance, TerminalEvent), &'static str>> {
+        let alias = pending.instance_alias.as_str();
+        let mut held = Some(held);
+        let mut retries = 0_usize;
+        let mut prepared = false;
+        loop {
+            if !self.recovery_admitted(pending)? {
+                return Ok(Err("recovery_admission_denied"));
+            }
+            if self.recovery_android_booted(pending)? {
+                prepared = true;
+                let admission = match held.take() {
+                    Some(admission) => admission,
+                    None => lock(instance_guard, "lock_instance_admission")?,
+                };
+                let current = self
+                    .resolve_instance(alias)
+                    .map_err(|failure| *failure.error)?;
+                if !current.device_self_checked() {
+                    return Ok(Err("recovery_preparation_unconfirmed"));
+                }
+                let (check, preparation, recoverable) =
+                    self.prepare_recovery_connection(&current, pending.links.clone(), &admission)?;
+                if check.capture.ok && check.touch.ok && check.failure_code.is_none() {
+                    return Ok(match preparation {
+                        Some(preparation) => Ok((current, preparation)),
+                        None => Err("recovery_preparation_unconfirmed"),
+                    });
+                }
+                drop(admission);
+                if !recoverable && !self.recovery_adb_unanswered(pending)? {
+                    return Ok(Err("recovery_environment_not_ready"));
+                }
+            }
+            drop(held.take());
+            let wait =
+                RECOVERY_READINESS_BACKOFF[retries.min(RECOVERY_READINESS_BACKOFF.len() - 1)];
+            let not_ready = if prepared {
+                "recovery_environment_not_ready"
+            } else {
+                "recovery_android_not_booted"
+            };
+            if let Some(reason) = self.await_recovery_retry(alias, wait, deadline, not_ready)? {
+                return Ok(Err(reason));
+            }
+            retries += 1;
+        }
+    }
+
+    /// Workflow #369-1 (review M5): Android has booted once it reports a resumed activity
+    /// (read-only, through the ADB baseline; no session is opened). An ADB failure is a "not
+    /// yet"; one whose child or pipe cleanup is unconfirmed poisons the host, as the
+    /// foreground gate does.
+    fn recovery_android_booted(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
+        match self
+            .execution()?
+            .observe_foreground_application(&pending.instance_alias)
+        {
+            Ok(observation) => Ok(observation.foreground.is_some()),
+            Err(error) => {
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    return Err(recovery_adb_fault(pending, &error));
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    /// Workflow #369-1 (review M3): whether the ADB baseline fails to answer one probe now.
+    fn recovery_adb_unanswered(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
+        match self
+            .execution()?
+            .probe_adb_baseline(&pending.instance_alias)
+        {
+            Ok(()) => Ok(false),
+            Err(error) => {
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    return Err(recovery_adb_fault(pending, &error));
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    /// Before the next readiness attempt: polls the ADB baseline every 500 ms until it answers
+    /// again, as `await_adb_baseline` does (review M-R4-1), then waits `wait`. Both are bounded
+    /// by `deadline` and check shutdown and install drain at every poll (review L1).
+    /// `Some(reason)` ends the rung: shutdown, drain, or no time left in the window
+    /// (`not_ready`).
+    fn await_recovery_retry(
+        &self,
+        alias: &str,
+        wait: Duration,
+        deadline: Instant,
+        not_ready: &'static str,
+    ) -> RuntimeHostResult<Option<&'static str>> {
+        let stopped = || self.fatal.is_shutdown_requested();
+        loop {
+            if let Some(reason) = self.recovery_wait_interrupted()? {
+                return Ok(Some(reason));
+            }
+            if Instant::now() >= deadline {
+                return Ok(Some(not_ready));
+            }
+            match self
+                .execution()?
+                .probe_adb_baseline_until(alias, deadline, &stopped)
+            {
+                Ok(()) => break,
+                Err(error) => {
+                    if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+                        return Err(RuntimeHostError::execution(LADDER_OPERATION, &error));
+                    }
+                    thread::sleep(
+                        RECOVERY_READINESS_POLL
+                            .min(deadline.saturating_duration_since(Instant::now())),
+                    );
+                }
+            }
+        }
+        let until = Instant::now() + wait;
+        if until >= deadline {
+            return Ok(Some(not_ready));
+        }
+        loop {
+            if let Some(reason) = self.recovery_wait_interrupted()? {
+                return Ok(Some(reason));
+            }
+            let now = Instant::now();
+            if now >= until {
+                return Ok(None);
+            }
+            thread::sleep(RECOVERY_READINESS_POLL.min(until - now));
+        }
+    }
+
+    /// A readiness wait ends at once on shutdown or an install drain (review L1).
+    fn recovery_wait_interrupted(&self) -> RuntimeHostResult<Option<&'static str>> {
+        if self.fatal.is_shutdown_requested() {
+            return Ok(Some("recovery_ladder_shutdown_requested"));
+        }
+        if self.lifecycle_draining()? {
+            return Ok(Some("recovery_ladder_drain_requested"));
+        }
+        Ok(None)
+    }
+
     /// Runs a rung's package; it recovers when the run completes with `success` (its target
-    /// page reached). A failure was already recorded by the runner.
+    /// page reached). A failure was already recorded by the runner. After a destructive action
+    /// (the emulator restart, Workflow #369-1) an unavailable entry channel or ADB fails the
+    /// rung instead of skipping it, so `rungs_tried` counts the action that ran.
     fn run_recovery_rung_package(
         &self,
         run: &PendingStartupPackage,
+        destructive: bool,
     ) -> RuntimeHostResult<RungAttempt> {
         Ok(match self.run_pending_startup_package(run)? {
             Ok(OperationSuccess {
@@ -826,18 +1021,8 @@ impl HostShared {
                 }
             }
             Ok(_) => return Err(ladder_invariant("recovery_rung_result_invalid")),
-            Err(code) => match code {
-                "recovery_capture_unavailable" => RungAttempt::Skipped {
-                    reason: RecoveryRungSkipReason::CaptureUnavailable,
-                },
-                "recovery_input_unavailable" => RungAttempt::Skipped {
-                    reason: RecoveryRungSkipReason::InputUnavailable,
-                },
-                "startup_package_adb_not_ready" | "recovery_ladder_adb_not_ready" => {
-                    RungAttempt::Skipped {
-                        reason: RecoveryRungSkipReason::AdbUnavailable,
-                    }
-                }
+            Err(code) => match recovery_entry_skip(code) {
+                Some(reason) if !destructive => RungAttempt::Skipped { reason },
                 _ => RungAttempt::Failed {
                     run_id: None,
                     reason: code,
@@ -888,4 +1073,37 @@ impl HostShared {
         )
         .map(|_| ())
     }
+}
+
+/// The skip a rung package's entry refusal stands for: a known unavailable capture or input
+/// channel, or an ADB baseline that does not answer.
+fn recovery_entry_skip(code: &str) -> Option<RecoveryRungSkipReason> {
+    match code {
+        "recovery_capture_unavailable" => Some(RecoveryRungSkipReason::CaptureUnavailable),
+        "recovery_input_unavailable" => Some(RecoveryRungSkipReason::InputUnavailable),
+        "startup_package_adb_not_ready" | "recovery_ladder_adb_not_ready" => {
+            Some(RecoveryRungSkipReason::AdbUnavailable)
+        }
+        _ => None,
+    }
+}
+
+/// Workflow #369-1: an ADB child or pipe cleanup left unconfirmed during a readiness check is
+/// a host fault (as in the foreground gate), not a "not yet".
+fn recovery_adb_fault(
+    pending: &PendingRecoveryLadder,
+    error: &actingcommand_device::DeviceError,
+) -> RuntimeHostError {
+    let mut fatal = RuntimeHostError::fatal(
+        "recovery_readiness_adb_unconfirmed",
+        LADDER_OPERATION,
+        RuntimeErrorCode::RuntimeFatal,
+    )
+    .with_native_detail(format!(
+        "instance_alias={}; adb_failed={error}",
+        pending.instance_alias
+    ));
+    fatal.lifecycle.instance_id = Some(pending.instance_id);
+    fatal.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
+    fatal
 }
