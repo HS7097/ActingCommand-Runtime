@@ -740,6 +740,23 @@ mod tests {
     }
 
     #[test]
+    fn one_off_355_s1_short_digest_is_invalid_not_a_panic() {
+        valid_report()
+            .validate()
+            .expect("a valid projected reference still validates");
+        for digest in ["abc", "sha256:", "sha256:0\u{e9}"] {
+            let mut reference = valid_report();
+            reference.sha256 = digest.to_owned();
+            assert!(reference.object_key.is_some());
+            let error = reference
+                .validate()
+                .expect_err("a short or non-ASCII digest is invalid");
+            assert_eq!(error.code(), "invalid_projected_artifact_reference");
+            println!("one-off #355 S1: digest {digest:?} -> {}", error.code());
+        }
+    }
+
+    #[test]
     fn parameter_proposal_has_stable_identity_and_plan_target() {
         let proposal = CatalogProposal::new(
             format!("sha256:{}", "b".repeat(64)),
