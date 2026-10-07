@@ -2,8 +2,9 @@
 
 //! Workflow #374: `actingctl watchdog` on an A/B fixture root. A live owner (the sealed C4
 //! Runtime child), a held acsetup writer lock, start attempts through a stand-in fixed entry
-//! and the budget, a FATAL hold, a formal start and close; and the real start path with the
-//! actingd that CI exports as `ACTINGCOMMAND_TEST_ACTINGD_EXE`.
+//! and the budget, a FATAL hold, a formal start and close; the real start path with the
+//! actingd that CI exports as `ACTINGCOMMAND_TEST_ACTINGD_EXE`; and the task's registration
+//! and removal. Without a registered task `status` adds attention 14.
 
 #![cfg(windows)]
 
@@ -143,8 +144,8 @@ impl Fixture {
     fn wait_alive(&self) {
         let started = Instant::now();
         loop {
-            let (exit, report) = self.watchdog(&["status"]);
-            if exit == 0 && report["decision"] == "alive" {
+            let (_, report) = self.watchdog(&["status"]);
+            if report["decision"] == "alive" {
                 return;
             }
             assert!(
@@ -154,6 +155,15 @@ impl Fixture {
             thread::sleep(Duration::from_millis(500));
         }
     }
+}
+
+fn attention(report: &Value) -> Vec<String> {
+    report["attention"]
+        .as_array()
+        .expect("attention list")
+        .iter()
+        .map(|item| item["code"].as_str().expect("attention code").to_owned())
+        .collect()
 }
 
 fn assert_decision(result: (i32, Value), exit: i32, decision: &str) -> Value {
@@ -178,8 +188,9 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
     let mut runtime = support::RuntimeChild::spawn(&fixture.state, "c4_runtime_child_process");
     runtime.wait_ready(&fixture.state);
 
-    let report = assert_decision(fixture.watchdog(&["status"]), 0, "alive");
+    let report = assert_decision(fixture.watchdog(&["status"]), 14, "alive");
     assert_eq!(report["detail"]["started_by_watchdog"], false);
+    assert_eq!(attention(&report), ["task_missing"]);
     assert_decision(fixture.watchdog(&["run-once"]), 0, "alive");
     assert!(
         fixture
@@ -237,8 +248,12 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
     assert_decision(fixture.watchdog(&["run-once"]), 0, "formal_close");
     assert_eq!(fixture.start_logs(), 3);
     // No Runtime log covers the closed epoch: `status` flags it (review M2).
-    let report = assert_decision(fixture.watchdog(&["status"]), 17, "formal_close");
+    let report = assert_decision(fixture.watchdog(&["status"]), 14, "formal_close");
     assert_eq!(report["close_evidence"], "unlogged");
+    assert_eq!(
+        attention(&report),
+        ["formal_close_unlogged", "task_missing"]
+    );
 }
 
 /// Ends a Runtime the test could not stop formally.
@@ -302,8 +317,9 @@ fn watchdog_restarts_a_killed_runtime_through_the_fixed_entry() {
         line.contains(&format!(" method={method} ")) && line.contains(" generation=1 "),
         "{line}"
     );
-    let report = assert_decision(fixture.watchdog(&["status"]), 0, "alive");
+    let report = assert_decision(fixture.watchdog(&["status"]), 14, "alive");
     assert_eq!(report["detail"]["started_by_watchdog"], true);
+    assert_eq!(attention(&report), ["task_missing"]);
 
     // A formal close: the watchdog stays down, and its own log covers the closed epoch.
     let shutdown = Command::new(env!("CARGO_BIN_EXE_actingctl"))
@@ -323,7 +339,102 @@ fn watchdog_restarts_a_killed_runtime_through_the_fixed_entry() {
         0,
         "formal_close",
     );
-    let report = assert_decision(fixture.watchdog(&["status"]), 0, "formal_close");
+    let report = assert_decision(fixture.watchdog(&["status"]), 14, "formal_close");
     assert_eq!(report["close_evidence"], "logged");
+    assert_eq!(attention(&report), ["task_missing"]);
     assert_eq!(fixture.start_logs(), 1);
+}
+
+/// Deletes the test's task whatever the test did.
+struct TaskCleanup(String);
+
+impl Drop for TaskCleanup {
+    fn drop(&mut self) {
+        let deleted = Command::new("schtasks")
+            .args(["/Delete", "/TN", &self.0, "/F"])
+            .output();
+        eprintln!("cleanup schtasks /Delete {}: {deleted:?}", self.0);
+    }
+}
+
+#[test]
+fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.root.join("tools")).expect("tools directory");
+    fs::copy(
+        env!("CARGO_BIN_EXE_actingwatch"),
+        fixture.root.join("tools").join("actingwatch.exe"),
+    )
+    .expect("place the launcher");
+    fs::copy(
+        env!("CARGO_BIN_EXE_actingctl"),
+        fixture.root.join("runtime").join("actingctl.exe"),
+    )
+    .expect("place the fixed entry");
+
+    let report = assert_decision(fixture.watchdog(&["install"]), 0, "installed");
+    let name = report["task_name"].as_str().expect("task name").to_owned();
+    let _cleanup = TaskCleanup(name.clone());
+    assert!(
+        name.starts_with("ActingCommand Runtime watchdog "),
+        "{name}"
+    );
+    let canonical = fs::canonicalize(&fixture.root).expect("canonical root");
+    let plain = canonical.to_string_lossy();
+    let launcher = format!(
+        "{}\\tools\\actingwatch.exe",
+        plain.strip_prefix("\\\\?\\").unwrap_or(plain.as_ref())
+    );
+    assert_eq!(
+        report["command"].as_str().map(str::to_lowercase),
+        Some(launcher.to_lowercase()),
+        "{report}"
+    );
+    assert_eq!(report["interval"], "PT1M");
+    assert_eq!(report["logon_type"], "InteractiveToken");
+    assert_eq!(report["enabled"], true);
+    let xml = fs::read(fixture.root.join("watchdog").join("task.xml")).expect("task.xml");
+    assert!(
+        xml.starts_with(&[0xff, 0xfe]),
+        "task.xml is not UTF-16LE with a BOM"
+    );
+
+    // Task Scheduler's own copy of the definition.
+    let queried = Command::new("schtasks")
+        .args(["/Query", "/TN", &name, "/XML"])
+        .output()
+        .expect("schtasks /Query");
+    assert!(queried.status.success(), "{queried:?}");
+    let text = String::from_utf8_lossy(&queried.stdout);
+    for setting in [
+        "<Interval>PT1M</Interval>",
+        "<LogonType>InteractiveToken</LogonType>",
+        "<ExecutionTimeLimit>PT5M</ExecutionTimeLimit>",
+        "actingwatch.exe</Command>",
+    ] {
+        assert!(text.contains(setting), "{setting} missing from {text}");
+    }
+    assert!(!text.contains("<Enabled>false</Enabled>"), "{text}");
+    let report = assert_decision(fixture.watchdog(&["status"]), 0, "never_started");
+    assert_eq!(report["task"]["registered"], true, "{report}");
+    assert_eq!(report["task"]["mismatches"], json!([]), "{report}");
+    assert!(
+        fixture
+            .log()
+            .contains(&format!(" INFO watchdog_installed task=\"{name}\" "))
+    );
+
+    // Uninstall removes the task and keeps every file; a second one finds none.
+    let report = assert_decision(fixture.watchdog(&["uninstall"]), 0, "uninstalled");
+    assert_eq!(report["was_registered"], true);
+    let queried = Command::new("schtasks")
+        .args(["/Query", "/TN", &name])
+        .output()
+        .expect("schtasks /Query");
+    assert!(!queried.status.success(), "the task is still registered");
+    let report = assert_decision(fixture.watchdog(&["uninstall"]), 0, "uninstalled");
+    assert_eq!(report["was_registered"], false);
+    assert!(fixture.root.join("watchdog").join("task.xml").is_file());
+    let report = assert_decision(fixture.watchdog(&["status"]), 14, "never_started");
+    assert_eq!(attention(&report), ["task_missing"]);
 }
