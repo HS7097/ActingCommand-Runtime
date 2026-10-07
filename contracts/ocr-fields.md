@@ -174,9 +174,16 @@ groups of exactly three digits. Thus `1,234,567` resolves to `1234567`; `1234`, 
 against `min..=max`. Capacity is validated but is not an output, a range bound or a divisor.
 Zero capacity and a current value greater than capacity are legal. `17/20` resolves to
 `17`; `17/20x`, `17/ 20` and a capacity overflow fail. Leading zeros follow the ordinary
-ASCII decimal rule on both sides. Internal whitespace, signs, decimal points and
-non-ASCII digits are invalid in all three formats. Group separators are exclusive to
-`comma_grouped`; unknown formats fail declaration admission.
+ASCII decimal rule on both sides.
+
+`times_prefixed` accepts at most one optional multiplier prefix, `x` (U+0078), `X` (U+0058)
+or `×` (U+00D7), immediately followed by one or more ASCII decimal digits and nothing else.
+`x2`, `×6`, `X10` and `1` resolve to `2`, `6`, `10` and `1`; the prefix alone, a space after
+the prefix, a repeated prefix, any other leading character such as `<1`, and a trailing
+prefix are invalid. Internal whitespace, signs, decimal points and non-ASCII digits are
+invalid in all four formats. Group separators are exclusive to `comma_grouped`; unknown
+formats fail declaration admission. A pack that declares `times_prefixed` needs Runtime
+v0.11.3 or later; an older Runtime refuses its program at admission.
 
 The contract owner's pure `OcrUnsignedIntegerFormat::parse` entry is shared by execution
 and official client value verification. It retains the original raw/trimmed text,
