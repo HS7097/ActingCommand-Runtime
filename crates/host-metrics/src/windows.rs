@@ -467,7 +467,8 @@ fn connectivity_hint_query() -> ConnectivityHintResolution {
             return Err(("network_connectivity_library_unavailable", Some(os_error)));
         }
         // SAFETY: a live module handle and a null-terminated ANSI name.
-        let address = unsafe { GetProcAddress(module, b"GetNetworkConnectivityHint\0".as_ptr()) };
+        let address =
+            unsafe { GetProcAddress(module, c"GetNetworkConnectivityHint".as_ptr().cast()) };
         let Some(address) = address else {
             return Err(("network_connectivity_query_unsupported", None));
         };
