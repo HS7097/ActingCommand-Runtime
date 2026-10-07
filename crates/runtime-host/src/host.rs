@@ -4,6 +4,7 @@ use crate::agent_dispatcher::{
     AgentDispatcherState, AgentResponsePreparation, AgentResumePreparation, AgentSessionPreparation,
 };
 use crate::approval::ApprovalProjection;
+use crate::catalog_plan::CatalogTransitionPlan;
 use crate::events::RuntimeEvents;
 use crate::fact_store::{
     InstanceFactStore, POLICY_INSTANCE_AVAILABLE_KEY, POLICY_INSTANCE_CAPABILITIES_KEY,
@@ -1614,6 +1615,25 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<CatalogGeneration> {
         self.work_ref("activate_policy_catalog")?
             .activate_policy_catalog(sources)
+    }
+
+    /// Workflow #361 C2: the transition the configured catalog asks for. Stages the
+    /// generation and records nothing in the ledger.
+    pub fn plan_policy_catalog_transition(
+        &self,
+        sources: &CatalogSources,
+    ) -> RuntimeHostResult<CatalogTransitionPlan> {
+        self.work_ref("plan_policy_catalog_transition")?
+            .plan_policy_catalog_transition(sources)
+    }
+
+    /// Workflow #361 C2: records a planned transition; the first catalog write of startup.
+    pub fn apply_policy_catalog_transition(
+        &self,
+        plan: &CatalogTransitionPlan,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        self.work_ref("apply_policy_catalog_transition")?
+            .apply_policy_catalog_transition(plan)
     }
 
     /// The latest decision of each approval id from the complete ledger-verified approval

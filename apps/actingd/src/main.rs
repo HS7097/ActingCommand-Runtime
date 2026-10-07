@@ -188,23 +188,12 @@ fn initialize_policy(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
 ) -> Result<PolicyCycleExecution, ActingdError> {
-    let generation = host
-        .activate_policy_catalog(&policy.catalog)
+    // Workflow #361 C2: plan and check everything first; the catalog pointer moves only after
+    // every check passed, so a refused configuration leaves no catalog event behind.
+    let plan = host
+        .plan_policy_catalog_transition(&policy.catalog)
         .map_err(ActingdError::runtime)?;
-    let governance = RuntimeClient::connect(
-        RuntimeClientConfig::new(&policy.state_root, EventActor::User, EventSource::Ui)
-            .with_io_timeout(Duration::from_secs(5)),
-    )
-    .map_err(ActingdError::client)?;
-    // Workflow #318 cfg4: the driver transcribes the person's configured approvals, so it
-    // stays (User, Ui); its card names the daemon, so the ledger shows who recorded them.
-    governance
-        .declare_governance_identity(&GovernanceIdentityCard {
-            client: config::GOVERNANCE_POLICY_DRIVER_CLIENT.to_owned(),
-            client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-            instance: None,
-        })
-        .map_err(ActingdError::client)?;
+    let generation = plan.generation();
     // Workflow #191 D2: the host's complete ledger-verified approval projection, not the
     // bounded client event query, so a long approval history cannot keep startup failing.
     let latest = host
@@ -233,21 +222,46 @@ fn initialize_policy(
         }
         undecided.push(decision);
     }
-    // Workflow #330 H2: the activated catalog supersedes every active catalog approval of an
+    // Workflow #330 H2: the planned catalog supersedes every active catalog approval of an
     // older version, or of this version under another hash. They can no longer authorize a
     // dispatch, so the driver revokes them on the same (User, Ui) connection before it records
     // the configured approvals, freeing their places in the bounded active projection.
-    for superseded in host
-        .superseded_catalog_approvals(&generation)
+    let revocations = host
+        .superseded_catalog_approvals(generation)
         .map_err(ActingdError::runtime)?
-    {
-        let revocation = ApprovalDecisionRecord::new(
-            superseded.approval_id(),
-            ApprovalDisposition::Revoked,
-            superseded.target().clone(),
-            "catalog_superseded",
-        )
-        .map_err(|_| ActingdError::process("policy_catalog_revocation_invalid"))?;
+        .iter()
+        .map(|superseded| {
+            ApprovalDecisionRecord::new(
+                superseded.approval_id(),
+                ApprovalDisposition::Revoked,
+                superseded.target().clone(),
+                "catalog_superseded",
+            )
+            .map_err(|_| ActingdError::process("policy_catalog_revocation_invalid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let governance = RuntimeClient::connect(
+        RuntimeClientConfig::new(&policy.state_root, EventActor::User, EventSource::Ui)
+            .with_io_timeout(Duration::from_secs(5)),
+    )
+    .map_err(ActingdError::client)?;
+    // Workflow #318 cfg4: the driver transcribes the person's configured approvals, so it
+    // stays (User, Ui); its card names the daemon, so the ledger shows who recorded them.
+    governance
+        .declare_governance_identity(&GovernanceIdentityCard {
+            client: config::GOVERNANCE_POLICY_DRIVER_CLIENT.to_owned(),
+            client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            instance: None,
+        })
+        .map_err(ActingdError::client)?;
+    // The first catalog write: the planned transition, under the plan's compare-and-swap.
+    let activated = host
+        .apply_policy_catalog_transition(&plan)
+        .map_err(ActingdError::runtime)?;
+    if activated != *generation {
+        return Err(ActingdError::process("policy_catalog_plan_changed"));
+    }
+    for revocation in revocations {
         governance
             .record_approval_decision(revocation)
             .map_err(ActingdError::client)?;
