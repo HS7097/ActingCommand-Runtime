@@ -30,6 +30,8 @@
 //!
 //! Slice #316-B4: the stuck-recovery ladder's emulator-restart rung drives the same action
 //! through `drive_emulator_control` after recording its own `command.received` intent.
+//! Workflow #369-1: on that recovery path this module neither prepares the connection nor
+//! schedules the startup package; the rung's own readiness wait does both.
 
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
@@ -50,10 +52,6 @@ pub(super) struct EmulatorControlDriven {
     adb_wait_ms: u64,
     pub(super) terminal: TerminalEvent,
     pub(super) startup_package: Option<super::startup_package::PendingStartupPackage>,
-    pub(super) preparation: Option<(
-        actingcommand_contract::SchedulingResumeSelfCheck,
-        Option<TerminalEvent>,
-    )>,
 }
 
 impl HostShared {
@@ -272,14 +270,18 @@ impl HostShared {
         // Workflow #317 sc3 (b), #316 goal 5: a started or restarted physical instance is
         // connected and self-checked at once; it stays unavailable until that self-check passes.
         // A failed preparation is recorded and does not fail the completed control action.
-        let preparation = if action != EmulatorInstanceAction::Stop && rebound.device_self_checked()
-        {
-            if recovery {
-                Some(
-                    self.prepare_recovery_connection(&rebound, links.clone(), admission)
-                        .map_err(RequestFailure::poison_without_terminal)?,
-                )
-            } else {
+        // Workflow #369-1: the ladder's emulator restart waits for readiness itself
+        // (`recovery_ladder`), so nothing is prepared or scheduled here on that path.
+        if recovery {
+            return Ok(EmulatorControlDriven {
+                outcome,
+                adb_wait_ms,
+                terminal: terminal_event,
+                startup_package: None,
+            });
+        }
+        let preparation_failed =
+            if action != EmulatorInstanceAction::Stop && rebound.device_self_checked() {
                 let check = self
                     .prepare_instance_connection(
                         &rebound.instance_alias,
@@ -288,14 +290,10 @@ impl HostShared {
                         admission,
                     )
                     .map_err(RequestFailure::poison_without_terminal)?;
-                Some((check, None))
-            }
-        } else {
-            None
-        };
-        let preparation_failed = preparation.as_ref().is_some_and(|(check, _)| {
-            !check.capture.ok || !check.touch.ok || check.failure_code.is_some()
-        });
+                !check.capture.ok || !check.touch.ok || check.failure_code.is_some()
+            } else {
+                false
+            };
         let startup_package = if action == EmulatorInstanceAction::Stop || preparation_failed {
             None
         } else {
@@ -306,7 +304,6 @@ impl HostShared {
             adb_wait_ms,
             terminal: terminal_event,
             startup_package,
-            preparation,
         })
     }
 
