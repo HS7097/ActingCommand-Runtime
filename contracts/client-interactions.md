@@ -141,17 +141,32 @@ not seen by the driver.
 The driver also revokes approvals the configured catalog supersedes (Workflow
 #330 H2). Since Workflow #361 C2 startup checks everything before the first
 catalog write: it plans the catalog transition (the generation is staged, no
-ledger record is written, a refused transition stops startup here), builds every
-configured approval and runs the conflict check, and reads, from the same complete
-verified projection, every active catalog approval (`approved` or `pinned`) whose
-target is `catalog` with an older version, or with the planned version under
-another hash. Only then does it connect, declare its card and apply the planned
-transition (nothing for an already active catalog); a refusal before that point
-leaves no catalog or approval record. After the transition it records `revoked`
-for each superseded approval on the same (User, Ui) connection, with the
-approval's own target and reason `catalog_superseded`, and only then records the
-undecided configured approvals. Plan and decision approvals and catalog
-approvals of a later version are left as they are. The ledger keeps the whole
+ledger record is written, a refused transition stops startup here, see
+"Catalog Lineage" in `contracts/scheduling/README.md`), builds every configured
+approval and runs the conflict check, and reads, from the same complete verified
+projection, every active catalog approval (`approved` or `pinned`) whose target
+is `catalog` and that the planned generation supersedes: an approval of another
+catalog id that was active in this ledger, whatever its version (Workflow #361
+A); otherwise an older version, or the planned version under another hash. Only
+then does it connect, declare its card and apply the planned transition (nothing
+for an already active catalog); a refusal before that point leaves no catalog or
+approval record. After the transition it records `revoked` for each superseded
+approval on the same (User, Ui) connection, with the approval's own target and
+reason `catalog_superseded`, and only then records the undecided configured
+approvals and the re-approvals. Plan and decision approvals and catalog
+approvals of a later version of the same catalog (or of a catalog never active
+here) are left as they are, also on a switch or a rollback.
+
+A re-approval (Workflow #361 A) restores a generation's own approval after a
+transition superseded it: a configured id whose latest decision is `revoked`
+with reason `catalog_superseded` for exactly the configured target is approved
+again with reason `configured_catalog_approval`, provided the configured
+generation was active before in this ledger (a rollback, or a forward step or
+`replace` back to a generation a rollback had left). Any other latest decision
+that differs, a person's rejection or revocation, another reason or another
+target, still fails startup with `policy_catalog_approval_conflict`. An approval
+id stays bound to one target forever, so a new catalog id needs new approval
+ids. The ledger keeps the whole
 history. A failed revocation fails startup (`policy_catalog_revocation_invalid`
 when the revocation cannot be built, the client error otherwise); the next
 startup computes the superseded set again.

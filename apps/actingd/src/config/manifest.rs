@@ -13,7 +13,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     MUMU_MANAGER_CONTROL_TIMEOUT, MUMU_MANAGER_STATE_WAIT_START, MUMU_MANAGER_STATE_WAIT_STOP,
 };
-use actingcommand_runtime_host::RuntimeHostConfig;
+use actingcommand_runtime_host::{CatalogTransitionRequest, RuntimeHostConfig};
 use std::path::Path;
 use std::time::Duration;
 
@@ -43,6 +43,8 @@ pub(super) struct ManifestInputs<'a> {
     /// `(max_attempts, max_session_ms, max_projection_events)` of a present section.
     pub(super) agent_dispatcher: Option<(u16, u64, u16)>,
     pub(super) policy_configured: bool,
+    /// The configured `policy.catalog_transition` (Workflow #361 A), reported only when set.
+    pub(super) catalog_transition: Option<&'a CatalogTransitionRequest>,
     pub(super) vision_provider_configured: bool,
     pub(super) instances_count: usize,
     pub(super) instances_deferred_count: usize,
@@ -222,6 +224,18 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             source: explicit_or_default(inputs.governance_allowed_clients_explicit),
         },
     ];
+    if let Some(transition) = inputs.catalog_transition {
+        parameters.extend([
+            explicit(
+                "policy.catalog_transition.kind",
+                FactScalar::String("replace".to_owned()),
+            ),
+            explicit(
+                "policy.catalog_transition.expected_active_catalog_hash",
+                FactScalar::String(transition.expected_active_catalog_hash().to_owned()),
+            ),
+        ]);
+    }
     if let Some(mumu_root) = inputs.mumu_root {
         parameters.push(explicit(
             "mumu_root",

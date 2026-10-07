@@ -314,13 +314,14 @@ impl ApprovalProjection {
             .collect()
     }
 
-    /// Active catalog approvals that a catalog at (`catalog_hash`, `catalog_version`) supersedes:
-    /// an older version, or the same version under another hash (Workflow #330 H2). A later
-    /// version is kept: it may be approved ahead of its activation.
+    /// Active catalog approvals that `generation` supersedes (Workflow #330 H2, #361 A): an
+    /// approval of another catalog id that was active in `lineage`, whatever its version;
+    /// otherwise an older version, or the same version under another hash. A later version is
+    /// kept: it may be approved ahead of its activation.
     pub(crate) fn superseded_catalog_approvals(
         &self,
-        catalog_hash: &str,
-        catalog_version: u64,
+        lineage: &crate::catalog_plan::CatalogLineage,
+        generation: &crate::CatalogGeneration,
     ) -> Vec<ApprovalDecisionRecord> {
         self.active
             .values()
@@ -329,10 +330,14 @@ impl ApprovalProjection {
                     && matches!(
                         decision.target(),
                         ApprovalTarget::Catalog {
-                            catalog_hash: target_hash,
-                            catalog_version: target_version,
-                        } if *target_version < catalog_version
-                            || (*target_version == catalog_version && target_hash != catalog_hash)
+                            catalog_hash,
+                            catalog_version,
+                        } if crate::catalog_plan::catalog_approval_superseded(
+                            lineage,
+                            generation,
+                            catalog_hash,
+                            *catalog_version,
+                        )
                     )
             })
             .cloned()

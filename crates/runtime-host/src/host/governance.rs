@@ -170,33 +170,61 @@ impl HostShared {
         Ok(latest)
     }
 
-    /// Workflow #330 H2: the active catalog approvals `generation` supersedes (an older
-    /// version, or the same version under another hash), read from the complete
-    /// ledger-verified approval projection under the governance write gate, exactly as
-    /// `latest_approval_decisions` reads. Appends nothing and releases the gate on return,
-    /// before the policy driver records any revocation.
+    /// Workflow #330 H2, #361 A: the active catalog approvals `generation` supersedes (another
+    /// catalog id that was active, an older version, or the same version under another hash),
+    /// read from the complete ledger-verified approval projection under the governance write
+    /// gate, exactly as `latest_approval_decisions` reads. Appends nothing and releases the
+    /// gate on return, before the policy driver records any revocation.
     pub(super) fn superseded_catalog_approvals(
         &self,
         generation: &CatalogGeneration,
     ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
+        let lineage = lock(self.policy()?, "read_policy_catalog_lineage")?
+            .lineage()
+            .clone();
+        let approvals = self.recover_approval_projection("read_superseded_catalog_approvals")?;
+        Ok(approvals.superseded_catalog_approvals(&lineage, generation))
+    }
+
+    /// Workflow #361 C2: the approvals the policy driver records for a planned `generation`
+    /// (`catalog_plan::plan_catalog_approvals`), read from the same complete ledger-verified
+    /// projection. Appends nothing.
+    pub(super) fn plan_catalog_approvals(
+        &self,
+        lineage: &crate::catalog_plan::CatalogLineage,
+        generation: &CatalogGeneration,
+        approval_ids: &[String],
+    ) -> RuntimeHostResult<crate::catalog_plan::CatalogApprovalPlan> {
+        if approval_ids.len() > MAX_APPROVAL_REFS {
+            return Err(RuntimeHostError::request(
+                "approval_read_ids_exceeded",
+                "plan_policy_catalog_approvals",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        let approvals = self.recover_approval_projection("plan_policy_catalog_approvals")?;
+        crate::catalog_plan::plan_catalog_approvals(&approvals, lineage, generation, approval_ids)
+    }
+
+    /// The complete ledger-verified approval projection, recovered under the governance write
+    /// gate (recovery rewrites derived State rows); a fatal failure poisons the Runtime.
+    fn recover_approval_projection(
+        &self,
+        operation: &'static str,
+    ) -> RuntimeHostResult<ApprovalProjection> {
         if let Some(error) = self.fatal.current()? {
             return Err(error);
         }
-        let _gate = lock(
-            &self.governance_write_gate,
-            "read_superseded_catalog_approvals",
-        )?;
-        let approvals = match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
-            Ok(approvals) => approvals,
+        let _gate = lock(&self.governance_write_gate, operation)?;
+        match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
+            Ok(approvals) => Ok(approvals),
             Err(error) => {
                 if error.is_fatal() {
                     self.fatal.mark(error.clone())?;
                 }
-                return Err(error);
+                Err(error)
             }
-        };
-        Ok(approvals
-            .superseded_catalog_approvals(generation.catalog_hash(), generation.catalog_version()))
+        }
     }
 
     /// Workflow #318 cfg4: verifies one declarative governance identity card and records it

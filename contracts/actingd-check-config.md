@@ -62,6 +62,24 @@ recorded. After the catalog compiles and `catalog_approval_ids` equals the catal
 All four codes are stage `assemble`. Startup then plans the catalog transition and checks
 the approval history before it activates anything (`contracts/client-interactions.md`).
 
+The optional `policy.catalog_transition` (Workflow #361 A) asks for a switch to another
+catalog id or a rollback to a generation that was active before:
+
+```json
+{"policy":{"catalog_transition":{"kind":"replace","expected_active_catalog_hash":"sha256:<64 hex>"}}}
+```
+
+`kind` must be `replace` (`catalog_transition_kind_unknown`) and the hash a lowercase
+`sha256:` digest (`catalog_transition_invalid`), both stage `assemble`; unknown fields are
+refused as everywhere else. Whether the transition applies is decided against the ledger
+(see "Catalog Lineage" in `contracts/scheduling/README.md`): startup refuses
+`catalog_transition_expectation_mismatch` when the expected hash is not the active generation,
+`catalog_replace_version_not_newer` for a never-active generation of a catalog id at or below
+a version of that id that was active, and `catalog_activation_not_newer` without the field
+(its detail names the `replace` transition, expecting the active hash, that would apply).
+When present, the manifest carries `policy.catalog_transition.kind` and
+`policy.catalog_transition.expected_active_catalog_hash` (`explicit`).
+
 ## Result
 
 Exactly one JSON object is written to stdout on both outcomes.
@@ -251,6 +269,7 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `scheduled_execution_instance_unknown`, `policy_catalog_approval_mismatch`,
 `policy_catalog_approval_invalid`, `procedure_manifest_entry_missing`,
 `policy_instance_set_mismatch`, `policy_instance_host_unknown`,
+`catalog_transition_kind_unknown`, `catalog_transition_invalid`,
 `procedure_package_not_regular`,
 `procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::catalog_plan::CatalogLineage;
 use crate::events::RuntimeEvents;
 use actingcommand_contract::{
     AuditInput, EventActor, EventSeverity, EventSource, OriginModule, StateMigrationData,
@@ -9,6 +10,9 @@ use actingcommand_contract::{
 use actingcommand_ledger::{GlobalLedgerError, LedgerTransactionWork, TransactionWorkError};
 use actingcommand_runtime_database::RuntimeTransaction;
 use actingcommand_runtime_state::PreparedCatalogState;
+
+/// The active generation a replay ends on: catalog id, version and hash.
+pub(super) type ActiveIdentity = (String, u64, String);
 
 pub(crate) fn catalog_ledger_error(error: &GlobalLedgerError) -> RuntimeHostError {
     RuntimeHostError::fatal(
@@ -298,14 +302,16 @@ impl CatalogStore {
         sync_directory(&self.root, "migrate_active_catalog")
     }
 
+    /// The active generation the ledger projects, checked against the state pointer, and every
+    /// generation that was active (Workflow #361 A).
     pub(super) fn load_verified_active(
         &self,
         ledger: &GlobalLedger,
-    ) -> RuntimeHostResult<Option<LoadedCatalog>> {
+    ) -> RuntimeHostResult<(Option<LoadedCatalog>, CatalogLineage)> {
         let latest = ledger
             .latest_sequence()
             .map_err(|error| catalog_ledger_error(&error))?;
-        let source = self.project_catalog_source(ledger, latest)?;
+        let (source, lineage) = self.project_catalog_lineage(ledger, latest)?;
         let actual = self.load_active()?;
         if actual.as_ref().map(|value| &value.generation)
             != source.as_ref().map(|value| &value.generation)
@@ -315,7 +321,7 @@ impl CatalogStore {
                 "load_active_catalog",
             ));
         }
-        Ok(actual)
+        Ok((actual, lineage))
     }
 
     pub(super) fn project_catalog_source(
@@ -323,32 +329,48 @@ impl CatalogStore {
         ledger: &GlobalLedger,
         through: u64,
     ) -> RuntimeHostResult<Option<LoadedCatalog>> {
-        // One indexed query per event type the loop consumes, merged back into ledger order
-        // (Workflow #317 rf2). The loop skips every other event, so it sees exactly the events
-        // the unfiltered read gave it.
-        let mut events = Vec::new();
-        for event_type in [
-            EventType::StateMigrated,
-            EventType::CatalogTransitionIntent,
-            EventType::CatalogActivated,
-            EventType::CatalogRolledBack,
-            EventType::CatalogTransitionFailed,
-        ] {
-            events.extend(
-                ledger
-                    .query(EventQuery {
-                        to_sequence: Some(through),
-                        event_type: Some(event_type),
-                        ..EventQuery::default()
-                    })
-                    .map_err(|error| catalog_ledger_error(&error))?,
-            );
+        self.project_catalog_lineage(ledger, through)
+            .map(|(active, _)| active)
+    }
+
+    fn project_catalog_lineage(
+        &self,
+        ledger: &GlobalLedger,
+        through: u64,
+    ) -> RuntimeHostResult<(Option<LoadedCatalog>, CatalogLineage)> {
+        let events = catalog_projection_events(through, |query| {
+            ledger
+                .query(query)
+                .map_err(|error| catalog_ledger_error(&error))
+        })?;
+        let (current, lineage) = self.fold_catalog_events(&events)?;
+        let Some((id, version, hash)) = current else {
+            return Ok((None, lineage));
+        };
+        let loaded = self.load_generation(&hash)?;
+        if loaded.generation.catalog_id() != id || loaded.generation.catalog_version() != version {
+            return Err(fatal(
+                "catalog_projection_identity_mismatch",
+                "project_policy_catalog",
+            ));
         }
-        events.sort_by_key(PersistedEvent::sequence);
-        let mut current: Option<(String, u64, String)> = None;
+        Ok((Some(LoadedCatalog::clone(&loaded)), lineage))
+    }
+
+    /// Replays the catalog transition events in ledger order: the active (id, version, hash)
+    /// they end on, and every generation that was active. A successful `catalog.activated`
+    /// keeps the id at a higher version or changes the id; a successful `catalog.rolled_back`
+    /// keeps the id at a lower version, or returns to a generation of another id that was
+    /// active before (Workflow #361 A). Every other sequence is fatal.
+    pub(super) fn fold_catalog_events(
+        &self,
+        events: &[PersistedEvent],
+    ) -> RuntimeHostResult<(Option<ActiveIdentity>, CatalogLineage)> {
+        let mut current: Option<ActiveIdentity> = None;
+        let mut lineage = CatalogLineage::default();
         let mut intents = BTreeMap::new();
         let mut migrations = BTreeSet::new();
-        for event in &events {
+        for event in events {
             if let EventPayload::State(StatePayload::Migrated(payload)) = event.payload() {
                 let data = payload.migration();
                 if data.state_key() != ACTIVE_POINTER_STATE_KEY {
@@ -394,6 +416,11 @@ impl CatalogStore {
                         "project_policy_catalog",
                     ));
                 }
+                lineage.record(
+                    &pointer.generation.catalog_id,
+                    pointer.generation.catalog_version,
+                    &pointer.generation.catalog_hash,
+                );
                 current = Some((
                     pointer.generation.catalog_id,
                     pointer.generation.catalog_version,
@@ -455,14 +482,17 @@ impl CatalogStore {
                     "project_policy_catalog",
                 ));
             }
-            if let Some((id, version, _)) = &current {
-                if id != payload.catalog_id()
-                    || match event.event_type() {
-                        EventType::CatalogActivated => payload.catalog_version() <= *version,
-                        EventType::CatalogRolledBack => payload.catalog_version() >= *version,
-                        _ => true,
+            if let Some((id, version, hash)) = &current {
+                let same_id = id == payload.catalog_id();
+                let accepted = match event.event_type() {
+                    EventType::CatalogActivated => !same_id || payload.catalog_version() > *version,
+                    EventType::CatalogRolledBack if same_id => payload.catalog_version() < *version,
+                    EventType::CatalogRolledBack => {
+                        hash != payload.catalog_hash() && lineage.contains(payload.catalog_hash())
                     }
-                {
+                    _ => false,
+                };
+                if !accepted {
                     return Err(fatal(
                         "catalog_generation_source_conflict",
                         "project_policy_catalog",
@@ -474,22 +504,42 @@ impl CatalogStore {
                     "project_policy_catalog",
                 ));
             }
+            lineage.record(
+                payload.catalog_id(),
+                payload.catalog_version(),
+                payload.catalog_hash(),
+            );
             current = Some((
                 payload.catalog_id().to_owned(),
                 payload.catalog_version(),
                 payload.catalog_hash().to_owned(),
             ));
         }
-        let Some((id, version, hash)) = current else {
-            return Ok(None);
-        };
-        let loaded = self.load_generation(&hash)?;
-        if loaded.generation.catalog_id() != id || loaded.generation.catalog_version() != version {
-            return Err(fatal(
-                "catalog_projection_identity_mismatch",
-                "project_policy_catalog",
-            ));
-        }
-        Ok(Some(LoadedCatalog::clone(&loaded)))
+        Ok((current, lineage))
     }
+}
+
+/// The catalog transition events through `through`, in ledger order: one indexed query per
+/// event type the replay consumes, merged back into ledger order (Workflow #317 rf2). The
+/// replay skips every other event, so it sees exactly the events the unfiltered read gave it.
+pub(super) fn catalog_projection_events(
+    through: u64,
+    query: impl Fn(EventQuery) -> RuntimeHostResult<Vec<PersistedEvent>>,
+) -> RuntimeHostResult<Vec<PersistedEvent>> {
+    let mut events = Vec::new();
+    for event_type in [
+        EventType::StateMigrated,
+        EventType::CatalogTransitionIntent,
+        EventType::CatalogActivated,
+        EventType::CatalogRolledBack,
+        EventType::CatalogTransitionFailed,
+    ] {
+        events.extend(query(EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(event_type),
+            ..EventQuery::default()
+        })?);
+    }
+    events.sort_by_key(PersistedEvent::sequence);
+    Ok(events)
 }

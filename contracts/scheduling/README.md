@@ -204,6 +204,50 @@ V1 rejects unknown fields and any schema version other than the exact supported 
 
 The `env.*` namespace remains an ordinary fact-key family. Existing execution substitutions that use `{env:...}` remain an execution-boundary concern; scheduling predicates reference the same stored values through typed `fact` predicates without changing that substitution syntax.
 
+## Catalog Lineage
+
+Workflow #361 A. A state root is not bound to one catalog id. The generations that were active
+in a ledger are the targets of its successful `catalog.activated` and `catalog.rolled_back`
+records and of the legacy active-pointer migration; they are rebuilt from the ledger on every
+start and never deleted. `actingd` decides the transition its configured catalog asks for
+before it records anything, in this order:
+
+| Active | Configured catalog | `policy.catalog_transition` | Plan | Recorded |
+|---|---|---|---|---|
+| none | any | absent | `first` | `catalog.activated` |
+| none | any | present | refused `catalog_transition_expectation_mismatch` | nothing |
+| A | the hash of A | any | `unchanged` | nothing |
+| A | the id of A at a higher version | absent, or `replace` expecting A | `forward` | `catalog.activated` |
+| A | anything else | absent | refused `catalog_activation_not_newer` | nothing |
+| A | any | `replace` expecting another hash | refused `catalog_transition_expectation_mismatch` | nothing |
+| A | a generation that was active | `replace` expecting A | `rollback` | `catalog.rolled_back` |
+| A | another id, never active, above every version of that id that was active | `replace` expecting A | `switch` | `catalog.activated` |
+| A | otherwise | `replace` expecting A | refused `catalog_replace_version_not_newer` | nothing |
+
+`replace` is the only transition kind; `expected_active_catalog_hash` is a compare-and-swap
+value, and the transition is recorded under the same compare-and-swap
+(`catalog_active_generation_changed` when another transition won). The field may stay in the
+configuration after it was applied: the next start finds the same hash and plans `unchanged`.
+A `catalog_activation_not_newer` refusal names the active and the configured generation and the
+`replace` transition, expecting the active hash, that would switch or roll back instead; `actingd`
+prints it on its `FATAL` line. Proposal promotion stays forward-only. Replay accepts exactly these records: a successful
+`catalog.activated` keeps the id at a higher version or changes the id, a successful
+`catalog.rolled_back` keeps the id at a lower version or returns to a generation of another id
+that was active before; every other sequence stays `catalog_generation_source_conflict`. Every
+ledger that satisfied the earlier rule satisfies this one and projects to the same generation.
+A Runtime older than this rule refuses a ledger with a cross-id transition at start with
+`catalog_generation_source_conflict`; switching an installation back to such a Runtime after a
+`replace` therefore fails loudly at its first start.
+
+There is no deactivation record. Stopping the scheduler is a configuration without `policy`
+(recorded as the disabled `policy_driver` subsystem) or the global scheduling pause; the last
+active generation stays the active generation of the lineage, and a later configuration with
+any catalog continues from it with `replace`.
+
+Task ids are global: dispatch history, last dispatch time, budgets and failure streaks are kept
+per (task id, instance) across a switch, so a catalog that keeps its task ids keeps its clock
+state.
+
 ## Scope And Overrides
 
 Runtime evaluation replaces task runtime snapshots with its replayed admitted and

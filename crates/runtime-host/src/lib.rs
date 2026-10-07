@@ -50,7 +50,9 @@ pub use time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock};
 
 pub use actingcommand_scheduler::SchedulerConfig;
 pub use agent_dispatcher::AgentDispatcherConfig;
-pub use catalog_plan::{CatalogTransitionPlan, CatalogTransitionPlanKind};
+pub use catalog_plan::{
+    CatalogApprovalPlan, CatalogTransitionPlan, CatalogTransitionPlanKind, CatalogTransitionRequest,
+};
 pub use emulator_control::admit_emulator_capabilities;
 pub use error::*;
 pub use host::*;

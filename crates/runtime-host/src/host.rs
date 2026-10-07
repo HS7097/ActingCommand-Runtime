@@ -4,7 +4,7 @@ use crate::agent_dispatcher::{
     AgentDispatcherState, AgentResponsePreparation, AgentResumePreparation, AgentSessionPreparation,
 };
 use crate::approval::ApprovalProjection;
-use crate::catalog_plan::CatalogTransitionPlan;
+use crate::catalog_plan::{CatalogTransitionPlan, CatalogTransitionRequest};
 use crate::events::RuntimeEvents;
 use crate::fact_store::{
     InstanceFactStore, POLICY_INSTANCE_AVAILABLE_KEY, POLICY_INSTANCE_CAPABILITIES_KEY,
@@ -1616,14 +1616,17 @@ impl RuntimeHost {
             .activate_policy_catalog(sources)
     }
 
-    /// Workflow #361 C2: the transition the configured catalog asks for. Stages the
-    /// generation and records nothing in the ledger.
+    /// Workflow #361 C2, A: the transition the configured catalog asks for (with its optional
+    /// `replace` request) and the approvals the driver records for it. Stages the generation
+    /// and records nothing in the ledger.
     pub fn plan_policy_catalog_transition(
         &self,
         sources: &CatalogSources,
+        request: Option<&CatalogTransitionRequest>,
+        approval_ids: &[String],
     ) -> RuntimeHostResult<CatalogTransitionPlan> {
         self.work_ref("plan_policy_catalog_transition")?
-            .plan_policy_catalog_transition(sources)
+            .plan_policy_catalog_transition(sources, request, approval_ids)
     }
 
     /// Workflow #361 C2: records a planned transition; the first catalog write of startup.
