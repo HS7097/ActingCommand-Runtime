@@ -138,15 +138,19 @@ initialization and is never treated as undecided. Reading and recording are two
 separate steps: a decision another governance client records between them is
 not seen by the driver.
 
-The driver also revokes approvals the activated catalog supersedes (Workflow
-#330 H2). Only after activation succeeds (including the unchanged-hash return
-of an already active catalog) and after every configured id has passed
-construction and the conflict check, it reads, from the same complete verified
-projection, every active catalog approval (`approved` or `pinned`) whose target
-is `catalog` with an older version, or with the active version under another
-hash. It records `revoked` for each one on the same (User, Ui) connection, with
-the approval's own target and reason `catalog_superseded`, and only then records
-the undecided configured approvals. Plan and decision approvals and catalog
+The driver also revokes approvals the configured catalog supersedes (Workflow
+#330 H2). Since Workflow #361 C2 startup checks everything before the first
+catalog write: it plans the catalog transition (the generation is staged, no
+ledger record is written, a refused transition stops startup here), builds every
+configured approval and runs the conflict check, and reads, from the same complete
+verified projection, every active catalog approval (`approved` or `pinned`) whose
+target is `catalog` with an older version, or with the planned version under
+another hash. Only then does it connect, declare its card and apply the planned
+transition (nothing for an already active catalog); a refusal before that point
+leaves no catalog or approval record. After the transition it records `revoked`
+for each superseded approval on the same (User, Ui) connection, with the
+approval's own target and reason `catalog_superseded`, and only then records the
+undecided configured approvals. Plan and decision approvals and catalog
 approvals of a later version are left as they are. The ledger keeps the whole
 history. A failed revocation fails startup (`policy_catalog_revocation_invalid`
 when the revocation cannot be built, the client error otherwise); the next

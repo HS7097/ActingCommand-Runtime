@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::catalog_plan::{
+    CatalogTransitionPlan, CatalogTransitionPlanKind, decide_catalog_transition,
+};
 
 impl HostShared {
     pub(super) fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
@@ -15,6 +18,73 @@ impl HostShared {
         sources: &CatalogSources,
     ) -> RuntimeHostResult<CatalogGeneration> {
         self.activate_policy_catalog_with_authorization(sources, None)
+    }
+
+    /// Workflow #361 C2: stages the configured catalog's generation and decides its transition
+    /// against the active generation. Nothing is recorded in the ledger.
+    pub(super) fn plan_policy_catalog_transition(
+        &self,
+        sources: &CatalogSources,
+    ) -> RuntimeHostResult<CatalogTransitionPlan> {
+        let (generation, active) = {
+            let policy = lock(self.policy()?, "plan_policy_catalog_transition")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
+            let catalog = policy.stage(sources)?;
+            (catalog.generation().clone(), policy.active_generation())
+        };
+        let kind = decide_catalog_transition(active.as_ref(), &generation)?;
+        Ok(CatalogTransitionPlan {
+            kind,
+            generation,
+            active,
+        })
+    }
+
+    /// Workflow #361 C2: records a planned transition. The generation active when the plan was
+    /// made must still be active (`catalog_active_generation_changed` otherwise); `unchanged`
+    /// records nothing, the others record the existing `catalog.activated` transaction with
+    /// that generation as its compare-and-swap expectation.
+    pub(super) fn apply_policy_catalog_transition(
+        &self,
+        plan: &CatalogTransitionPlan,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        let (catalog, active) = {
+            let policy = lock(self.policy()?, "apply_policy_catalog_transition")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
+            (
+                policy.load_generation(plan.generation.catalog_hash())?,
+                policy.active_generation(),
+            )
+        };
+        if active != plan.active {
+            return Err(RuntimeHostError::request(
+                "catalog_active_generation_changed",
+                "apply_policy_catalog_transition",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        if *catalog.generation() != plan.generation {
+            return Err(RuntimeHostError::fatal(
+                "catalog_plan_generation_mismatch",
+                "apply_policy_catalog_transition",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        match plan.kind {
+            CatalogTransitionPlanKind::Unchanged => Ok(plan.generation.clone()),
+            CatalogTransitionPlanKind::First | CatalogTransitionPlanKind::Forward => self
+                .switch_policy_catalog(
+                    catalog,
+                    active,
+                    EventAction::CatalogActivate,
+                    CatalogTransitionTarget::Activated,
+                    None,
+                ),
+        }
     }
 
     pub(super) fn activate_policy_catalog_with_authorization(

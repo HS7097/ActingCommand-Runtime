@@ -42,6 +42,26 @@ reference. A content-directory binding to any other file fails
 content is admitted when the task runs. An empty `instances` array passes, as at startup,
 and describes a control-plane-only daemon.
 
+Workflow #361 C1 moves every policy check startup used to make after catalog activation into
+the assembly, so this command and startup refuse the same configurations before anything is
+recorded. After the catalog compiles and `catalog_approval_ids` equals the catalog's
+`approval_refs` (`policy_catalog_approval_mismatch`, as before):
+
+- every configured approval id must pass the approval decision record's own rule (the
+  `approval:` prefix, then only `[a-z0-9._:-]`, at most the identifier bound):
+  `policy_catalog_approval_invalid`. A catalog may declare a reference such as
+  `daily-v12` or a URL that this rule refuses;
+- every catalog task's `procedure_ref` must have a `procedure_manifest` binding:
+  `procedure_manifest_entry_missing`;
+- the set of `policy.facts.instances[].instance_id` must equal the set of configured
+  instance aliases (`policy_instance_set_mismatch`), and every policy instance's `host_id`
+  must be in `policy.resources.hosts` (`policy_instance_host_unknown`). These are the rules
+  of the first policy cycle's input check (`policy_instance_metadata_untrusted`,
+  `policy_resource_metadata_untrusted`), which still runs.
+
+All four codes are stage `assemble`. Startup then plans the catalog transition and checks
+the approval history before it activates anything (`contracts/client-interactions.md`).
+
 ## Result
 
 Exactly one JSON object is written to stdout on both outcomes.
@@ -228,7 +248,10 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `duplicate_instance_id`, `stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
 `device_path_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
-`scheduled_execution_instance_unknown`, `procedure_package_not_regular`,
+`scheduled_execution_instance_unknown`, `policy_catalog_approval_mismatch`,
+`policy_catalog_approval_invalid`, `procedure_manifest_entry_missing`,
+`policy_instance_set_mismatch`, `policy_instance_host_unknown`,
+`procedure_package_not_regular`,
 `procedure_package_container_unsupported`, `governance_capability_retired`,
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
 `config_manifest_incomplete`, `vision_provider_manifest_retired`,
