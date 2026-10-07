@@ -12,13 +12,17 @@ use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME,
-    GetLastError, HANDLE, INVALID_HANDLE_VALUE, RECT, STILL_ACTIVE,
+    GetLastError, HANDLE, INVALID_HANDLE_VALUE, NO_ERROR, RECT, STILL_ACTIVE, WIN32_ERROR,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
+use windows_sys::Win32::Networking::WinSock as winsock;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 use windows_sys::Win32::System::Performance::{
     PDH_CSTATUS_NEW_DATA, PDH_CSTATUS_VALID_DATA, PDH_FMT_COUNTERVALUE,
@@ -438,6 +442,75 @@ pub(super) fn sample_physical_memory() -> Result<super::PhysicalMemorySample, &'
             total_bytes: status.ullTotalPhys,
             available_bytes: status.ullAvailPhys,
         })
+    }
+}
+
+/// `GetNetworkConnectivityHint` (iphlpapi, Windows 10 2004 and later).
+type ConnectivityHintQuery =
+    unsafe extern "system" fn(*mut winsock::NL_NETWORK_CONNECTIVITY_HINT) -> WIN32_ERROR;
+type ConnectivityHintResolution = Result<ConnectivityHintQuery, (&'static str, Option<u32>)>;
+
+/// Resolves `GetNetworkConnectivityHint` once per process. It is looked up at run time and not
+/// imported: an import would keep the whole process from loading on a Windows without it, where
+/// the status is reported unknown instead.
+fn connectivity_hint_query() -> ConnectivityHintResolution {
+    static QUERY: std::sync::OnceLock<ConnectivityHintResolution> = std::sync::OnceLock::new();
+    *QUERY.get_or_init(|| {
+        let library = wide("iphlpapi.dll");
+        // SAFETY: a null-terminated wide name, no file handle and the system directory only;
+        // the module stays loaded for the life of the process.
+        let module =
+            unsafe { LoadLibraryExW(library.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+        if module.is_null() {
+            // SAFETY: reads the calling thread's last error code.
+            let os_error = unsafe { GetLastError() };
+            return Err(("network_connectivity_library_unavailable", Some(os_error)));
+        }
+        // SAFETY: a live module handle and a null-terminated ANSI name.
+        let address = unsafe { GetProcAddress(module, b"GetNetworkConnectivityHint\0".as_ptr()) };
+        let Some(address) = address else {
+            return Err(("network_connectivity_query_unsupported", None));
+        };
+        // SAFETY: the export's documented signature is
+        // `NETIOAPI_API GetNetworkConnectivityHint(NL_NETWORK_CONNECTIVITY_HINT *)`, a
+        // WIN32_ERROR-returning system-ABI function taking one out pointer.
+        Ok(unsafe {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, ConnectivityHintQuery>(
+                address,
+            )
+        })
+    })
+}
+
+/// Internet and constrained internet access count as connected; no network, local access only
+/// and a hidden network as not connected; anything else is unknown.
+pub(super) fn network_connectivity() -> super::NetworkConnectivity {
+    use super::NetworkConnectivity;
+    let query = match connectivity_hint_query() {
+        Ok(query) => query,
+        Err((reason, os_error)) => return NetworkConnectivity::Unknown { reason, os_error },
+    };
+    let mut hint = winsock::NL_NETWORK_CONNECTIVITY_HINT::default();
+    // SAFETY: the out pointer is valid and writable for the call.
+    let status = unsafe { query(&mut hint) };
+    if status != NO_ERROR {
+        return NetworkConnectivity::Unknown {
+            reason: "network_connectivity_query_failed",
+            os_error: Some(status),
+        };
+    }
+    match hint.ConnectivityLevel {
+        winsock::NetworkConnectivityLevelHintInternetAccess
+        | winsock::NetworkConnectivityLevelHintConstrainedInternetAccess => {
+            NetworkConnectivity::Internet
+        }
+        winsock::NetworkConnectivityLevelHintNone
+        | winsock::NetworkConnectivityLevelHintLocalAccess
+        | winsock::NetworkConnectivityLevelHintHidden => NetworkConnectivity::NoInternet,
+        _ => NetworkConnectivity::Unknown {
+            reason: "network_connectivity_level_unknown",
+            os_error: None,
+        },
     }
 }
 

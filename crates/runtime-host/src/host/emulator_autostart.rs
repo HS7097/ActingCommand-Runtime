@@ -11,8 +11,10 @@
 //!
 //! The daemon queues the starts once, after policy initialization succeeded, as host work on
 //! the startup thread, so they never delay runtime-info publication (review H2). Before the
-//! first start the thread waits, bounded, until the network answers. Instances start one after
-//! another in configuration order. A start is skipped while a scheduling pause holds the
+//! first start the thread waits, bounded, until the operating system reports internet access
+//! (`actingcommand_host_metrics::network_connectivity`: the operating system's own status; the
+//! Runtime opens no connection and resolves no name, review P3). An unknown status starts at
+//! once and says so. Instances start one after another in configuration order. A start is skipped while a scheduling pause holds the
 //! global gate or the instance's gate (review M4) and queued again by the resume that lifts
 //! it. Every refusal is the existing `command.rejected` + `runtime.failed` pair and a report
 //! line for the daemon's stdout; none stops the daemon.
@@ -25,15 +27,13 @@
 
 use super::*;
 use actingcommand_contract::EmulatorInstanceAction;
-use std::net::{TcpStream, ToSocketAddrs};
+use actingcommand_host_metrics::NetworkConnectivity;
 
 const OPERATION: &str = "autostart_emulator";
-/// The endpoint whose TCP answer counts as network reachability: the operating system's own
-/// connectivity check host, contacted with a bare connection and no request.
-const NETWORK_PROBE: &str = "www.msftconnecttest.com:80";
-const NETWORK_PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long the first start waits for the network before every pending start is refused.
+/// How long the first start waits for the operating system to report internet access before
+/// every pending start is refused.
 const NETWORK_WAIT: Duration = Duration::from_secs(600);
+/// How often the operating system's connectivity status is read during that wait.
 const NETWORK_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Review L2: a start inside the takeover cooldown waits for its end instead of being refused.
 const TAKEOVER_COOLDOWN_WAIT: Duration = Duration::from_secs(60);
@@ -78,12 +78,8 @@ pub(super) fn resolve_emulator_autostart(
         .collect()
 }
 
-fn network_answers() -> bool {
-    NETWORK_PROBE.to_socket_addrs().is_ok_and(|mut addresses| {
-        addresses.any(|address| {
-            TcpStream::connect_timeout(&address, NETWORK_PROBE_CONNECT_TIMEOUT).is_ok()
-        })
-    })
+fn waited_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 impl HostShared {
@@ -235,7 +231,7 @@ impl HostShared {
             let ready = match network {
                 Some(ready) => ready,
                 None => {
-                    let ready = self.await_network();
+                    let ready = self.await_network()?;
                     network = Some(ready);
                     ready
                 }
@@ -308,15 +304,37 @@ impl HostShared {
         }
     }
 
-    /// Waits until the network answers, at most `NETWORK_WAIT`; `false` on timeout or shutdown.
-    fn await_network(&self) -> bool {
-        let deadline = Instant::now() + NETWORK_WAIT;
+    /// Review P3: waits, at most `NETWORK_WAIT`, until the operating system reports internet
+    /// access, reading its connectivity status every `NETWORK_POLL_INTERVAL`. The Runtime opens
+    /// no connection and resolves no name. An unknown status ends the wait at once and the
+    /// start goes on; `false` on timeout or shutdown. Each outcome is one report line.
+    fn await_network(&self) -> RuntimeHostResult<bool> {
+        let started = Instant::now();
+        let deadline = started + NETWORK_WAIT;
         loop {
-            if network_answers() {
-                return true;
+            match actingcommand_host_metrics::network_connectivity() {
+                NetworkConnectivity::Internet => {
+                    self.report_emulator_autostart(format!(
+                        "emulator_autostart_network_ready waited_ms={}",
+                        waited_ms(started)
+                    ))?;
+                    return Ok(true);
+                }
+                NetworkConnectivity::Unknown { reason, os_error } => {
+                    self.report_emulator_autostart(format!(
+                        "emulator_autostart_network_status_unknown reason={reason} os_error={} starting_without_wait",
+                        os_error.map_or_else(|| "none".to_owned(), |code| code.to_string())
+                    ))?;
+                    return Ok(true);
+                }
+                NetworkConnectivity::NoInternet => {}
             }
             if self.fatal.is_shutdown_requested() || Instant::now() >= deadline {
-                return false;
+                self.report_emulator_autostart(format!(
+                    "emulator_autostart_network_unready waited_ms={}",
+                    waited_ms(started)
+                ))?;
+                return Ok(false);
             }
             thread::sleep(NETWORK_POLL_INTERVAL);
         }

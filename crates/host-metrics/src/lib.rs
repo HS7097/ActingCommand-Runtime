@@ -57,6 +57,40 @@ pub fn probe_process(pid: u32) -> ProcessProbe {
     }
 }
 
+/// What the operating system reports about the host's internet connectivity (Workflow #361
+/// B2). It is the operating system's own status (on Windows `GetNetworkConnectivityHint`,
+/// which its network connectivity status indicator keeps); reading it opens no socket, sends
+/// nothing and resolves no name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkConnectivity {
+    /// Internet access, constrained internet access (for example behind a captive portal)
+    /// included.
+    Internet,
+    /// No internet access: no network, local access only, or a hidden network.
+    NoInternet,
+    /// The operating system did not decide: its level is unknown, the query failed (with the
+    /// operating system's error code when it gave one), or this host has no such query.
+    Unknown {
+        reason: &'static str,
+        os_error: Option<u32>,
+    },
+}
+
+/// Reads the operating system's connectivity status once; see [`NetworkConnectivity`].
+pub fn network_connectivity() -> NetworkConnectivity {
+    #[cfg(windows)]
+    {
+        windows::network_connectivity()
+    }
+    #[cfg(not(windows))]
+    {
+        NetworkConnectivity::Unknown {
+            reason: "network_connectivity_unsupported",
+            os_error: None,
+        }
+    }
+}
+
 #[cfg(windows)]
 mod windows;
 
