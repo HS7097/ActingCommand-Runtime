@@ -4837,6 +4837,7 @@ const HOST_SPLIT: &[HostModule] = &[
         ],
     },
     host_module("device_diagnostic", &["HostShared"]),
+    host_module("emulator_autostart", &["HostShared"]),
     host_module("emulator_instance", &["HostShared"]),
     host_module("evidence_export", &["HostShared"]),
     host_module("facts", &["HostShared"]),

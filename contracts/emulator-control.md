@@ -434,12 +434,18 @@ running instance gets the usual start preparation only.
   its self-check, and the instance's startup package scheduled as after a manual `start`. A
   takeover cooldown is waited out (at most 60 s) instead of refusing the start.
 - **Failure is loud, not fatal.** A refused or failed start writes the existing
-  `command.rejected` + `runtime.failed` pair; the instance stays unavailable and the other
-  instances are still started. Only a fatal failure (a ledger append) stops the host.
+  `command.rejected` + `runtime.failed` pair; a failed connection preparation after a
+  performed start is recorded by the preparation itself. The instance stays unavailable and
+  the other instances are still started. Neither queues a stuck-recovery ladder (the
+  preparation is the `connection_preparation` stage of a manual start, which starts none since
+  Workflow #369-3); later scheduled runs keep their own ladder. Only a fatal failure (a ledger
+  append) stops the host.
 - **Report.** `actingd` prints `actingd emulator_autostart_queued instances=<n>` when it queues
   the starts and one line per instance as it is handled: `actingd emulator_autostart_started
-  instance=<alias>`, `actingd emulator_autostart_failed instance=<alias> code=<code>` or
-  `actingd emulator_autostart_skipped instance=<alias> reason=scheduling_paused`.
+  instance=<alias>`, `actingd emulator_autostart_failed instance=<alias> code=<code>` (also
+  `code=emulator_autostart_preparation_failed` when the emulator started but its connection
+  preparation did not pass) or `actingd emulator_autostart_skipped instance=<alias>
+  reason=scheduling_paused`.
 
 Host configuration: `RuntimeHostConfig::with_emulator_autostart` takes the aliases in
 configuration order; startup refuses an alias that is not registered

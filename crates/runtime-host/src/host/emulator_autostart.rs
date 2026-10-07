@@ -16,6 +16,12 @@
 //! global gate or the instance's gate (review M4) and queued again by the resume that lifts
 //! it. Every refusal is the existing `command.rejected` + `runtime.failed` pair and a report
 //! line for the daemon's stdout; none stops the daemon.
+//!
+//! The start's connection preparation is the one a manual `emulator start` runs
+//! (`prepare_instance_connection`, stage `connection_preparation`); since Workflow #369-3 a
+//! failed preparation at that stage starts no stuck-recovery ladder, so neither a failed start
+//! nor a failed preparation here queues one. Later scheduled runs keep their own ladder. A
+//! failed preparation is recorded by the preparation itself and reported here.
 
 use super::*;
 use actingcommand_contract::EmulatorInstanceAction;
@@ -256,9 +262,14 @@ impl HostShared {
                     // Review L1: the startup package is scheduled as a manual start schedules it.
                     self.schedule_startup_package(driven.startup_package)
                         .map_err(|failure| *failure.error)?;
-                    self.report_emulator_autostart(format!(
-                        "emulator_autostart_started instance={alias}"
-                    ))?;
+                    let line = if self.prepared_after_start(instance_id)? {
+                        format!("emulator_autostart_started instance={alias}")
+                    } else {
+                        format!(
+                            "emulator_autostart_failed instance={alias} code=emulator_autostart_preparation_failed"
+                        )
+                    };
+                    self.report_emulator_autostart(line)?;
                 }
                 Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
                     return Err(*failure.error);
@@ -315,13 +326,32 @@ impl HostShared {
     /// `TAKEOVER_COOLDOWN_WAIT`; any other fence refuses the start as usual.
     fn await_takeover_cooldown(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         let deadline = Instant::now() + TAKEOVER_COOLDOWN_WAIT;
-        while self.monitor_recovery_admission(instance_id)?.reason
-            == MonitorRecoveryCoordinationReason::TakeoverCooldown
-            && Instant::now() < deadline
-            && !self.fatal.is_shutdown_requested()
-        {
+        loop {
+            let now = self.monotonic_ms()?;
+            if !lock(&self.scheduler, "read_autostart_takeover_cooldown")?
+                .cooldown_active(instance_id, now)
+                || Instant::now() >= deadline
+                || self.fatal.is_shutdown_requested()
+            {
+                return Ok(());
+            }
             thread::sleep(TAKEOVER_COOLDOWN_POLL_INTERVAL);
         }
-        Ok(())
+    }
+
+    /// Whether the connection preparation after the start passed: the backend self-check
+    /// facts the start invalidated were recorded again as `passed`, for the Nemu pair or for
+    /// both input and capture.
+    fn prepared_after_start(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        let store = lock(&self.runtime_facts, "read_autostart_selfcheck")?;
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let passed = |entry: &str| {
+            store
+                .get(&scope, &format!("backend.selfcheck.{entry}.status"))
+                .is_some_and(|record| {
+                    record.value == ContractFactValue::String("passed".to_owned())
+                })
+        };
+        Ok(passed("nemu") || (passed("input") && passed("capture")))
     }
 }
