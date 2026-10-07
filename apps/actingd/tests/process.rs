@@ -2682,7 +2682,8 @@ fn policy_configuration_is_refused_before_any_catalog_record() {
         }
         config["policy"]["catalog_approval_ids"] = json!([approval_id]);
     }
-    let cases: [(&str, fn(&Path, &mut Value), &str); 6] = [
+    type Mutation = fn(&Path, &mut Value);
+    let cases: [(&str, Mutation, &str); 6] = [
         (
             "approval id without prefix",
             |state_root, config| set_approval_ref(state_root, config, "fixture-a"),
