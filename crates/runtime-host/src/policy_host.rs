@@ -4,7 +4,7 @@
 
 mod catalog_preview;
 pub use catalog_preview::{
-    CatalogPreview, CatalogPreviewRequest, preview_policy_catalog_transition,
+    CatalogPreview, CatalogPreviewPhases, CatalogPreviewRequest, preview_policy_catalog_transition,
 };
 mod catalog_transaction;
 pub(crate) use catalog_transaction::catalog_ledger_error;
