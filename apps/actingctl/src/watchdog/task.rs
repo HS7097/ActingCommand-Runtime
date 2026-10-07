@@ -66,9 +66,10 @@ fn decode(bytes: &[u8]) -> String {
     let utf16 =
         bytes.starts_with(&[0xff, 0xfe]) || bytes.iter().skip(1).step_by(2).any(|b| *b == 0);
     if utf16 && bytes.len().is_multiple_of(2) {
-        let units = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        let (pairs, _) = bytes.as_chunks::<2>();
+        let units = pairs
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect::<Vec<_>>();
         String::from_utf16_lossy(&units)
             .trim_start_matches('\u{feff}')
