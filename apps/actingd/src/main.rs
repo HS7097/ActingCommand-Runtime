@@ -17,10 +17,9 @@ mod suspended;
 mod c4_support;
 
 use actingcommand_contract::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, EventActor, EventFamily,
-    EventQuery, EventSource, GovernanceIdentityCard, MAX_RUNTIME_SUBSCRIPTION_EVENTS,
-    PolicyExecutionEventData, ProjectedEvent, ProjectionProfile, RunId,
-    RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeSubscriptionRequest,
+    EventActor, EventFamily, EventQuery, EventSource, GovernanceIdentityCard,
+    MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionProfile,
+    RunId, RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeSubscriptionRequest,
     SchedulingOutcomeProjection, SubscriptionCursor,
 };
 use actingcommand_policy::MAX_TASKS;
@@ -189,57 +188,19 @@ fn initialize_policy(
     policy: &PolicyBootstrap,
 ) -> Result<PolicyCycleExecution, ActingdError> {
     // Workflow #361 C2: plan and check everything first; the catalog pointer moves only after
-    // every check passed, so a refused configuration leaves no catalog event behind.
+    // every check passed, so a refused configuration leaves no catalog event behind. The plan
+    // reads the host's complete ledger-verified approval projection (Workflow #191 D2), builds
+    // every configured approval, checks it against its latest decision (a persisted rejection
+    // or revocation cannot be silently replaced by startup config) and computes the approvals
+    // the planned catalog supersedes (Workflow #330 H2, #361 A).
     let plan = host
-        .plan_policy_catalog_transition(&policy.catalog)
+        .plan_policy_catalog_transition(
+            &policy.catalog,
+            policy.catalog_transition.as_ref(),
+            &policy.catalog_approval_ids,
+        )
         .map_err(ActingdError::runtime)?;
     let generation = plan.generation();
-    // Workflow #191 D2: the host's complete ledger-verified approval projection, not the
-    // bounded client event query, so a long approval history cannot keep startup failing.
-    let latest = host
-        .latest_approval_decisions(&policy.catalog_approval_ids)
-        .map_err(ActingdError::runtime)?;
-    // Every configured id is built and checked before anything is recorded, so a bad
-    // configuration fails startup without a partial write (Workflow #330 H2).
-    let mut undecided = Vec::new();
-    for approval_id in &policy.catalog_approval_ids {
-        let decision = ApprovalDecisionRecord::new(
-            approval_id,
-            ApprovalDisposition::Approved,
-            ApprovalTarget::Catalog {
-                catalog_hash: generation.catalog_hash().to_owned(),
-                catalog_version: generation.catalog_version(),
-            },
-            "configured_catalog_approval",
-        )
-        .map_err(|_| ActingdError::process("policy_catalog_approval_invalid"))?;
-        if let Some(existing) = latest.get(approval_id) {
-            // A persisted rejection or revocation cannot be silently replaced by startup config.
-            if existing != &decision {
-                return Err(ActingdError::process("policy_catalog_approval_conflict"));
-            }
-            continue;
-        }
-        undecided.push(decision);
-    }
-    // Workflow #330 H2: the planned catalog supersedes every active catalog approval of an
-    // older version, or of this version under another hash. They can no longer authorize a
-    // dispatch, so the driver revokes them on the same (User, Ui) connection before it records
-    // the configured approvals, freeing their places in the bounded active projection.
-    let revocations = host
-        .superseded_catalog_approvals(generation)
-        .map_err(ActingdError::runtime)?
-        .iter()
-        .map(|superseded| {
-            ApprovalDecisionRecord::new(
-                superseded.approval_id(),
-                ApprovalDisposition::Revoked,
-                superseded.target().clone(),
-                "catalog_superseded",
-            )
-            .map_err(|_| ActingdError::process("policy_catalog_revocation_invalid"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let governance = RuntimeClient::connect(
         RuntimeClientConfig::new(&policy.state_root, EventActor::User, EventSource::Ui)
             .with_io_timeout(Duration::from_secs(5)),
@@ -261,14 +222,18 @@ fn initialize_policy(
     if activated != *generation {
         return Err(ActingdError::process("policy_catalog_plan_changed"));
     }
-    for revocation in revocations {
+    // Superseded approvals can no longer authorize a dispatch: they are revoked on the same
+    // (User, Ui) connection first, freeing their places in the bounded active projection;
+    // then the undecided configured approvals and the re-approvals of a restored generation.
+    let approvals = plan.approvals();
+    for decision in approvals
+        .revoke()
+        .iter()
+        .chain(approvals.record())
+        .chain(approvals.reapprove())
+    {
         governance
-            .record_approval_decision(revocation)
-            .map_err(ActingdError::client)?;
-    }
-    for decision in undecided {
-        governance
-            .record_approval_decision(decision)
+            .record_approval_decision(decision.clone())
             .map_err(ActingdError::client)?;
     }
     drop(governance);
@@ -1839,6 +1804,7 @@ mod tests {
             state_root: root.path().to_path_buf(),
             catalog_approval_ids: vec!["approval:fixture-a".to_string()],
             catalog,
+            catalog_transition: None,
             scheduled_tasks: BTreeMap::from([(
                 "procedure.observe".to_string(),
                 ScheduledProcedureTask {

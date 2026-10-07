@@ -22,11 +22,11 @@ use actingcommand_policy::{
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
 };
 use actingcommand_runtime_host::{
-    AgentDispatcherConfig, DiscoverySpec, ExecutionBackendProvider, ExecutionBackendRegistration,
-    ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy, InstanceMode, InstanceSpec,
-    PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
-    ProcedureManifest, ProviderAssembly, RecognitionVisionProvider, RuntimeHostConfig,
-    RuntimeHostError, VisionFfiProvider, VisionSpec,
+    AgentDispatcherConfig, CatalogTransitionRequest, DiscoverySpec, ExecutionBackendProvider,
+    ExecutionBackendRegistration, ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy,
+    InstanceMode, InstanceSpec, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
+    ProcedureBinding, ProcedureManifest, ProviderAssembly, RecognitionVisionProvider,
+    RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionModelListing,
@@ -510,6 +510,42 @@ struct PolicyConfigFile {
     catalog: PolicyCatalogConfigFile,
     catalog_approval_ids: Vec<String>,
     procedure_manifest: Vec<ProcedureBindingConfigFile>,
+    /// Workflow #361 A: the explicit transition to another catalog id or to a generation that
+    /// was active before; absent means the forward-only rule.
+    #[serde(default)]
+    catalog_transition: Option<CatalogTransitionConfigFile>,
+}
+
+/// `policy.catalog_transition` (Workflow #361 A): `kind` is `replace`, and the transition is
+/// applied only while `expected_active_catalog_hash` is the active generation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CatalogTransitionConfigFile {
+    kind: String,
+    expected_active_catalog_hash: String,
+}
+
+impl CatalogTransitionConfigFile {
+    fn request(&self) -> Result<CatalogTransitionRequest, &'static str> {
+        if self.kind != "replace" {
+            return Err("catalog_transition_kind_unknown");
+        }
+        let canonical = self
+            .expected_active_catalog_hash
+            .strip_prefix("sha256:")
+            .is_some_and(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            });
+        if !canonical {
+            return Err("catalog_transition_invalid");
+        }
+        Ok(CatalogTransitionRequest::replace(
+            self.expected_active_catalog_hash.clone(),
+        ))
+    }
 }
 
 #[derive(Deserialize)]
@@ -779,6 +815,8 @@ pub(super) struct PolicyBootstrap {
     pub(super) state_root: PathBuf,
     pub(super) catalog_approval_ids: Vec<String>,
     pub(super) catalog: CatalogSources,
+    /// Workflow #361 A: the configured `replace` transition, if any.
+    pub(super) catalog_transition: Option<CatalogTransitionRequest>,
     pub(super) scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
     pub(super) registry_modes: BTreeMap<String, ScheduledExecutionMode>,
     pub(super) cadence: PolicyCadence,
@@ -1132,6 +1170,9 @@ impl ActingdConfigFile {
             governance_allowed_clients_explicit: self.governance.is_some(),
             agent_dispatcher: agent_dispatcher_budget,
             policy_configured: policy.is_some(),
+            catalog_transition: policy
+                .as_ref()
+                .and_then(|policy| policy.catalog_transition.as_ref()),
             vision_provider_configured: provider.vision.is_some(),
             instances_count: provider.instance_count(),
             instances_deferred_count: provider.deferred.len(),
@@ -1150,6 +1191,7 @@ impl ActingdConfigFile {
                 state_root: policy_state_root,
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
+                catalog_transition: policy.catalog_transition,
                 scheduled_tasks: policy.scheduled_tasks,
                 registry_modes: provider.modes(),
                 cadence: policy_cadence,
@@ -1198,6 +1240,7 @@ struct PolicyAssembly {
     procedure_manifest: ProcedureManifest,
     catalog_approval_ids: Vec<String>,
     catalog: CatalogSources,
+    catalog_transition: Option<CatalogTransitionRequest>,
     scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
     scheduled_instance_scopes: Vec<(String, String)>,
 }
@@ -1268,6 +1311,13 @@ impl PolicyConfigFile {
         {
             return Err("procedure_manifest_entry_missing");
         }
+        // Workflow #361 A, C1: the transition's shape; whether it applies is decided against
+        // the ledger at startup (and previewed by `check-config`).
+        let catalog_transition = self
+            .catalog_transition
+            .as_ref()
+            .map(CatalogTransitionConfigFile::request)
+            .transpose()?;
         let scheduled_instance_scopes = compiled
             .catalog()
             .tasks
@@ -1291,6 +1341,7 @@ impl PolicyConfigFile {
             procedure_manifest,
             catalog_approval_ids: self.catalog_approval_ids,
             catalog,
+            catalog_transition,
             scheduled_tasks,
             scheduled_instance_scopes,
         })
