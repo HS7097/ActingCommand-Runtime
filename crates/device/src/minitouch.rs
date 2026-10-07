@@ -1003,6 +1003,96 @@ mod tests {
     use super::*;
 
     #[test]
+    fn one_off_355_s2_wm_size_parser_shared_by_capture_and_touch() {
+        use crate::adb::{WmSize, parse_wm_size};
+        use crate::touch::touch_bounds_from_screen_size;
+        use actingcommand_contract::CaptureWmSizeKind;
+
+        let device = |screen_size: &str| DeviceInfo {
+            serial: "neutral:1".to_owned(),
+            state: "device".to_owned(),
+            screen_size: screen_size.to_owned(),
+        };
+
+        let both = "Physical size: 1920x1080\nOverride size: 1280x720";
+        for message in [
+            parse_wm_size(both)
+                .expect_err("differing sizes")
+                .to_string(),
+            touch_bounds_from_screen_size(both)
+                .expect_err("touch refuses")
+                .to_string(),
+            screen_bounds_from_device(&device(both))
+                .expect_err("minitouch refuses")
+                .to_string(),
+        ] {
+            assert!(
+                message.contains("wm_size_override_unsupported"),
+                "{message}"
+            );
+            assert!(
+                message.contains("1920x1080") && message.contains("1280x720"),
+                "{message}"
+            );
+            println!("one-off #355 S2: override differs -> {message}");
+        }
+
+        let cases = [
+            (
+                "Physical size: 1280x720",
+                1280,
+                720,
+                CaptureWmSizeKind::Physical,
+            ),
+            (
+                "Physical size: 720x1280\r\n",
+                720,
+                1280,
+                CaptureWmSizeKind::Physical,
+            ),
+            ("1280x720", 1280, 720, CaptureWmSizeKind::Unlabelled),
+            (
+                "Physical size: 1280x720\nOverride size: 1280x720",
+                1280,
+                720,
+                CaptureWmSizeKind::Override,
+            ),
+        ];
+        for (text, width, height, kind) in cases {
+            assert_eq!(
+                parse_wm_size(text).expect("wm size"),
+                WmSize {
+                    width,
+                    height,
+                    kind
+                }
+            );
+            let touch = touch_bounds_from_screen_size(text).expect("touch bounds");
+            assert_eq!((touch.max_x, touch.max_y), (width as i32, height as i32));
+            let minitouch = screen_bounds_from_device(&device(text)).expect("minitouch bounds");
+            assert_eq!(
+                (minitouch.width, minitouch.height),
+                (width as i32, height as i32)
+            );
+            println!("one-off #355 S2: {text:?} -> {width}x{height} {kind:?}");
+        }
+
+        for text in [
+            "Physical size: 1280",
+            "Physical size: invalidx720",
+            "Physical size: 0x720",
+            "Physical size: 1280x0",
+            "",
+            "Physical size: 1280x720\nPhysical size: 1280x720",
+        ] {
+            let message = parse_wm_size(text).expect_err("invalid").to_string();
+            assert!(touch_bounds_from_screen_size(text).is_err());
+            assert!(screen_bounds_from_device(&device(text)).is_err());
+            println!("one-off #355 S2: {text:?} -> {message}");
+        }
+    }
+
+    #[test]
     fn parses_minitouch_handshake() {
         let input = b"v 1\n^ 10 1279 719 255\n$ 1234\n";
         let mut reader = BufReader::new(&input[..]);
