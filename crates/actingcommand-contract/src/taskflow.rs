@@ -404,6 +404,8 @@ pub enum OcrFieldType {
     },
 }
 
+// Interface anchor `package` revision 2 (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when packs need what older readers lack.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OcrUnsignedIntegerFormat {

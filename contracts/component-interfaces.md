@@ -19,12 +19,12 @@ additive `interfaces` object. Every existing reader of the manifest ignores it.
 "interfaces": {
   "schema_version": "actingcommand.component-interfaces.v1",
   "speaks": {
-    "actingd-config": [2, 2],
+    "actingd-config": [2, 3],
     "install-selection": [1, 1],
     "install-control": [0, 1],
-    "ledger": [1, 1],
+    "ledger": [1, 2],
     "runtime-client": [1, 1],
-    "package": [1, 1]
+    "package": [1, 2]
   }
 }
 ```
@@ -98,16 +98,56 @@ writes the configuration, the console edits it, and actingd reads it.
 |---|---|---|---|---|---|
 | `actingd-config` | negotiation, three parties | acsetup writes the configuration, the console edits it, actingd reads it; one revision common to all three | 1 | `actingcommand.actingd.config.v1` with `vision_provider_manifest` and no `vision` section | `apps/actingd/src/config.rs`, the vision fields |
 | | | | 2 | the same schema string; a `vision` section; `vision_provider_manifest` refused (#360) | same |
+| | | | 3 | revision 2 plus the optional `policy.catalog_transition` object `{"kind": "replace", "expected_active_catalog_hash": "sha256:<64 hex>"}` (#361 A, Runtime v0.11.3); a Runtime up to v0.11.2 refuses a file that names it, because `policy` denies unknown fields | `apps/actingd/src/config.rs`, `PolicyConfigFile::catalog_transition` |
 | `install-selection` | containment | acsetup writes `install/active.json`; actingd, actingctl, the Tools, acui and the fixed entries (acforward) read it | 1 | `actingcommand.install-selection.v1` | `crates/actingcommand-contract/src/installation.rs`, `INSTALL_SELECTION_SCHEMA` |
 | `install-control` | negotiation | acsetup drives a shutdown and a start; actingd answers | 0 | cold: `actingctl request-shutdown --wait`, and a start without `--install-held` | `apps/actingctl`, `request-shutdown` |
 | | | | 1 | the Host installation transition (#352): `begin_drain`, `query`, `commit_shutdown`, `--install-held`, `release` | `crates/actingcommand-contract/src/installation.rs`, `InstallTransitionAction` |
 | `ledger` | containment | actingd writes the GlobalLedger; later and earlier Runtimes, the Tools and the console read it | 1 | GlobalLedger SQLite format 1, `actingcommand.event.v2`, and every record that Runtimes v0.11.0 to v0.11.2 write and their readers accept | `crates/ledger/src/global/sqlite.rs`, `FORMAL_FORMAT_VERSION`; `crates/actingcommand-contract/src/event.rs`, `GLOBAL_EVENT_SCHEMA_VERSION` |
+| | | | 2 | revision 1 plus the cross-id catalog transitions of #361 A (Runtime v0.11.3), which a Runtime records only after a `policy.catalog_transition` `replace`: a successful `catalog.activated` that changes the catalog id (plan `switch`), and a successful `catalog.rolled_back` to a generation of another catalog id that was active before. Event types, payloads, `actingcommand.event.v2` and SQLite format 1 are unchanged. A Runtime up to v0.11.2 refuses such a ledger when it starts (`catalog_generation_source_conflict`, operation `project_policy_catalog`), and its `ledger-maintenance verify` does not detect it. Consoles and Tools read revision 2: they never replay the catalog lineage | `crates/runtime-host/src/policy_host/catalog_transaction.rs`, `CatalogStore::fold_catalog_events` |
 | `runtime-client` | negotiation | the console requests; actingd answers | 1 | requests `actingcommand.runtime.request.v3`, receipts `actingcommand.runtime.receipt.v1` | `crates/actingcommand-contract/src/runtime.rs` |
 | `package` | containment | a bundle writes packs; actingd runs them, and acsetup admits them before it places them | 1 | packages as the v0.11.x execution kernel admits them: `content-directory.v1` and legacy zip references; bundle index v1, v2 and v3 | `crates/actingcommand-contract/src/package.rs`, `BundleIndex` |
-| `tools-layout` | derived | never declared | 1, 2 | the Tools manifest's `tools_payload_layout`: `platform-tools-v1` is 1, `platform-tools-v2` is 2 | `.github/workflows/windows-remote-build.yml` |
+| | | | 2 | revision 1 plus the OCR unsigned-integer format `times_prefixed` (#369/#371, Runtime v0.11.3), in an OCR field's `value.format` (`contracts/ocr-fields.md`) and in a resource reading's `value.format` (`contracts/resource-readings.md`); the contract crate before v0.11.3 has no such format, so a Runtime up to v0.11.2 refuses a pack that declares it at admission. A bundle whose packs use it declares `package` [2, 2] | `crates/actingcommand-contract/src/taskflow.rs`, `OcrUnsignedIntegerFormat` |
+| `tools-layout` | derived | never declared | 1, 2, 3 | the Tools manifest's `tools_payload_layout`: `platform-tools-v1` is 1, `platform-tools-v2` is 2, `platform-tools-v3` (layout 2 plus `actingwatch.exe`, #374) is 3 | `.github/workflows/windows-remote-build.yml` |
 
 The console reads no package, so it is not a `package` reader. What a pack's run
 records is covered by `ledger` and `runtime-client`.
+
+### What Runtime v0.11.3 moved
+
+Runtime v0.11.3 declares `actingd-config` [2, 3], `install-selection` [1, 1],
+`install-control` [0, 1], `ledger` [1, 2], `runtime-client` [1, 1] and `package`
+[1, 2]. It still reads every earlier revision it read before, so no `min` moves.
+Each change since v0.11.2 was checked against these interfaces:
+
+- `actingd-config` 3 comes from #637 alone; nothing else in v0.11.3 changes the
+  configuration schema. #631 adds no field: its assembly refusals
+  (`policy_instance_set_mismatch`, `policy_instance_host_unknown`,
+  `policy_catalog_approval_invalid`, `procedure_manifest_entry_missing`) stop
+  earlier what v0.11.2 refused later, at the first policy cycle, at the
+  approval record or at the first intent.
+- `ledger` 2 comes from #637 alone. These v0.11.3 records are not part of it,
+  because a v0.11.2 Runtime reads them:
+  - #642's persisted scheduling pause, the runtime fact `host.scheduling_pause`
+    in the existing `host.` family. v0.11.2 replays it as any runtime fact and
+    ignores it, so it starts unpaused;
+  - #646's planning signals with `fact_code` `<fact_key>.type_mismatch` or
+    `<fact_key>.field_missing`, a new token in an existing field;
+  - #632's failure codes `contained_task_step_unconfirmed` and
+    `contained_task_error_page_reached`, and the entry and ladder records of
+    #636, #638 and #639, which use existing record types, fields and token rules.
+
+  #633 and #640 only read the ledger, and #635 adds keys to the diagnostic
+  artifact `actingcommand.runtime.saved-artifact-ocr.v1`, which no component
+  parses. No event type, payload field or persisted structure is added.
+- `package` 2 comes from #630 alone. The entry wait of #371-3 and the new failure
+  codes change how a pack runs, not what it declares: every revision-1 pack is
+  still admitted.
+- `install-selection`, `install-control` and `runtime-client` do not move. Their
+  anchors changed by comments only; the status's pause fields keep their shape
+  and are now restored after a restart (#642).
+- `tools-layout` 3 comes from #374, which adds `actingwatch.exe` to the Tools.
+  It is derived from the Tools manifest and never declared, so neither the
+  declaration nor the known table changes for it.
 
 ## Bump rule
 
@@ -208,7 +248,7 @@ I and the bundles B work together. The edges:
 | `ledger` | Rp.max in R*; Rp.max and R*.max in U* |
 | `runtime-client` | U* ∩ R* |
 | `package` | B.max in R* and in I |
-| new slot | a Runtime laid into a new slot needs `tools-layout` 2, `actingd-config` containing 2 and `install-selection` containing 1: a slot is the program core only (#359, #360), and an earlier Runtime looks for its tools inside its slot |
+| new slot | a Runtime laid into a new slot needs `tools-layout` 2 or 3, `actingd-config` containing 2 and `install-selection` containing 1: a slot is the program core only (#359, #360), and an earlier Runtime looks for its tools inside its slot |
 
 | Operation | R*, U* | Rp | Bundles | New slot |
 |---|---|---|---|---|
@@ -231,3 +271,26 @@ replacement for that verification.
 The fixed entries in `<root>\runtime\` and `<root>\ui\` (acforward) read
 `install/active.json`. An A/B upgrade replaces them with the release's
 acforward whenever their bytes differ, so they read what the release's UI reads.
+
+### No Runtime rollback across `ledger` 2
+
+Runtime v0.11.3 and later declare `ledger` [1, 2], and every Runtime row of the
+known table (v0.11.0 to v0.11.2) is `ledger` [1, 1]. A rollback checks Rp.max in
+R*: the Runtime of the selected slot wrote the ledger, and the Runtime of the
+retained slot reads it next. 2 is not in [1, 1], and neither the known table
+nor the containment rule makes an exception, so acsetup refuses `--rollback`
+from a slot whose Runtime declares `ledger` 2 to a retained slot whose Runtime
+is v0.11.2 or earlier. It names the `ledger` edge, exits with code 1 and changes
+nothing. This is intended:
+
+- The refusal does not depend on what the ledger holds. It applies even when no
+  `replace` was ever made, because nothing can tell beforehand: a v0.11.2
+  Runtime's `ledger-maintenance verify` passes a revision-2 ledger.
+- Once the ledger holds a cross-id catalog transition, a v0.11.2 Runtime stops
+  at its first start with `catalog_generation_source_conflict`. Without one it
+  starts, but it ignores a persisted scheduling pause (#642) and runs unpaused.
+
+Rolling the Runtime back from v0.11.3 to v0.11.2 or earlier is therefore not
+supported, and the v0.11.3 release notes say so. The known table's Runtime rows
+stay [1, 1]. A rollback between two slots whose Runtimes both declare `ledger` 2
+is checked as before.

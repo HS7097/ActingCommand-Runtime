@@ -514,6 +514,8 @@ struct PolicyConfigFile {
     procedure_manifest: Vec<ProcedureBindingConfigFile>,
     /// Workflow #361 A: the explicit transition to another catalog id or to a generation that
     /// was active before; absent means the forward-only rule.
+    // Interface anchor `actingd-config` revision 3 (contracts/component-interfaces.md): raise its
+    // revision in distribution/windows/component-interfaces.json when older readers refuse this.
     #[serde(default)]
     catalog_transition: Option<CatalogTransitionConfigFile>,
 }
