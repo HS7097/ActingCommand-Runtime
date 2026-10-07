@@ -229,7 +229,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `session request` | no_effect | | retired (always exit 6) |
 | `session contract` | no_effect | | |
 | `session api` | no_effect | | |
-| `session transport` | no_effect | | |
+| `session transport` | no_effect | | `plan`: retired (always exit 6, `trusted_remote_transport_retired`) |
 | `session journal` | no_effect | | retired |
 | `session events` | no_effect | | retired |
 | `session response` | no_effect | | retired |

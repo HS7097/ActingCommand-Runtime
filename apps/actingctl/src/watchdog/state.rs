@@ -8,7 +8,7 @@
 use super::Failure;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) const STATE_SCHEMA: &str = "actingcommand.runtime-watchdog-state.v1";
@@ -142,7 +142,8 @@ pub(crate) fn set_aside(directory: &Path, now_unix_ms: u64) -> Result<PathBuf, F
     Ok(to)
 }
 
-/// Written whole to a temporary file, then renamed over the state.
+/// Written whole to a temporary file and flushed to disk, then renamed over the state, so an
+/// unclean shutdown cannot leave a renamed file without its content.
 pub(crate) fn save(directory: &Path, state: &WatchdogState) -> Result<(), Failure> {
     let path = directory.join(STATE_FILE);
     let temporary = directory.join(format!("{STATE_FILE}.tmp-{}", std::process::id()));
@@ -155,7 +156,11 @@ pub(crate) fn save(directory: &Path, state: &WatchdogState) -> Result<(), Failur
     let mut bytes = serde_json::to_vec_pretty(state)
         .map_err(|error| Failure::misconfigured("watchdog_state_unwritable", error.to_string()))?;
     bytes.push(b'\n');
-    fs::write(&temporary, bytes).map_err(unwritable)?;
+    let mut file = fs::File::create(&temporary).map_err(unwritable)?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(unwritable)?;
+    drop(file);
     fs::rename(&temporary, &path).map_err(unwritable)
 }
 

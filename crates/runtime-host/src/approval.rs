@@ -83,6 +83,23 @@ impl ApprovalProjection {
                 ..EventQuery::default()
             })
             .map_err(|_| approval_fatal("approval_projection_query_failed"))?;
+        let projection = Self::from_events(&events, state)?;
+        if persist {
+            projection
+                .state
+                .recover_approval_projections(&events)
+                .map_err(approval_state_error)?;
+        }
+        Ok(projection)
+    }
+
+    /// The projection of `events`, the approval decisions of one ledger in ledger order, with
+    /// the same checks as recovery; nothing is persisted (Workflow #361 C3 reads it from the
+    /// read-only evidence ledger).
+    pub(crate) fn from_events(
+        events: &[PersistedEvent],
+        state: Arc<RuntimeStateStore>,
+    ) -> RuntimeHostResult<Self> {
         let mut projection = Self {
             active: BTreeMap::new(),
             recent: BTreeMap::new(),
@@ -90,16 +107,10 @@ impl ApprovalProjection {
             latest: BTreeMap::new(),
             state,
         };
-        for event in &events {
+        for event in events {
             projection.apply(event)?;
         }
         projection.validate_capacity()?;
-        if persist {
-            projection
-                .state
-                .recover_approval_projections(&events)
-                .map_err(approval_state_error)?;
-        }
         Ok(projection)
     }
 
@@ -314,13 +325,14 @@ impl ApprovalProjection {
             .collect()
     }
 
-    /// Active catalog approvals that a catalog at (`catalog_hash`, `catalog_version`) supersedes:
-    /// an older version, or the same version under another hash (Workflow #330 H2). A later
-    /// version is kept: it may be approved ahead of its activation.
+    /// Active catalog approvals that `generation` supersedes (Workflow #330 H2, #361 A): an
+    /// approval of another catalog id that was active in `lineage`, whatever its version;
+    /// otherwise an older version, or the same version under another hash. A later version is
+    /// kept: it may be approved ahead of its activation.
     pub(crate) fn superseded_catalog_approvals(
         &self,
-        catalog_hash: &str,
-        catalog_version: u64,
+        lineage: &crate::catalog_plan::CatalogLineage,
+        generation: &crate::CatalogGeneration,
     ) -> Vec<ApprovalDecisionRecord> {
         self.active
             .values()
@@ -329,10 +341,14 @@ impl ApprovalProjection {
                     && matches!(
                         decision.target(),
                         ApprovalTarget::Catalog {
-                            catalog_hash: target_hash,
-                            catalog_version: target_version,
-                        } if *target_version < catalog_version
-                            || (*target_version == catalog_version && target_hash != catalog_hash)
+                            catalog_hash,
+                            catalog_version,
+                        } if crate::catalog_plan::catalog_approval_superseded(
+                            lineage,
+                            generation,
+                            catalog_hash,
+                            *catalog_version,
+                        )
                     )
             })
             .cloned()

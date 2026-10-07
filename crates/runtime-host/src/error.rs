@@ -109,12 +109,15 @@ impl PartialEq for RuntimeHostError {
 impl Eq for RuntimeHostError {}
 
 impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
-    fn from(_: actingcommand_policy::PolicyEvaluationError) -> Self {
+    fn from(error: actingcommand_policy::PolicyEvaluationError) -> Self {
+        // Workflow #355 D12: keep the policy code and message so the lifecycle record names
+        // the failing fact or overflow.
         Self::request(
             "policy_evaluation_rejected",
             "evaluate_policy_cycle",
             RuntimeErrorCode::InvalidRequest,
         )
+        .with_native_detail(format!("{}: {}", error.code(), error.message()))
     }
 }
 
@@ -286,6 +289,15 @@ impl RuntimeHostError {
         &self,
     ) -> Option<&actingcommand_contract::ResourceTargetsRejection> {
         self.lifecycle.resource_targets_rejection.as_deref()
+    }
+
+    /// The bounded native detail, if any. The ledger keeps it under its declared sensitivity;
+    /// a process shell prints it only for refusals whose detail it knows to carry no device or
+    /// vendor output, such as the catalog plan's remedy (Workflow #361 A).
+    pub fn native_detail(&self) -> Option<&str> {
+        self.diagnostics()
+            .native_detail()
+            .map(actingcommand_contract::LifecycleNativeDetail::text)
     }
 
     /// A refused `ApplyResourceTargets` document: non-fatal `InvalidRequest`, host code

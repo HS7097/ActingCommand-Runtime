@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{CliError, CliOutcome, TRUSTED_REMOTE_CLIENT_CERT_ENV, TRUSTED_REMOTE_TOKEN_ENV};
+use super::{CliError, CliOutcome};
 use serde_json::{Value, json};
-use std::env;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -12,20 +11,19 @@ pub(super) struct RuntimeEndpointPolicy {
     pub(super) host: String,
     pub(super) port: u16,
     pub(super) channel: RuntimeEndpointChannel,
-    pub(super) auth_material: Option<&'static str>,
 }
 
+/// Workflow #355 D4: the trusted-remote channel was retired; ActingLab talks only to a Runtime
+/// on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RuntimeEndpointChannel {
     LocalDirect,
-    TrustedRemote,
 }
 
 impl RuntimeEndpointChannel {
     fn as_str(self) -> &'static str {
         match self {
             RuntimeEndpointChannel::LocalDirect => "local_direct",
-            RuntimeEndpointChannel::TrustedRemote => "trusted_remote",
         }
     }
 }
@@ -57,37 +55,23 @@ pub(super) fn runtime_endpoint_policy(endpoint: &str) -> CliOutcome<RuntimeEndpo
             "runtime endpoint is invalid; expected host:port, http://host:port, or https://host:port, got {endpoint}"
         ))
     })?;
-    if is_loopback_host(&host) {
-        return Ok(RuntimeEndpointPolicy {
-            scheme,
-            host,
-            port,
-            channel: RuntimeEndpointChannel::LocalDirect,
-            auth_material: None,
-        });
-    }
-    if scheme != "https" {
+    // The Runtime binds a loopback IP only (runtime-host refuses any bind address whose IP is
+    // not loopback), so the endpoint host must be a loopback IP literal. Names, `localhost`
+    // included, are refused rather than resolved.
+    if !host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
         return Err(CliError::safety_blocked(
-            "trusted_remote_transport_blocked",
-            "trusted remote runtime endpoints must use https:// with encryption",
-            &["trusted_remote", "encryption"],
+            "runtime_endpoint_not_local",
+            format!(
+                "ActingLab connects only to a Runtime on this machine; use 127.0.0.1:<port> or [::1]:<port>, got {host}"
+            ),
+            &["local_runtime_only"],
         ));
     }
-    let auth_material = trusted_remote_auth_material().ok_or_else(|| {
-        CliError::safety_blocked(
-            "trusted_remote_auth_required",
-            format!(
-                "trusted remote runtime endpoints require {TRUSTED_REMOTE_TOKEN_ENV} or {TRUSTED_REMOTE_CLIENT_CERT_ENV}"
-            ),
-            &["trusted_remote", "authentication"],
-        )
-    })?;
     Ok(RuntimeEndpointPolicy {
         scheme,
         host,
         port,
-        channel: RuntimeEndpointChannel::TrustedRemote,
-        auth_material: Some(auth_material),
+        channel: RuntimeEndpointChannel::LocalDirect,
     })
 }
 
@@ -96,31 +80,8 @@ pub(super) fn runtime_endpoint_policy_json(policy: &RuntimeEndpointPolicy) -> Va
         "channel": policy.channel.as_str(),
         "scheme": policy.scheme,
         "host": policy.host,
-        "port": policy.port,
-        "encryption_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
-        "authentication_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
-        "auth_material": policy.auth_material,
-        "auth_env": {
-            "token": TRUSTED_REMOTE_TOKEN_ENV,
-            "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
-        }
+        "port": policy.port
     })
-}
-
-fn trusted_remote_auth_material() -> Option<&'static str> {
-    if env_var_non_empty(TRUSTED_REMOTE_TOKEN_ENV) {
-        Some("token")
-    } else if env_var_non_empty(TRUSTED_REMOTE_CLIENT_CERT_ENV) {
-        Some("client_certificate")
-    } else {
-        None
-    }
-}
-
-pub(super) fn env_var_non_empty(name: &str) -> bool {
-    env::var(name)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
 }
 
 pub(super) fn runtime_tcp_available(endpoint: &str) -> bool {
@@ -152,12 +113,4 @@ fn parse_endpoint_parts(endpoint: &str) -> Option<(String, String, u16)> {
         host.trim_matches(['[', ']']).to_string(),
         port.parse().ok()?,
     ))
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    let normalized = host.trim_matches(['[', ']']).to_ascii_lowercase();
-    normalized == "localhost"
-        || normalized == "::1"
-        || normalized == "0:0:0:0:0:0:0:1"
-        || normalized.starts_with("127.")
 }

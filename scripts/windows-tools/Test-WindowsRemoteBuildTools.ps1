@@ -209,7 +209,8 @@ function New-ArtifactFixture {
         [Parameter(Mandatory)][string] $CommitSha,
         [Parameter(Mandatory)][string] $TreeSha,
         [Parameter(Mandatory)][string] $CargoLockSha256,
-        [Parameter(Mandatory)][bool] $CorruptPayload
+        [Parameter(Mandatory)][bool] $CorruptPayload,
+        [ValidateSet('platform-tools-v2', 'platform-tools-v3')][string] $ToolsLayout = 'platform-tools-v3'
     )
     $directory = Join-Path $Root "artifacts/$Mode/$ArtifactName"
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
@@ -226,8 +227,12 @@ function New-ArtifactFixture {
             @{ name = 'actinglab.exe'; content = 'synthetic actinglab payload' },
             @{ name = 'actingledger.exe'; content = 'synthetic actingledger payload' },
             @{ name = 'actingcommand-vision-provider-check.exe'; content = 'synthetic provider-check payload' },
-            @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' },
-            @{ name = 'actingwatch.exe'; content = 'synthetic watchdog launcher payload' },
+            @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' }
+        ) + @(
+            if ($ToolsLayout -ceq 'platform-tools-v3') {
+                @{ name = 'actingwatch.exe'; content = 'synthetic watchdog launcher payload' }
+            }
+        ) + @(
             @{ name = 'platform-tools/adb.exe'; content = 'synthetic adb payload' },
             @{ name = 'platform-tools/AdbWinApi.dll'; content = 'synthetic AdbWinApi payload' },
             @{ name = 'platform-tools/AdbWinUsbApi.dll'; content = 'synthetic AdbWinUsbApi payload' },
@@ -262,7 +267,7 @@ function New-ArtifactFixture {
     if ($ArtifactKind -ceq 'Runtime') {
         $manifest.runtime_payload_layout = 'distribution-v1'
     } else {
-        $manifest.tools_payload_layout = 'platform-tools-v3'
+        $manifest.tools_payload_layout = $ToolsLayout
     }
     Write-Utf8NoBom -Path (Join-Path $directory 'BUILD-MANIFEST.json') -Text (($manifest | ConvertTo-Json -Depth 8) + "`n")
     if ($CorruptPayload) {
@@ -464,6 +469,19 @@ try {
     $adbFixture = Get-Item -LiteralPath (Join-Path $toolsOutput 'platform-tools/adb.exe') -ErrorAction Stop
     Assert-True -Condition ($adbFixture.Length -gt 0) -Message 'Tools artifact platform-tools payload is missing or empty'
     Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $toolsOutput 'ac_fastdeploy_ppocr.dll'))) -Message 'Tools artifact still carries the retired vision provider'
+    Assert-True -Condition (Test-Path -LiteralPath (Join-Path $toolsOutput 'actingwatch.exe') -PathType Leaf) -Message 'platform-tools-v3 Tools artifact lacks actingwatch.exe'
+    Complete-Case -Name $script:CurrentCase
+
+    # Workflow #374: the historical platform-tools-v2 layout (no actingwatch.exe) stays accepted.
+    $script:CurrentCase = 'artifact-tools-v2-historical-layout'
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-v2' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -ToolsLayout 'platform-tools-v2'
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'tools-v2'
+    $toolsV2Output = Join-Path $testRootFull 'downloads/tools-v2'
+    $toolsV2 = (& $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsV2Output -GhExecutable $fakeGh) | ConvertFrom-Json -Depth 20
+    Assert-True -Condition ($toolsV2.status -ceq 'PASS') -Message 'historical platform-tools-v2 Tools artifact was not accepted'
+    Assert-True -Condition (@($toolsV2.verified_files).Count -eq 9) -Message 'platform-tools-v2 Tools artifact did not verify exactly nine payloads'
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $toolsV2Output 'actingwatch.exe'))) -Message 'platform-tools-v2 Tools artifact carries actingwatch.exe'
+    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'success'
     Complete-Case -Name $script:CurrentCase
 
     Invoke-FailCase -Name 'artifact-wrong-sha' -MessagePattern 'found 0' -Action {

@@ -415,7 +415,11 @@ window and runs `<root>\runtime\actingctl.exe watchdog run-once --root <root>
 --from-task` hidden. The launcher exits 20 when it is not at
 `<root>\tools\actingwatch.exe`, 21 when `<root>\watchdog\` is missing, 22 when the
 fixed entry cannot run and 23 when the writer lock cannot be probed; otherwise it
-returns the tick's code. While acsetup holds the writer lock it does nothing.
+returns the tick's code. While acsetup holds the writer lock it does nothing. The
+other way round, the launcher holds that lock shared for its tick (about a second;
+up to three minutes while a start waits for readiness): an acsetup run that begins
+then stops at once with "Installation/configuration writer is occupied" and changes
+nothing. Run acsetup again.
 
 The watchdog writes only under `<root>\watchdog\`: `watchdog.log` (one line per
 change, start or error; the record to read), `state.json` (its budget and
@@ -425,8 +429,10 @@ per-minute task turns over within days; it shows the last runs, `watchdog.log`
 keeps the record.
 
 Every program that starts the Runtime should log its stdout and stderr into an
-`actingd-*.log` in the root, so that a FATAL is seen; a Runtime started without
-one shows only as `formal_close_unlogged` (17) in `status` after it stops.
+`actingd-*.log` in the root (the console's own logs in
+`%LOCALAPPDATA%\ActingCommand\logs` count as well), so that a FATAL is seen; a
+Runtime started without one shows only as `formal_close_unlogged` (17) in `status`
+after it stops.
 Switching back to a slot whose `actingctl.exe` predates the watchdog makes every
 tick fail with that program's usage error until a newer slot is selected; run
 `watchdog uninstall` first, or disable the task

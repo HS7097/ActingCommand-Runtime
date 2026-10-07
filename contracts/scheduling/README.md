@@ -204,6 +204,50 @@ V1 rejects unknown fields and any schema version other than the exact supported 
 
 The `env.*` namespace remains an ordinary fact-key family. Existing execution substitutions that use `{env:...}` remain an execution-boundary concern; scheduling predicates reference the same stored values through typed `fact` predicates without changing that substitution syntax.
 
+## Catalog Lineage
+
+Workflow #361 A. A state root is not bound to one catalog id. The generations that were active
+in a ledger are the targets of its successful `catalog.activated` and `catalog.rolled_back`
+records and of the legacy active-pointer migration; they are rebuilt from the ledger on every
+start and never deleted. `actingd` decides the transition its configured catalog asks for
+before it records anything, in this order:
+
+| Active | Configured catalog | `policy.catalog_transition` | Plan | Recorded |
+|---|---|---|---|---|
+| none | any | absent | `first` | `catalog.activated` |
+| none | any | present | refused `catalog_transition_expectation_mismatch` | nothing |
+| A | the hash of A | any | `unchanged` | nothing |
+| A | the id of A at a higher version | absent, or `replace` expecting A | `forward` | `catalog.activated` |
+| A | anything else | absent | refused `catalog_activation_not_newer` | nothing |
+| A | any | `replace` expecting another hash | refused `catalog_transition_expectation_mismatch` | nothing |
+| A | a generation that was active | `replace` expecting A | `rollback` | `catalog.rolled_back` |
+| A | another id, never active, above every version of that id that was active | `replace` expecting A | `switch` | `catalog.activated` |
+| A | otherwise | `replace` expecting A | refused `catalog_replace_version_not_newer` | nothing |
+
+`replace` is the only transition kind; `expected_active_catalog_hash` is a compare-and-swap
+value, and the transition is recorded under the same compare-and-swap
+(`catalog_active_generation_changed` when another transition won). The field may stay in the
+configuration after it was applied: the next start finds the same hash and plans `unchanged`.
+A `catalog_activation_not_newer` refusal names the active and the configured generation and the
+`replace` transition, expecting the active hash, that would switch or roll back instead; `actingd`
+prints it on its `FATAL` line. Proposal promotion stays forward-only. Replay accepts exactly these records: a successful
+`catalog.activated` keeps the id at a higher version or changes the id, a successful
+`catalog.rolled_back` keeps the id at a lower version or returns to a generation of another id
+that was active before; every other sequence stays `catalog_generation_source_conflict`. Every
+ledger that satisfied the earlier rule satisfies this one and projects to the same generation.
+A Runtime older than this rule refuses a ledger with a cross-id transition at start with
+`catalog_generation_source_conflict`; switching an installation back to such a Runtime after a
+`replace` therefore fails loudly at its first start.
+
+There is no deactivation record. Stopping the scheduler is a configuration without `policy`
+(recorded as the disabled `policy_driver` subsystem) or the global scheduling pause; the last
+active generation stays the active generation of the lineage, and a later configuration with
+any catalog continues from it with `replace`.
+
+Task ids are global: dispatch history, last dispatch time, budgets and failure streaks are kept
+per (task id, instance) across a switch, so a catalog that keeps its task ids keeps its clock
+state.
+
 ## Scope And Overrides
 
 Runtime evaluation replaces task runtime snapshots with its replayed admitted and
@@ -547,6 +591,22 @@ An observation at or before the last matching reset is Unknown until replaced
 by a newer observation. Equal timestamps are conservative because the input
 contains no ordering evidence within that millisecond.
 
+A fact or outcome whose observed value kind differs from the kind its predicate
+compares (`fact`, `outcome`), a `record_deadline` fact that is not a
+`record_list`, or a record whose timestamp field is not `timestamp_ms` resolves
+that predicate Unknown with reason `type_mismatch`; a record missing its
+timestamp field resolves it Unknown with `field_missing` (the selection-policy
+words; Workflow #355 D12). Neither fails the evaluation: the other tasks and
+instances evaluate and dispatch normally, and the reason surfaces as the
+planning signal `<fact_key>.type_mismatch` or `<fact_key>.field_missing`. Like
+`fact_missing`, each new fact snapshot reserves one more detection for that
+instance's activity window, so an unrepaired pack type error ends as one
+detection-quota-exhausted signal per window. Errors of the catalog's own
+comparison (an operator on kinds it does not accept, such as `contains` on two
+integers) and arithmetic overflow still fail the evaluation; Runtime reports
+them as `policy_evaluation_rejected` and keeps the policy code and message as
+the lifecycle record's native detail.
+
 `ObservedOutcome.expires_at_unix_ms` is optional and uses the fact TTL convention:
 the expiry millisecond is valid and expiry + 1 wakes reevaluation. Matching future
 resets cap admission freshness at occurrence - 1 and wake at the occurrence.
@@ -585,6 +645,8 @@ Every clock schedule declares exactly one source:
 - `local` uses the host-provided monotonic coordinate and is valid only for interval schedules. The evaluator projects its next occurrence back to Unix time for transport.
 - `server` uses a pinned timezone identity, base UTC offset, explicit DST offset, and bounded maintenance drift.
 - `reveal` has the same calendar fields plus `reveal_source`, the immutable evidence identity from which the catalog author derived the pinned schedule.
+
+A clock occurrence is owed from the moment it occurs until the task is next dispatched; it has no expiry (Workflow #361). Several occurrences missed in a row collapse into the latest one. An occurrence that fell while the task's activity window was closed, or while no Runtime was running, is dispatched once at the first admissible evaluation of the next window, and that dispatch counts against the loop budget of that window's day. A timeline reset invalidates the task's settled state but does not settle a missed occurrence. A catalog that must skip a missed occurrence instead of replaying it gates each occurrence with its own timeline window (`timeline_active`); no expiry rule exists in the catalog schema yet.
 
 The catalog contains the effective DST offset instead of consulting a hidden timezone database. The base UTC offset is bounded to `[-840, 840]` minutes and the explicit DST offset is independently bounded to `[-120, 120]` minutes; their effective sum is therefore bounded to `[-960, 960]` minutes. A DST transition, server-clock correction, reveal change, or maintenance delay creates a new immutable catalog generation and triggers full recomputation. `maintenance_drift_ms` shifts nominal occurrences and is bounded to seven days. Calendar and absolute schedules cannot use `local`, because monotonic coordinates do not identify wall-clock instants and are not portable across host boot epochs.
 

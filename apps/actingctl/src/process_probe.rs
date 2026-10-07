@@ -5,15 +5,28 @@
 
 use std::process::Command;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// No liveness helper exists in actingctl's dependencies and unsafe code is forbidden here, so
-/// this asks the platform process lister: `tasklist` on Windows (exit 0 either way; a match is a
-/// CSV row whose second field is the pid), POSIX `ps` elsewhere (no match: non-zero, no output).
+/// this asks the platform process lister: `%SystemRoot%\System32\tasklist.exe` without a
+/// window on Windows (exit 0 either way; a match is a CSV row whose second field is the pid),
+/// POSIX `ps` elsewhere (no match: non-zero, no output).
 pub(crate) fn pid_alive(pid: u32) -> Result<bool, String> {
     let pid_text = pid.to_string();
     #[cfg(windows)]
-    let output = Command::new("tasklist")
+    let output = {
+        use std::os::windows::process::CommandExt;
+        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+        Command::new(
+            std::path::PathBuf::from(system_root)
+                .join("System32")
+                .join("tasklist.exe"),
+        )
         .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output();
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    };
     #[cfg(not(windows))]
     let output = Command::new("ps")
         .args(["-p", &pid_text, "-o", "pid="])

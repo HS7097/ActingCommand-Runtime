@@ -1457,7 +1457,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                 (
                     release.timestamp_unix_ms(),
                     PolicyExecutionInput::Failed {
-                        error_code: "policy_settlement_interrupted".to_owned(),
+                        error_code: crate::policy_control::POLICY_SETTLEMENT_INTERRUPTED.to_owned(),
                         class: PolicyFailureClass::Severe,
                     },
                     0,

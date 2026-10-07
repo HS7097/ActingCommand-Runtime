@@ -1297,14 +1297,15 @@ pub struct ProjectedArtifactReference {
 
 impl ProjectedArtifactReference {
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        let object_key_valid = self.object_key.as_ref().is_none_or(|object_key| {
-            object_key == &object_key_for(&self.artifact_id, self.kind, &self.sha256)
-        });
+        // Workflow #355 D1: the object key is derived from the digest, so it is compared only
+        // after `is_sha256` has accepted the digest (same order as `ArtifactReference::validate`).
         let valid = self.byte_count > 0
             && self.created_at_unix_ms > 0
             && is_sha256(&self.sha256)
             && self.media_type == self.kind.media_type()
-            && object_key_valid;
+            && self.object_key.as_ref().is_none_or(|object_key| {
+                object_key == &object_key_for(&self.artifact_id, self.kind, &self.sha256)
+            });
         if valid {
             Ok(())
         } else {
@@ -1363,7 +1364,9 @@ impl fmt::Debug for ProjectedArtifactReference {
     }
 }
 
+/// Callers pass a digest already accepted by `is_sha256` (Workflow #355 D1).
 fn object_key_for(artifact_id: &ArtifactId, kind: ArtifactKind, sha256: &str) -> String {
+    debug_assert!(is_sha256(sha256));
     let shard = &sha256[7..9];
     format!(
         "artifacts/{shard}/{}.{}",

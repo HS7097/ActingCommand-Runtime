@@ -22,7 +22,7 @@ pub(super) fn help_data() -> Value {
             "--resource-root <path>",
             "--game <game>",
             "--server <server>",
-            "--runtime-endpoint <url>",
+            "--runtime-endpoint <127.0.0.1:port>",
             "--capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc>",
             "--backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
             "--touch-backend <auto|auto-fastest|maatouch|minitouch|adb_shell_input>",
