@@ -42,7 +42,11 @@ The request has a 120-second deadline, including source preparation. The ledger
 read is bounded by the declared prefix and that deadline, with no fixed byte or
 event ceiling; `ledger_read_budget_exceeded` names the bound that was reached.
 Its cost grows linearly with `through_sequence`, so the capture completion's
-sequence is the cheapest valid value. The selected PNG
+sequence is the cheapest valid value. Measured on the reference machine (warm
+cache), the ledger phase took about 0.047 ms per event (2.6 s for 50,149 events,
+127 MB of rows) and its peak memory about 3.4 times the bytes read, so it reaches
+half the deadline near 1.27 million events, about 100 days of ledger at about
+12,000 events per day. The source writer's own open grows the same way. The selected PNG
 retains the existing 64 MiB artifact limit and must match the source capture
 dimensions, with at most 16,777,216 pixels. The source target's existing OCR
 timeout is capped by the remaining deadline; Provider ownership waiting consumes
