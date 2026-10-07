@@ -591,6 +591,22 @@ An observation at or before the last matching reset is Unknown until replaced
 by a newer observation. Equal timestamps are conservative because the input
 contains no ordering evidence within that millisecond.
 
+A fact or outcome whose observed value kind differs from the kind its predicate
+compares (`fact`, `outcome`), a `record_deadline` fact that is not a
+`record_list`, or a record whose timestamp field is not `timestamp_ms` resolves
+that predicate Unknown with reason `type_mismatch`; a record missing its
+timestamp field resolves it Unknown with `field_missing` (the selection-policy
+words; Workflow #355 D12). Neither fails the evaluation: the other tasks and
+instances evaluate and dispatch normally, and the reason surfaces as the
+planning signal `<fact_key>.type_mismatch` or `<fact_key>.field_missing`. Like
+`fact_missing`, each new fact snapshot reserves one more detection for that
+instance's activity window, so an unrepaired pack type error ends as one
+detection-quota-exhausted signal per window. Errors of the catalog's own
+comparison (an operator on kinds it does not accept, such as `contains` on two
+integers) and arithmetic overflow still fail the evaluation; Runtime reports
+them as `policy_evaluation_rejected` and keeps the policy code and message as
+the lifecycle record's native detail.
+
 `ObservedOutcome.expires_at_unix_ms` is optional and uses the fact TTL convention:
 the expiry millisecond is valid and expiry + 1 wakes reevaluation. Matching future
 resets cap admission freshness at occurrence - 1 and wake at the occurrence.
