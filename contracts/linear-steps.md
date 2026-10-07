@@ -390,7 +390,8 @@ scheduled run's refusal is recorded with the policy's lease released, as any oth
 refusal. The admission deadline of a prerequisite package is the run's deadline (for a scheduled
 run, the one the run derives from its request and lease). A prerequisite package's
 `scheduling_outcome` without a designated operation is allowed and ignored. A request's
-`--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only. The
+`--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only,
+which only a scheduled run starts (Workflow #369-3: a direct task run never starts one). The
 map is read when `actingd` starts; a change needs a restart.
 
 **Gate.** A package whose chain is not empty runs through the entry gate instead of starting
