@@ -11,6 +11,9 @@ use actingcommand_ledger::{GlobalLedgerError, LedgerTransactionWork, Transaction
 use actingcommand_runtime_database::RuntimeTransaction;
 use actingcommand_runtime_state::PreparedCatalogState;
 
+/// The active generation a replay ends on: catalog id, version and hash.
+pub(super) type ActiveIdentity = (String, u64, String);
+
 pub(crate) fn catalog_ledger_error(error: &GlobalLedgerError) -> RuntimeHostError {
     RuntimeHostError::fatal(
         error.code(),
@@ -362,8 +365,8 @@ impl CatalogStore {
     pub(super) fn fold_catalog_events(
         &self,
         events: &[PersistedEvent],
-    ) -> RuntimeHostResult<(Option<(String, u64, String)>, CatalogLineage)> {
-        let mut current: Option<(String, u64, String)> = None;
+    ) -> RuntimeHostResult<(Option<ActiveIdentity>, CatalogLineage)> {
+        let mut current: Option<ActiveIdentity> = None;
         let mut lineage = CatalogLineage::default();
         let mut intents = BTreeMap::new();
         let mut migrations = BTreeSet::new();
