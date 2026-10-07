@@ -3,7 +3,8 @@
 //! `actingctl watchdog` (Workflow #374): the Runtime watchdog of an A/B installation.
 //! `run-once` is one supervision tick, run every minute by Task Scheduler through
 //! `<root>\tools\actingwatch.exe`; it starts the Runtime only when it is gone without a formal
-//! close. `status` computes the same decision read-only and adds attention states.
+//! close. `status` computes the same decision read-only and adds attention states, the task's
+//! among them. `install` and `uninstall` register and remove that task.
 //! Contract: `contracts/runtime-watchdog.md`. Nothing here touches the ledger.
 
 mod decide;
@@ -12,6 +13,7 @@ mod observe;
 mod powershell;
 mod start;
 mod state;
+mod task;
 
 use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartProbes};
 use log::Level;
@@ -23,10 +25,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-pub(crate) const USAGE: &str =
-    "usage: actingctl watchdog <status|run-once [--from-task]> --root <install root>";
+pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 const RUN_LOCK: &str = "run.lock";
 
 /// A misconfiguration (exit 13): the code names it, the detail says where.
@@ -55,6 +56,8 @@ impl Failure {
 enum Subcommand {
     Status,
     RunOnce { from_task: bool },
+    Install,
+    Uninstall,
 }
 
 /// Runs `watchdog …` when the first argument names it; `None` leaves every other command to
@@ -72,6 +75,8 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     let (report, exit) = match subcommand {
         Subcommand::Status => status(&root),
         Subcommand::RunOnce { from_task } => run_once(&root, from_task),
+        Subcommand::Install => install(&root),
+        Subcommand::Uninstall => uninstall(&root),
     };
     let written = serde_json::to_writer(std::io::stdout().lock(), &report)
         .map_err(|error| error.to_string())
@@ -97,6 +102,8 @@ fn parse(arguments: &[OsString]) -> Option<(Subcommand, PathBuf)> {
     let mut subcommand = match arguments.first()?.to_str()? {
         "status" => Subcommand::Status,
         "run-once" => Subcommand::RunOnce { from_task: false },
+        "install" => Subcommand::Install,
+        "uninstall" => Subcommand::Uninstall,
         _ => return None,
     };
     let mut root = None;
@@ -339,6 +346,7 @@ fn status(root: &Path) -> (Value, u8) {
     if starts_24h >= decide::REPEATED_RESTARTS {
         attention.push(("repeated_restarts".to_owned(), 16));
     }
+    let task_section = task_report(&tick.installation.root_plain, &mut attention);
     let exit = [13, 10, 11, 15, 12, 14, 16, 17]
         .into_iter()
         .find(|code| attention.iter().any(|(_, exit)| exit == code))
@@ -352,6 +360,7 @@ fn status(root: &Path) -> (Value, u8) {
     );
     report["close_evidence"] = json!(close_evidence);
     report["watchdog_starts_24h"] = json!(starts_24h);
+    report["task"] = task_section;
     report["state"] = json!(match loaded {
         Loaded::Fresh => "absent".to_owned(),
         Loaded::Existing => "present".to_owned(),
@@ -907,4 +916,318 @@ fn misconfigured_report(
         }),
         13,
     )
+}
+
+/// `status`'s task section (read-only, through the ScheduledTasks module): a missing,
+/// disabled or different definition is attention 14.
+fn task_report(root_plain: &Path, attention: &mut Vec<(String, u8)>) -> Value {
+    let name = task::task_name(root_plain);
+    let registration = match task::query(&name) {
+        Ok((registration, _)) => registration,
+        Err(failure) => {
+            attention.push((format!("misconfigured:{}", failure.code), 13));
+            return json!({ "task_name": name, "error": failure.detail });
+        }
+    };
+    match registration {
+        task::Registration::Absent => {
+            attention.push(("task_missing".to_owned(), 14));
+            json!({ "task_name": name, "registered": false })
+        }
+        task::Registration::Present(definition, run) => {
+            let mismatches = task::mismatches(&definition, root_plain);
+            if !mismatches.is_empty() {
+                attention.push(("task_mismatch".to_owned(), 14));
+            }
+            json!({
+                "task_name": name,
+                "registered": true,
+                "command": definition.command,
+                "interval": definition.interval,
+                "logon_type": definition.logon_type,
+                "run_level": definition.run_level.clone().unwrap_or_else(|| task::RUN_LEVEL.to_owned()),
+                "enabled": definition.enabled,
+                "mismatches": mismatches,
+                "status": run.state,
+                "last_run_time": run.last_run_time,
+                "last_result": run.last_result,
+                "next_run_time": run.next_run_time,
+            })
+        }
+    }
+}
+
+/// `install`: registers or refreshes the task (`schtasks /Create /XML /F`), then checks what
+/// Task Scheduler holds. Every refusal is exit 13 with a named code; a different definition
+/// afterwards is 14.
+fn install(root: &Path) -> (Value, u8) {
+    let now = now_unix_ms();
+    let installation = match Installation::resolve(root) {
+        Ok(installation) => installation,
+        Err(failure) => return misconfigured_report(None, failure, false, false),
+    };
+    let root_plain = installation.root_plain.clone();
+    let launcher = task::launcher(&root_plain);
+    let entry = root_plain.join("runtime").join("actingctl.exe");
+    for program in [&entry, &launcher] {
+        if !program.is_file() {
+            let failure = Failure::misconfigured(
+                "watchdog_launcher_missing",
+                format!(
+                    "{} is not a file; deploy the Runtime and Tools that carry the watchdog first",
+                    program.display()
+                ),
+            );
+            return misconfigured_report(None, failure, false, false);
+        }
+    }
+    match observe::writer_lock(&installation.root) {
+        Ok(WriterProbe::Free(guard)) => drop(guard),
+        Ok(WriterProbe::Busy) => {
+            let failure = Failure::misconfigured(
+                "watchdog_installer_busy",
+                "acsetup holds install\\writer.lock; install the watchdog after it finishes",
+            );
+            return misconfigured_report(None, failure, false, false);
+        }
+        Err(failure) => return misconfigured_report(None, failure, false, false),
+    }
+    let directory = installation.root.join("watchdog");
+    if let Err(error) = fs::create_dir_all(&directory) {
+        let failure = Failure::misconfigured(
+            "watchdog_directory_unavailable",
+            format!("{}: {error}", directory.display()),
+        );
+        return misconfigured_report(None, failure, false, false);
+    }
+    // A tick in flight would write state.json behind this rewrite: wait for it, briefly.
+    let run_lock = match hold_run_lock(&directory, Duration::from_secs(30)) {
+        Ok(run_lock) => run_lock,
+        Err(failure) => return misconfigured_report(Some(&directory), failure, true, false),
+    };
+    let installed = (|| -> Result<Value, (Failure, u8)> {
+        let plain = root_plain.display().to_string();
+        let mut state = match state::load(&directory, &plain) {
+            Ok((state, Loaded::Existing | Loaded::Fresh)) => state,
+            Ok((state, Loaded::OtherSchema(schema))) => {
+                let aside =
+                    state::set_aside(&directory, now).map_err(|failure| (failure, 13_u8))?;
+                log::append(
+                    &directory,
+                    now,
+                    Level::Warn,
+                    "watchdog_state_reset",
+                    &[
+                        ("schema_version", schema),
+                        ("set_aside", aside.display().to_string()),
+                    ],
+                )
+                .map_err(|failure| (failure, 13_u8))?;
+                state
+            }
+            // An unreadable state is moved aside: install is an operator's fresh start.
+            Err(unreadable) => {
+                let from = directory.join(state::STATE_FILE);
+                let to = directory.join(format!("{}.unreadable-{now}", state::STATE_FILE));
+                fs::rename(&from, &to).map_err(|error| {
+                    (
+                        Failure::misconfigured(
+                            "watchdog_state_unwritable",
+                            format!("cannot move {} aside: {error}", from.display()),
+                        ),
+                        13_u8,
+                    )
+                })?;
+                log::append(
+                    &directory,
+                    now,
+                    Level::Warn,
+                    "watchdog_state_reset",
+                    &[
+                        ("code", unreadable.code),
+                        ("set_aside", to.display().to_string()),
+                    ],
+                )
+                .map_err(|failure| (failure, 13_u8))?;
+                WatchdogState::fresh(&plain)
+            }
+        };
+        // Review L5: the first task tick after an install opens no gap grace.
+        state.last_task_tick_end_unix_ms = Some(now);
+        state::save(&directory, &state).map_err(|failure| (failure, 13_u8))?;
+        let user = task::current_user_sid().map_err(|failure| (failure, 13_u8))?;
+        let name = task::task_name(&root_plain);
+        let xml = directory.join(task::TASK_XML);
+        let start_boundary = format!("{}Z", &log::rfc3339_utc(now)[..19]);
+        fs::write(
+            &xml,
+            task::utf16le_with_bom(&task::definition_xml(&root_plain, &user, &start_boundary)),
+        )
+        .map_err(|error| {
+            (
+                Failure::misconfigured(
+                    "watchdog_task_register_failed",
+                    format!("{}: {error}", xml.display()),
+                ),
+                13_u8,
+            )
+        })?;
+        task::register(&name, &observe::plain_path(&xml)).map_err(|failure| (failure, 13_u8))?;
+        let definition = match task::query(&name).map_err(|failure| (failure, 13_u8))?.0 {
+            task::Registration::Present(definition, _) => definition,
+            task::Registration::Absent => {
+                return Err((
+                    Failure::misconfigured(
+                        "watchdog_task_mismatch",
+                        format!("Task Scheduler holds no task {name} after schtasks /Create"),
+                    ),
+                    14,
+                ));
+            }
+        };
+        let mismatches = task::mismatches(&definition, &root_plain);
+        if !mismatches.is_empty() {
+            return Err((
+                Failure::misconfigured("watchdog_task_mismatch", mismatches.join("; ")),
+                14,
+            ));
+        }
+        log::append(
+            &directory,
+            now_unix_ms(),
+            Level::Info,
+            "watchdog_installed",
+            &[("task", name.clone()), ("user", user.clone())],
+        )
+        .map_err(|failure| (failure, 13_u8))?;
+        Ok(json!({
+            "decision": "installed",
+            "exit_code": 0,
+            "task_name": name,
+            "command": definition.command,
+            "interval": definition.interval,
+            "logon_type": definition.logon_type,
+            "run_level": definition.run_level.clone().unwrap_or_else(|| task::RUN_LEVEL.to_owned()),
+            "enabled": definition.enabled,
+            "user": user,
+            "xml": observe::plain_path(&xml).display().to_string(),
+            "log": observe::plain_path(&directory.join(log::LOG_FILE)).display().to_string(),
+        }))
+    })();
+    drop(run_lock);
+    match installed {
+        Ok(report) => (report, 0),
+        Err((failure, exit)) => {
+            let (mut report, _) = misconfigured_report(Some(&directory), failure, true, false);
+            report["exit_code"] = json!(exit);
+            (report, exit)
+        }
+    }
+}
+
+/// `uninstall`: `schtasks /Delete /F`. Every file under `<root>\watchdog\` stays. The root
+/// need not be a working installation any more.
+fn uninstall(root: &Path) -> (Value, u8) {
+    let resolved = fs::canonicalize(root).or_else(|_| std::path::absolute(root));
+    let root_plain = match resolved {
+        Ok(path) => observe::plain_path(&path),
+        Err(error) => {
+            let failure = Failure::misconfigured(
+                "watchdog_root_unavailable",
+                format!("{}: {error}", root.display()),
+            );
+            return misconfigured_report(None, failure, false, false);
+        }
+    };
+    let name = task::task_name(&root_plain);
+    let (registration, other_tasks) = match task::query(&name) {
+        Ok(found) => found,
+        Err(failure) => return misconfigured_report(None, failure, false, false),
+    };
+    let was_registered = matches!(registration, task::Registration::Present(..));
+    let mut ended = None;
+    if was_registered {
+        // A tick in flight is ended first; a start it already issued keeps running.
+        ended = Some(task::end(&name));
+        if let Err(failure) = task::delete(&name) {
+            return misconfigured_report(None, failure, false, false);
+        }
+    }
+    let directory = root_plain.join("watchdog");
+    // The task is gone; a tick that still holds run.lock is waited for, up to its own limit.
+    let tick_in_progress = if directory.is_dir() {
+        match hold_run_lock(
+            &directory,
+            Duration::from_millis(decide::READY_TIMEOUT_MS + 20_000),
+        ) {
+            Ok(_) => false,
+            Err(failure) if failure.code == "watchdog_run_in_progress" => true,
+            Err(failure) => return misconfigured_report(None, failure, false, false),
+        }
+    } else {
+        false
+    };
+    if was_registered
+        && directory.is_dir()
+        && let Err(failure) = log::append(
+            &directory,
+            now_unix_ms(),
+            Level::Info,
+            "watchdog_uninstalled",
+            &[("task", name.clone())],
+        )
+    {
+        return misconfigured_report(None, failure, false, false);
+    }
+    (
+        json!({
+            "decision": "uninstalled",
+            "exit_code": 0,
+            "task_name": name,
+            "registered": false,
+            "was_registered": was_registered,
+            "end": ended,
+            "tick_in_progress": tick_in_progress,
+            "other_watchdog_tasks": other_tasks,
+        }),
+        0,
+    )
+}
+
+/// `<root>\watchdog\run.lock`, held exclusively, retried until `wait` has passed.
+fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Failure> {
+    let path = directory.join(RUN_LOCK);
+    let failed = |detail: String| {
+        Failure::misconfigured(
+            "watchdog_run_lock_failed",
+            format!("{}: {detail}", path.display()),
+        )
+    };
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|error| failed(error.to_string()))?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(Failure::misconfigured(
+                    "watchdog_run_in_progress",
+                    format!(
+                        "a tick still holds {} after {} s; run the command again",
+                        path.display(),
+                        wait.as_secs()
+                    ),
+                ));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(failed(error.to_string())),
+        }
+    }
 }

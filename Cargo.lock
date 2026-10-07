@@ -32,6 +32,7 @@ dependencies = [
  "actingcommand-scheduler",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "zip",
 ]

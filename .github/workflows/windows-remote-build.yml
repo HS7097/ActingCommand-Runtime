@@ -676,7 +676,8 @@ jobs:
           # Workflow #374: this build's watchdog on an A/B root laid out from the staged
           # artifacts. The fixed entries are this build's Runtime programs themselves (the
           # forwarding entry is a UI program), without BUILD-MANIFEST.json, so they run as
-          # plain programs and actingctl reads install\active.json for the watchdog.
+          # plain programs and actingctl reads install\active.json for the watchdog. No task
+          # is registered here, so `status` answers attention 14 (task missing) throughout.
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
           $root = Join-Path $env:RUNNER_TEMP 'watchdog-smoke'
@@ -755,7 +756,7 @@ jobs:
             do {
               Start-Sleep -Milliseconds 500
               $text = (& $ctl watchdog status --root $root | Out-String)
-              $alive = ($LASTEXITCODE -eq 0 -and ($text | ConvertFrom-Json).decision -ceq 'alive')
+              $alive = (($text | ConvertFrom-Json).decision -ceq 'alive')
             } until ($alive -or $formal.HasExited -or [DateTime]::UtcNow -gt $deadline)
             if (-not $alive) {
               throw "watchdog_smoke_failed: the formal start did not come up (exited=$($formal.HasExited)): $text"
@@ -767,7 +768,7 @@ jobs:
             $formal.WaitForExit()
             # 4. One launcher tick starts the Runtime again.
             Invoke-Launcher
-            $status = Invoke-Watchdog 'status' 0
+            $status = Invoke-Watchdog 'status' 14
             if ($status.decision -cne 'alive' -or $status.detail.started_by_watchdog -ne $true) {
               throw 'watchdog_smoke_failed: the Runtime is not alive as the watchdog started it'
             }
@@ -785,7 +786,7 @@ jobs:
             Write-Host "request-shutdown: $($shutdown.Trim())"
             # 6. The next launcher tick leaves it down.
             Invoke-Launcher
-            $status = Invoke-Watchdog 'status' 0
+            $status = Invoke-Watchdog 'status' 14
             if ($status.decision -cne 'formal_close') {
               throw "watchdog_smoke_failed: expected formal_close, got $($status.decision)"
             }
@@ -805,6 +806,8 @@ jobs:
               Stop-Process -Id $process.ProcessId -Force -ErrorAction Continue
             }
           }
+          # The runner ends the step with the last native exit code, here the expected 14.
+          $global:LASTEXITCODE = 0
 
       # Actions artifacts are acceptance builds only; a release run publishes the Release instead.
       - name: Upload Runtime artifact
