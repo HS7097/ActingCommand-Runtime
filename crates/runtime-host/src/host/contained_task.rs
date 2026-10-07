@@ -5714,9 +5714,16 @@ impl HostShared {
                     },
                 );
                 // Workflow #336 L2d: the page-graph home entry's refusal of a configured
-                // return-home package carries its detail as a linear failure does.
+                // return-home package carries its detail as a linear failure does. Workflow
+                // #371-2: so does a page-graph step whose confirmation failed.
                 let detailed = prepared.execution_mode() == "linear_steps"
-                    || error.code() == prerequisite::INCOMPATIBLE;
+                    || matches!(
+                        error.code(),
+                        prerequisite::INCOMPATIBLE
+                            | "contained_task_step_unconfirmed"
+                            | "contained_task_error_page_reached"
+                            | "page_confirmation_failed"
+                    );
                 if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail())
                 {
                     task_error = task_error.with_native_detail(detail);

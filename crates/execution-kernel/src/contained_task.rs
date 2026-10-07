@@ -62,6 +62,11 @@ const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
 const MAX_PREREQUISITE_PACKAGE_ID_BYTES: usize = 256;
 const PREREQUISITE_ENTRY_UNMATCHED: &str = "contained_task_prerequisite_entry_unmatched";
+/// Workflow #371-2: a page-graph step whose operation decided Fail after its postcondition was
+/// not confirmed, without a declared error page.
+const STEP_UNCONFIRMED: &str = "contained_task_step_unconfirmed";
+/// Workflow #371-2: a page-graph step whose operation decided Fail on a declared error page.
+const ERROR_PAGE_REACHED: &str = "contained_task_error_page_reached";
 const RETURN_HOME_ENTRY_UNMATCHED: &str = "contained_task_return_home_entry_unmatched";
 const MAX_STABILITY_PIXEL_BYTES: usize = 4;
 const MAX_POST_ADMISSION_OCR_FRAMES: u32 = 256;
@@ -3202,9 +3207,13 @@ impl PreparedContainedTask {
                                             }
                                             RunOperationFailureDecision::Fail(_) => {
                                                 return Err(ContainedTaskError::with_detail(
-                                                    "contained_task_requires_scheduler",
-                                                    format!(
-                                                        "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                                    ERROR_PAGE_REACHED,
+                                                    confirmation_failure_detail(
+                                                        &operation_id,
+                                                        attempt,
+                                                        fresh.as_ref(),
+                                                        true,
+                                                        None,
                                                     ),
                                                 )
                                                 .into());
@@ -3273,10 +3282,19 @@ impl PreparedContainedTask {
                                     &operation_id,
                                     failed_observation.as_ref(),
                                 )?;
+                                // Workflow #371-2: the code says which confirmation failed.
                                 return Err(ContainedTaskError::with_detail(
-                                    "contained_task_requires_scheduler",
-                                    format!(
-                                        "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                    if hit_error_page {
+                                        ERROR_PAGE_REACHED
+                                    } else {
+                                        STEP_UNCONFIRMED
+                                    },
+                                    confirmation_failure_detail(
+                                        &operation_id,
+                                        attempt,
+                                        failed_observation.as_ref(),
+                                        hit_error_page,
+                                        timing_failure.as_ref(),
                                     ),
                                 )
                                 .with_timing(timing_failure)
@@ -4145,6 +4163,30 @@ fn sample_geometry_matches(
         (None, None) => true,
         _ => false,
     }
+}
+
+/// Workflow #371-2: the detail of a failed step confirmation: the operation, its attempts, the
+/// page seen after it, whether that was a declared error page and, on a confirmation timeout,
+/// the elapsed time and the limit. No recognized text and no coordinates.
+fn confirmation_failure_detail(
+    operation_id: &str,
+    attempts: u32,
+    after: Option<&PageObservation>,
+    hit_error_page: bool,
+    timing: Option<&TaskTimingFailure>,
+) -> String {
+    let after_page = after.map_or("<unrecognized>", |observation| {
+        observation.page_label.as_str()
+    });
+    let timing = timing.map_or_else(String::new, |timing| {
+        format!(
+            " confirm_elapsed_ms={} confirm_limit_ms={}",
+            timing.elapsed_ms, timing.limit_ms
+        )
+    });
+    format!(
+        "operation={operation_id} attempts={attempts} after_page={after_page} hit_error_page={hit_error_page}{timing}"
+    )
 }
 
 enum PostconditionResolution {
@@ -11032,7 +11074,7 @@ mod retry_wiring_tests {
             }
         };
 
-        assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert_eq!(error.code(), "contained_task_step_unconfirmed");
         assert_eq!(runtime.inputs, 6);
         assert_closed_effect_attempts(&runtime, 6);
     }

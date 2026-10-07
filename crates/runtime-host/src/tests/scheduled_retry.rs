@@ -42,7 +42,7 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("sixth operation attempt must stop the scheduled run");
-    assert_eq!(error.code(), "contained_task_requires_scheduler");
+    assert_eq!(error.code(), "contained_task_step_unconfirmed");
     assert!(!error.is_fatal());
 
     let mut client = TestClient::connect(&host);
@@ -305,7 +305,7 @@ fn scheduled_declared_error_page_skips_ordinary_retry() {
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("declared error page must not enter the ordinary retry path");
-    assert_eq!(error.code(), "contained_task_requires_scheduler");
+    assert_eq!(error.code(), "contained_task_error_page_reached");
     assert!(!error.is_fatal());
 
     let mut client = TestClient::connect(&host);
@@ -411,7 +411,15 @@ fn scheduled_non_retryable_destination_observation_is_fail_closed_and_no_destina
             let error = host
                 .run_scheduled_contained_task(&context, &request)
                 .expect_err("non-retryable destination failure must settle once");
-            assert_eq!(error.code(), "contained_task_requires_scheduler", "{case}");
+            assert_eq!(
+                error.code(),
+                if error_page {
+                    "contained_task_error_page_reached"
+                } else {
+                    "contained_task_step_unconfirmed"
+                },
+                "{case}"
+            );
             assert!(!error.is_fatal(), "{case}");
         }
 
@@ -577,7 +585,7 @@ fn scheduled_fresh_retry_observation_error_page_prevents_second_effect() {
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("fresh declared error page must not start another operation attempt");
-    assert_eq!(error.code(), "contained_task_requires_scheduler");
+    assert_eq!(error.code(), "contained_task_error_page_reached");
 
     let mut client = TestClient::connect(&host);
     let events = projected_events(
