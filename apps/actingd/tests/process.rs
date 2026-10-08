@@ -488,6 +488,254 @@ fn actingd_evaluates_scheduled_policy_when_next_wake_becomes_due() {
     child.0.wait().expect("wait actingd");
 }
 
+/// Workflow #376: an install drain closes root admission, which refuses the resident policy
+/// monitor's own subscription. The monitor waits through the drain, resumes after an abort, and
+/// ends only with the accepted `commit_shutdown`, whose receipt reaches the installer before the
+/// daemon exits zero. Follows acsetup's order: begin, poll to drained, then commit.
+#[test]
+fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
+    use actingcommand_contract::{InstallTransitionAction, InstallTransitionPhase};
+    use std::io::BufRead;
+
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    // Nothing becomes due during the test, so the drain finds an idle Runtime (acsetup's case).
+    configure_policy_clock_at(root.path(), unix_ms_now() + 3_600_000);
+    let child = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["--config", config_path.to_str().expect("config path")])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start actingd");
+    let mut child = ChildGuard(child);
+    let stdout = child.0.stdout.take().expect("actingd stdout");
+    let (lines, received) = std::sync::mpsc::channel::<String>();
+    let reader = thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut stdout_lines = Vec::new();
+    let started = Instant::now();
+    // The policy monitor starts after `actingd ready`; an earlier drain would refuse the
+    // startup governance calls instead (a separate startup-window case, not this test).
+    while !stdout_lines
+        .iter()
+        .any(|line: &String| line.starts_with("actingd ready "))
+    {
+        match received.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => stdout_lines.push(line),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("actingd stdout closed before ready: {stdout_lines:?}")
+            }
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            panic!("actingd exited before ready with {status}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "actingd ready timed out"
+        );
+    }
+    // At least four monitor polls, so the subscription loop is running before the drain.
+    thread::sleep(Duration::from_secs(1));
+
+    // The installer's control client: production I/O budget and a governance identity.
+    let control = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("connect install control client");
+    control
+        .declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
+            client: "actingctl".to_owned(),
+            client_version: Some("process-test".to_owned()),
+            instance: None,
+        })
+        .expect("declare install control identity");
+    let drain = |transition_id: &str| {
+        let receipt = control
+            .install_transition(InstallTransitionAction::BeginDrain {
+                transition_id: transition_id.to_owned(),
+                timeout_ms: 60_000,
+            })
+            .unwrap_or_else(|error| panic!("begin drain {transition_id}: {error}"));
+        let Some(RuntimeResult::InstallTransition { status }) = receipt.result() else {
+            panic!("begin drain {transition_id}: transition status");
+        };
+        let ticket = status.ticket.clone();
+        let mut phase = status.phase;
+        let polled = Instant::now();
+        while phase != InstallTransitionPhase::Drained {
+            assert_eq!(phase, InstallTransitionPhase::Draining, "{transition_id}");
+            assert!(
+                polled.elapsed() < Duration::from_secs(30),
+                "{transition_id}: the idle Runtime did not drain"
+            );
+            thread::sleep(Duration::from_millis(50));
+            let receipt = control
+                .install_transition(InstallTransitionAction::Query {
+                    transition_id: transition_id.to_owned(),
+                })
+                .unwrap_or_else(|error| panic!("query drain {transition_id}: {error}"));
+            let Some(RuntimeResult::InstallTransition { status }) = receipt.result() else {
+                panic!("query drain {transition_id}: transition status");
+            };
+            phase = status.phase;
+        }
+        ticket
+    };
+    fn assert_daemon_survives(child: &mut Child, control: &RuntimeClient, step: &str) {
+        if let Some(status) = child.try_wait().expect("process state") {
+            let mut stderr = String::new();
+            if let Some(pipe) = child.stderr.as_mut() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read actingd stderr");
+            }
+            panic!("{step}: actingd exited during the install transition with {status}: {stderr}");
+        }
+        // `QueryEvents` is lifecycle control, so the drained host still answers it.
+        let failures = control
+            .query_events(
+                EventQuery {
+                    event_type: Some(EventType::RuntimeFailed),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .unwrap_or_else(|error| panic!("{step}: query runtime failures: {error}"));
+        assert!(
+            failures.is_empty(),
+            "{step}: runtime.failed during the install transition: {failures:?}"
+        );
+    }
+
+    let first = drain("issue-376-first");
+    thread::sleep(Duration::from_secs(1));
+    assert_daemon_survives(&mut child.0, &control, "first drain");
+    let aborted = control
+        .install_transition(InstallTransitionAction::Abort { ticket: first })
+        .expect("abort first drain");
+    assert!(matches!(
+        aborted.result(),
+        Some(RuntimeResult::InstallTransition { status }) if status.phase == InstallTransitionPhase::Aborted
+    ));
+    thread::sleep(Duration::from_secs(1));
+    assert_daemon_survives(&mut child.0, &control, "after abort");
+
+    let second = drain("issue-376-second");
+    thread::sleep(Duration::from_secs(1));
+    assert_daemon_survives(&mut child.0, &control, "second drain");
+    let drained_position = control
+        .query_event_page(
+            EventQuery::default(),
+            ProjectionProfile::Concise,
+            RuntimeEventQueryPageRequest::new(1, None).expect("page request"),
+        )
+        .expect("ledger position after the second drain")
+        .snapshot_ledger_position();
+    let target = second.target;
+    let committed = control
+        .install_transition(InstallTransitionAction::CommitShutdown { ticket: second })
+        .expect("commit_shutdown receipt before exit");
+    assert_eq!(committed.state(), RuntimeReceiptState::Admitted);
+    assert!(matches!(
+        committed.result(),
+        Some(RuntimeResult::ShutdownAccepted { target: accepted }) if *accepted == target
+    ));
+    let terminal = committed
+        .terminal()
+        .expect("accepted shutdown ledger reference");
+    assert!(terminal.sequence > drained_position);
+    drop(control);
+
+    let closing = Instant::now();
+    let status = loop {
+        if let Some(status) = child.0.try_wait().expect("install close exit") {
+            break status;
+        }
+        assert!(
+            closing.elapsed() < Duration::from_secs(30),
+            "install close did not finish"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    let mut stderr = String::new();
+    if let Some(pipe) = child.0.stderr.as_mut() {
+        pipe.read_to_string(&mut stderr)
+            .expect("read actingd stderr");
+    }
+    assert!(
+        status.success(),
+        "a formal install close must exit zero: {status}: {stderr}"
+    );
+    assert!(!stderr.contains("FATAL"), "{stderr}");
+    reader.join().expect("stdout reader");
+    stdout_lines.extend(received.try_iter());
+    let monitor_lines = stdout_lines
+        .iter()
+        .filter(|line| line.starts_with("actingd policy_monitor "))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        monitor_lines,
+        [
+            "actingd policy_monitor waiting install_transition",
+            "actingd policy_monitor resumed",
+            "actingd policy_monitor waiting install_transition",
+        ]
+    );
+
+    let ledger = actingcommand_ledger::GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(root.path(), reference)
+                    .expect("verify closed daemon artifact"),
+            )
+        },
+    )
+    .expect("closed ledger");
+    assert!(ledger.corrupt_tail().is_none());
+    let events = ledger.query(&EventQuery::default());
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event_type() == EventType::RuntimeFailed)
+    );
+    let accepted = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
+                    if matches!(
+                        payload.phase(),
+                        actingcommand_contract::RuntimeLifecyclePhase::ShutdownRequest {
+                            decision: actingcommand_contract::RuntimeShutdownDecision::Accepted,
+                            ..
+                        }
+                    )
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(*accepted[0].event_id(), terminal.event_id);
+    assert_eq!(accepted[0].sequence(), terminal.sequence);
+}
+
 #[test]
 fn actingd_recovery_does_not_repeat_a_settled_scheduled_run() {
     let root = TempDir::new().expect("tempdir");
