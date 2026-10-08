@@ -93,12 +93,13 @@
         "raw_text": "required",
         "raw_code": "optional",
         "raw_text_truncated": "optional",
-        "raw_text_sensitivity": "optional"
+        "raw_text_sensitivity": "optional",
+        "exit_code": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "MuMuManager failed or printed a failure; raw_text keeps its output.",
+      "description": "MuMuManager failed or printed a failure; raw_text keeps its output, exit_code its exit code when it exited.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

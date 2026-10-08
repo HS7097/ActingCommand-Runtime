@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -55,6 +55,10 @@ const RAW_TEXT_TRUNCATED_KEY: &str = "raw_text_truncated";
 /// Declares an owning crate's outcome codes. Each crate keeps exactly one registry, in its
 /// `src/codes.rs`, and lists every entry in its catalog fragment
 /// `contracts/outcome-codes/<owner>.json` (the outcome guard's G1 checks both directions).
+///
+/// Attributes on the enum and on each variant pass through unchanged, serde attributes
+/// included: a registry that must also (de)serialize adds `#[derive(serde::Serialize)]` and
+/// `#[serde(rename = "...")]` with the registered spelling.
 ///
 /// ```ignore
 /// actingcommand_contract::outcome_codes! {
@@ -117,7 +121,8 @@ macro_rules! outcome_codes {
 }
 
 /// Declares an owning crate's locations: the registered values of the `operation`, `stage` and
-/// `boundary` keys. They live beside the crate's codes in `src/codes.rs`.
+/// `boundary` keys. They live beside the crate's codes in `src/codes.rs`. Attributes on the
+/// enum and on each variant, serde attributes included, pass through unchanged.
 #[macro_export]
 macro_rules! outcome_locations {
     (
@@ -165,7 +170,8 @@ macro_rules! outcome_locations {
 }
 
 /// Declares a closed set of tokens for one catalog vocabulary. The outcome guard's G7 checks
-/// the tokens against the catalog's `vocabularies` entry of the same name.
+/// the tokens against the catalog's `vocabularies` entry of the same name. Attributes on the
+/// enum and on each variant, serde attributes included, pass through unchanged.
 #[macro_export]
 macro_rules! outcome_vocabulary {
     (
@@ -275,7 +281,7 @@ macro_rules! outcome_keys {
             I: ::core::iter::IntoIterator<Item = $crate::outcome::Record>,
         {
             $crate::outcome::put_list(
-                &mut self.values,
+                self.values_mut(),
                 ::core::stringify!($key),
                 ::core::concat!(::core::stringify!($key), "_total"),
                 records
@@ -297,14 +303,14 @@ macro_rules! outcome_keys {
     (@set $key:ident : code) => {
         pub fn $key(mut self, value: impl ::core::convert::Into<$crate::outcome::Code>) -> Self {
             let value: $crate::outcome::Code = value.into();
-            $crate::outcome::put_name(&mut self.values, ::core::stringify!($key), value.as_str());
+            $crate::outcome::put_name(self.values_mut(), ::core::stringify!($key), value.as_str());
             self
         }
     };
     (@set $key:ident : location) => {
         pub fn $key(mut self, value: impl ::core::convert::Into<$crate::outcome::Location>) -> Self {
             let value: $crate::outcome::Location = value.into();
-            $crate::outcome::put_name(&mut self.values, ::core::stringify!($key), value.as_str());
+            $crate::outcome::put_name(self.values_mut(), ::core::stringify!($key), value.as_str());
             self
         }
     };
@@ -317,7 +323,7 @@ macro_rules! outcome_keys {
                 )
             };
             $crate::outcome::put_name(
-                &mut self.values,
+                self.values_mut(),
                 ::core::stringify!($key),
                 $crate::outcome::VocabularyToken::token(value),
             );
@@ -327,34 +333,34 @@ macro_rules! outcome_keys {
     (@set $key:ident : path) => {
         pub fn $key(mut self, value: impl ::core::convert::AsRef<::std::path::Path>) -> Self {
             let value = $crate::outcome::path_value(::core::stringify!($key), value.as_ref());
-            self.values.insert(::core::stringify!($key).to_owned(), value);
+            self.values_mut().insert(::core::stringify!($key).to_owned(), value);
             self
         }
     };
     (@set $key:ident : integer) => {
         pub fn $key(mut self, value: impl $crate::outcome::IntegerValue) -> Self {
             let value = $crate::outcome::IntegerValue::into_json(value);
-            self.values.insert(::core::stringify!($key).to_owned(), value);
+            self.values_mut().insert(::core::stringify!($key).to_owned(), value);
             self
         }
     };
     (@set $key:ident : unix_ms) => {
         pub fn $key(mut self, value: impl $crate::outcome::IntegerValue) -> Self {
             let value = $crate::outcome::IntegerValue::into_json(value);
-            self.values.insert(::core::stringify!($key).to_owned(), value);
+            self.values_mut().insert(::core::stringify!($key).to_owned(), value);
             self
         }
     };
     (@set $key:ident : duration_ms) => {
         pub fn $key(mut self, value: impl $crate::outcome::DurationValue) -> Self {
             let value = $crate::outcome::DurationValue::into_json(value);
-            self.values.insert(::core::stringify!($key).to_owned(), value);
+            self.values_mut().insert(::core::stringify!($key).to_owned(), value);
             self
         }
     };
     (@set $key:ident : boolean) => {
         pub fn $key(mut self, value: bool) -> Self {
-            self.values.insert(::core::stringify!($key).to_owned(), ::serde_json::Value::Bool(value));
+            self.values_mut().insert(::core::stringify!($key).to_owned(), ::serde_json::Value::Bool(value));
             self
         }
     };
@@ -365,7 +371,7 @@ macro_rules! outcome_keys {
             I::Item: ::core::convert::AsRef<::std::path::Path>,
         {
             $crate::outcome::put_list(
-                &mut self.values,
+                self.values_mut(),
                 ::core::stringify!($key),
                 ::core::concat!(::core::stringify!($key), "_total"),
                 items
@@ -388,7 +394,7 @@ macro_rules! outcome_keys {
                 )
             };
             $crate::outcome::put_list(
-                &mut self.values,
+                self.values_mut(),
                 ::core::stringify!($key),
                 ::core::concat!(::core::stringify!($key), "_total"),
                 items.into_iter().map(|item| {
@@ -407,7 +413,7 @@ macro_rules! outcome_keys {
             I::Item: ::core::convert::Into<::std::string::String>,
         {
             $crate::outcome::put_list(
-                &mut self.values,
+                self.values_mut(),
                 ::core::stringify!($key),
                 ::core::concat!(::core::stringify!($key), "_total"),
                 items.into_iter().map(|item| {
@@ -428,7 +434,7 @@ macro_rules! outcome_keys {
                 outcome_keys!(@kind $text),
                 value.into(),
             );
-            self.values.insert(::core::stringify!($key).to_owned(), value);
+            self.values_mut().insert(::core::stringify!($key).to_owned(), value);
             self
         }
     };
@@ -469,6 +475,15 @@ pub fn catalog() -> &'static str {
         env!("CARGO_MANIFEST_DIR"),
         "/../../contracts/outcome-codes.json"
     ))
+}
+
+/// The embedded catalog, parsed once on first use and shared by every reader (the debug
+/// checks, the MCP `outcome_code` tool, `actingledger codes`).
+pub fn catalog_json() -> Result<&'static JsonValue, &'static serde_json::Error> {
+    static PARSED: OnceLock<Result<JsonValue, serde_json::Error>> = OnceLock::new();
+    PARSED
+        .get_or_init(|| serde_json::from_str(catalog()))
+        .as_ref()
 }
 
 /// The one category of a code, ordered from `success` to `fatal`.
@@ -862,9 +877,16 @@ pub enum Detail {
     Full,
 }
 
-/// One result: a code with its category, typed values and nested links.
-#[derive(Debug, Clone, PartialEq)]
+/// One result: a code with its category, typed values and nested links. The fields sit
+/// behind one box, so a `Result<_, Outcome>` (or a module error holding one) stays small.
+/// Equality ignores whether the outcome was received from another process.
+#[derive(Debug, Clone)]
 pub struct Outcome {
+    inner: Box<OutcomeInner>,
+}
+
+#[derive(Debug, Clone)]
+struct OutcomeInner {
     code: CodeStr,
     category: Category,
     values: Map<String, JsonValue>,
@@ -874,8 +896,21 @@ pub struct Outcome {
     received: bool,
 }
 
+impl PartialEq for Outcome {
+    fn eq(&self, other: &Self) -> bool {
+        let (left, right) = (&self.inner, &other.inner);
+        left.code == right.code
+            && left.category == right.category
+            && left.values == right.values
+            && left.causes == right.causes
+            && left.causes_total == right.causes_total
+    }
+}
+
+impl Eq for Outcome {}
+
 /// One link of a cause chain: an outcome with its relation to the outcome above it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
     relation: Relation,
     outcome: Outcome,
@@ -892,7 +927,7 @@ impl Link {
 }
 
 /// One flat record of a `records` value. Its fields are keys of the key table.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
     values: Map<String, JsonValue>,
 }
@@ -905,24 +940,41 @@ impl Record {
     pub fn values(&self) -> &Map<String, JsonValue> {
         &self.values
     }
+
+    fn values_mut(&mut self) -> &mut Map<String, JsonValue> {
+        &mut self.values
+    }
 }
 
 impl Outcome {
     /// Starts an outcome for an emitted code; add values with the key setters.
     pub fn new(code: impl Into<Code>) -> Self {
         let code = code.into();
-        Self {
+        Self::from_inner(OutcomeInner {
             code: CodeStr::from(code),
             category: code.category(),
             values: Map::new(),
             causes: Vec::new(),
             causes_total: None,
             received: false,
+        })
+    }
+
+    fn from_inner(inner: OutcomeInner) -> Self {
+        Self {
+            inner: Box::new(inner),
         }
+    }
+
+    fn values_mut(&mut self) -> &mut Map<String, JsonValue> {
+        &mut self.inner.values
     }
 
     /// `foreign_os_error` for a failed OS or file-system call: `raw_source` `os`, `io_kind`,
     /// `io_op`, `os_error` when the OS gave one, and the error's text as `raw_text`.
+    ///
+    /// Only for an error the OS or std raised. An `io::Error` the Runtime builds itself
+    /// (`io::Error::new` or `other` with its own text) gets its own registered code instead.
     pub fn from_io_error(error: &std::io::Error, op: IoOp) -> Self {
         let outcome = Self::new(ContractCode::ForeignOsError)
             .raw_source(RawSource::Os)
@@ -936,33 +988,33 @@ impl Outcome {
     }
 
     pub fn code(&self) -> &CodeStr {
-        &self.code
+        &self.inner.code
     }
 
     pub fn category(&self) -> Category {
-        self.category
+        self.inner.category
     }
 
     /// Whether this outcome carries the given code.
     pub fn is(&self, code: impl Into<Code>) -> bool {
-        self.code == code.into()
+        self.inner.code == code.into()
     }
 
     pub fn values(&self) -> &Map<String, JsonValue> {
-        &self.values
+        &self.inner.values
     }
 
     pub fn value(&self, key: &str) -> Option<&JsonValue> {
-        self.values.get(key)
+        self.inner.values.get(key)
     }
 
     pub fn causes(&self) -> &[Link] {
-        &self.causes
+        &self.inner.causes
     }
 
     /// The full number of links when an earlier cut dropped some.
     pub fn causes_total(&self) -> Option<u64> {
-        self.causes_total
+        self.inner.causes_total
     }
 
     /// Attaches the outcome that caused this one.
@@ -974,7 +1026,7 @@ impl Outcome {
     /// attaching [`OutcomeEnvelope::into_outcome`].
     pub fn link(mut self, relation: CauseRelation, link: Outcome) -> Self {
         check::debug_assert_link(&link);
-        self.causes.push(Link {
+        self.inner.causes.push(Link {
             relation: Relation::from(relation),
             outcome: link,
         });
@@ -990,19 +1042,24 @@ impl Outcome {
     fn put_evidence(&mut self, key: &'static str, truncated_key: &'static str, bytes: &[u8]) {
         let text = String::from_utf8_lossy(bytes).into_owned();
         if text.len() <= RAW_TEXT_MAX_BYTES {
-            self.values.insert(key.to_owned(), JsonValue::String(text));
+            self.inner
+                .values
+                .insert(key.to_owned(), JsonValue::String(text));
             return;
         }
         diagnostic(self, &text);
         let cut = floor_char_boundary(&text, RAW_TEXT_MAX_BYTES);
-        self.values
+        self.inner
+            .values
             .insert(key.to_owned(), JsonValue::String(text[..cut].to_owned()));
-        self.values
+        self.inner
+            .values
             .insert(truncated_key.to_owned(), JsonValue::Bool(true));
     }
 
     fn link_count(&self) -> u64 {
-        self.causes
+        self.inner
+            .causes
             .iter()
             .map(|link| 1 + link.outcome.link_count())
             .sum()
@@ -1011,16 +1068,17 @@ impl Outcome {
 
 impl fmt::Display for Outcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.code.as_str())?;
-        for (key, value) in &self.values {
+        formatter.write_str(self.inner.code.as_str())?;
+        for (key, value) in &self.inner.values {
+            write!(formatter, " {key}=")?;
             match value {
-                JsonValue::String(text) => write!(formatter, " {key}={text}")?,
-                other => write!(formatter, " {key}={other}")?,
+                JsonValue::String(text) => write_escaped(formatter, text)?,
+                other => write!(formatter, "{other}")?,
             }
         }
-        if !self.causes.is_empty() {
+        if !self.inner.causes.is_empty() {
             formatter.write_str(" [")?;
-            for (index, link) in self.causes.iter().enumerate() {
+            for (index, link) in self.inner.causes.iter().enumerate() {
                 if index > 0 {
                     formatter.write_str("; ")?;
                 }
@@ -1028,16 +1086,29 @@ impl fmt::Display for Outcome {
             }
             formatter.write_str("]")?;
         }
-        if let Some(total) = self.causes_total {
+        if let Some(total) = self.inner.causes_total {
             write!(formatter, " causes_total={total}")?;
         }
         Ok(())
     }
 }
 
+/// Writes text with its control characters escaped, so a developer line stays one line.
+fn write_escaped(formatter: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
+    for character in text.chars() {
+        if character.is_control() {
+            write!(formatter, "{}", character.escape_default())?;
+        } else {
+            formatter.write_char(character)?;
+        }
+    }
+    Ok(())
+}
+
 impl std::error::Error for Outcome {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.causes
+        self.inner
+            .causes
             .first()
             .map(|link| &link.outcome as &(dyn std::error::Error + 'static))
     }
@@ -1183,7 +1254,7 @@ pub fn diagnostic(outcome: &Outcome, text: &str) {
 }
 
 /// An outcome in its `actingcommand.outcome.v1` interface form.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutcomeEnvelope {
     outcome: Outcome,
     detail: Detail,
@@ -1258,22 +1329,22 @@ fn wire_links(causes: &[Link], detail: Detail) -> Vec<WireLink> {
     causes
         .iter()
         .map(|link| WireLink {
-            code: link.outcome.code.clone(),
-            category: link.outcome.category,
+            code: link.outcome.inner.code.clone(),
+            category: link.outcome.inner.category,
             relation: link.relation.clone(),
-            values: wire_values(&link.outcome.values, detail),
-            causes: wire_links(&link.outcome.causes, detail),
+            values: wire_values(&link.outcome.inner.values, detail),
+            causes: wire_links(&link.outcome.inner.causes, detail),
         })
         .collect()
 }
 
 fn wire_body(outcome: &Outcome, detail: Detail) -> WireBody {
     WireBody {
-        code: outcome.code.clone(),
-        category: outcome.category,
-        values: wire_values(&outcome.values, detail),
-        causes: wire_links(&outcome.causes, detail),
-        causes_total: outcome.causes_total,
+        code: outcome.inner.code.clone(),
+        category: outcome.inner.category,
+        values: wire_values(&outcome.inner.values, detail),
+        causes: wire_links(&outcome.inner.causes, detail),
+        causes_total: outcome.inner.causes_total,
     }
 }
 
@@ -1282,14 +1353,14 @@ fn received_links(links: Vec<WireLink>) -> Vec<Link> {
         .into_iter()
         .map(|link| Link {
             relation: link.relation,
-            outcome: Outcome {
+            outcome: Outcome::from_inner(OutcomeInner {
                 code: link.code,
                 category: link.category,
                 values: link.values.unwrap_or_default(),
                 causes: received_links(link.causes),
                 causes_total: None,
                 received: true,
-            },
+            }),
         })
         .collect()
 }
@@ -1326,14 +1397,14 @@ impl<'de> Deserialize<'de> for OutcomeEnvelope {
             (None, Detail::Full) => return Err(de::Error::missing_field("values")),
         };
         Ok(Self {
-            outcome: Outcome {
+            outcome: Outcome::from_inner(OutcomeInner {
                 code: wire.code,
                 category: wire.category,
                 values,
                 causes: received_links(wire.causes),
                 causes_total: wire.causes_total,
                 received: true,
-            },
+            }),
             detail,
         })
     }
@@ -1357,14 +1428,14 @@ impl<'de> Deserialize<'de> for Outcome {
         let Some(values) = wire.values else {
             return Err(de::Error::missing_field("values"));
         };
-        Ok(Self {
+        Ok(Self::from_inner(OutcomeInner {
             code: wire.code,
             category: wire.category,
             values,
             causes: received_links(wire.causes),
             causes_total: wire.causes_total,
             received: true,
-        })
+        }))
     }
 }
 
@@ -1398,7 +1469,7 @@ fn bounded(outcome: &Outcome, detail: Detail, budget: usize) -> Outcome {
         break;
     }
     if cut {
-        result.causes_total = Some(outcome.causes_total.unwrap_or(0).max(total));
+        result.inner.causes_total = Some(outcome.inner.causes_total.unwrap_or(0).max(total));
     }
     result
 }
@@ -1407,11 +1478,11 @@ fn bounded(outcome: &Outcome, detail: Detail, budget: usize) -> Outcome {
 fn breadth_first(outcome: &Outcome) -> Vec<Vec<usize>> {
     let mut order = Vec::new();
     let mut queue = VecDeque::new();
-    for (index, link) in outcome.causes.iter().enumerate() {
+    for (index, link) in outcome.inner.causes.iter().enumerate() {
         queue.push_back((vec![index], &link.outcome));
     }
     while let Some((path, node)) = queue.pop_front() {
-        for (index, link) in node.causes.iter().enumerate() {
+        for (index, link) in node.inner.causes.iter().enumerate() {
             let mut child = path.clone();
             child.push(index);
             queue.push_back((child, &link.outcome));
@@ -1428,8 +1499,9 @@ fn rebuilt(
     detail: Detail,
 ) -> Outcome {
     let values = match detail {
-        Detail::Full => outcome.values.clone(),
+        Detail::Full => outcome.inner.values.clone(),
         Detail::Codes => outcome
+            .inner
             .values
             .iter()
             .filter(|(key, _)| key_kind(key).is_some_and(KeyKind::is_registered_name))
@@ -1437,7 +1509,7 @@ fn rebuilt(
             .collect(),
     };
     let mut causes = Vec::new();
-    for (index, link) in outcome.causes.iter().enumerate() {
+    for (index, link) in outcome.inner.causes.iter().enumerate() {
         path.push(index);
         if keep.iter().any(|kept| kept.as_slice() == path.as_slice()) {
             causes.push(Link {
@@ -1447,20 +1519,20 @@ fn rebuilt(
         }
         path.pop();
     }
-    Outcome {
-        code: outcome.code.clone(),
-        category: outcome.category,
+    Outcome::from_inner(OutcomeInner {
+        code: outcome.inner.code.clone(),
+        category: outcome.inner.category,
         values,
         causes,
-        causes_total: outcome.causes_total,
-        received: outcome.received,
-    }
+        causes_total: outcome.inner.causes_total,
+        received: outcome.inner.received,
+    })
 }
 
 fn node_mut<'a>(outcome: &'a mut Outcome, path: &[usize]) -> &'a mut Outcome {
     let mut node = outcome;
     for index in path {
-        node = &mut node.causes[*index].outcome;
+        node = &mut node.inner.causes[*index].outcome;
     }
     node
 }
@@ -1470,14 +1542,16 @@ fn cut_deepest_raw_text(outcome: &mut Outcome) -> bool {
     paths.extend(breadth_first(outcome));
     for path in paths.iter().rev() {
         let node = node_mut(outcome, path);
-        let text = match node.values.get(RAW_TEXT_KEY) {
+        let text = match node.inner.values.get(RAW_TEXT_KEY) {
             Some(JsonValue::String(text)) if !text.is_empty() => text.clone(),
             _ => continue,
         };
         diagnostic(node, &text);
-        node.values
+        node.inner
+            .values
             .insert(RAW_TEXT_KEY.to_owned(), JsonValue::String(String::new()));
-        node.values
+        node.inner
+            .values
             .insert(RAW_TEXT_TRUNCATED_KEY.to_owned(), JsonValue::Bool(true));
         return true;
     }

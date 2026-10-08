@@ -4,7 +4,7 @@
 //! enums (G7) and the string channels a code or location must not travel through (G2-G5).
 //! Test modules (`#[cfg(test)]`, `#[test]`) are skipped.
 
-use proc_macro2::{Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::parse::{ParseStream, Parser};
 use syn::visit::{self, Visit};
@@ -769,6 +769,14 @@ impl<'ast> Visit<'ast> for ChannelVisitor<'_> {
         if REGISTRY_MACROS.contains(&name.as_str()) {
             return;
         }
+        if name == "include" {
+            let span = node.path.segments[0].ident.span();
+            self.report(
+                Check::G2,
+                span,
+                "include! pulls in source the guard cannot see".to_owned(),
+            );
+        }
         if !self.outcome_module && contains_ident(node.tokens.clone(), "__from_registry") {
             let span = node.path.segments[0].ident.span();
             self.report(
@@ -920,11 +928,16 @@ fn type_arguments(ty: &Type) -> Vec<&Type> {
     }
 }
 
-/// `String`, `&str`, `Box<str>`, `Cow<str>`, `impl Into<String>`, `impl AsRef<str>`, or an
-/// `Option` or `Vec` of these.
+/// `String`, `&str`, `Box<str>`, `Cow<str>`, `impl Into<String>`, `impl AsRef<str>`, an
+/// `Option` or `Vec` of these, or a tuple, array or slice that contains one.
 fn is_string_type(ty: &Type) -> bool {
     match ty {
-        Type::Reference(reference) => is_path_named(&reference.elem, "str"),
+        Type::Reference(reference) => {
+            is_path_named(&reference.elem, "str") || is_string_type(&reference.elem)
+        }
+        Type::Tuple(tuple) => tuple.elems.iter().any(is_string_type),
+        Type::Array(array) => is_string_type(&array.elem),
+        Type::Slice(slice) => is_string_type(&slice.elem),
         Type::Paren(inner) => is_string_type(&inner.elem),
         Type::Group(inner) => is_string_type(&inner.elem),
         Type::ImplTrait(implementation) => implementation.bounds.iter().any(|bound| {
@@ -973,12 +986,40 @@ fn result_error_is_string(ty: &Type) -> bool {
     arguments.len() == 2 && is_string_type(arguments[1])
 }
 
-/// A `#[cfg(...)]` that names `test`.
+/// `#[cfg(test)]` or `#[cfg(all(test, ...))]`: code that exists only in test builds. Any other
+/// predicate (`not(test)`, `any(test, ...)`) also builds outside tests and is scanned.
 pub fn has_cfg_test(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
         attr.path().is_ident("cfg")
-            && matches!(&attr.meta, syn::Meta::List(list) if contains_ident(list.tokens.clone(), "test"))
+            && matches!(&attr.meta, syn::Meta::List(list) if cfg_requires_test(list.tokens.clone()))
     })
+}
+
+fn cfg_requires_test(predicate: TokenStream) -> bool {
+    let tokens = predicate.into_iter().collect::<Vec<_>>();
+    match tokens.as_slice() {
+        [TokenTree::Ident(ident)] => ident == "test",
+        [TokenTree::Ident(ident), TokenTree::Group(group)]
+            if ident == "all" && group.delimiter() == Delimiter::Parenthesis =>
+        {
+            cfg_terms(group.stream()).into_iter().any(cfg_requires_test)
+        }
+        _ => false,
+    }
+}
+
+/// The comma-separated terms of a cfg predicate list.
+fn cfg_terms(list: TokenStream) -> Vec<TokenStream> {
+    let mut terms = vec![TokenStream::new()];
+    for token in list {
+        let separator = matches!(&token, TokenTree::Punct(punct) if punct.as_char() == ',');
+        if separator {
+            terms.push(TokenStream::new());
+        } else if let Some(term) = terms.last_mut() {
+            term.extend([token]);
+        }
+    }
+    terms
 }
 
 fn is_test_item(attrs: &[Attribute]) -> bool {

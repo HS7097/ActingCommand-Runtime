@@ -16,6 +16,8 @@ pub const RELEASED_DIR: &str = "contracts/outcome-codes/released";
 pub const MERGED_FILE: &str = "contracts/outcome-codes.json";
 /// The owner the reserved UI prefixes map to; it owns no Runtime fragment.
 pub const UI_OWNER: &str = "ui";
+/// The vocabulary whose every token carries a category (record `severity` derives from it).
+pub const CATEGORIZED_VOCABULARY: &str = "event_type";
 /// The first release whose entries must follow the naming rule.
 pub const NAMING_SINCE: (u64, u64, u64) = (0, 12, 0);
 
@@ -322,23 +324,24 @@ pub fn check_contract(root: &Path, catalog: &Catalog) -> Vec<String> {
         );
         match read_object(root, &relative) {
             Err(error) => violations.push(format!("G9 {error}")),
-            Ok(snapshot) => check_snapshot(&relative, &snapshot, catalog, &mut violations),
+            Ok(snapshot) => violations.extend(check_snapshot(&relative, &snapshot, catalog)),
         }
     }
     violations
 }
 
-fn check_snapshot(
+/// G9 for one release snapshot against the current catalog.
+pub fn check_snapshot(
     relative: &str,
     snapshot: &Map<String, Value>,
     catalog: &Catalog,
-    violations: &mut Vec<String>,
-) {
+) -> Vec<String> {
+    let mut violations = Vec::new();
     if text(snapshot, "schema_version") != Some(RELEASE_SCHEMA_VERSION) {
         violations.push(format!(
             "G9 {relative}: schema_version must be {RELEASE_SCHEMA_VERSION}"
         ));
-        return;
+        return violations;
     }
     for (section, table) in [("codes", &catalog.codes), ("locations", &catalog.locations)] {
         let Some(released) = snapshot.get(section).and_then(Value::as_object) else {
@@ -369,9 +372,10 @@ fn check_snapshot(
                     "G9 {relative}: settled {name} changed its category"
                 ));
             }
-            check_snapshot_values(relative, name, old, current, catalog, violations);
+            check_snapshot_values(relative, name, old, current, catalog, &mut violations);
         }
     }
+    violations
 }
 
 fn check_snapshot_values(
@@ -456,6 +460,11 @@ fn check_vocabularies(vocabularies: &Map<String, Value>, errors: &mut Vec<String
             };
             unknown_fields(item, TOKEN_FIELDS, &place, errors);
             require_text(item, "description", &place, errors);
+            if name == CATEGORIZED_VOCABULARY && !item.contains_key("category") {
+                errors.push(format!(
+                    "{place}: every {CATEGORIZED_VOCABULARY} token carries a category"
+                ));
+            }
             if let Some(category) = item.get("category")
                 && !category
                     .as_str()

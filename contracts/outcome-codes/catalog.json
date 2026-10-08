@@ -73,10 +73,6 @@
       "type": "path",
       "description": "An executable."
     },
-    "console_program": {
-      "type": "path",
-      "description": "The console executable."
-    },
     "log": {
       "type": "path",
       "description": "A log file."
@@ -570,7 +566,7 @@
     },
     "mumu_root_source": {
       "type": "vocab:mumu_root_source",
-      "description": "How the MuMu folder was found."
+      "description": "How the MuMu folder was given or found."
     },
     "install_source": {
       "type": "vocab:install_source",
@@ -837,11 +833,7 @@
     },
     "line": {
       "type": "integer",
-      "description": "A line number in a file (1-based)."
-    },
-    "line_no": {
-      "type": "integer",
-      "description": "A line number in SHA256SUMS (1-based)."
+      "description": "A line number in a file (1-based), for example of a parse error or a SHA256SUMS line."
     },
     "commit_sha": {
       "type": "commit",
@@ -1069,10 +1061,6 @@
       "type": "token",
       "description": "The status a ledger-maintenance report gives."
     },
-    "status": {
-      "type": "token",
-      "description": "The status a report gives."
-    },
     "listed_in": {
       "type": "name",
       "description": "The file that lists another."
@@ -1092,10 +1080,6 @@
     "mode": {
       "type": "vocab:mode",
       "description": "The kind of installation run."
-    },
-    "mumu_source": {
-      "type": "vocab:mumu_root_source",
-      "description": "How the MuMu folder was given or found."
     },
     "names": {
       "type": "list<name>",
@@ -3390,10 +3374,13 @@
       }
     },
     "language": {
-      "description": "A display language. The Simplified Chinese tag is pending (see runtime-outcomes.md).",
+      "description": "A display language (a BCP 47 language tag).",
       "tokens": {
         "en": {
           "description": "English."
+        },
+        "zh-Hans": {
+          "description": "Simplified Chinese."
         }
       }
     },

@@ -4,6 +4,10 @@
 //! keys present, only declared keys, records fields, the category, and that a fatal link sits
 //! only under a fatal top. Received outcomes are relayed unchanged and not checked as emissions;
 //! a code the catalog does not list (a test registry) skips the key checks.
+//!
+//! The checks read the committed merged file `contracts/outcome-codes.json` that the build
+//! embeds, not the fragments: a fragment change is seen once its CI-regenerated merged file
+//! is committed.
 
 use super::{Category, CodeStr, KeyKind, Outcome, key_kind};
 use serde::Deserialize;
@@ -37,8 +41,8 @@ pub(crate) struct CatalogIndex {
 }
 
 impl CatalogIndex {
-    pub(crate) fn parse(text: &str) -> Result<Self, serde_json::Error> {
-        let document: CatalogDocument = serde_json::from_str(text)?;
+    fn from_document(document: &JsonValue) -> Result<Self, serde_json::Error> {
+        let document = CatalogDocument::deserialize(document)?;
         Ok(Self {
             codes: document.codes,
         })
@@ -121,8 +125,11 @@ fn joined(failures: &[CheckFailure]) -> String {
 fn index() -> &'static CatalogIndex {
     static INDEX: OnceLock<CatalogIndex> = OnceLock::new();
     INDEX.get_or_init(|| {
-        CatalogIndex::parse(super::catalog())
-            .unwrap_or_else(|error| panic!("the embedded outcome catalog does not parse: {error}"))
+        let document = super::catalog_json()
+            .unwrap_or_else(|error| panic!("the embedded outcome catalog does not parse: {error}"));
+        CatalogIndex::from_document(document).unwrap_or_else(|error| {
+            panic!("the embedded outcome catalog lacks its codes table: {error}")
+        })
     })
 }
 
@@ -156,11 +163,11 @@ pub(crate) fn debug_assert_link(link: &Outcome) {
 
 pub(crate) fn failures(outcome: &Outcome, index: &CatalogIndex, top: bool) -> Vec<CheckFailure> {
     let mut failures = Vec::new();
-    if top && outcome.category != Category::Fatal {
-        for link in &outcome.causes {
+    if top && !outcome.inner.received && outcome.inner.category != Category::Fatal {
+        for link in &outcome.inner.causes {
             if let Some(fatal) = first_fatal(&link.outcome) {
                 failures.push(CheckFailure::FatalLinkUnderNonFatalTop {
-                    top: outcome.code.clone(),
+                    top: outcome.inner.code.clone(),
                     link: fatal.clone(),
                 });
             }
@@ -171,37 +178,38 @@ pub(crate) fn failures(outcome: &Outcome, index: &CatalogIndex, top: bool) -> Ve
 }
 
 fn first_fatal(outcome: &Outcome) -> Option<&CodeStr> {
-    if outcome.category == Category::Fatal {
-        return Some(&outcome.code);
+    if outcome.inner.category == Category::Fatal {
+        return Some(&outcome.inner.code);
     }
     outcome
+        .inner
         .causes
         .iter()
         .find_map(|link| first_fatal(&link.outcome))
 }
 
 fn check_node(outcome: &Outcome, index: &CatalogIndex, failures: &mut Vec<CheckFailure>) {
-    if outcome.received {
+    if outcome.inner.received {
         return;
     }
-    if let Some(entry) = index.codes.get(outcome.code.as_str()) {
-        if entry.category != outcome.category {
+    if let Some(entry) = index.codes.get(outcome.inner.code.as_str()) {
+        if entry.category != outcome.inner.category {
             failures.push(CheckFailure::CategoryMismatch {
-                outcome: outcome.code.clone(),
+                outcome: outcome.inner.code.clone(),
             });
         }
         for (key, presence) in &entry.values {
-            if *presence == Presence::Required && !outcome.values.contains_key(key) {
+            if *presence == Presence::Required && !outcome.inner.values.contains_key(key) {
                 failures.push(CheckFailure::RequiredKeyMissing {
-                    outcome: outcome.code.clone(),
+                    outcome: outcome.inner.code.clone(),
                     key: key.clone(),
                 });
             }
         }
-        for (key, value) in &outcome.values {
+        for (key, value) in &outcome.inner.values {
             if !declared(key, &entry.values) {
                 failures.push(CheckFailure::KeyNotDeclared {
-                    outcome: outcome.code.clone(),
+                    outcome: outcome.inner.code.clone(),
                     key: key.clone(),
                 });
             }
@@ -210,7 +218,7 @@ fn check_node(outcome: &Outcome, index: &CatalogIndex, failures: &mut Vec<CheckF
             }
         }
     }
-    for link in &outcome.causes {
+    for link in &outcome.inner.causes {
         check_node(&link.outcome, index, failures);
     }
 }
@@ -240,7 +248,7 @@ fn check_records(
         for (field, required) in fields {
             if *required && !record.contains_key(*field) {
                 failures.push(CheckFailure::RecordFieldMissing {
-                    outcome: outcome.code.clone(),
+                    outcome: outcome.inner.code.clone(),
                     key: key.to_owned(),
                     field,
                 });
@@ -249,7 +257,7 @@ fn check_records(
         for field in record.keys() {
             if !fields.iter().any(|(name, _)| *name == field.as_str()) {
                 failures.push(CheckFailure::RecordFieldNotDeclared {
-                    outcome: outcome.code.clone(),
+                    outcome: outcome.inner.code.clone(),
                     key: key.to_owned(),
                     field: field.clone(),
                 });

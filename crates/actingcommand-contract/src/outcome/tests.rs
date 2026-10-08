@@ -59,6 +59,9 @@ fn a_full_envelope_carries_values_and_links_and_round_trips() {
         serde_json::to_string(&received).expect("serialize again"),
         text
     );
+    // Equality ignores that one side was received; the fields sit behind one box.
+    assert_eq!(received, outcome.envelope(Detail::Full));
+    assert_eq!(std::mem::size_of::<Outcome>(), std::mem::size_of::<usize>());
 }
 
 #[test]

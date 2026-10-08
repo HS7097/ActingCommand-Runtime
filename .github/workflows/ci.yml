@@ -74,26 +74,6 @@ jobs:
             exit 1
           }
           exit 0
-      # Workflow #378: regenerate the merged outcome catalog whenever the Test step ran, pass or
-      # fail (G9 fails on the first push of a fragment change by design), and upload it for the
-      # pushed head; the implementer commits that artifact unchanged.
-      - name: Outcome catalog merge
-        id: outcome_merge
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: pwsh
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          cargo run --locked -p actingcommand-outcome-guard --bin outcome-guard -- merge
-          if ($LASTEXITCODE -ne 0) {
-            throw "outcome-guard merge failed with exit code $LASTEXITCODE"
-          }
-      - name: Upload merged outcome catalog
-        if: ${{ !cancelled() && steps.outcome_merge.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: outcome-codes-${{ github.event.pull_request.head.sha || github.sha }}
-          path: contracts/outcome-codes.json
-          if-no-files-found: error
       - name: Test observation
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: pwsh
@@ -114,6 +94,27 @@ jobs:
             exit 1
           }
           exit 0
+      # Workflow #378: regenerate the merged outcome catalog whenever the Test step ran, pass or
+      # fail (G9 fails on the first push of a fragment change by design), and upload it for the
+      # pushed head; the implementer commits that artifact unchanged. It runs after every test
+      # step, so no test rebuilds against the regenerated file.
+      - name: Outcome catalog merge
+        id: outcome_merge
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo run --locked -p actingcommand-outcome-guard --bin outcome-guard -- merge
+          if ($LASTEXITCODE -ne 0) {
+            throw "outcome-guard merge failed with exit code $LASTEXITCODE"
+          }
+      - name: Upload merged outcome catalog
+        if: ${{ !cancelled() && steps.outcome_merge.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: outcome-codes-${{ github.event.pull_request.head.sha || github.sha }}
+          path: contracts/outcome-codes.json
+          if-no-files-found: error
       - name: Remove trybuild cache artifacts
         if: always()
         shell: pwsh

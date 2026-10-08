@@ -29,12 +29,15 @@ moved, it keeps its v0.11 shape.
 | `schema_version` | top only, `actingcommand.outcome.v1` |
 | `code`, `category` | always; one category per code (`success`, `info`, `warning`, `error`, `fatal`) |
 | `values` | required (may be `{}`) unless `detail` is `codes`; keys and types from the catalog `keys` |
-| `causes` | optional; links `{code, category, relation, values, causes?}` (an envelope without `schema_version`) |
+| `causes` | optional; links `{code, category, relation, values, causes?}` |
 | `causes_total` | top only, present when links were cut: the full link count |
 | `detail` | `codes` when data values were withheld; absent means full |
 
 - **Readers** ignore unknown members, and keep an unknown code or relation readable as it came
-  (`CodeStr`, `Relation`). A relayed envelope nests unchanged as a link.
+  (`CodeStr`, `Relation`).
+- **Relaying.** A received envelope is attached as a link, `{code, category, relation, values,
+  causes?}`: it keeps its code, category, values and nested links, takes the relation the
+  relaying outcome gives it, and has no `schema_version`, `detail` or `causes_total`.
 - **Relations** (vocabulary `cause_relation`): `caused_by` (default), `cleanup`, `secondary`,
   `recording`, `related`, `after_commit`, `note`, `diagnostic_summary`, the 21 names the Runtime
   host passes to `with_related_failure` and the 3 `RuntimeFailureRelation` joins.
@@ -47,6 +50,7 @@ moved, it keeps its v0.11 shape.
 - **Codes mode** (`detail: "codes"`) keeps every node's `code`, `category` and `relation`, and
   only the values whose type is `code`, `location`, `vocab:*` or a list of them.
 - **Foreign text** goes only into `raw_text` on a `foreign_*` or `panic_caught` link, verbatim.
+  A child process's foreign code carries `exit_code` when the process exited.
 
 ## Categories and exit codes
 
@@ -119,21 +123,32 @@ Between Runtime modules outcomes always travel full.
 
 ### Regenerating the merged file
 
-Never run the merge locally. Push the fragment change; CI's `Outcome catalog merge` step runs
-`outcome-guard merge` whenever the Test step ran, pass or fail, and uploads
-`contracts/outcome-codes.json` as the artifact `outcome-codes-<sha>` of the pushed head.
-Download it (`gh run download <run-id> -n outcome-codes-<sha>`), commit it unchanged and push
-again; G9 then passes.
+Never run the merge locally, and never merge the file by hand.
+
+1. Push the fragment change. CI's `Outcome catalog merge` step runs `outcome-guard merge` after
+   every test step, whenever the Test step ran (pass or fail; G9 fails on the first push by
+   design), and uploads `contracts/outcome-codes.json` as the artifact `outcome-codes-<sha>` of
+   the pushed head.
+2. Download it into an empty temporary folder,
+   `gh run download <run-id> -n outcome-codes-<sha> -D <empty temp dir>` (the artifact holds a
+   bare `outcome-codes.json`), copy that file over `contracts/outcome-codes.json`, commit it
+   unchanged and push again; G9 then passes.
+3. A pull request's CI checks out GitHub's merge of the head into `main`, and `main` requires
+   branches to be up to date. After every rebase or merge from `main`, and on any conflict in
+   this file, take your side of the fragments and repeat steps 1 and 2.
 
 ## Drift guard `tools/outcome-guard`
 
 A source scanner that links no workspace crate; its tests run in `cargo test --workspace`.
-Test modules and files reached only through them are skipped.
+Crate roots come from each manifest (`[lib]`, `[[bin]]`) and Cargo's defaults; the module tree
+is walked from them. Code under `#[cfg(test)]` or `#[cfg(all(test, ...))]`, `#[test]` functions
+and files reached only through them are skipped; any other predicate, `not(test)` included, is
+scanned. An unparsable registry macro fails G1.
 
 | Check | Fails on | On since |
 |---|---|---|
 | G1 | a registry entry (`outcome_codes!`, `outcome_locations!`) missing from the fragments, or of another owner or category, or retired; an active fragment entry with no registry entry; a spelling registered twice | A1 |
-| G2 | a string-typed field or parameter named `code`, `*_code`, `reason`, `*_reason`, `failure`, `operation`, `*_operation`, `stage`, `*_stage`, `boundary`; a `Result` whose error is a string; a getter `code`, `*_code`, `reason`, `*_reason`, `key`, `operation`, `stage` returning a string | A2a-A2e, member by member |
+| G2 | a string-typed field or parameter named `code`, `*_code`, `reason`, `*_reason`, `failure`, `operation`, `*_operation`, `stage`, `*_stage`, `boundary`; a `Result` whose error is a string; a getter `code`, `*_code`, `reason`, `*_reason`, `key`, `operation`, `stage` returning a string. A tuple, array or slice holding a string type counts. A non-test `include!` is reported too, since the guard cannot see the included source | A2a-A2e, member by member |
 | G3 | a `json!` key `code`, `*_code`, `reason`, `*_reason`, `category`, `operation`, `*_operation`, `stage`, `*_stage`, `boundary` | A2a-A2e |
 | G4 | `From<String>`/`FromStr`/a string constructor for `Code`, `Location`, `CodeStr`, or a registry constructor, outside the outcome module | A2a-A2e |
 | G5 | a non-test string literal equal to a registered code or location outside its registry | A2a-A2e |
@@ -154,23 +169,27 @@ decoders, MCP's JSON-RPC `error_response`, `tools/actinglab-architecture` and
   `outcome_codes! { pub enum HostCode { InstanceDiscoveryUnavailable => "instance_discovery_unavailable": error } }`
   and `outcome_locations! { pub enum HostLocation { DiscoverInstances => "discover_instances" } }`.
   They generate `ALL`, `as_str`, `category`/`location` and `From` into `Code` or `Location`,
-  which nothing else can build. `outcome_vocabulary!` declares a vocabulary enum.
+  which nothing else can build. `outcome_vocabulary!` declares a vocabulary enum. Attributes
+  on the enum and its variants, serde attributes included, pass through unchanged.
 - `Outcome::new(code)` with one typed setter per key (`.path(p)`, `.stage(location)`,
   `.io_kind(kind)`, …), `.caused_by(link)`, `.link(relation, link)`, `Outcome::from_io_error`,
   and `.envelope(Detail::Codes | Detail::Full)`. A vocabulary key accepts only tokens of its
-  own vocabulary (checked at compile time).
+  own vocabulary (checked at compile time). `Outcome` keeps its fields behind one box, and its
+  equality ignores whether it was received.
+- `Outcome::from_io_error` is only for an error the OS or std raised. An `io::Error` the
+  Runtime builds itself (`io::Error::new` or `other` with its own text) gets its own registered
+  code.
 - Debug and test builds check each emitted outcome against the embedded catalog: required keys,
-  only declared keys, record fields, the category, and the fatal-link rule.
+  only declared keys, record fields, the category, and the fatal-link rule (not for a received
+  outcome). They read the committed merged file the build embeds, so a fragment change is seen
+  once its regenerated merged file is committed.
 - `install_diagnostic_sink` (once per binary) and `diagnostic(&outcome, text)`; the contract
   crate never writes to stderr itself.
-- `catalog()` returns the embedded merged file.
+- `catalog()` returns the embedded merged file; `catalog_json()` parses it once and shares the
+  parsed document with every reader.
 
 ## Open items
 
-- **Simplified Chinese language token.** The model's tag for Simplified Chinese carries a region
-  subtag that the C2 genericity guard (`tools/actinglab-architecture`) rejects as a standalone
-  word in every file under `contracts/`, so the `language` vocabulary registers `en` only; the
-  coordinator decides between a script tag (`zh-Hans`) and a guard exemption.
 - **UI keys the UI names next.** By model section 3.4 these draft keys are not keys and wait for
   the UI's next revision: `reason`, `subject`, `context`, the generic `source`, `key`, `value`,
   `party`, `layout`, `expected`, `actual`, `op` (split into `io_op`, `setup_*` stage locations

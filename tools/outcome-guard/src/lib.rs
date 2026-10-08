@@ -13,8 +13,10 @@
 //! - G8 naming and prefixes (A1);
 //! - G9 the merged file and the released contract (A1).
 //!
-//! Test modules (`#[cfg(test)]`, `#[test]`) and files reached only through them are skipped.
-//! Code pulled in with `include!` is not seen.
+//! Crate roots come from each manifest (`[lib]`, `[[bin]]`) and Cargo's defaults. Code under
+//! `#[cfg(test)]` or `#[cfg(all(test, ...))]`, `#[test]` functions and files reached only through
+//! them are skipped. The guard cannot see source pulled in with `include!`, so a non-test
+//! `include!` is itself a G2 finding.
 
 pub mod catalog;
 pub mod source;
@@ -191,6 +193,11 @@ pub fn check_registries(workspace: &Workspace) -> Vec<String> {
         Err(errors) => return prefixed("G1", errors),
     };
     let mut violations = Vec::new();
+    for file in &workspace.files {
+        for error in &file.scan.facts.errors {
+            violations.push(format!("G1 {}: {error}", file.path));
+        }
+    }
     let mut places = BTreeMap::<String, String>::new();
     let mut codes = BTreeSet::new();
     let mut locations = BTreeSet::new();
@@ -505,14 +512,44 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// The crate roots of a member: `src/lib.rs`, `src/main.rs` and the `src/bin` targets.
-fn crate_roots(root: &Path, member: &str) -> Vec<PathBuf> {
-    let source = root.join(member).join("src");
-    let mut roots = ["lib.rs", "main.rs"]
+/// The crate roots of a member: the `[lib]` and `[[bin]]` paths its manifest names (else
+/// `src/lib.rs`), plus `src/main.rs` and the `src/bin` targets Cargo discovers.
+fn crate_roots(root: &Path, member: &str, errors: &mut Vec<String>) -> Vec<PathBuf> {
+    let directory = root.join(member);
+    let manifest = match fs::read_to_string(directory.join("Cargo.toml")) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            errors.push(format!("{member}/Cargo.toml: cannot read: {error}"));
+            return Vec::new();
+        }
+    };
+    let (library, binaries) = manifest_target_paths(&manifest);
+    let source = directory.join("src");
+    let mut declared = binaries
         .iter()
-        .map(|name| source.join(name))
+        .map(|path| directory.join(path))
+        .collect::<Vec<_>>();
+    if let Some(path) = &library {
+        declared.push(directory.join(path));
+    }
+    for path in &declared {
+        if !path.is_file() {
+            errors.push(format!(
+                "{member}/Cargo.toml: target path {} is not a file",
+                relative_path(root, path)
+            ));
+        }
+    }
+    let mut roots = declared
+        .into_iter()
         .filter(|path| path.is_file())
         .collect::<Vec<_>>();
+    let defaults = if library.is_some() {
+        vec![source.join("main.rs")]
+    } else {
+        vec![source.join("lib.rs"), source.join("main.rs")]
+    };
+    roots.extend(defaults.into_iter().filter(|path| path.is_file()));
     if let Ok(entries) = fs::read_dir(source.join("bin")) {
         let mut bins = entries
             .filter_map(Result::ok)
@@ -531,6 +568,33 @@ fn crate_roots(root: &Path, member: &str) -> Vec<PathBuf> {
     roots
 }
 
+/// The `path` of the `[lib]` section and of each `[[bin]]` section of a manifest.
+fn manifest_target_paths(manifest: &str) -> (Option<String>, Vec<String>) {
+    let mut section = "";
+    let mut library = None;
+    let mut binaries = Vec::new();
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            section = line;
+            continue;
+        }
+        let Some(value) = line
+            .strip_prefix("path")
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix('='))
+        else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').to_owned();
+        match section {
+            "[lib]" => library = Some(value),
+            "[[bin]]" => binaries.push(value),
+            _ => {}
+        }
+    }
+    (library, binaries)
+}
+
 /// Walks one member's module tree from its crate roots, skipping test modules.
 fn scan_member(
     root: &Path,
@@ -540,7 +604,7 @@ fn scan_member(
     files: &mut Vec<ScannedFile>,
     errors: &mut Vec<String>,
 ) {
-    let roots = crate_roots(root, member);
+    let roots = crate_roots(root, member, errors);
     if roots.is_empty() {
         errors.push(format!("{member}: no crate root under src"));
         return;

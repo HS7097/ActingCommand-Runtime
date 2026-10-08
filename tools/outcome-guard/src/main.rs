@@ -19,14 +19,23 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let target = root.join(MERGED_FILE);
     let errors = match merge(&root) {
-        Ok(text) => match std::fs::write(root.join(MERGED_FILE), text) {
-            Ok(()) => {
-                println!("outcome-guard: wrote {MERGED_FILE}");
+        Ok(text) => {
+            let current = std::fs::read_to_string(&target).ok();
+            let current = current.map(|current| current.replace("\r\n", "\n"));
+            if current.as_deref() == Some(text.as_str()) {
+                println!("outcome-guard: {MERGED_FILE} is current");
                 return ExitCode::SUCCESS;
             }
-            Err(error) => vec![format!("cannot write {MERGED_FILE}: {error}")],
-        },
+            match std::fs::write(&target, text) {
+                Ok(()) => {
+                    println!("outcome-guard: wrote {MERGED_FILE}");
+                    return ExitCode::SUCCESS;
+                }
+                Err(error) => vec![format!("cannot write {MERGED_FILE}: {error}")],
+            }
+        }
         Err(errors) => errors,
     };
     for error in errors {
