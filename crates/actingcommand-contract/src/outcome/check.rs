@@ -242,7 +242,7 @@ fn check_records(
                 failures.push(CheckFailure::RecordFieldMissing {
                     outcome: outcome.code.clone(),
                     key: key.to_owned(),
-                    field: *field,
+                    field,
                 });
             }
         }

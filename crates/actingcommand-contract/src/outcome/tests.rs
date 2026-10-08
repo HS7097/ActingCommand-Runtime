@@ -131,8 +131,7 @@ fn raw_text_is_cut_at_its_bound_and_the_full_text_goes_to_the_sink() {
         SINK_TEXTS
             .lock()
             .expect("lock the test sink")
-            .iter()
-            .any(|entry| *entry == expected)
+            .contains(&expected)
     );
 }
 
