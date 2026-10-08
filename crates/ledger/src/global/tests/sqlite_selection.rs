@@ -210,7 +210,7 @@ fn selected_query_refuses_unselected_types_and_views() {
             ..EventQuery::default()
         },
     ] {
-        let error = selection.query(&query).err().expect("refused query");
+        let error = selection.query(&query).expect_err("refused query");
         assert_eq!(
             (error.code(), error.operation(), error.is_fatal()),
             (
