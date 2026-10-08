@@ -33,6 +33,8 @@ pub(super) struct RuntimeLeaseAcquisition<'request, 'payload> {
     pub(super) connection_id: ConnectionId,
     pub(super) run_links: Option<RuntimeRunLinks>,
     pub(super) lease_ttl_ms: Option<u64>,
+    /// Workflow #369 Q-2: who holds the lease once granted.
+    pub(super) kind: ClaimKind,
 }
 
 #[derive(Clone)]
@@ -40,6 +42,8 @@ pub(super) struct QueuedRequestContext {
     request: RuntimeRequest,
     instance: RegisteredInstance,
     connection_id: ConnectionId,
+    // Workflow #369 Q-6: where a Runtime-internal claim learns its grant; a client polls.
+    grant: Option<Arc<ClaimGrantSlot>>,
 }
 
 #[derive(Clone, Copy)]
@@ -75,7 +79,106 @@ impl QueueTerminalStore {
     }
 }
 
+/// Workflow #369 Q-6: where a Runtime-internal claim learns its grant. The pump or the transfer
+/// that grants the claim sets the token; that never fails, so a claimant cancels its own entry
+/// before it stops waiting (W-3).
+#[derive(Default)]
+pub(super) struct ClaimGrantSlot {
+    granted: Mutex<Option<LeaseToken>>,
+    ready: Condvar,
+}
+
+impl ClaimGrantSlot {
+    fn grant(&self, token: LeaseToken) -> RuntimeHostResult<()> {
+        *lock(&self.granted, "record_claim_grant")? = Some(token);
+        self.ready.notify_all();
+        Ok(())
+    }
+
+    /// The granted token, waiting at most `timeout` for it.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the #369 S2+S3b workers and S5 operator waits read it"
+        )
+    )]
+    pub(super) fn wait(&self, timeout: Duration) -> RuntimeHostResult<Option<LeaseToken>> {
+        let granted = lock(&self.granted, "wait_claim_grant")?;
+        let (granted, _) = self
+            .ready
+            .wait_timeout_while(granted, timeout, |granted| granted.is_none())
+            .map_err(|_| lock_poison_error("wait_claim_grant"))?;
+        Ok(granted.clone())
+    }
+}
+
+/// Workflow #369 Q-6: an instance's admission guard that pumps the instance's queue when it is
+/// dropped, so a claim queued while the guard was held is granted as soon as it can be. It
+/// dereferences to the plain guard that the `_while_guarded` paths take.
+pub(super) struct AdmissionGuard<'a> {
+    guard: Option<MutexGuard<'a, ()>>,
+    host: &'a HostShared,
+    instance_id: InstanceId,
+}
+
+impl<'a> std::ops::Deref for AdmissionGuard<'a> {
+    type Target = MutexGuard<'a, ()>;
+
+    fn deref(&self) -> &Self::Target {
+        match &self.guard {
+            Some(guard) => guard,
+            None => unreachable!("only the drop takes the admission guard"),
+        }
+    }
+}
+
+impl Drop for AdmissionGuard<'_> {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        if thread::panicking() {
+            return;
+        }
+        if let Err(error) = self.host.pump(self.instance_id) {
+            self.host.mark_pump_failure(error);
+        }
+    }
+}
+
+/// Workflow #369 Q-2, Q-6: a Runtime-internal claim on one instance. `request` is the claim's
+/// own synthetic request; its links carry the claim's waiting records (W-5).
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the #369 S2+S3b, S5 and S6 claimants build it")
+)]
+pub(super) struct HostClaim<'a> {
+    pub(super) request: &'a RuntimeRequest,
+    pub(super) instance_alias: &'a str,
+    pub(super) holder_id: actingcommand_contract::HolderId,
+    pub(super) connection_id: ConnectionId,
+    pub(super) kind: ClaimKind,
+    pub(super) priority: actingcommand_contract::LeasePriority,
+    pub(super) lease_ttl_ms: u64,
+}
+
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the #369 S2+S3b, S5 and S6 claimants read it")
+)]
+pub(super) enum HostClaimAdmission {
+    Granted(LeaseToken),
+    Queued {
+        status: QueuedLease,
+        grant: Arc<ClaimGrantSlot>,
+    },
+}
+
 impl HostShared {
+    /// A client `QueueLease` (Workflow #369 Q-6): the request is visible (scheduler entry,
+    /// `lease.requested` + `scheduler.queued`, context) before it can be granted, and it never
+    /// blocks on the admission guard before that. A free instance grants at once only when the
+    /// guard is free (`try_lock`); on contention the request queues and the guard's holder pumps
+    /// it when it lets the guard go.
     pub(super) fn queue_lease(
         &self,
         original: &RuntimeRequest,
@@ -87,7 +190,7 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
         let instance_guard = self.instance_guard(instance_id)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = self.try_lock_admission(&instance_guard, instance_id)?;
         let resolved = self.resolve_instance(instance_alias)?;
         if resolved.instance_id() != instance_id {
             return Err(RequestFailure::poison_without_terminal(
@@ -98,14 +201,19 @@ impl HostShared {
                 ),
             ));
         }
-        self.expire_instance_if_due(resolved.instance_id())?;
+        if let Some(admission) = &admission {
+            self.expire_instance_if_due(resolved.instance_id(), Some(&**admission))?;
+        }
         self.require_bound_endpoint(
             &resolved,
             self.events
                 .request_links(request, Some(resolved.instance_id()), None, None),
             EventAction::LeaseAcquire,
         )?;
-        let outcome = lock(&self.scheduler, "queue_lease")?.request_queued(
+        let gate = self.routine_gate(instance_id)?;
+        let order_lock = self.queue_order_lock(instance_id)?;
+        let order = lock(&order_lock, "lock_instance_queue_order")?;
+        let outcome = lock(&self.scheduler, "queue_lease")?.request_queued_gated(
             QueueLeaseRequest::new(
                 original.request_id(),
                 resolved.instance_id(),
@@ -114,6 +222,8 @@ impl HostShared {
                 policy.priority(),
                 policy.timeout_ms(),
             ),
+            gate,
+            admission.is_some(),
             self.monotonic_ms()?,
         );
         let outcome = match outcome {
@@ -125,104 +235,114 @@ impl HostShared {
         };
         let (decision, expired) = outcome.into_parts();
         self.record_expired_queued(expired)?;
-        match decision {
+        let queued = match decision {
             QueueAdmissionDecision::Lease(preparation) if preparation.is_existing() => {
                 let token = preparation.token().clone();
                 let terminal =
                     self.existing_queue_grant_terminal(original.request_id(), token.lease_id())?;
-                Ok(OperationSuccess {
+                return Ok(OperationSuccess {
                     state: RuntimeReceiptState::Admitted,
                     terminal: Some(terminal),
                     result: RuntimeResult::LeaseGranted { token },
-                })
+                });
             }
-            QueueAdmissionDecision::Lease(preparation) => self.grant_prepared_lease(
-                request,
-                original.request_id(),
-                &resolved,
-                preparation,
-                None,
-            ),
-            QueueAdmissionDecision::Queued(queued) => {
-                if let Some(existing) = lock(&self.queued_requests, "read_queued_request")?
-                    .get(&original.request_id())
-                    .cloned()
-                {
-                    if existing.request != *original
-                        || existing.instance != resolved
-                        || existing.connection_id != connection_id
-                    {
-                        return Err(RequestFailure::poison_without_terminal(
-                            RuntimeHostError::fatal(
-                                "queued_request_identity_mismatch",
-                                "queue_lease",
-                                RuntimeErrorCode::RuntimeFatal,
-                            ),
-                        ));
-                    }
-                    let terminal = self.existing_request_terminal(
-                        original.request_id(),
-                        EventType::SchedulerQueued,
-                    )?;
-                    return Ok(OperationSuccess {
-                        state: RuntimeReceiptState::Queued,
-                        terminal: Some(terminal),
-                        result: RuntimeResult::LeaseQueued {
-                            status: queued.status().map_err(|error| {
-                                RequestFailure::poison_without_terminal(
-                                    RuntimeHostError::scheduler("queue_lease_status", &error),
-                                )
-                            })?,
-                        },
-                    });
-                }
-                self.append_lease_requested(request, &resolved)?;
-                let mut terminal_event =
-                    self.append_scheduler_queued(request, &resolved, &queued)?;
-                if queued.preempt_requested() {
-                    terminal_event =
-                        self.append_scheduler_preempted(request, &resolved, &queued)?;
-                }
-                let context = QueuedRequestContext {
-                    request: original.clone(),
-                    instance: resolved,
-                    connection_id,
-                };
-                if lock(&self.queued_requests, "register_queued_request")?
-                    .insert(original.request_id(), context)
-                    .is_some()
-                {
-                    return Err(RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
-                            "queued_request_collision",
-                            "queue_lease",
-                            RuntimeErrorCode::RuntimeFatal,
-                        ),
-                    ));
-                }
-                if let Some((token, transferred)) =
-                    self.promote_idle_preemption(&queued, &admission)?
-                {
-                    return Ok(OperationSuccess {
-                        state: RuntimeReceiptState::Admitted,
-                        terminal: Some(terminal(&transferred)),
-                        result: RuntimeResult::LeaseGranted { token },
-                    });
-                }
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Queued,
-                    terminal: Some(terminal(&terminal_event)),
-                    result: RuntimeResult::LeaseQueued {
-                        status: queued.status().map_err(|error| {
-                            RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                                "queue_lease_status",
-                                &error,
-                            ))
-                        })?,
-                    },
-                })
+            QueueAdmissionDecision::Lease(preparation) => {
+                return self.grant_prepared_lease(
+                    request,
+                    original.request_id(),
+                    &resolved,
+                    preparation,
+                    None,
+                    CapacityUse::Business,
+                );
+            }
+            QueueAdmissionDecision::Queued(queued) => queued,
+        };
+        let queued_status = |queued: &QueuedLease| {
+            queued.status().map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    "queue_lease_status",
+                    &error,
+                ))
+            })
+        };
+        if let Some(existing) = lock(&self.queued_requests, "read_queued_request")?
+            .get(&original.request_id())
+            .cloned()
+        {
+            if existing.request != *original
+                || existing.instance != resolved
+                || existing.connection_id != connection_id
+            {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "queued_request_identity_mismatch",
+                        "queue_lease",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+            let terminal =
+                self.existing_request_terminal(original.request_id(), EventType::SchedulerQueued)?;
+            return Ok(OperationSuccess {
+                state: RuntimeReceiptState::Queued,
+                terminal: Some(terminal),
+                result: RuntimeResult::LeaseQueued {
+                    status: queued_status(&queued)?,
+                },
+            });
+        }
+        self.append_lease_requested(request, &resolved)?;
+        let mut terminal_event = self.append_scheduler_queued(request, &resolved, &queued)?;
+        if queued.preempt_requested() {
+            terminal_event = self.append_scheduler_preempted(request, &resolved, &queued)?;
+        }
+        self.register_queued_context(QueuedRequestContext {
+            request: original.clone(),
+            instance: resolved,
+            connection_id,
+            grant: None,
+        })?;
+        drop(order);
+        if queued.preempt_requested() {
+            // The request is visible; an idle holder is preempted now, under the guard.
+            let admission = match admission {
+                Some(admission) => admission,
+                None => self.lock_admission(&instance_guard, instance_id)?,
+            };
+            if let Some((token, transferred)) = self.promote_idle_preemption(&queued, &admission)? {
+                return Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Admitted,
+                    terminal: Some(terminal(&transferred)),
+                    result: RuntimeResult::LeaseGranted { token },
+                });
             }
         }
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Queued,
+            terminal: Some(terminal(&terminal_event)),
+            result: RuntimeResult::LeaseQueued {
+                status: queued_status(&queued)?,
+            },
+        })
+    }
+
+    /// Workflow #369 Q-6: registers a queued request's context; the caller holds the instance's
+    /// queue-order lock, so the request is not grantable before this returns.
+    fn register_queued_context(&self, context: QueuedRequestContext) -> Result<(), RequestFailure> {
+        if lock(&self.queued_requests, "register_queued_request")?
+            .insert(context.request.request_id(), context)
+            .is_some()
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "queued_request_collision",
+                    "queue_lease",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -313,13 +433,13 @@ impl HostShared {
         {
             return Ok(success);
         }
-        let instance_guard = context
+        let order_lock = context
             .as_ref()
-            .map(|context| self.instance_guard(context.instance.instance_id()))
+            .map(|context| self.queue_order_lock(context.instance.instance_id()))
             .transpose()?;
-        let _admission = instance_guard
+        let _order = order_lock
             .as_ref()
-            .map(|guard| lock(guard, "lock_instance_admission"))
+            .map(|order_lock| lock(order_lock, "lock_instance_queue_order"))
             .transpose()?;
         let poll = lock(&self.scheduler, "poll_queued_lease")?.poll_queued(
             queued_request_id,
@@ -413,13 +533,13 @@ impl HostShared {
         {
             return Ok(success);
         }
-        let instance_guard = context
+        let order_lock = context
             .as_ref()
-            .map(|context| self.instance_guard(context.instance.instance_id()))
+            .map(|context| self.queue_order_lock(context.instance.instance_id()))
             .transpose()?;
-        let _admission = instance_guard
+        let order = order_lock
             .as_ref()
-            .map(|guard| lock(guard, "lock_instance_admission"))
+            .map(|order_lock| lock(order_lock, "lock_instance_queue_order"))
             .transpose()?;
         let cancelled = lock(&self.scheduler, "cancel_queued_lease")?
             .cancel_queued(queued_request_id, connection_id);
@@ -462,6 +582,8 @@ impl HostShared {
                 instance_id: cancelled.queued().instance_id(),
             },
         )?;
+        drop(order);
+        self.pump(cancelled.queued().instance_id())?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Cancelled,
             terminal: Some(terminal(&event)),
@@ -616,6 +738,7 @@ impl HostShared {
         Ok(())
     }
 
+    /// The caller holds the instance's queue-order lock (Workflow #369 Q-6).
     pub(super) fn cancel_instance_queue(
         &self,
         instance_id: InstanceId,
@@ -750,10 +873,18 @@ impl HostShared {
         )
     }
 
+    /// Expires the instance's lapsed entries under its queue-order lock (Workflow #369 Q-6).
     pub(super) fn expire_queued_for_instance(
         &self,
         instance_id: InstanceId,
     ) -> Result<(), RequestFailure> {
+        let order_lock = self.queue_order_lock(instance_id)?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
+        self.expire_queued_while_ordered(instance_id)
+    }
+
+    /// [`Self::expire_queued_for_instance`] for a caller that holds the queue-order lock.
+    fn expire_queued_while_ordered(&self, instance_id: InstanceId) -> Result<(), RequestFailure> {
         let expired = lock(&self.scheduler, "expire_queued_requests")?
             .take_expired_for_instance(instance_id, self.monotonic_ms()?)
             .map_err(|error| {
@@ -875,6 +1006,11 @@ impl HostShared {
             ));
         }
         self.remove_queued_context(queued_request_id, to_connection_id)?;
+        if let Some(grant) = &context.grant {
+            grant
+                .grant(committed)
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         self.persist_active_instances()
             .map_err(RequestFailure::poison_without_terminal)?;
         Ok(transferred)
@@ -890,23 +1026,23 @@ impl HostShared {
         if !queued.preempt_requested() {
             return Ok(None);
         }
+        let instance_id = queued.instance_id();
+        let gate = self.routine_gate(instance_id)?;
+        let order_lock = self.queue_order_lock(instance_id)?;
+        let order = lock(&order_lock, "lock_instance_queue_order")?;
         let transfer = {
             let mut scheduler = lock(&self.scheduler, "prepare_idle_preemption")?;
-            let active = scheduler
-                .active_lease(queued.instance_id())
-                .ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "idle_preemption_active_lease_missing",
-                        "prepare_idle_preemption",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
+            // Since the request became visible it may have been granted, expired or cancelled.
+            let Some(active) = scheduler.active_lease(instance_id) else {
+                return Ok(None);
+            };
             scheduler
-                .prepare_transfer(
+                .prepare_transfer_gated(
                     active.token(),
                     active.connection_id(),
                     LeaseTransferReason::Preempted,
                     None,
+                    gate,
                     self.monotonic_ms()?,
                 )
                 .map_err(|error| {
@@ -918,7 +1054,11 @@ impl HostShared {
         };
         match transfer {
             TransferPreparation::Ready(prepared) => {
+                if prepared.queued_request_id() != queued.request_id() {
+                    return Ok(None);
+                }
                 if !self.capacity_allows_transfer(prepared.from_token())? {
+                    drop(order);
                     self.cleanup_token_inner(
                         prepared.from_token(),
                         prepared.from_connection_id(),
@@ -932,14 +1072,7 @@ impl HostShared {
                 self.perform_transfer(prepared)
                     .map(|event| Some((token, event)))
             }
-            TransferPreparation::Deferred => Ok(None),
-            TransferPreparation::NoCandidate => Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "idle_preemption_candidate_missing",
-                    "prepare_idle_preemption",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            )),
+            TransferPreparation::Deferred | TransferPreparation::NoCandidate => Ok(None),
         }
     }
 
@@ -949,14 +1082,7 @@ impl HostShared {
             .copied()
             .collect::<Vec<_>>();
         for instance_id in instance_ids {
-            let instance_guard = self
-                .instance_guard(instance_id)
-                .map_err(|failure| *failure.error)?;
-            let _admission = lock(&instance_guard, "lock_instance_admission")?;
-            let expired = lock(&self.scheduler, "expire_queued_requests")?
-                .take_expired_for_instance(instance_id, self.monotonic_ms()?)
-                .map_err(|error| RuntimeHostError::scheduler("expire_queued_requests", &error))?;
-            self.record_expired_queued(expired)
+            self.expire_queued_for_instance(instance_id)
                 .map_err(|failure| *failure.error)?;
         }
         Ok(())
@@ -976,10 +1102,11 @@ impl HostShared {
             connection_id,
             run_links,
             lease_ttl_ms,
+            kind,
         } = acquisition;
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
         let instance_guard = self.instance_guard(instance_id)?;
-        let _admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = self.lock_admission(&instance_guard, instance_id)?;
         let resolved = self.resolve_instance(instance_alias)?;
         if resolved.instance_id() != instance_id {
             return Err(RequestFailure::poison_without_terminal(
@@ -990,33 +1117,35 @@ impl HostShared {
                 ),
             ));
         }
-        self.expire_instance_if_due(resolved.instance_id())?;
-        self.require_bound_endpoint(
-            &resolved,
-            self.events
-                .request_links(request, Some(resolved.instance_id()), None, None),
-            EventAction::LeaseAcquire,
-        )?;
+        self.expire_instance_if_due(resolved.instance_id(), Some(&*admission))?;
+        if kind.takes_admission_checks() {
+            self.require_bound_endpoint(
+                &resolved,
+                self.events
+                    .request_links(request, Some(resolved.instance_id()), None, None),
+                EventAction::LeaseAcquire,
+            )?;
+        }
+        let gate = self.routine_gate(instance_id)?;
+        let order_lock = self.queue_order_lock(instance_id)?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
         let preparation = {
             let mut scheduler = lock(&self.scheduler, "prepare_lease")?;
             let now_monotonic_ms = self.monotonic_ms()?;
-            match lease_ttl_ms {
-                Some(lease_ttl_ms) => scheduler.prepare_acquire_with_ttl(
+            let lease_ttl_ms = lease_ttl_ms.unwrap_or(scheduler.config().lease_ttl_ms);
+            scheduler.prepare_claim_acquire(
+                ClaimRequest {
                     request_id,
-                    resolved.instance_id(),
+                    instance_id: resolved.instance_id(),
                     holder_id,
                     connection_id,
+                    kind,
+                    priority: actingcommand_contract::LeasePriority::Normal,
                     lease_ttl_ms,
-                    now_monotonic_ms,
-                ),
-                None => scheduler.prepare_acquire(
-                    request_id,
-                    resolved.instance_id(),
-                    holder_id,
-                    connection_id,
-                    now_monotonic_ms,
-                ),
-            }
+                },
+                gate,
+                now_monotonic_ms,
+            )
         };
         let preparation = match preparation {
             Ok(preparation) => preparation,
@@ -1025,10 +1154,17 @@ impl HostShared {
                 return Err(self.scheduler_denied(request, &resolved, None, error)?);
             }
         };
-        if !preparation.is_existing() {
+        if !preparation.is_existing() && kind.takes_admission_checks() {
             self.require_performance_control_lease(request, &resolved, instance_alias)?;
         }
-        self.grant_prepared_lease(request, request_id, &resolved, preparation, run_links)
+        self.grant_prepared_lease(
+            request,
+            request_id,
+            &resolved,
+            preparation,
+            run_links,
+            kind_capacity(kind),
+        )
     }
 
     /// A new Business lease is refused while the instance's performance-control directive asks
@@ -1066,6 +1202,7 @@ impl HostShared {
         resolved: &RegisteredInstance,
         preparation: LeasePreparation,
         run_links: Option<RuntimeRunLinks>,
+        capacity_use: CapacityUse,
     ) -> Result<OperationSuccess, RequestFailure> {
         if preparation.is_existing() {
             let terminal = self.existing_lease_terminal(
@@ -1097,7 +1234,7 @@ impl HostShared {
         if let Some(run_links) = run_links {
             links = run_links.apply(links);
         }
-        self.grant_prepared_lease_with_links(resolved, preparation, links, CapacityUse::Business)
+        self.grant_prepared_lease_with_links(resolved, preparation, links, capacity_use)
     }
 
     pub(super) fn grant_prepared_lease_with_links(
@@ -1409,15 +1546,19 @@ impl HostShared {
         }
         let resolved = self.validated_instance(request, token, connection_id)?;
         let instance_guard = self.instance_guard(token.instance_id())?;
-        let _admission = lock(&instance_guard, "lock_instance_admission")?;
+        let _admission = self.lock_admission(&instance_guard, token.instance_id())?;
         self.expire_queued_for_instance(token.instance_id())?;
         self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)?;
+        let gate = self.routine_gate(token.instance_id())?;
+        let order_lock = self.queue_order_lock(token.instance_id())?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
         let transfer = lock(&self.scheduler, "prepare_release_transfer")?
-            .prepare_transfer(
+            .prepare_transfer_gated(
                 token,
                 connection_id,
                 LeaseTransferReason::ExplicitRelease,
                 Some(request_id),
+                gate,
                 self.monotonic_ms()?,
             )
             .map_err(|error| {
@@ -1429,7 +1570,9 @@ impl HostShared {
         self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
         match transfer {
             TransferPreparation::Ready(prepared) => {
-                if self.capacity_allows_transfer(token)? {
+                if prepared.to_kind().skips_business_capacity()
+                    || self.capacity_allows_transfer(token)?
+                {
                     return self
                         .release_via_transfer(request, token, &resolved, prepared, run_links);
                 }
@@ -1559,7 +1702,7 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<bool, RequestFailure> {
         let instance_guard = self.instance_guard(token.instance_id())?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = self.lock_admission(&instance_guard, token.instance_id())?;
         self.transfer_preempted_while_guarded(token, connection_id, &admission)
     }
 
@@ -1570,12 +1713,16 @@ impl HostShared {
         _admission: &MutexGuard<'_, ()>,
     ) -> Result<bool, RequestFailure> {
         self.expire_queued_for_instance(token.instance_id())?;
+        let gate = self.routine_gate(token.instance_id())?;
+        let order_lock = self.queue_order_lock(token.instance_id())?;
+        let order = lock(&order_lock, "lock_instance_queue_order")?;
         let transfer = lock(&self.scheduler, "prepare_preempted_transfer")?
-            .prepare_transfer(
+            .prepare_transfer_gated(
                 token,
                 connection_id,
                 LeaseTransferReason::Preempted,
                 None,
+                gate,
                 self.monotonic_ms()?,
             )
             .map_err(|error| {
@@ -1588,6 +1735,7 @@ impl HostShared {
             TransferPreparation::NoCandidate => Ok(false),
             TransferPreparation::Ready(prepared) => {
                 if !self.capacity_allows_transfer(token)? {
+                    drop(order);
                     self.cleanup_token_inner(
                         token,
                         connection_id,
@@ -1749,32 +1897,86 @@ impl HostShared {
         request_links: Option<(&ValidatedRuntimeRequest<'_>, RuntimeRunLinks)>,
         admission: Option<&MutexGuard<'_, ()>>,
     ) -> RuntimeHostResult<()> {
-        let resolved = lock(&self.registered_instances, "read_instance_registry")?
-            .get(&token.instance_id())
-            .cloned();
-        let Some(resolved) = resolved else {
-            let active = lock(&self.scheduler, "check_cleanup_lease")?
-                .active_tokens()
-                .into_iter()
-                .any(|active| active == *token);
-            return if active {
-                Err(RuntimeHostError::fatal(
-                    "active_lease_instance_missing",
-                    "cleanup_runtime_connection",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            } else {
-                Ok(())
-            };
+        let Some(resolved) = self.cleanup_instance(token)? else {
+            return Ok(());
         };
         let instance_guard = self
             .instance_guard(token.instance_id())
             .map_err(|failure| *failure.error)?;
         let _owned_admission = if admission.is_none() {
-            Some(lock(&instance_guard, "lock_instance_admission")?)
+            Some(self.lock_admission(&instance_guard, token.instance_id())?)
         } else {
             None
         };
+        self.cleanup_token_guarded(token, connection_id, reason, request_links, &resolved)
+    }
+
+    /// Workflow #369 Q-8: the sweep's cleanup of a lapsed lease takes the admission guard only
+    /// with `try_lock`; while the holder is inside a device step it is retried at the next tick.
+    /// Returns whether the lease was cleaned up.
+    fn cleanup_expired_if_guard_free(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<bool> {
+        let Some(resolved) = self.cleanup_instance(token)? else {
+            return Ok(true);
+        };
+        let instance_guard = self
+            .instance_guard(token.instance_id())
+            .map_err(|failure| *failure.error)?;
+        let Some(_admission) = self.try_lock_admission(&instance_guard, token.instance_id())?
+        else {
+            return Ok(false);
+        };
+        self.cleanup_token_guarded(
+            token,
+            connection_id,
+            LeaseReleaseReason::Expired,
+            None,
+            &resolved,
+        )?;
+        Ok(true)
+    }
+
+    /// The registered instance a cleanup acts on; `None` when the instance and the lease are
+    /// both gone.
+    fn cleanup_instance(
+        &self,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<Option<RegisteredInstance>> {
+        let resolved = lock(&self.registered_instances, "read_instance_registry")?
+            .get(&token.instance_id())
+            .cloned();
+        if resolved.is_some() {
+            return Ok(resolved);
+        }
+        let active = lock(&self.scheduler, "check_cleanup_lease")?
+            .active_tokens()
+            .into_iter()
+            .any(|active| active == *token);
+        if active {
+            return Err(RuntimeHostError::fatal(
+                "active_lease_instance_missing",
+                "cleanup_runtime_connection",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(None)
+    }
+
+    /// A lease end under the instance's admission guard. Every end except `HostShutdown` hands
+    /// the key on (Workflow #369 Q-4): a disconnect, an expiry and a backend failure transfer to
+    /// the first eligible entry (with the run's links on the releaser's records, C1, C9); any
+    /// other end releases and the guard's drop pumps. `HostShutdown` cancels the queue.
+    fn cleanup_token_guarded(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        reason: LeaseReleaseReason,
+        request_links: Option<(&ValidatedRuntimeRequest<'_>, RuntimeRunLinks)>,
+        resolved: &RegisteredInstance,
+    ) -> RuntimeHostResult<()> {
         self.expire_queued_for_instance(token.instance_id())
             .map_err(|failure| *failure.error)?;
         // Workflow #191 H: every lease end keeps the instance's session, a HostShutdown too (the
@@ -1789,27 +1991,41 @@ impl HostShared {
         let transfer_reason = match reason {
             LeaseReleaseReason::Disconnect => Some(LeaseTransferReason::Disconnect),
             LeaseReleaseReason::Expired => Some(LeaseTransferReason::Expired),
+            LeaseReleaseReason::BackendFailure => Some(LeaseTransferReason::BackendFailure),
             LeaseReleaseReason::Explicit
             | LeaseReleaseReason::Preempted
-            | LeaseReleaseReason::BackendFailure
             | LeaseReleaseReason::HostShutdown
             | LeaseReleaseReason::InstancePaused
             | LeaseReleaseReason::ConnectionPrepared => None,
         };
+        let gate = self.routine_gate(token.instance_id())?;
+        let order_lock = self
+            .queue_order_lock(token.instance_id())
+            .map_err(|failure| *failure.error)?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
         if let Some(transfer_reason) = transfer_reason {
             let transfer = lock(&self.scheduler, "prepare_cleanup_transfer")?
-                .prepare_transfer(
+                .prepare_transfer_gated(
                     token,
                     connection_id,
                     transfer_reason,
                     None,
+                    gate,
                     self.monotonic_ms()?,
                 )
                 .map_err(|error| RuntimeHostError::scheduler("prepare_cleanup_transfer", &error))?;
             match transfer {
                 TransferPreparation::Ready(prepared) => {
-                    if self.capacity_allows_transfer(token)? {
-                        self.cleanup_via_transfer(token, &resolved, reason, prepared)?;
+                    if prepared.to_kind().skips_business_capacity()
+                        || self.capacity_allows_transfer(token)?
+                    {
+                        self.cleanup_via_transfer(
+                            token,
+                            resolved,
+                            reason,
+                            prepared,
+                            request_links,
+                        )?;
                         return Ok(());
                     }
                 }
@@ -1826,19 +2042,9 @@ impl HostShared {
                 TransferPreparation::NoCandidate => {}
             }
         }
-        if matches!(
-            reason,
-            LeaseReleaseReason::BackendFailure | LeaseReleaseReason::HostShutdown
-        ) {
-            self.cancel_instance_queue(
-                token.instance_id(),
-                if reason == LeaseReleaseReason::BackendFailure {
-                    DiagnosticCode::BackendOperationFailed
-                } else {
-                    DiagnosticCode::LeaseQueueDisconnected
-                },
-            )
-            .map_err(|failure| *failure.error)?;
+        if reason == LeaseReleaseReason::HostShutdown {
+            self.cancel_instance_queue(token.instance_id(), DiagnosticCode::LeaseQueueDisconnected)
+                .map_err(|failure| *failure.error)?;
         }
         let action_id = self.events.action_id()?;
         let links = match request_links {
@@ -1865,7 +2071,7 @@ impl HostShared {
             .map_err(|failure| *failure.error)?;
         let plan = CriticalEventPlan::new(CriticalOperation::LeaseTransition(target), intent)
             .map_err(|_| critical_plan_error())?;
-        let endpoint = resolved.audit_endpoint;
+        let endpoint = resolved.audit_endpoint.clone();
         let outcome_links = links.clone();
         let failure_links = links;
         let result = execute_critical(
@@ -1991,9 +2197,18 @@ impl HostShared {
         resolved: &RegisteredInstance,
         reason: LeaseReleaseReason,
         prepared: Box<PreparedLeaseTransfer>,
+        request_links: Option<(&ValidatedRuntimeRequest<'_>, RuntimeRunLinks)>,
     ) -> RuntimeHostResult<()> {
         let action_id = self.events.action_id()?;
-        let links = self.events.synthetic_links(token, action_id)?;
+        let links = match request_links {
+            Some((request, run_links)) => run_links.apply(self.events.request_links(
+                request,
+                Some(token.instance_id()),
+                Some(token.lease_id()),
+                Some(action_id),
+            )),
+            None => self.events.synthetic_links(token, action_id)?,
+        };
         let action = if reason == LeaseReleaseReason::Expired {
             EventAction::LeaseExpire
         } else {
@@ -2224,16 +2439,19 @@ impl HostShared {
             let connection_id = lock(&self.scheduler, "read_lease_connection")?
                 .connection_for_token(&token)
                 .map_err(|error| RuntimeHostError::scheduler("read_lease_connection", &error))?;
-            self.cleanup_token(&token, connection_id, LeaseReleaseReason::Expired)?;
+            if !self.cleanup_expired_if_guard_free(&token, connection_id)? {
+                continue;
+            }
             #[cfg(test)]
             self.record_completed_lease_expiry_for_test(&token)?;
         }
-        Ok(())
+        self.pump_all()
     }
 
     pub(super) fn expire_instance_if_due(
         &self,
         instance_id: InstanceId,
+        admission: Option<&MutexGuard<'_, ()>>,
     ) -> Result<(), RequestFailure> {
         let now = self
             .monotonic_ms()
@@ -2251,8 +2469,14 @@ impl HostShared {
                         &error,
                     ))
                 })?;
-            self.cleanup_token(&token, connection_id, LeaseReleaseReason::Expired)
-                .map_err(RequestFailure::poison_without_terminal)?;
+            self.cleanup_token_inner(
+                &token,
+                connection_id,
+                LeaseReleaseReason::Expired,
+                None,
+                admission,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         }
         Ok(())
     }
@@ -2272,10 +2496,10 @@ impl HostShared {
         let queued_instances = lock(&self.scheduler, "list_connection_queues")?
             .queued_instance_ids_for_connection(connection_id);
         for instance_id in queued_instances {
-            let instance_guard = self
-                .instance_guard(instance_id)
+            let order_lock = self
+                .queue_order_lock(instance_id)
                 .map_err(|failure| *failure.error)?;
-            let _admission = lock(&instance_guard, "lock_instance_admission")?;
+            let order = lock(&order_lock, "lock_instance_queue_order")?;
             let removed = lock(&self.scheduler, "cleanup_connection_queues")?
                 .remove_queued_for_connection_on_instance(instance_id, connection_id)
                 .map_err(|error| {
@@ -2288,6 +2512,8 @@ impl HostShared {
                 self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueDisconnected)
                     .map_err(|failure| *failure.error)?;
             }
+            drop(order);
+            self.pump(instance_id)?;
         }
         let tokens =
             lock(&self.scheduler, "list_connection_leases")?.tokens_for_connection(connection_id);
@@ -2676,6 +2902,426 @@ impl HostShared {
                 critical_execution_error(&error),
             )),
         }
+    }
+}
+
+/// Workflow #369: the one queue per instance (model-369-queue.md v3.1 Q-4 to Q-8).
+impl HostShared {
+    /// Takes the instance's admission guard, blocking, as a guard that pumps when dropped.
+    pub(super) fn lock_admission<'a>(
+        &'a self,
+        mutex: &'a Mutex<()>,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<AdmissionGuard<'a>> {
+        Ok(AdmissionGuard {
+            guard: Some(lock(mutex, "lock_instance_admission")?),
+            host: self,
+            instance_id,
+        })
+    }
+
+    /// Q-6, Q-8: takes the admission guard only if it is free. A poisoned guard is fatal.
+    pub(super) fn try_lock_admission<'a>(
+        &'a self,
+        mutex: &'a Mutex<()>,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<AdmissionGuard<'a>>> {
+        match mutex.try_lock() {
+            Ok(guard) => Ok(Some(AdmissionGuard {
+                guard: Some(guard),
+                host: self,
+                instance_id,
+            })),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Poisoned(_)) => Err(lock_poison_error("try_lock_instance_admission")),
+        }
+    }
+
+    pub(super) fn queue_order_lock(
+        &self,
+        instance_id: InstanceId,
+    ) -> Result<Arc<Mutex<()>>, RequestFailure> {
+        let mut locks = lock(&self.queue_order_locks, "read_instance_queue_order")?;
+        Ok(Arc::clone(
+            locks
+                .entry(instance_id)
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        ))
+    }
+
+    /// Q-3 (4): the instance's routine gate, read from the scheduling pauses now. It is read
+    /// before the scheduler lock is taken.
+    pub(super) fn routine_gate(&self, instance_id: InstanceId) -> RuntimeHostResult<ClaimGate> {
+        let alias = lock(&self.registered_instances, "read_instance_registry")?
+            .get(&instance_id)
+            .map(|instance| instance.instance_alias.clone());
+        let pauses = lock(&self.scheduling_pause, "read_routine_gate")?;
+        let held = pauses.holds_global()
+            || alias.is_some_and(|instance_alias| pauses.holds_instance(&instance_alias));
+        Ok(if held {
+            ClaimGate::RoutineHeld
+        } else {
+            ClaimGate::Open
+        })
+    }
+
+    /// Q-4: grants the first eligible entry of a free instance, with `scheduler.admitted` +
+    /// `lease.granted` under the entry's own request links. A pump that grants nothing writes
+    /// nothing: an instance held, in takeover cooldown, without an eligible entry, short of
+    /// business capacity for a business claim, or whose admission guard is taken is left as it
+    /// is (the guard's holder pumps when it drops it; the sweep pumps every tick).
+    pub(super) fn pump(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
+        if self.fatal.is_shutdown_requested() {
+            return Ok(());
+        }
+        let gate = self.routine_gate(instance_id)?;
+        let candidate = lock(&self.scheduler, "read_queue_grant_candidate")?.grant_candidate(
+            instance_id,
+            gate,
+            self.monotonic_ms()?,
+        );
+        let Some(kind) = candidate else {
+            return Ok(());
+        };
+        if !kind.skips_business_capacity() {
+            match self.admit_capacity() {
+                Ok(_) => {}
+                Err(error) if error.is_fatal() => return Err(error),
+                Err(_) => return Ok(()),
+            }
+        }
+        let instance_guard = self
+            .instance_guard(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let _admission = match instance_guard.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return Ok(()),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(lock_poison_error("pump_instance_queue"));
+            }
+        };
+        let order_lock = self
+            .queue_order_lock(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
+        self.expire_queued_while_ordered(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let prepared = lock(&self.scheduler, "prepare_queue_grant")?
+            .prepare_queued_grant(instance_id, gate, self.monotonic_ms()?)
+            .map_err(|error| RuntimeHostError::scheduler("prepare_queue_grant", &error))?;
+        let Some(prepared) = prepared else {
+            return Ok(());
+        };
+        let request_id = prepared.request_id();
+        let context = self
+            .read_queued_context(request_id)
+            .map_err(|failure| *failure.error)?;
+        let validated = context.request.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                "queued_request_context_invalid",
+                "pump_instance_queue",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        self.append_scheduler_admitted(&validated, &context.instance, None)
+            .map_err(|failure| *failure.error)?;
+        let action_id = self.events.action_id()?;
+        let links = self.events.request_links(
+            &validated,
+            Some(instance_id),
+            Some(prepared.token().lease_id()),
+            Some(action_id),
+        );
+        let token = prepared.token().clone();
+        // Capacity was admitted above, so the grant itself writes no capacity refusal.
+        self.grant_prepared_lease_with_links(
+            &context.instance,
+            LeasePreparation::New(prepared),
+            links,
+            CapacityUse::Drain,
+        )
+        .map_err(|failure| *failure.error)?;
+        self.remove_queued_context(request_id, context.connection_id)
+            .map_err(|failure| *failure.error)?;
+        if let Some(grant) = &context.grant {
+            grant.grant(token)?;
+        }
+        Ok(())
+    }
+
+    /// Q-4: the sweep's backstop pump of every registered instance.
+    pub(super) fn pump_all(&self) -> RuntimeHostResult<()> {
+        let instance_ids = lock(&self.registered_instances, "read_instance_registry")?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for instance_id in instance_ids {
+            self.pump(instance_id)?;
+        }
+        Ok(())
+    }
+
+    /// A pump that failed where its error cannot be returned (an admission guard's drop) marks
+    /// the Runtime fatal. Every pump failure is an invariant or ledger failure.
+    fn mark_pump_failure(&self, error: RuntimeHostError) {
+        let error = if error.is_fatal() {
+            error
+        } else {
+            RuntimeHostError::fatal(
+                error.code(),
+                "pump_instance_queue",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        };
+        if self.fatal.mark(error).is_err() {
+            self.fatal.request_shutdown();
+        }
+    }
+
+    fn read_queued_context(
+        &self,
+        request_id: RequestId,
+    ) -> Result<QueuedRequestContext, RequestFailure> {
+        lock(&self.queued_requests, "read_queued_request")?
+            .get(&request_id)
+            .cloned()
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "queued_request_context_missing",
+                    "read_queued_request",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })
+    }
+
+    /// Q-2a, Q-6, Q-7: a Runtime-internal claim. Its checks follow its kind: emulator control,
+    /// autostart, resume reconnect and self-check skip the bound-endpoint and
+    /// performance-control checks and use drain capacity. On a free instance whose admission
+    /// guard is free and where no eligible entry waits it is granted at once; otherwise it is
+    /// queued with no deadline (never preempting) and made visible before it can be granted:
+    /// `lease.requested` + `scheduler.queued` and its context, all under the queue-order lock.
+    /// The grant then reaches the claimant through the returned slot.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the #369 S2+S3b, S5 and S6 claimants call it")
+    )]
+    pub(super) fn request_host_claim(
+        &self,
+        claim: HostClaim<'_>,
+    ) -> Result<HostClaimAdmission, RequestFailure> {
+        let validated = claim.request.validate().map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "queued_request_context_invalid",
+                "request_host_claim",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let resolved = self.resolve_instance(claim.instance_alias)?;
+        let instance_id = resolved.instance_id();
+        if claim.kind.takes_admission_checks() {
+            self.require_bound_endpoint(
+                &resolved,
+                self.events
+                    .request_links(&validated, Some(instance_id), None, None),
+                EventAction::LeaseAcquire,
+            )?;
+            self.require_performance_control_lease(&validated, &resolved, claim.instance_alias)?;
+        }
+        let request = ClaimRequest {
+            request_id: claim.request.request_id(),
+            instance_id,
+            holder_id: claim.holder_id,
+            connection_id: claim.connection_id,
+            kind: claim.kind,
+            priority: claim.priority,
+            lease_ttl_ms: claim.lease_ttl_ms,
+        };
+        let gate = self.routine_gate(instance_id)?;
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = self.try_lock_admission(&instance_guard, instance_id)?;
+        let order_lock = self.queue_order_lock(instance_id)?;
+        let order = lock(&order_lock, "lock_instance_queue_order")?;
+        if admission.is_some() {
+            let preparation = lock(&self.scheduler, "prepare_host_claim")?.prepare_claim_acquire(
+                request,
+                gate,
+                self.monotonic_ms()?,
+            );
+            match preparation {
+                Ok(preparation) => {
+                    let token = preparation.token().clone();
+                    self.grant_prepared_lease(
+                        &validated,
+                        request.request_id,
+                        &resolved,
+                        preparation,
+                        None,
+                        kind_capacity(claim.kind),
+                    )?;
+                    return Ok(HostClaimAdmission::Granted(token));
+                }
+                // Held, an entry ahead, or a takeover cooldown: the claim waits in the queue.
+                Err(
+                    SchedulerError::Busy { .. }
+                    | SchedulerError::QueueAhead { .. }
+                    | SchedulerError::Cooldown { .. },
+                ) => {}
+                Err(error) => {
+                    self.append_lease_requested(&validated, &resolved)?;
+                    return Err(self.scheduler_denied(&validated, &resolved, None, error)?);
+                }
+            }
+        }
+        let queued = lock(&self.scheduler, "enqueue_host_claim")?
+            .enqueue_claim(request, self.monotonic_ms()?);
+        let queued = match queued {
+            Ok(queued) => queued,
+            Err(error) => {
+                self.append_lease_requested(&validated, &resolved)?;
+                return Err(self.scheduler_denied(&validated, &resolved, None, error)?);
+            }
+        };
+        self.append_lease_requested(&validated, &resolved)?;
+        self.append_scheduler_queued(&validated, &resolved, &queued)?;
+        let grant = Arc::new(ClaimGrantSlot::default());
+        self.register_queued_context(QueuedRequestContext {
+            request: claim.request.clone(),
+            instance: resolved,
+            connection_id: claim.connection_id,
+            grant: Some(Arc::clone(&grant)),
+        })?;
+        drop(order);
+        drop(admission);
+        Ok(HostClaimAdmission::Queued {
+            status: queued,
+            grant,
+        })
+    }
+
+    /// Q-5: renews a Runtime-held lease to `lease_ttl_ms` with today's renew set
+    /// (`scheduler.admitted`, `lease.transition_intent`, `lease.renewed`, all Info) under the
+    /// holder's request links. It runs under the queue-order lock and never takes the admission
+    /// guard, which the holder may hold across a device step. A refusal (`lease_expired`,
+    /// `lease_missing`) ends the hold loudly at its caller.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the #369 S2+S3b and S6 holders renew through it")
+    )]
+    pub(super) fn renew_held_lease(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        lease_ttl_ms: u64,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let resolved = lock(&self.registered_instances, "read_instance_registry")?
+            .get(&token.instance_id())
+            .cloned()
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "active_lease_instance_missing",
+                    "renew_held_lease",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        let order_lock = self.queue_order_lock(token.instance_id())?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
+        self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
+        let action_id = self
+            .events
+            .action_id()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let links = self.events.request_links(
+            request,
+            Some(token.instance_id()),
+            Some(token.lease_id()),
+            Some(action_id),
+        );
+        let intent = self.lease_intent(
+            EventAction::LeaseRenew,
+            links.clone(),
+            resolved.audit_endpoint(),
+        )?;
+        let plan = CriticalEventPlan::new(
+            CriticalOperation::LeaseTransition(LeaseTransitionTarget::Renewed),
+            intent,
+        )
+        .map_err(|_| RequestFailure::poison_without_terminal(critical_plan_error()))?;
+        let outcome_links = links.clone();
+        let failure_links = links;
+        let endpoint = resolved.audit_endpoint;
+        let result = execute_critical(
+            &self.ledger,
+            self.events.fingerprinter(),
+            plan,
+            || {
+                let renewed =
+                    lock(&self.scheduler, "renew_held_lease").and_then(|mut scheduler| {
+                        scheduler
+                            .renew_with_ttl(
+                                token,
+                                connection_id,
+                                lease_ttl_ms,
+                                self.monotonic_ms()?,
+                            )
+                            .map_err(|error| {
+                                RuntimeHostError::scheduler("renew_held_lease", &error)
+                            })
+                    });
+                match renewed {
+                    Ok(token) => CriticalActionReport::Succeeded {
+                        value: token,
+                        effect: DefiniteEffectDisposition::Performed,
+                    },
+                    Err(error) => CriticalActionReport::Failed {
+                        error: ActionFailure::scheduler(error),
+                        effect: EffectDisposition::NotPerformed,
+                    },
+                }
+            },
+            |_, effect| {
+                self.lease_outcome_draft(
+                    EventSeverity::Info,
+                    outcome_links,
+                    LeasePayloadDraft::renewed(
+                        EventAction::LeaseRenew,
+                        effect.into(),
+                        audit_endpoint(&endpoint),
+                    ),
+                )
+            },
+            |error, effect| {
+                self.lease_failure_draft(
+                    failure_links,
+                    EventAction::LeaseRenew,
+                    error.diagnostic,
+                    effect,
+                    &endpoint,
+                )
+            },
+        );
+        match result {
+            Ok(receipt) => Ok(receipt.into_value()),
+            Err(CriticalExecutionError::Action { error, outcome, .. }) => Err(RequestFailure {
+                state: RuntimeReceiptState::Failed,
+                terminal: Some(terminal(&outcome)),
+                poison_runtime: error.poison_runtime,
+                error: Box::new(error.error),
+                task_failure: None,
+            }),
+            Err(error) => Err(RequestFailure::poison_without_terminal(
+                critical_execution_error(&error),
+            )),
+        }
+    }
+}
+
+/// Q-2a: a grant to a drain-capacity kind never meets business capacity.
+const fn kind_capacity(kind: ClaimKind) -> CapacityUse {
+    if kind.skips_business_capacity() {
+        CapacityUse::Drain
+    } else {
+        CapacityUse::Business
     }
 }
 

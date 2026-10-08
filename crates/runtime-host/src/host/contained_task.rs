@@ -4622,6 +4622,7 @@ impl HostShared {
             connection_id,
             run_links: None,
             lease_ttl_ms: Some(lease_ttl_ms),
+            kind: ClaimKind::DirectTaskRun,
         })?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -4945,6 +4946,7 @@ impl HostShared {
             connection_id,
             run_links: Some(run_links),
             lease_ttl_ms: Some(lease_ttl_ms),
+            kind: ClaimKind::StartupPackage,
         })?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(

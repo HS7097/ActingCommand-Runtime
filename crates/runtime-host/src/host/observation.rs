@@ -150,7 +150,9 @@ impl HostShared {
             artifact_links = artifact_links.with_run_id(run_id);
         }
         let instance_guard = self.instance_guard(instance_id)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        // Workflow #369 Q-6: a read-only observe stays keyless; its guard pumps when dropped, so a
+        // claim queued during the observe is granted right after it.
+        let admission = self.lock_admission(&instance_guard, instance_id)?;
         self.capture_observation_with_links(
             request,
             instance_alias,

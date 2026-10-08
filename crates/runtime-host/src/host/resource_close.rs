@@ -413,12 +413,19 @@ impl HostShared {
         let connection_id = ConnectionId::new(connection_value).map_err(|error| {
             RuntimeHostError::scheduler("build_resource_close_connection", &error)
         })?;
+        // Workflow #369 Q-2: a dedicated lease is a close or a connection preparation.
+        let kind = if connection_value == RESOURCE_CLOSE_CONNECTION_VALUE {
+            ClaimKind::ResourceClose
+        } else {
+            ClaimKind::DaemonStartPreparation
+        };
         let preparation = lock(&self.scheduler, "prepare_resource_close_lease")?
-            .prepare_resource_close(
+            .prepare_dedicated_lease(
                 *request_id.transport(),
                 instance_id,
                 *holder_id.transport(),
                 connection_id,
+                kind,
                 self.monotonic_ms()?,
             )
             .map_err(|error| RuntimeHostError::scheduler("prepare_resource_close_lease", &error))?;
