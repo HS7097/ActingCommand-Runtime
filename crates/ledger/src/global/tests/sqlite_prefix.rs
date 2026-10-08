@@ -20,7 +20,7 @@ fn formal_root(count: usize) -> TempDir {
         .initialize_empty(&database)
         .expect("formal empty ledger");
     let ledger = maintenance
-        .open_writer(database, "formal".into(), |_| None)
+        .open_writer(database, "formal".into())
         .expect("formal writer");
     for index in 0..count {
         ledger
@@ -52,7 +52,7 @@ fn migrated_root() -> (TempDir, u64) {
         limits.deadline().expect("deadline"),
     )
     .expect("closed source");
-    let source = maintenance.source(|_| None).expect("complete source");
+    let source = maintenance.source().expect("complete source");
     let record = source
         .migration_record(
             &actingcommand_runtime_database::digest(b"backup fixture"),
@@ -78,7 +78,7 @@ fn migrated_root() -> (TempDir, u64) {
         .import(&database, &source, &record, completion, false)
         .expect("import");
     let ledger = maintenance
-        .open_writer(database, "formal".into(), |_| None)
+        .open_writer(database, "formal".into())
         .expect("formal writer");
     ledger
         .append(event("after-cutover"))

@@ -129,11 +129,7 @@ fn committed_release_without_ledger_outcome_is_reconciled_on_restart() {
         .initialize_empty(&database)
         .expect("empty Ledger");
     let ledger = maintenance
-        .open_writer(
-            Arc::clone(&database),
-            "legacy-release-spec".to_owned(),
-            |_| None,
-        )
+        .open_writer(Arc::clone(&database), "legacy-release-spec".to_owned())
         .expect("empty Ledger writer");
     ledger.close().expect("close empty Ledger writer");
     let state = RuntimeStateStore::from_database(database).expect("runtime state");

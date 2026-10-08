@@ -2574,7 +2574,7 @@ mod tests {
             .initialize_empty(&database)
             .expect("ready ledger");
         let ledger = maintenance
-            .open_writer(database, "neutral-summary-writer".into(), |_| None)
+            .open_writer(database, "neutral-summary-writer".into())
             .expect("ledger");
         let ids = IdentifierIssuer::new().expect("ids");
         let persist = |data: PerformanceSummaryEventData| {

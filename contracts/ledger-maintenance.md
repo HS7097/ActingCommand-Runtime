@@ -5,7 +5,7 @@ acquires OwnerGuard, validates State/ArtifactStore, classifies the formal Ledger
 by its keyed metadata row alone without reading history, then opens the one
 SQLite writer, which performs the single complete verification. That pass reads
 no further than the authenticated head sequence and must finish within the held
-maintenance operation deadline. Startup then assembles Provider and the
+maintenance operation deadline. It reads no artifact material (Workflow #375 R5a). Startup then assembles Provider and the
 remaining Runtime.
 Existing roots without a formal marker require explicit maintenance. An empty
 root initializes formal schema and metadata atomically. Candidate, partial,
@@ -54,9 +54,9 @@ is compared before and after reads. Mutable writer metadata is frozen in the
 backup; the Segment/repair source identity binds the immutable import material.
 
 The importer preserves each original canonical event, sequence, identity,
-timestamp, origin, links and artifacts. ArtifactStore verifies bytes outside the
-database mutex. Only those frozen proofs are used while comparing the import
-transaction's reconstructed facts and common indexes.
+timestamp, origin, links and artifacts. It reads no artifact material (Workflow #375
+R5a): a reference without an eviction proof is imported `Unrecorded`, and the import
+transaction's reconstructed facts and common indexes are compared without it.
 
 One Immediate transaction creates the Ledger schema, inserts all original
 records and indexes, appends the typed `LedgerRecovered / storage_cutover`
@@ -91,13 +91,19 @@ deadline. The formal maintenance receipt and backup metadata retain this warning
 a later backup failure also carries it in the formal error receipt. No diagnostic
 writer is started for maintenance.
 
-Restore first verifies the current source lineage, complete backup, State rows,
-Ledger prefix and external artifact bytes. A pre-cutover restore requires the
-current head to equal the cutover position and the State baseline to be unchanged.
-New facts or unprovable current state refuse restoration. Copies use create-new
-files, retain exact artifact references, and verify the restored State, Ledger
-head and artifacts before returning. The source is retained and the result is
-not activated. Failed destination material is retained for explicit disposition.
+Restore first verifies the current source lineage, complete backup, State rows and
+Ledger prefix; a backup that records evictions restores too (Workflow #375 R5a). A
+pre-cutover restore requires the current head to equal the cutover position and the
+State baseline to be unchanged. New facts or unprovable current state refuse
+restoration. Each distinct referenced artifact without a recorded `Deleted` or
+`RecoveryAbsent` eviction whose file exists in the artifact root is copied as a
+verified create-new copy with its exact reference, within the operation limits;
+evicted and absent artifacts are skipped. Restore verifies the restored State and
+Ledger head before returning, and actingd then prints one stderr line,
+`INFO actingd: ledger_maintenance restore artifacts_copied=<n> artifacts_evicted=<n>
+artifacts_absent=<n>`; the receipt is unchanged. The source is retained and the
+result is not activated. Failed destination material is retained for explicit
+disposition.
 
 Defaults are 512 MiB total file material, 16,384 entries, 200,000 events, 120
 seconds and 128 SQLite pages per step. Typed limits must be positive and cannot
@@ -115,23 +121,26 @@ return `ledger_read_budget_exceeded` for a root beyond the default limits; such 
 root needs `RuntimeHost::maintain_ledger` with explicit limits (at most 1,000,000
 events, 4 GiB, 600 seconds). The CLI takes no limit options.
 
-Complete material for a formal `verify` is every artifact `Available`, or
-`Evicted` with its authenticated `Deleted` or `RecoveryAbsent` proof. A pending
-or failed eviction, and missing or unverifiable material, refuse with
-`maintenance_artifact_material_unavailable` (a failed eviction keeps its fatal
-`artifact_eviction_failed`); a Segment root still refuses any eviction. Within
-one opening (startup, `unlock-owner`, `verify`, `status`, the binding read), each
-distinct artifact reference without an eviction proof is verified exactly once,
-before the records are restored in sequence order; with a shared verifier this
-runs on at most eight worker threads, each checking the deadline before every
-file. The first failing reference in sequence order keeps its
-`artifact_store_verification_failed`, and a deadline miss keeps
-`ledger_read_budget_exceeded`. After the writer open, startup prints one stdout
-line, also before a failure is returned and never as a Ledger event:
-`actingd ledger_open events=<n> artifacts=<distinct verified> artifact_bytes=<b>
+Workflow #375 R5a: no opening of a formal root reads artifact material. Startup,
+`unlock-owner` and every maintenance pass (`verify`, `status`, `backup` with its
+binding read, `dry-run`, `import`, `restore`'s checks) never open, hash or stat a
+referenced file. A reference with an authenticated eviction proof takes the proof's
+state (`Evicted`, `PendingEviction`, or `FailedEviction` for a `Failed` outcome, which
+no longer stops an opening); any other reference is `Unrecorded`, so a missing or
+damaged artifact never stops startup or `verify`. Row authentication, the hash chain,
+the keyed head and the retention replay are unchanged. A formal `verify` refuses only
+the retention state the ledger itself leaves unsettled: an eviction intent without its
+outcome, which only the next actingd start completes. It fails with
+`maintenance_artifact_material_unavailable` and the cause
+`pending_evictions=<n>` (start actingd once so that it finishes the eviction, then run
+`verify` again); `Unrecorded`, `Evicted` and
+`FailedEviction` pass. A Segment root still refuses any eviction. After the writer
+open, startup prints one stdout line, also before a failure is returned and never as
+a Ledger event: `actingd ledger_open events=<n> artifacts=<n> artifact_bytes=<b>
 workers=<w> sql_read_ms=<ms> verify_ms=<ms> material_ms=<ms> restore_ms=<ms>
-deadline_ms=<ms>`. A failed formal `verify` appends the same fields to its
-failure cause.
+deadline_ms=<ms>`. Material is never read, so `artifacts`, `artifact_bytes`,
+`workers` and `material_ms` are always 0; they stay so that the line keeps its
+format. A failed formal `verify` appends the same fields to its failure cause.
 
 Later startup steps keep
 their own bounds: instance-fact and agent-dispatch recovery each query the full
@@ -155,13 +164,16 @@ byte snapshots, repair counts and tail observations are explicitly not applicabl
 On an SQLite root, forensics open/events/chain/tail/repairs/performance open the
 ledger with the same record authentication but read no artifact material; open
 reports `artifact_material_complete` as `null`. Stability, task-evidence and export
-verify each artifact separately. Material failures enter `failures` and a gap
-without de-duplication: one damaged artifact appears once per referencing event at
-opening, without a source sequence, and again with its source sequence when a
-report projects it. Export fails with an error naming each failed artifact and
-withholds all content. One damaged artifact no longer fails the whole snapshot.
-Failed evictions and artifact identity conflicts remain fatal. Segment roots keep
-their existing behavior.
+verify each artifact separately. An artifact whose file does not exist (Workflow #375
+R5b: a frame deleted by hand) is listed once in `material_missing` (export: a
+`material_missing:` line) and is neither a failure nor a gap; the reports and the
+export complete, and no later projection reads it. Other material failures enter
+`failures` and a gap without de-duplication: one damaged artifact appears once per
+referencing event at opening, without a source sequence, and again with its source
+sequence when a report projects it. Export fails with an error naming each failed
+artifact and withholds all content. One damaged artifact no longer fails the whole
+snapshot. Artifact identity conflicts remain fatal; a failed eviction is reported as
+`eviction_failed`. Segment roots keep their existing behavior.
 
 Segment reports retain their original physical meaning. Saved-artifact OCR holds
 the source writer lock, rejects the target root, requires a closed source whose

@@ -245,7 +245,19 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
-        let mut result = if error.is_fatal() {
+        let fatal = error.is_fatal();
+        Self::artifact_as(error, fatal)
+    }
+
+    /// Workflow #375 R5b: an artifact-store failure of a material read, which leaves the
+    /// Runtime running: a request error with the store's code, operation and native detail,
+    /// whatever the store's own category.
+    pub(crate) fn artifact_read(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
+        Self::artifact_as(error, false)
+    }
+
+    fn artifact_as(error: actingcommand_artifact_store::ArtifactStoreError, fatal: bool) -> Self {
+        let mut result = if fatal {
             Self::fatal(
                 error.code(),
                 error.operation(),
