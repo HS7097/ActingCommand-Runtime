@@ -143,8 +143,9 @@ impl ArtifactEventSink for Sink<'_> {
     }
 }
 
-/// One frame captured with no run and no lease, closed by a later confirmed quiescence of its
-/// instance (the shape of an actingctl readonly observe).
+/// One frame captured with no run and no lease in its own owner epoch, which a quiescence
+/// records before the frame, closed by a later confirmed quiescence of its instance (the shape
+/// of an actingctl readonly observe).
 struct Capture {
     reference: ProjectedArtifactReference,
     material: PathBuf,
@@ -195,6 +196,8 @@ fn capture(ledger: &GlobalLedger, artifacts: &ArtifactStore, bytes: &[u8]) -> Ca
     let ids = IdentifierIssuer::new().expect("issuer");
     let owner = *ids.mint_owner_epoch().expect("owner").transport();
     let instance = ids.mint_instance_id().expect("instance");
+    // The owner epoch is recorded before the frame, so its pin's trigger is in that epoch.
+    quiescence(ledger, &ids, owner, instance);
     let request = ids.mint_request_id().expect("request");
     let correlation = ids.mint_correlation_id().expect("correlation");
     let frame = ids.mint_frame_id().expect("frame");
