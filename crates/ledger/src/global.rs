@@ -15,7 +15,8 @@ mod read_only;
 mod retention;
 pub use retention::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
-    LedgerOpenTiming,
+    FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
+    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, LocalOffsetMs,
 };
 mod sqlite;
 mod storage;

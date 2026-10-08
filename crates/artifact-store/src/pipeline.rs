@@ -814,6 +814,22 @@ impl CapturePipeline {
         &self.frame_store
     }
 
+    /// Workflow #375 R5c: a retained frame's thumbnail, for the host's observe marking.
+    pub fn frame_thumbnail(
+        &self,
+        frame_index: usize,
+    ) -> ArtifactStoreResult<&crate::FrameThumbnail> {
+        self.frame_store
+            .frame_thumbnail(frame_index)
+            .ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "frame_material_unavailable",
+                    "read_frame_thumbnail",
+                    "the frame is not retained",
+                )
+            })
+    }
+
     pub fn frame_context(&self, index: usize) -> Option<&ArtifactWriteContext> {
         self.contexts.get(&index)
     }
@@ -1386,6 +1402,190 @@ mod tests {
                 .event_types
                 .contains(&EventType::ArtifactStoreFailed)
         );
+    }
+
+    /// Workflow #375 R5c: frames recorded, persisted and recognized as a contained task does,
+    /// on a pipeline without memory pressure.
+    struct Marking {
+        _temp: tempfile::TempDir,
+        sink: RecordingSink,
+        pipeline: CapturePipeline,
+        frames: Vec<actingcommand_contract::FrameId>,
+    }
+
+    impl Marking {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let mut sink = RecordingSink::default();
+            let artifact_store =
+                Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+            artifact_store
+                .install_capacity_admission(Arc::new(RecordingSink {
+                    capacity_root: Some(artifact_store.root().to_path_buf()),
+                    ..RecordingSink::default()
+                }))
+                .expect("fixture capacity owner");
+            let pipeline = CapturePipeline::open(
+                artifact_store,
+                temp.path().join("frames"),
+                config(10_000_000),
+                context(1),
+                &mut sink,
+            )
+            .expect("pipeline");
+            Self {
+                _temp: temp,
+                sink,
+                pipeline,
+                frames: Vec::new(),
+            }
+        }
+
+        /// A 16x9 frame whose thumbnail sample `cell` is `value(cell)`.
+        fn capture(
+            &mut self,
+            value: impl Fn(usize) -> u8,
+            label: &str,
+            pinned_reason: Option<PinnedFrameReason>,
+            captured_at_unix_ms: u64,
+        ) {
+            let frame_index = self.frames.len();
+            let mut pixels = Vec::with_capacity(16 * 9 * 3);
+            for cell in 0..16 * 9 {
+                let sample = value(cell);
+                pixels.extend_from_slice(&[sample, sample, sample]);
+            }
+            let mut frame = Frame::from_pixels(
+                16,
+                9,
+                pixels,
+                PixelFormat::Rgb8,
+                CaptureBackendName::AdbScreencap,
+            )
+            .expect("frame");
+            frame.captured_at =
+                std::time::UNIX_EPOCH + std::time::Duration::from_millis(captured_at_unix_ms);
+            let context = context(10 + frame_index as u64);
+            self.frames
+                .push(*context.event_links().frame_id().expect("frame id"));
+            self.pipeline
+                .record_frame(
+                    FrameStoreFrameInput {
+                        frame_index,
+                        file_name: format!("frame-{frame_index}.png"),
+                        label: label.to_string(),
+                        recognition_state: crate::RecognitionState::Pending,
+                        pinned_reason,
+                        frame,
+                    },
+                    context,
+                    &mut self.sink,
+                )
+                .expect("record frame");
+            self.pipeline
+                .persist_frame(frame_index, &mut self.sink)
+                .expect("persist frame");
+        }
+
+        fn recognize(&mut self, frame_index: usize, state: crate::RecognitionState) {
+            self.pipeline
+                .record_recognition(frame_index, state, &mut self.sink)
+                .expect("record recognition");
+        }
+
+        /// `(preserved frame, duration_ms)` of every dedup record, in append order.
+        fn markers(&self) -> Vec<(actingcommand_contract::FrameId, u64)> {
+            self.sink
+                .payloads
+                .iter()
+                .filter_map(|payload| match payload {
+                    actingcommand_contract::EventPayload::Capture(
+                        actingcommand_contract::CapturePayload::DedupWindow(window),
+                    ) => Some((
+                        *window
+                            .preserved_frame_id()
+                            .expect("a marker preserves material"),
+                        window.duration_ms(),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    fn page(page_id: &str) -> crate::RecognitionState {
+        crate::RecognitionState::Matched {
+            page_id: page_id.to_string(),
+        }
+    }
+
+    const MARKING_AT: u64 = 1_752_147_200_000;
+
+    #[test]
+    fn persisted_near_duplicates_are_marked_at_recognition_and_keep_their_material() {
+        // Workflow #375 R5c: two "no page matched" frames above 0.95 are one verdict; each is
+        // marked against its predecessor with the existing record, and nothing is dropped.
+        let mut marking = Marking::new();
+        marking.capture(|_| 100, "initial", None, MARKING_AT);
+        marking.capture(|_| 112, "capture", None, MARKING_AT + 250);
+        marking.capture(|_| 112, "capture", None, MARKING_AT + 250);
+        for frame_index in 0..3 {
+            marking.recognize(frame_index, crate::RecognitionState::CompletedNoMatch);
+        }
+
+        // 1 - 12 * 144 / (144 * 255) = 0.953; the same capture millisecond records 1 ms.
+        assert_eq!(
+            marking.markers(),
+            vec![(marking.frames[1], 250), (marking.frames[2], 1)]
+        );
+        assert!(
+            !marking
+                .sink
+                .event_types
+                .contains(&EventType::CapturePressureChanged)
+        );
+        assert_eq!(marking.pipeline.counts().deduplicated, 0);
+        assert_eq!(marking.pipeline.counts().persisted, 3);
+    }
+
+    #[test]
+    fn marking_needs_more_than_the_threshold_and_one_verdict() {
+        let mut marking = Marking::new();
+        let threshold = |cell: usize| -> u8 { if cell < 108 { 113 } else { 112 } };
+        marking.capture(|_| 100, "capture", None, MARKING_AT);
+        // 108 samples 13 apart and 36 samples 12 apart: exactly 1 - 1836 / (144 * 255) = 0.95.
+        marking.capture(threshold, "capture", None, MARKING_AT + 1);
+        marking.capture(threshold, "capture", None, MARKING_AT + 2);
+        marking.capture(threshold, "capture", None, MARKING_AT + 3);
+        marking.recognize(0, crate::RecognitionState::CompletedNoMatch);
+        marking.recognize(1, crate::RecognitionState::CompletedNoMatch);
+        // Identical frames: no match against a matched page, then two different pages.
+        marking.recognize(2, page("test/a"));
+        marking.recognize(3, page("test/b"));
+
+        assert!(marking.markers().is_empty());
+    }
+
+    #[test]
+    fn key_frames_and_pending_frames_are_never_marked() {
+        let mut marking = Marking::new();
+        marking.capture(|_| 100, "capture", None, MARKING_AT);
+        marking.capture(|_| 100, "after-input", None, MARKING_AT + 1);
+        marking.capture(|_| 100, "initial", None, MARKING_AT + 2);
+        marking.capture(
+            |_| 100,
+            "capture",
+            Some(PinnedFrameReason::Terminal),
+            MARKING_AT + 3,
+        );
+        // Frame 4 is never recognized; it stays Pending and breaks the similar run.
+        marking.capture(|_| 100, "capture", None, MARKING_AT + 4);
+        marking.capture(|_| 100, "capture", None, MARKING_AT + 5);
+        for frame_index in [0, 1, 2, 3, 5] {
+            marking.recognize(frame_index, crate::RecognitionState::CompletedNoMatch);
+        }
+
+        assert!(marking.markers().is_empty());
     }
 
     fn config(max_mem_bytes: u64) -> CapturePipelineConfig {

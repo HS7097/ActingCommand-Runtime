@@ -37,6 +37,30 @@ pub fn priority_offset_fact_key(task_id: &str) -> String {
     format!("{PRIORITY_OFFSET_KEY_PREFIX}{task_id}{PRIORITY_OFFSET_KEY_SUFFIX}")
 }
 
+/// Workflow #375 R5c: the `source_detector` prefix of a resource reading the Runtime took.
+pub const RESOURCE_READING_DETECTOR_PREFIX: &str = "resource_reading:";
+
+/// Workflow #375 R5c: the `source_snapshot_id` of a resource reading taken on a run's terminal
+/// frame, `run:<run>/frame:<frame>/<reading id>`, where `run` and `frame` are the identifiers'
+/// canonical text. The frame retention view reads it back with
+/// [`parse_resource_reading_snapshot_id`].
+pub fn resource_reading_snapshot_id(run: &str, frame: &str, reading_id: &str) -> String {
+    format!("run:{run}/frame:{frame}/{reading_id}")
+}
+
+/// The run and the frame that a resource reading's `source_snapshot_id` names; `None` for any
+/// text that [`resource_reading_snapshot_id`] does not write.
+pub fn parse_resource_reading_snapshot_id(value: &str) -> Option<(crate::RunId, crate::FrameId)> {
+    let (run, rest) = value.strip_prefix("run:")?.split_once("/frame:")?;
+    let (frame, reading_id) = rest.split_once('/')?;
+    if reading_id.is_empty() {
+        return None;
+    }
+    let run = serde_json::from_value(serde_json::Value::String(run.to_owned())).ok()?;
+    let frame = serde_json::from_value(serde_json::Value::String(frame.to_owned())).ok()?;
+    Some((run, frame))
+}
+
 impl FactRecord {
     /// A manually set priority offset without expiry: the inline integer `offset_milli` under
     /// `session.task.<task_id>.priority_offset`, full confidence, no invalidating events. The
