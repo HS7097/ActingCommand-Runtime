@@ -3725,7 +3725,13 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
     assert_eq!(state.closes.load(Ordering::Acquire), 0);
     drop(client);
-    host.close().expect("close host");
+    let close_started = std::time::Instant::now();
+    let closed = host.close();
+    eprintln!(
+        "FLAKE-METRIC host_close_ms={}",
+        close_started.elapsed().as_millis()
+    );
+    closed.expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
     #[cfg(feature = "test-observation")]
     {
