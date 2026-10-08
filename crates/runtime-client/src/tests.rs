@@ -3700,7 +3700,10 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     let (observation, host_observation) = start_test_observation();
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::for_test_observation());
-    let host = host(&root, Arc::clone(&state), 1_000);
+    // v0.11.4 flaky tests (review M1): the TTL also bounds the lease `host.close()` grants to
+    // itself and then uses (resource_close -> begin_resource_close); about 1.9 s passed between
+    // the two on a loaded runner, so the TTL is 5 s and the wait below still outlasts it.
+    let host = host(&root, Arc::clone(&state), 5_000);
     let client = client(&root);
     let mut proxy = RuntimeInputProxy::connect_with_heartbeat(
         client.clone(),
@@ -3709,7 +3712,8 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     )
     .expect("runtime input proxy");
 
-    thread::sleep(Duration::from_millis(1_300));
+    // Longer than the TTL, so the input after it proves renewal.
+    thread::sleep(Duration::from_millis(5_300));
     let receipt = proxy
         .input(InputAction::Tap { x: 30, y: 40 })
         .expect("input after renewals");
@@ -3870,8 +3874,13 @@ fn broken_ipc_connection_latches_without_reconnect() {
             client.release_lease(&token).expect_err("latched release"),
             error
         );
-        // The timeout is not evidence of non-performance: let the one accepted input finish.
-        thread::sleep(Duration::from_millis(400));
+        // The timeout is not evidence of non-performance: let the one accepted input finish,
+        // waiting for it (bounded) instead of a fixed 400 ms.
+        let waited = Instant::now();
+        while state.inputs.load(Ordering::Acquire) == 0 && waited.elapsed() < Duration::from_secs(5)
+        {
+            thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(state.opens.load(Ordering::Acquire), 1);
         assert_eq!(state.inputs.load(Ordering::Acquire), 1);
         drop(session);

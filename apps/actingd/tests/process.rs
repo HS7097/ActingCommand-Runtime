@@ -758,10 +758,19 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         let child = start_actingd(&config_path);
         let mut child = ChildGuard(child);
         wait_for_runtime_info(&mut child.0, root.path());
-        let client = wait_for_agent_client(&mut child.0, root.path());
+        // v0.11.4 flaky tests (review H1): every client of this test keeps the production I/O
+        // budget, so one slow reply behind the single ledger writer does not latch its
+        // connection; nothing reconnects or abandons a connection.
+        let client = wait_for_agent_client_default_io(&mut child.0, root.path());
         let started = Instant::now();
         let events = loop {
+            let query_started = Instant::now();
             let queried = client.query_events(EventQuery::default(), ProjectionProfile::Forensic);
+            let query_ms = query_started.elapsed().as_millis();
+            if query_ms >= 500 {
+                // Each such reply would have failed the former 500 ms budget.
+                eprintln!("{case}: slow query_events reply: {query_ms} ms");
+            }
             let events = match queried {
                 Ok(events) => events,
                 Err(error) => {
@@ -776,7 +785,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                         );
                     }
                     assert!(
-                        started.elapsed() < Duration::from_secs(5),
+                        started.elapsed() < Duration::from_secs(20),
                         "{case}: query run events failed: {error}"
                     );
                     thread::sleep(Duration::from_millis(20));
@@ -798,7 +807,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                 panic!("{case}: actingd exited before completed run with {status}: {stderr}");
             }
             assert!(
-                started.elapsed() < Duration::from_secs(5),
+                started.elapsed() < Duration::from_secs(20),
                 "{case}: completed policy run timed out"
             );
             thread::sleep(Duration::from_millis(20));
@@ -1179,7 +1188,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             )
             .expect("query fixture captures")
             .len();
-        let device_client = connect(root.path());
+        let device_client = connect_default_io(root.path());
         let denied = device_client
             .observe_readonly(INSTANCE_ALIAS)
             .expect_err("fixture provider must be isolated from normal device operations");
@@ -1203,7 +1212,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         assert!(child.0.try_wait().expect("process state").is_none());
 
         drop(client);
-        let maintenance = connect(root.path());
+        let maintenance = connect_default_io(root.path());
         let started = Instant::now();
         let accepted = loop {
             match maintenance.request_shutdown() {
@@ -2989,6 +2998,17 @@ fn connect(state_root: &Path) -> RuntimeClient {
     .expect("connect runtime")
 }
 
+/// The production I/O budget (5 s, `RuntimeClientConfig` default), as in G-flake4 and the
+/// pagination test: a reply delayed behind the single ledger writer does not latch the client.
+fn connect_default_io(state_root: &Path) -> RuntimeClient {
+    RuntimeClient::connect(RuntimeClientConfig::new(
+        state_root,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("connect runtime")
+}
+
 fn connect_agent(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(
         RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter)
@@ -3011,12 +3031,33 @@ fn wait_for_first_receipt(state_root: &Path) {
 }
 
 fn wait_for_agent_client(child: &mut Child, state_root: &Path) -> RuntimeClient {
+    wait_for_agent_client_with(
+        child,
+        state_root,
+        Some(Duration::from_millis(500)),
+        Duration::from_secs(5),
+    )
+}
+
+/// The same wait with the production I/O budget (see `connect_default_io`).
+fn wait_for_agent_client_default_io(child: &mut Child, state_root: &Path) -> RuntimeClient {
+    wait_for_agent_client_with(child, state_root, None, Duration::from_secs(20))
+}
+
+fn wait_for_agent_client_with(
+    child: &mut Child,
+    state_root: &Path,
+    io_timeout: Option<Duration>,
+    budget: Duration,
+) -> RuntimeClient {
     let started = Instant::now();
     loop {
-        match RuntimeClient::connect(
-            RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter)
-                .with_io_timeout(Duration::from_millis(500)),
-        ) {
+        let config = RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter);
+        let config = match io_timeout {
+            Some(io_timeout) => config.with_io_timeout(io_timeout),
+            None => config,
+        };
+        match RuntimeClient::connect(config) {
             Ok(client) => return client,
             Err(error) => {
                 if let Some(status) = child.try_wait().expect("process state") {
@@ -3028,7 +3069,7 @@ fn wait_for_agent_client(child: &mut Child, state_root: &Path) -> RuntimeClient 
                     panic!("actingd exited before policy readiness with {status}: {stderr}");
                 }
                 assert!(
-                    started.elapsed() < Duration::from_secs(5),
+                    started.elapsed() < budget,
                     "actingd policy connection timed out after {error}"
                 );
                 thread::sleep(Duration::from_millis(20));
