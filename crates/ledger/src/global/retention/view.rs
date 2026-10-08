@@ -809,8 +809,7 @@ fn neighbour<'f>(
 fn in_window(point: &ResolvedPoint, frame: &ViewFrame) -> bool {
     point.named.contains(&frame.reference.artifact_id)
         || (frame.instance == point.instance
-            && frame.at <= point.at
-            && frame.at >= point.at.saturating_sub(ERROR_WINDOW_MS))
+            && (point.at.saturating_sub(ERROR_WINDOW_MS)..=point.at).contains(&frame.at))
 }
 
 /// `<instance>-<sequence>-<code>`.
