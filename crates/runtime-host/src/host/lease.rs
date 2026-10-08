@@ -2053,8 +2053,24 @@ impl HostShared {
                     None,
                     gate,
                     self.monotonic_ms()?,
-                )
-                .map_err(|error| RuntimeHostError::scheduler("prepare_cleanup_transfer", &error))?;
+                );
+            let transfer = match transfer {
+                Ok(transfer) => transfer,
+                // A backend-failure cleanup may meet a lease that already ended (it lapsed, or an
+                // earlier cleanup released it): there is no key to hand on, and the release
+                // below records the lease as already removed, as before #369.
+                Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch)
+                    if reason == LeaseReleaseReason::BackendFailure =>
+                {
+                    TransferPreparation::NoCandidate
+                }
+                Err(error) => {
+                    return Err(RuntimeHostError::scheduler(
+                        "prepare_cleanup_transfer",
+                        &error,
+                    ));
+                }
+            };
             match transfer {
                 TransferPreparation::Ready(prepared) => {
                     if prepared.to_kind().skips_business_capacity()
