@@ -3076,6 +3076,17 @@ pub(crate) struct HostClaimForTest {
 }
 
 #[cfg(test)]
+impl std::fmt::Debug for HostClaimForTest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostClaimForTest")
+            .field("granted", &self.granted.is_some())
+            .field("queued", &self.queued.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
 impl HostClaimForTest {
     /// The token a queued claim was granted, waiting at most `timeout`.
     pub(crate) fn wait_for_grant(
