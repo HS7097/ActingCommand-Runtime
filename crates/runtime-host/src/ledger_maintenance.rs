@@ -192,6 +192,13 @@ fn run_locked(
     let state = RuntimeStateStore::from_database(Arc::clone(&database))?;
     let state_sha256 = state.maintenance_digest(request.limits, deadline)?;
     let artifacts = ArtifactStore::open(root)?;
+    // Workflow #375 H2: a formal root is classified by its keyed meta row, as startup does,
+    // and verified by one complete read bounded by its authenticated head and the deadline.
+    if request.operation == LedgerMaintenanceOperation::Verify
+        && maintenance.formal_ready(&database)?
+    {
+        return verify_formal_root(maintenance, &database, &artifacts, request.limits);
+    }
     // Marker lookup precedes source import and any backup decision.
     let ledger = maintenance.status(&database, |reference| {
         artifacts.verify_recovery_reference(reference).ok()
@@ -217,22 +224,7 @@ fn run_locked(
                 let snapshot = maintenance.read_formal(&database, |reference| {
                     artifacts.verify_recovery_reference(reference).ok()
                 })?;
-                if snapshot
-                    .events()
-                    .iter()
-                    .flat_map(actingcommand_ledger::PersistedEvent::artifacts)
-                    .any(|artifact| {
-                        !matches!(
-                            artifact.availability(),
-                            actingcommand_ledger::ArtifactAvailability::Available(_)
-                        )
-                    })
-                {
-                    return Err(failure(
-                        "maintenance_artifact_material_unavailable",
-                        "verify_complete_artifact_material",
-                    ));
-                }
+                require_complete_material(snapshot.events())?;
             }
             Ok(receipt(
                 if ledger == LedgerStorageStatus::Missing {
@@ -357,6 +349,61 @@ fn run_locked(
             deadline,
         ),
     }
+}
+
+/// Workflow #375 H2: `verify` of a formal root in one pass. A failure's cause also names the
+/// read's phase timings (`ledger_open …`, as the startup line prints them).
+fn verify_formal_root(
+    maintenance: &LedgerMaintenance,
+    database: &RuntimeDatabase,
+    artifacts: &ArtifactStore,
+    limits: MaintenanceLimits,
+) -> Result<LedgerMaintenanceReceipt> {
+    let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
+    let verified = maintenance
+        .verify_formal(
+            database,
+            |reference| artifacts.verify_recovery_reference(reference).ok(),
+            &mut timing,
+        )
+        .map_err(LedgerMaintenanceFailure::from)
+        .and_then(|(events, ledger)| {
+            require_complete_material(&events)?;
+            Ok(ledger)
+        });
+    match verified {
+        Ok(ledger) => Ok(receipt("verified-sqlite", ledger, None)),
+        Err(mut error) => {
+            error.cause.push_str(&format!(
+                "; ledger_open {timing} deadline_ms={}",
+                limits.timeout_seconds.saturating_mul(1000)
+            ));
+            Err(error)
+        }
+    }
+}
+
+/// Workflow #375 H2: complete material is every artifact `Available`, or `Evicted` with its
+/// authenticated `Deleted` / `RecoveryAbsent` proof. A pending or failed eviction, and
+/// material that is missing or does not verify, still refuse.
+fn require_complete_material(events: &[actingcommand_ledger::PersistedEvent]) -> Result<()> {
+    if events
+        .iter()
+        .flat_map(actingcommand_ledger::PersistedEvent::artifacts)
+        .any(|artifact| {
+            !matches!(
+                artifact.availability(),
+                actingcommand_ledger::ArtifactAvailability::Available(_)
+                    | actingcommand_ledger::ArtifactAvailability::Evicted(_)
+            )
+        })
+    {
+        return Err(failure(
+            "maintenance_artifact_material_unavailable",
+            "verify_complete_artifact_material",
+        ));
+    }
+    Ok(())
 }
 
 fn binding(

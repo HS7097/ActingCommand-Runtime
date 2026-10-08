@@ -1003,18 +1003,27 @@ impl RuntimeHost {
                 RuntimeErrorCode::LedgerFailure,
             ));
         }
-        let ledger = maintenance
-            .open_writer(Arc::clone(&database), ledger_owner, |reference| {
-                artifacts.verify_recovery_reference(reference).ok()
-            })
-            .map_err(|error| {
-                RuntimeHostError::fatal(
-                    error.code(),
-                    error.operation(),
-                    RuntimeErrorCode::LedgerFailure,
-                )
-                .with_native_detail(format!("{error:?}"))
-            })?;
+        // Workflow #375 H1: one stdout line with the open's phases, also before a failure is
+        // returned (never a Ledger event). Each distinct artifact is verified once, in parallel.
+        let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
+        let opened = maintenance.open_writer_timed(
+            Arc::clone(&database),
+            ledger_owner,
+            |reference| artifacts.verify_recovery_reference(reference).ok(),
+            &mut timing,
+        );
+        println!(
+            "actingd ledger_open {timing} deadline_ms={}",
+            limits.timeout_seconds.saturating_mul(1000)
+        );
+        let ledger = opened.map_err(|error| {
+            RuntimeHostError::fatal(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::LedgerFailure,
+            )
+            .with_native_detail(format!("{error:?}"))
+        })?;
         let recovery = limits
             .deadline()
             .map_err(|error| {
