@@ -414,7 +414,10 @@ so a later read checks the bytes it reads. Only the verifying openings still rea
 material: `open_sqlite_candidate_with_artifact_verifier` and `open_read_only` with a
 verifier (Segment evidence). For them, missing verification or a mismatched/missing
 artifact fails the opening, and no reference is accepted solely because its metadata
-is self-consistent. File paths, secret fields and forged metadata retain their existing
+is self-consistent. `open_evidence` with `sqlite_material_per_artifact` (the forensic
+export, stability and task-evidence reads, signature matching, `actinglab resource
+restore`) also verifies each unevicted artifact, one at a time: a verifier `None`
+leaves only that artifact `Unrecorded`, and the caller reports it. File paths, secret fields and forged metadata retain their existing
 non-disclosure rules. ArtifactStore continues to own files; the ledger owns
 references and verified event facts.
 
@@ -604,6 +607,76 @@ connects #287 disk-capacity observations and #97-P7 `enforce_retention`; memory
 watermarks alone do not authorize disk deletion. The S4 package must freeze the
 run-window bound, pin/retention evidence and I/O failure handling before enabling
 these actions. No S0 file retention or verifier behavior changes.
+
+### Frame classes (Workflow #375 R5c)
+
+The frame retention view classes every frame for the cleaner and the listing. It is
+read-only and writes nothing: it is derived from the committed prefix and evaluated at
+the ledger head and the caller's clock (`GlobalLedgerEvidence::frame_retention_view`
+for a reader; the writer's own retention index for the cleaner). It never consults the
+unlinked-warning latch, the Warning ring or the K/T policy, and it adds no persisted
+structure.
+
+- **Frame.** A `capture.frame` artifact with its `PinRecorded` identity (instance,
+  request, correlation, run, lease) and no eviction proof. Its time is the reference's
+  `created_at_unix_ms`, the capture time.
+- **Near-duplicate markers** are the existing `capture.dedup_window` records with a
+  `preserved_frame_id` (material preserved). The frame store marks a persisted frame
+  when its recognition is recorded, against its predecessor and against an already
+  recognized successor: the same matched page, or "no page matched" on both, and a
+  16x9 thumbnail similarity above 0.95 (not configurable). It never marks a frame
+  labelled `initial` or `after-input`, a frame pinned at capture, a `Failed` verdict or
+  a frame still `Pending`, and it marks a frame at most once, whichever of always-on
+  marking and Tier1Dedup runs first. The host marks an observe capture against the
+  previous observe capture of the same instance and origin (a `Lab` or an `Explicit`
+  retention pin), captured less than 50 s earlier, in memory per process. A marker
+  links the representative (the predecessor) and preserves the marked frame. A frame
+  is **interior** when it is marked and another marker links it as the representative.
+- **Error points.** A non-retention, non-`perf.*` event on a known instance (its own
+  link, or its run's instance) that is a `TerminalCommitted` with outcome `Failure` at
+  any severity, a run-linked event at Warning or higher, or an instance-linked event
+  without a run at Error or higher. Its t is its ledger timestamp, except that a point
+  on a run with no terminal in its own owner epoch, appended after that epoch ended, is
+  dated at the run's last frame. A run's owner epoch ends at the first
+  `runtime.started` or `runtime.takeover` after the run's first event. A run with frames
+  and no terminal in its own epoch also gets an **epoch-end point**: its sequence is
+  that start event, its t the run's last frame time.
+- **Error window.** The frames of the point's instance captured in `[t - 30 s, t]`
+  (`ERROR_WINDOW_MS`), and the frames the point's event names.
+- **Settled.** The frame's entry is closed, the frame is at least 60 s old, and no run
+  on its instance whose first frame is at most 30 s after it is still without a
+  terminal while its epoch goes on. A run closes by its terminal, its capture summary
+  and a later `Performed` release of its lease (its own, or a run-less one), or by the
+  end of its owner epoch; a run-less frame closes when its capture completes. The entry
+  time is the terminal's timestamp, the ending start event's timestamp when that comes
+  first, or a run-less frame's capture time. An unsettled frame is `running`.
+- **Exempt** (kept even when interior): a capture-summary pin other than
+  `recognition_evidence`; a frame an `input.intent` names as its before frame; an
+  observe frame (one no capture summary names) whose capture carries a lease, that is,
+  Lab operation evidence; a frame a `fact.published` names (as an artifact, or by the
+  run and frame of a resource reading's snapshot id); a frame an error point names.
+  The retention pins `Explicit` and `Lab` exempt nothing. A run closed by the end of its
+  epoch without a capture summary has no duplicates, and no window drops its frames.
+- **Classes**, in order of precedence (switches from `actingd.config.json`, revision 4):
+
+  | Class | Test | Due |
+  | --- | --- | --- |
+  | Lab | an unreleased Lab pin or the index's Lab protection; with `frame_retention_dedup_lab` on, an interior, non-exempt Lab frame falls through | moved to its Lab folder at settle; deleted by people |
+  | error | kept by at least one window; with `frame_retention_dedup_error` on (the default), a window drops an interior, non-exempt frame whose predecessor and successor are both in it | moved to its error folder at settle; deleted by people |
+  | resource | a frame a `fact.published` with a `resource_reading:` detector names, whose snapshot id names the frame's run | 7 days after the entry time |
+  | duplicate | interior and not exempt | at settle |
+  | default | everything else | 1 day after the entry time |
+
+- **Kept folder** (relative to `<state root>\kept`): `<YYYY-MM-DD>\<leaf>\<HHmmss-fff>_<object
+  file name>`, in the machine's local time. An error frame belongs to the
+  lowest-sequence point whose window contains it; its leaf is
+  `<instance alias>-<sequence>-<code>`, dated at that point's t, where the alias is the
+  one bound at the point (for an epoch-end point, at the run's last frame) and the code
+  is the point's own `failure_code`, else its own `code`, else the failure code of its
+  run's failure terminal when that terminal precedes it, else its event type with `.` as
+  `_` (an epoch-end point: `runtime_takeover` or `runtime_started`); characters outside
+  `[A-Za-z0-9_-]` become `_`, and the code keeps at most 64 of them. A Lab frame's leaf
+  is `lab-<instance alias>`, dated at its capture.
 
 ## S1–S5 ownership and acceptance map
 

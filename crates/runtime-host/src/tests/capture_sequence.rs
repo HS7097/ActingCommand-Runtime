@@ -84,14 +84,28 @@ fn bounded_capture_sequence_returns_unique_verified_observations_without_input()
                 EventType::ArtifactCreated,
                 EventType::ArtifactVerified,
                 EventType::ArtifactPinRecorded,
+                // Workflow #375 R5c: the marker of an identical observe frame, linked to the
+                // previous frame of this request.
+                EventType::CaptureDedupWindow,
                 EventType::CaptureCompleted,
                 EventType::RecognitionCompleted,
             ]
             .into_iter()
             .cycle()
-            .take(16),
+            .take(18),
         )
         .collect::<Vec<_>>()
+    );
+    // Workflow #375 R5c: the first frame after the start is not marked; each later identical
+    // frame is marked against its predecessor, so the middle frame is interior.
+    let frames = sequence
+        .observations()
+        .iter()
+        .map(|observation| *observation.artifact().frame_id().expect("frame id"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observe_markers(&mut client, correlation_id),
+        vec![(frames[0], frames[1]), (frames[1], frames[2])]
     );
     assert_eq!(state.capture_open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.capture_count.load(Ordering::Acquire), 3);
@@ -100,6 +114,106 @@ fn bounded_capture_sequence_returns_unique_verified_observations_without_input()
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+}
+
+/// Workflow #375 R5c: `(representative, preserved)` frames of every observe marker linked to
+/// the correlation, in ledger order.
+fn observe_markers(
+    client: &mut TestClient,
+    correlation_id: actingcommand_contract::CorrelationId,
+) -> Vec<(
+    actingcommand_contract::FrameId,
+    actingcommand_contract::FrameId,
+)> {
+    projected_events(
+        client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .filter(|event| event.event_type == EventType::CaptureDedupWindow)
+    .map(|event| {
+        let ProjectionPayload::Full(payload) = &event.payload else {
+            panic!("expected a forensic marker payload")
+        };
+        let EventPayload::Capture(actingcommand_contract::CapturePayload::DedupWindow(window)) =
+            payload.as_ref()
+        else {
+            panic!("expected a dedup window payload")
+        };
+        (
+            *event.links.frame_id().expect("representative frame"),
+            *window.preserved_frame_id().expect("preserved frame"),
+        )
+    })
+    .collect()
+}
+
+#[test]
+fn observe_chains_restart_with_the_process_and_prior_epoch_closes_hold() {
+    // Workflow #375 R5c: a marker stays in the owner epoch of its frames. After a restart the
+    // first observe capture on the instance is not marked, and the start's prior-epoch
+    // reconciliation accepts the earlier scope that gained a marker.
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            runtime_instance_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let first = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::CaptureSequence {
+            instance_alias: "node.a".to_string(),
+            spec: CaptureSequenceSpec::new(2, 0).expect("sequence spec"),
+        },
+    );
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert_eq!(observe_markers(&mut client, first).len(), 1);
+    drop(client);
+    host.close().expect("close host");
+
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            runtime_instance_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("restarted runtime host");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let second = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::ObserveReadonly {
+            instance_alias: "node.a".to_string(),
+        },
+    );
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert!(observe_markers(&mut client, second).is_empty());
+    assert_eq!(observe_markers(&mut client, first).len(), 1);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close restarted host");
 }
 
 #[test]

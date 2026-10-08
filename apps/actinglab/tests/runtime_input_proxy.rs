@@ -221,6 +221,17 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
             artifacts,
         };
         verify_lab_operation_evidence(&evidence).unwrap();
+        // Workflow #375 R5c: the fixture's frames are identical, so the after frame of a tap
+        // without an arrival wait is marked against its before frame on the operation's own
+        // request; the online evidence above still verifies.
+        if input_expected && timeout_ms.is_none() {
+            assert!(
+                evidence
+                    .events
+                    .iter()
+                    .any(|event| event.event_type == EventType::CaptureDedupWindow)
+            );
+        }
         assert_eq!(evidence.operation.record.failure.is_none(), complete);
         assert_eq!(
             evidence.operation.record.after_frame.is_some(),
@@ -479,6 +490,22 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
         EventSource::Lab,
     ))
     .unwrap();
+    // Workflow #375 R5c: the fixture's frames are identical, so each operation's later frames
+    // are marked against its earlier ones; the restore below still restores every step.
+    let first_request = serde_json::from_value(json!(request_ids[0])).unwrap();
+    assert!(
+        client
+            .query_events(
+                EventQuery {
+                    request_id: Some(first_request),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .unwrap()
+            .iter()
+            .any(|event| event.event_type == EventType::CaptureDedupWindow)
+    );
     let session = client.begin_debug_session().unwrap();
     let published_source = open_published_package(&original).unwrap();
     let incomplete = session

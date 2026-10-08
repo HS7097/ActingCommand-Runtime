@@ -124,6 +124,19 @@ Confirmed close, summary/settlement, material binding and permanent evidence
 protections still apply. GlobalLedger seals the effective K/T and original
 terminal with the chosen eligibility basis in the original eviction intent.
 
+`frame_retention_dedup_error` (boolean, default `true`) and
+`frame_retention_dedup_lab` (boolean, default `false`) are the frame classes'
+two dedup switches (Workflow #375 R5c, `contracts/ledger-store.md`, "Frame
+classes"). Ordinary frames are always deduplicated and have no switch. With
+`frame_retention_dedup_error` on, each 30 s error window drops its interior
+near-duplicates; with `frame_retention_dedup_lab` on, Lab output drops its
+interior near-duplicates, except Lab operation evidence. A change applies only
+to frames not yet moved into a kept folder. Omission and explicit values keep
+their `default` or `explicit` sources in the manifest. They are actingd-config
+revision 4 (`contracts/component-interfaces.md`): a Runtime up to v0.11.4
+refuses a file that names either key, and a file that names neither keeps its
+revision.
+
 - `config_path` is the path as given; `state_root` is the configured value,
   neither resolved nor inspected.
 - `bind_port` `0` means the OS chooses the listening port.
@@ -200,7 +213,8 @@ terminal with the chosen eligibility basis in the original eviction intent.
   - `parameters` (`key`, `value`, `source`): the effective values of
     `bind_host`, `bind_port`, `device_diagnostic_mode`,
     `frame_retention_enabled`, `frame_retention_failed_run_successes`,
-    `frame_retention_failed_run_days`, `secret_fingerprint_salt_bytes` (the byte
+    `frame_retention_failed_run_days`, `frame_retention_dedup_error`,
+    `frame_retention_dedup_lab`, `secret_fingerprint_salt_bytes` (the byte
     length only; the salt itself is never printed), `allow_env_overrides`
     (boolean, default `false`), `governance.allowed_clients` (string: the
     effective allow-list joined with `,`, which always includes

@@ -2,6 +2,55 @@
 
 use super::*;
 
+/// Workflow #375 R5c: an observe frame is compared only with the previous observe frame of
+/// its instance and origin, and only when that one was captured less than 50 s earlier, so
+/// every marker that links a frame exists before the frame settles (60 s).
+const OBSERVE_CHAIN_BOUND_MS: u64 = 50_000;
+
+/// Workflow #375 R5c: the latest persisted observe frame per instance and origin (whether the
+/// frame's retention pin reason is `Lab`), in memory for the life of the process; the first
+/// observe capture after a start is never marked.
+#[derive(Default)]
+pub(super) struct ObserveMarks {
+    latest: BTreeMap<(InstanceId, bool), ObserveMark>,
+}
+
+/// One persisted observe frame: its capture links, thumbnail and capture time.
+struct ObserveMark {
+    links: EventLinksDraft,
+    thumbnail: actingcommand_artifact_store::FrameThumbnail,
+    captured_at_unix_ms: u64,
+}
+
+/// The marker a new observe frame gets: the representative's links and the gap.
+struct ObserveMarker {
+    representative: EventLinksDraft,
+    duration_ms: u64,
+}
+
+impl ObserveMarks {
+    fn marker(&self, key: (InstanceId, bool), current: &ObserveMark) -> Option<ObserveMarker> {
+        let previous = self.latest.get(&key)?;
+        let gap = current
+            .captured_at_unix_ms
+            .checked_sub(previous.captured_at_unix_ms)?;
+        (gap < OBSERVE_CHAIN_BOUND_MS
+            && actingcommand_artifact_store::thumb_similarity(
+                &previous.thumbnail,
+                &current.thumbnail,
+            ) > actingcommand_artifact_store::DEFAULT_SIMILARITY_THRESHOLD)
+            .then(|| ObserveMarker {
+                representative: previous.links.clone(),
+                // The sanitizer refuses a zero duration.
+                duration_ms: gap.max(1),
+            })
+    }
+
+    fn record(&mut self, key: (InstanceId, bool), current: ObserveMark) {
+        self.latest.insert(key, current);
+    }
+}
+
 pub(super) struct CompletedReadonlyObservation {
     pub(super) observation: ReadonlyObservation,
     pub(super) terminal: PersistedEvent,
@@ -413,6 +462,19 @@ impl HostShared {
                 Ok(reference)
             })
             .map_err(|error| self.readonly_frame_admission_failure(error, links.clone()))??;
+        let thumbnail = pipeline
+            .frame_thumbnail(0)
+            .cloned()
+            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+        self.mark_observe_duplicate(
+            request,
+            &links,
+            ObserveMark {
+                links: links.clone(),
+                thumbnail,
+                captured_at_unix_ms: reference.created_at_unix_ms(),
+            },
+        )?;
         let observation = ReadonlyObservation::new(
             frame_width,
             frame_height,
@@ -476,6 +538,45 @@ impl HostShared {
         })
     }
 
+    /// Workflow #375 R5c: after an observe frame is persisted, under the instance's admission
+    /// lock (so the host's order is the ledger's), compares it with the previous observe frame
+    /// of its instance and origin. A near-duplicate captured less than 50 s after it gets one
+    /// material-preserving `capture.dedup_window`, linked like every marker to the
+    /// representative (the previous frame) and preserving the new frame.
+    fn mark_observe_duplicate(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        links: &EventLinksDraft,
+        current: ObserveMark,
+    ) -> Result<(), RequestFailure> {
+        // Observe links always name the instance; a frame without one has no chain.
+        let Some(instance_id) = links.instance_id().copied() else {
+            return Ok(());
+        };
+        let key = (
+            instance_id,
+            frame_retention::capture_pin_reason(request)
+                == actingcommand_contract::ArtifactPinReason::Lab,
+        );
+        let mut marks = lock(&self.observe_marks, "lock_observe_marks")?;
+        if let Some(marker) = marks.marker(key, &current) {
+            self.append_event(
+                EventSeverity::Info,
+                EventSource::System,
+                OriginModule::CapturePipeline,
+                EventActor::System,
+                marker.representative,
+                CapturePayloadDraft::dedup_window_preserving_material(
+                    links,
+                    marker.duration_ms,
+                    AuditInput::new(),
+                ),
+            )?;
+        }
+        marks.record(key, current);
+        Ok(())
+    }
+
     fn issue_readonly_capability(
         &self,
         instance_id: InstanceId,
@@ -514,5 +615,54 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod observe_mark_tests {
+    use super::*;
+
+    fn mark(captured_at_unix_ms: u64, shade: u8) -> ObserveMark {
+        let frame = actingcommand_device::Frame::from_pixels(
+            2,
+            1,
+            vec![shade; 6],
+            actingcommand_device::PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::AdbScreencap,
+        )
+        .expect("frame");
+        ObserveMark {
+            links: EventLinksDraft::default(),
+            thumbnail: actingcommand_artifact_store::FrameThumbnail::of_frame(&frame),
+            captured_at_unix_ms,
+        }
+    }
+
+    #[test]
+    fn observe_frames_chain_per_instance_and_origin_within_50_seconds() {
+        let instance = *actingcommand_contract::IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance")
+            .transport();
+        let explicit = (instance, false);
+        let lab = (instance, true);
+        let mut marks = ObserveMarks::default();
+        // The first observe capture after a start has no predecessor.
+        assert!(marks.marker(explicit, &mark(1_000, 10)).is_none());
+        marks.record(explicit, mark(1_000, 10));
+        // A Lab capture never chains with an actingctl capture.
+        assert!(marks.marker(lab, &mark(2_000, 10)).is_none());
+        marks.record(lab, mark(2_000, 10));
+        // Identical and less than 50 s later: marked against the previous frame of its origin.
+        assert_eq!(
+            marks
+                .marker(explicit, &mark(50_999, 10))
+                .map(|marker| marker.duration_ms),
+            Some(49_999)
+        );
+        // 50 s or more later starts a new chain; so does a frame that is not similar.
+        assert!(marks.marker(explicit, &mark(51_000, 10)).is_none());
+        assert!(marks.marker(explicit, &mark(2_000, 200)).is_none());
     }
 }
