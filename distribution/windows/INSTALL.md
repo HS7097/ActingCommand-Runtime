@@ -167,7 +167,9 @@ The JSON action is `begin_drain` (transition_id and optional timeout_ms), `query
 closes new root admission while admitted calls, leases, queued work and their
 cleanup finish. Wait for `drained`, then submit that ticket's `commit_shutdown`;
 `--wait 60` on this action observes the accepted owner's actual close and process
-exit through the existing shutdown waiter. A completed control receipt describes
+exit through the existing shutdown waiter. The resident daemon's policy monitor
+waits through a drain, resumes after an abort or a drain timeout, and ends with
+the accepted `commit_shutdown` (Workflow #376). A completed control receipt describes
 the action; only `released` describes completed new-owner preparation.
 
 Start the selected daemon in held mode with:
