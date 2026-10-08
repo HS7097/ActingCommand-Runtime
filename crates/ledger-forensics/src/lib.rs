@@ -1952,3 +1952,59 @@ fn serialization_error(error: serde_json::Error) -> ForensicError {
         error.to_string(),
     )
 }
+
+/// One-off (to be reverted): Workflow #375 R5c evidence. The frame retention view of a state
+/// root at `now_unix_ms`, in JST, with the default switches, as one JSON document.
+pub fn r5c_frames_debug(state_root: &Path, now_unix_ms: u64) -> Result<String, String> {
+    fn jst(_: u64) -> i64 {
+        9 * 3_600_000
+    }
+    let evidence = actingcommand_ledger::GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(state_root)
+            .sqlite_material_not_read(),
+        |_| None,
+    )
+    .map_err(|error| error.to_string())?;
+    let view = evidence
+        .frame_retention_view(
+            now_unix_ms,
+            actingcommand_ledger::FrameRetentionSwitches::default(),
+            jst,
+        )
+        .map_err(|error| error.to_string())?;
+    let frames = view
+        .frames
+        .iter()
+        .map(|frame| {
+            json!({
+                "artifact_id": frame.reference.artifact_id,
+                "class": format!("{:?}", frame.class),
+                "entry": frame.entry_unix_ms,
+                "due": frame.due_unix_ms,
+                "folder": frame.folder.as_ref().map(|folder| format!("{}/{}/{}", folder.date, folder.leaf, folder.file_name)),
+                "windows": frame.windows,
+            })
+        })
+        .collect::<Vec<_>>();
+    let points = view
+        .error_points
+        .iter()
+        .map(|point| {
+            json!({
+                "sequence": point.sequence,
+                "event_type": point.event_type,
+                "epoch_end": point.epoch_end,
+                "at": point.at_unix_ms,
+                "leaf": point.leaf,
+                "date": point.date,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&json!({
+        "through_sequence": view.through_sequence,
+        "evaluated_at_unix_ms": view.evaluated_at_unix_ms,
+        "frames": frames,
+        "error_points": points,
+    }))
+    .map_err(|error| error.to_string())
+}
