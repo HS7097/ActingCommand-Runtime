@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.95;
+/// The near-duplicate threshold. Workflow #375 R5c: always-on marking compares with this
+/// constant, never with a configured `similarity_threshold`.
+pub const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.95;
 const DEFAULT_TIER1_RATIO: f64 = 0.60;
 const DEFAULT_TIER2_RATIO: f64 = 0.75;
 const DEFAULT_TIER3_RATIO: f64 = 0.90;
@@ -326,6 +328,16 @@ impl RecognitionState {
         )
     }
 
+    /// Workflow #375 R5c: marking also treats "no page matched" as one verdict, so two
+    /// `CompletedNoMatch` frames compare like two frames of the same page.
+    fn can_mark_with(&self, other: &Self) -> bool {
+        self.can_dedupe_with(other)
+            || matches!(
+                (self, other),
+                (Self::CompletedNoMatch, Self::CompletedNoMatch)
+            )
+    }
+
     fn can_spill(&self) -> bool {
         !matches!(self, Self::Pending)
     }
@@ -541,6 +553,15 @@ impl FrameStore {
             .map(|entry| &entry.material)
     }
 
+    /// Workflow #375 R5c: the retained thumbnail of a frame, which the host compares across
+    /// observe captures.
+    pub fn frame_thumbnail(&self, frame_index: usize) -> Option<&FrameThumbnail> {
+        self.entries
+            .iter()
+            .find(|entry| entry.frame_index == frame_index && entry.retained)
+            .map(|entry| &entry.thumb)
+    }
+
     pub(crate) fn persisted_reference(&self, frame_index: usize) -> Option<&ArtifactReference> {
         self.entries
             .iter()
@@ -580,7 +601,60 @@ impl FrameStore {
             || matches!(state, RecognitionState::Failed { .. })
             || !previous_matches;
         entry.recognition_state = state;
+        self.mark_persisted_duplicates(index);
         Ok(())
+    }
+
+    /// Workflow #375 R5c: always on and separate from Tier1Dedup, which stays as it is. The
+    /// frame whose recognition was just recorded is compared with its predecessor, and with
+    /// its successor when that one is already recognized. Each persisted near-duplicate gets
+    /// the material-preserving `capture.dedup_window` that Tier1Dedup appends for a persisted
+    /// frame, chained to its predecessor; nothing is dropped. `similarity_recorded` is shared
+    /// with `dedup_existing`, so a frame gets at most one marker whichever branch runs.
+    fn mark_persisted_duplicates(&mut self, index: usize) {
+        if let Some(previous) = self.entries[..index]
+            .iter()
+            .rposition(|entry| entry.retained)
+        {
+            self.mark_persisted_pair(previous, index);
+        }
+        if let Some(offset) = self.entries[index + 1..]
+            .iter()
+            .position(|entry| entry.retained)
+        {
+            self.mark_persisted_pair(index, index + 1 + offset);
+        }
+    }
+
+    fn mark_persisted_pair(&mut self, representative: usize, duplicate: usize) {
+        let (left, right) = (&self.entries[representative], &self.entries[duplicate]);
+        if !left.retained
+            || !right.retained
+            || !left.artifact_persisted
+            || !right.artifact_persisted
+            || right.similarity_recorded
+            || right.marking_key_frame()
+            || !left
+                .recognition_state
+                .can_mark_with(&right.recognition_state)
+            || thumb_similarity(&left.thumb, &right.thumb) <= DEFAULT_SIMILARITY_THRESHOLD
+        {
+            return;
+        }
+        // The sanitizer refuses a zero duration; two frames of one capture millisecond get 1.
+        let duration_ms = right
+            .captured_at
+            .duration_since(left.captured_at)
+            .map_or(0, |gap| u64::try_from(gap.as_millis()).unwrap_or(u64::MAX))
+            .max(1);
+        let event = FrameStoreEvent::DedupWindow {
+            representative_frame_index: left.frame_index,
+            preserved_frame_index: Some(right.frame_index),
+            duplicate_count: 1,
+            duration_ms,
+        };
+        self.entries[duplicate].similarity_recorded = true;
+        self.events.push(event);
     }
 
     /// A pin cannot resurrect a perceptually similar representative as the original frame.
@@ -697,6 +771,7 @@ impl FrameStore {
             recognition_state: input.recognition_state,
             key_frame,
             pinned_reason: input.pinned_reason,
+            pinned_at_capture: input.pinned_reason.is_some(),
             artifact_persisted: false,
             artifact_material: None,
             similarity_recorded: false,
@@ -1454,6 +1529,9 @@ struct FrameEntry {
     recognition_state: RecognitionState,
     key_frame: bool,
     pinned_reason: Option<PinnedFrameReason>,
+    /// Workflow #375 R5c: a pin reason the frame carried when it was captured (`Terminal`),
+    /// as distinct from a pin added later.
+    pinned_at_capture: bool,
     artifact_persisted: bool,
     artifact_material: Option<PersistedFrameMaterial>,
     similarity_recorded: bool,
@@ -1465,7 +1543,7 @@ struct FrameEntry {
     storage: FrameStorage,
     storage_state: FrameStorageState,
     resident_estimate: ResidentEstimate,
-    thumb: Thumbnail,
+    thumb: FrameThumbnail,
     spill_failed: bool,
     memory_metadata: FrameMemoryCharge,
 }
@@ -1477,6 +1555,16 @@ pub struct FramePersistenceFailure {
 }
 
 impl FrameEntry {
+    /// Workflow #375 R5c: the frames marking never marks: the `initial` and `after-input`
+    /// labels, a pin set at capture, or a `Failed` verdict. A verdict change is excluded by
+    /// `can_mark_with`, so marking does not use `key_frame`.
+    fn marking_key_frame(&self) -> bool {
+        self.label == "initial"
+            || self.label == "after-input"
+            || self.pinned_at_capture
+            || matches!(self.recognition_state, RecognitionState::Failed { .. })
+    }
+
     fn original_png(&self) -> CliOutcome<Cow<'_, [u8]>> {
         let png = match &self.storage {
             FrameStorage::Resident(frame) => frame
@@ -1518,9 +1606,17 @@ enum FrameStorage {
     Dropped,
 }
 
-#[derive(Clone)]
-struct Thumbnail {
+/// A frame's 16x9 grayscale thumbnail (each sample the integer mean of R, G and B).
+#[derive(Debug, Clone)]
+pub struct FrameThumbnail {
     values: Vec<u8>,
+}
+
+impl FrameThumbnail {
+    /// The thumbnail the frame store keeps for `frame`.
+    pub fn of_frame(frame: &Frame) -> Self {
+        thumbnail(frame)
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1584,7 +1680,7 @@ fn string_capacity_bytes(value: &str) -> u64 {
     value.len() as u64
 }
 
-fn thumbnail(frame: &Frame) -> Thumbnail {
+fn thumbnail(frame: &Frame) -> FrameThumbnail {
     let channels = match frame.pixel_format {
         PixelFormat::Rgb8 => 3usize,
         PixelFormat::Rgba8 => 4usize,
@@ -1610,10 +1706,12 @@ fn thumbnail(frame: &Frame) -> Thumbnail {
             values.push(((r + g + b) / 3) as u8);
         }
     }
-    Thumbnail { values }
+    FrameThumbnail { values }
 }
 
-fn thumb_similarity(left: &Thumbnail, right: &Thumbnail) -> f32 {
+/// `1 - sum|a - b| / (samples * 255)` over two thumbnails. Workflow #375 R5c: public so that
+/// the host compares observe captures with the frame store's own measure.
+pub fn thumb_similarity(left: &FrameThumbnail, right: &FrameThumbnail) -> f32 {
     let len = left.values.len().min(right.values.len());
     if len == 0 {
         return 0.0;
@@ -2102,6 +2200,87 @@ mod tests {
 
         assert_eq!(thumb.values.len(), THUMB_WIDTH * THUMB_HEIGHT);
     }
+
+    #[test]
+    fn a_frame_tier1_already_marked_gets_no_second_marker() {
+        // Workflow #375 R5c: the always-on marking shares `similarity_recorded` with
+        // Tier1Dedup's persisted branch, so a frame gets at most one marker.
+        let temp = TempDir::new().expect("temp");
+        let mut store =
+            FrameStore::new(temp.path().join("temp"), test_config(1_000_000)).expect("store");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "capture");
+        add_test_frame(&mut store, 2, 10, matched("fixture01/home"), "capture");
+        persist_resident_frames(&mut store);
+        assert!(store.entries.iter().all(|entry| entry.artifact_persisted));
+        store.drain_events();
+
+        store.tier1_active = true;
+        store.refresh_pressure().expect("tier1 pass");
+        assert_eq!(dedup_windows(&mut store), 1);
+        store
+            .record_recognition(2, matched("fixture01/home"))
+            .expect("recognition");
+        assert_eq!(dedup_windows(&mut store), 0);
+        assert!(store.entries.iter().all(|entry| entry.retained));
+    }
+
+    fn dedup_windows(store: &mut FrameStore) -> usize {
+        store
+            .drain_events()
+            .iter()
+            .filter(|event| matches!(event, FrameStoreEvent::DedupWindow { .. }))
+            .count()
+    }
+
+    /// Publishes every recognized resident frame as the Tier2 flush does.
+    fn persist_resident_frames(store: &mut FrameStore) {
+        let artifacts =
+            Arc::new(ArtifactStore::open(store.fixture_root.join("materials")).expect("store"));
+        artifacts
+            .install_capacity_admission(Arc::new(crate::store::tests::RecordingSink {
+                capacity_root: Some(artifacts.root().to_path_buf()),
+                ..Default::default()
+            }))
+            .expect("fixture capacity");
+        let mut sink = crate::store::tests::RecordingSink::default();
+        let mut failures = Vec::new();
+        store
+            .flush_resident_frames(
+                &mut |candidate| {
+                    use actingcommand_contract::{
+                        ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+                        ArtifactRedactionState, EventLinksDraft, IdentifierIssuer, RetentionClass,
+                    };
+                    let ids = IdentifierIssuer::new().expect("fixture identity");
+                    let frame_id = ids.mint_frame_id().expect("fixture frame");
+                    let context = crate::ArtifactWriteContext::new(
+                        ArtifactLinksDraft::default().with_frame_id(frame_id),
+                        EventLinksDraft::default().with_frame_id(frame_id),
+                        1,
+                    );
+                    let artifact = artifacts.put(
+                        crate::ArtifactWriteRequest::new(
+                            ArtifactKind::CaptureFrame,
+                            &candidate.png,
+                            context,
+                            ArtifactIssuePolicy::new(
+                                ArtifactProducer::CapturePipeline,
+                                RetentionClass::Adaptive,
+                                ArtifactRedactionState::NotRequired,
+                            ),
+                        ),
+                        &mut sink,
+                    )?;
+                    Ok((Arc::clone(&artifacts), artifact.reference().clone()))
+                },
+                &mut Vec::new(),
+                &mut failures,
+                &mut false,
+            )
+            .expect("persist resident frames");
+        assert!(failures.is_empty());
+    }
+
     fn matched(page_id: &str) -> RecognitionState {
         RecognitionState::Matched {
             page_id: page_id.to_string(),
