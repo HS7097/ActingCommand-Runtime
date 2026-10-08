@@ -290,6 +290,10 @@
       "type": "duration_ms",
       "description": "Time spent restoring state while opening the ledger."
     },
+    "pending_evictions": {
+      "type": "integer",
+      "description": "Artifacts whose eviction intent has no outcome yet."
+    },
     "runtime_code": {
       "type": "code",
       "description": "The Runtime error code of an IPC failure."
@@ -329,6 +333,14 @@
     "transition_id": {
       "type": "id",
       "description": "An installation transition id."
+    },
+    "artifact_id": {
+      "type": "id",
+      "description": "An artifact's opaque identifier."
+    },
+    "event_id": {
+      "type": "id",
+      "description": "A ledger event's opaque identifier."
     },
     "phase": {
       "type": "vocab:install_phase",
@@ -3739,6 +3751,18 @@
     "foreign_": [
       "contract"
     ],
+    "maintenance_artifact_": [
+      "runtime-host"
+    ],
+    "material_read_": [
+      "runtime-host"
+    ],
+    "proposal_report_": [
+      "runtime-host"
+    ],
+    "strategic_evidence_": [
+      "runtime-host"
+    ],
     "panic_": [
       "contract"
     ],
@@ -3932,6 +3956,37 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "maintenance_artifact_material_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pending_evictions": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "ledger-maintenance refused a root whose artifact retention is not settled: on a formal root an eviction intent without its outcome (pending_evictions counts the artifacts), on a Segment root any recorded eviction.",
+      "common_causes": "A hard stop (power loss, forced reboot) between an eviction intent and its outcome; a Segment root that already records evictions.",
+      "handling": "Start actingd once on the root so that startup recovery finishes the pending eviction, then run the maintenance operation again."
+    },
+    "material_read_missing": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "event_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A material read found no file for an artifact that has no eviction proof; the read result is missing and the Runtime records nothing.",
+      "common_causes": "A frame deleted by hand from the state root's artifacts folder.",
+      "handling": "Nothing to repair in the Runtime; the frame is gone. Read another frame, or restore the file from a copy if it is still needed."
+    },
     "panic_caught": {
       "category": "warning",
       "owner": "contract",
@@ -3951,6 +4006,36 @@
       "description": "A panic boundary caught a panic; raw_text keeps the panic payload. It is a link under the interrupted operation's own failure code.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "proposal_report_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A proposal request was refused because its verified report artifact could not be read back.",
+      "common_causes": "The report file was deleted or damaged after it was recorded.",
+      "handling": "Prepare the report again so that a new report artifact is recorded, then resubmit the proposal."
+    },
+    "strategic_evidence_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A strategic report request was refused because one of its verified evidence artifacts could not be read back.",
+      "common_causes": "An evidence frame or file was deleted by hand or damaged after it was recorded.",
+      "handling": "Cite evidence whose files still exist, then submit the report again."
     }
   },
   "locations": {}
