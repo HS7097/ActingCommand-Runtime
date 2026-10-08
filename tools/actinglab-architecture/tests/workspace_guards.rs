@@ -1340,7 +1340,8 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
     assert!(host.contains("LedgerMaintenance::acquire"));
     // Workflow #375 H1: the startup writer open is the timed variant of open_writer.
     assert!(host.contains(".open_writer_timed("));
-    assert!(host.contains("verify_recovery_reference(reference)"));
+    // Workflow #375 R5a: the startup writer open reads no artifact material.
+    assert!(!host.contains("verify_recovery_reference"));
     assert!(store.contains("pub fn verify_recovery_reference"));
 }
 

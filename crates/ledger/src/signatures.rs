@@ -61,19 +61,30 @@ impl SignaturePrefix {
         &self.identity
     }
 
+    /// Workflow #375 R5b: when the opening verified each artifact separately, an artifact
+    /// that did not verify (a frame deleted by hand, say) stays Unrecorded and makes the
+    /// prefix incomplete evidence instead of failing the opening.
     pub fn from_evidence(
         snapshot: &crate::GlobalLedgerEvidence,
         through: u64,
     ) -> GlobalLedgerResult<Self> {
         let mut prefix = PrefixBuilder::new(through)?;
+        let mut material_complete = true;
         for event in snapshot
             .events()
             .iter()
             .take_while(|event| event.sequence() <= through)
         {
+            material_complete &= !snapshot.material_checked()
+                || event.artifacts().iter().all(|artifact| {
+                    !matches!(
+                        artifact.availability(),
+                        crate::ArtifactAvailability::Unrecorded
+                    )
+                });
             prefix.push(event.clone())?;
         }
-        Ok(prefix.finish(snapshot.is_complete()))
+        Ok(prefix.finish(snapshot.is_complete() && material_complete))
     }
 
     /// The v2 catalog identity: only catalog events through `min(through, latest)`,

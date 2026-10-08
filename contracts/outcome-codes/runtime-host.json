@@ -33,6 +33,67 @@
       "description": "A policy candidate, or its admission, met an instance that a claim holds or that an eligible claim waits for (holder_kind names the holder, or the waiting claim that receives the key next; count is the number of eligible waiting claims). The candidate is deferred with no wake, or its intent is rejected at info; the policy driver evaluates again when a lease is released, transferred or expires.",
       "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
       "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
+    },
+    "maintenance_artifact_material_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pending_evictions": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "ledger-maintenance refused a root whose artifact retention is not settled: on a formal root an eviction intent without its outcome (pending_evictions counts the artifacts), on a Segment root any recorded eviction.",
+      "common_causes": "A hard stop (power loss, forced reboot) between an eviction intent and its outcome; a Segment root that already records evictions.",
+      "handling": "Start actingd once on the root so that startup recovery finishes the pending eviction, then run the maintenance operation again."
+    },
+    "material_read_missing": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "event_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A material read found no file for an artifact that has no eviction proof; the read result is missing and the Runtime records nothing.",
+      "common_causes": "A frame deleted by hand from the state root's artifacts folder.",
+      "handling": "Nothing to repair in the Runtime; the frame is gone. Read another frame, or restore the file from a copy if it is still needed."
+    },
+    "proposal_report_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A proposal or strategic report request was refused because a verified report artifact could not be read back: a proposal's cited report, or the stored report that a strategic report with identical content would reuse.",
+      "common_causes": "The report file was deleted by hand or damaged after it was recorded.",
+      "handling": "Restore the report file from a copy if it is still needed. Otherwise prepare a strategic report whose content differs (for example a later as-of position), which records a new report artifact, and cite that report."
+    },
+    "strategic_evidence_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A strategic report request was refused because one of its verified evidence artifacts could not be read back.",
+      "common_causes": "An evidence frame or file was deleted by hand or damaged after it was recorded.",
+      "handling": "Cite evidence whose files still exist, then submit the report again."
     }
   }
 }

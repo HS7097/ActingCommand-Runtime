@@ -105,18 +105,22 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
         });
     let bundle = crate::contained_resources::finish_package_use(admitted, package.close())?;
 
+    // Workflow #375 R5b: each artifact is verified separately. A file that does not exist (a
+    // frame deleted by hand) skips its request, which is listed as a gap; any other artifact
+    // failure still fails the restore.
     let mut artifact_failure = None;
-    let snapshot =
-        GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(&root), |reference| {
-            match verify_projected_read_only(&root, reference) {
-                Ok(verified) => Some(verified),
-                Err(error) => {
-                    artifact_failure.get_or_insert(error.code());
-                    None
-                }
+    let snapshot = GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(&root).sqlite_material_per_artifact(),
+        |reference| match verify_projected_read_only(&root, reference) {
+            Ok(verified) => Some(verified),
+            Err(error) if error.is_material_missing() => None,
+            Err(error) => {
+                artifact_failure.get_or_insert(error.code());
+                None
             }
-        })
-        .map_err(|error| CliError::package_invalid(format!("resource restore ledger: {error}")))?;
+        },
+    )
+    .map_err(|error| CliError::package_invalid(format!("resource restore ledger: {error}")))?;
     if let Some(code) = artifact_failure {
         return Err(CliError::package_invalid(format!(
             "resource restore artifact verification: {code}"
@@ -143,6 +147,7 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             return Err(restore_error("requested native request is absent"));
         }
         let mut artifacts = BTreeMap::new();
+        let mut material_missing = Vec::new();
         let mut stored_prepared = None;
         let mut prepared_reference = None;
         let mut terminal_record = None;
@@ -158,9 +163,19 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
                         "Lab diagnostic artifact exceeds its original budget",
                     ));
                 }
-                let bytes = read_projected_verified(&root, reference).map_err(|error| {
-                    CliError::package_invalid(format!("read Lab artifact: {}", error.code()))
-                })?;
+                let bytes = match read_projected_verified(&root, reference) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.is_material_missing() => {
+                        material_missing.push(reference.artifact_id);
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(CliError::package_invalid(format!(
+                            "read Lab artifact: {}",
+                            error.code()
+                        )));
+                    }
+                };
                 if reference.kind == ArtifactKind::DiagnosticJson {
                     let value: Value = serde_json::from_slice(&bytes)
                         .map_err(|_| restore_error("Lab diagnostic JSON cannot be decoded"))?;
@@ -203,6 +218,11 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
                     return Err(restore_error("duplicate native ArtifactVerified identity"));
                 }
             }
+        }
+        if !material_missing.is_empty() {
+            gaps.push(json!({"request_id":request_id,"code":"material_missing",
+                "artifact_ids":material_missing}));
+            continue;
         }
         let prepared = stored_prepared
             .as_ref()

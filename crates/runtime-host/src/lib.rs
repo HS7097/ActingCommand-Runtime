@@ -22,7 +22,7 @@ mod ledger_maintenance;
 mod monitor;
 pub use ledger_maintenance::{
     LedgerMaintenanceFailure, LedgerMaintenanceOperation, LedgerMaintenanceReceipt,
-    LedgerMaintenanceRequest,
+    LedgerMaintenanceRequest, LedgerMaintenanceRestoredMaterial,
 };
 mod owner;
 pub use owner::PriorOwnerReleasedByExit;

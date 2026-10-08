@@ -1920,31 +1920,30 @@ where
     restore_verified(retention, records, verdicts.as_ref(), check)
 }
 
-/// Workflow #375 H1: `restore_records_with` for a verifier that can be shared. The distinct
-/// references are verified on a bounded worker pool; `timing` keeps the phases that ran,
+/// Workflow #375 R5a: the restoring half of a formal opening (the writer open and every
+/// `ledger-maintenance` read), which never opens, hashes or stats artifact material. An
+/// eviction proof gives its availability; any other reference stays `Unrecorded`. Only
+/// `timing.restore_ms` is measured: the material fields stay 0. `timing` keeps the phase
 /// also when an error is returned.
-pub(super) fn restore_records_parallel_with<F, C>(
+pub(super) fn restore_records_unread(
     retention: &RetentionIndex,
     records: Vec<StoredEventRecord>,
-    verifier: &F,
-    check: C,
+    mut check: impl FnMut(usize) -> GlobalLedgerResult<()>,
     timing: &mut LedgerOpenTiming,
-) -> GlobalLedgerResult<Vec<PersistedEvent>>
-where
-    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
-    C: Fn(usize) -> GlobalLedgerResult<()> + Sync,
-{
+) -> GlobalLedgerResult<Vec<PersistedEvent>> {
     let started = std::time::Instant::now();
-    let pending = PendingMaterial::collect(retention, &records);
-    timing.artifacts = pending.count();
-    timing.artifact_bytes = pending.bytes();
-    let verdicts = pending.verify_parallel(verifier, &check, &mut timing.workers);
-    timing.material_ms = elapsed_ms(started);
-    let verdicts = verdicts?;
-    let started = std::time::Instant::now();
-    let events = restore_verified(retention, records, Some(&verdicts), check);
+    let restored = (|| -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let mut events = Vec::with_capacity(records.len());
+        for record in records {
+            check(events.len() + 1)?;
+            let event = retention.restore_record_unread(record)?;
+            check(events.len() + 1)?;
+            events.push(event);
+        }
+        Ok(events)
+    })();
     timing.restore_ms = elapsed_ms(started);
-    events
+    restored
 }
 
 /// Restores in sequence order with the verdicts of the pending material; `None` means no
@@ -1968,6 +1967,29 @@ fn restore_verified(
 }
 
 impl RetentionIndex {
+    /// The availability an authenticated eviction proof gives a reference, or `None` when it
+    /// has none. Workflow #375 R5a: a `Failed` outcome restores as `FailedEviction`; it no
+    /// longer stops an opening. An identity conflict stays fatal.
+    fn proven_availability(
+        &self,
+        reference: &ProjectedArtifactReference,
+    ) -> Result<Option<ArtifactAvailability>, FactValidationError> {
+        let proof = self
+            .proof(reference)
+            .map_err(|error| FactValidationError::new(error.code()))?;
+        Ok(proof.map(|proof| match proof.disposition {
+            Some(
+                ArtifactEvictionDisposition::Deleted | ArtifactEvictionDisposition::RecoveryAbsent,
+            ) => ArtifactAvailability::Evicted(Box::new(proof)),
+            None => ArtifactAvailability::PendingEviction(Box::new(proof)),
+            Some(ArtifactEvictionDisposition::Failed) => {
+                ArtifactAvailability::FailedEviction(Box::new(proof))
+            }
+        }))
+    }
+
+    /// Restores a stored record whose unproven material must verify: a missing verifier or a
+    /// verifier `None` fails the opening. Only the candidate and Segment openings use it.
     pub(super) fn restore_record<F>(
         &self,
         record: StoredEventRecord,
@@ -1978,26 +2000,14 @@ impl RetentionIndex {
     {
         let mut event = record
             .into_event_with_artifact_availability(&mut |reference| {
-                let proof = self
-                    .proof(reference)
-                    .map_err(|error| FactValidationError::new(error.code()))?;
-                if let Some(proof) = proof {
-                    return match proof.disposition {
-                        Some(
-                            ArtifactEvictionDisposition::Deleted
-                            | ArtifactEvictionDisposition::RecoveryAbsent,
-                        ) => Ok(ArtifactAvailability::Evicted(Box::new(proof))),
-                        None => Ok(ArtifactAvailability::PendingEviction(Box::new(proof))),
-                        Some(ArtifactEvictionDisposition::Failed) => {
-                            Err(FactValidationError::new("artifact_eviction_failed"))
-                        }
-                    };
+                if let Some(availability) = self.proven_availability(reference)? {
+                    return Ok(Some(availability));
                 }
                 let verify = verifier.as_mut().ok_or(FactValidationError::new(
                     "artifact_store_verification_unavailable",
                 ))?;
                 verify(reference)
-                    .map(ArtifactAvailability::Available)
+                    .map(|verified| Some(ArtifactAvailability::Available(verified)))
                     .ok_or(FactValidationError::new(
                         "artifact_store_verification_failed",
                     ))
@@ -2007,11 +2017,27 @@ impl RetentionIndex {
         Ok(event)
     }
 
+    /// Workflow #375 R5a: restores a stored record without reading its material. A reference
+    /// with an eviction proof takes the proof's availability; any other stays `Unrecorded`,
+    /// so a missing or damaged artifact file never fails the record.
+    pub(super) fn restore_record_unread(
+        &self,
+        record: StoredEventRecord,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        let mut event = record
+            .into_event_with_artifact_availability(&mut |reference| {
+                self.proven_availability(reference)
+            })
+            .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+        self.annotate_event(&mut event);
+        Ok(event)
+    }
+
     /// Restores authenticated metadata with per-artifact material state. Eviction proofs
-    /// are applied as in `restore_record`, and a failed eviction or identity conflict stays
-    /// fatal. Unlike `restore_record`, an artifact without a proof never fails the event:
-    /// with no verifier its material is not read, and a verifier `None` leaves it
-    /// Unrecorded. The caller must record and report every such `None`.
+    /// are applied as in `restore_record`, and an identity conflict stays fatal. Unlike
+    /// `restore_record`, an artifact without a proof never fails the event: with no
+    /// verifier its material is not read, and a verifier `None` leaves it Unrecorded. The
+    /// caller must record and report every such `None`.
     pub(super) fn restore_metadata<F>(
         &self,
         event: crate::fact::LedgerEventMetadata,
@@ -2022,20 +2048,8 @@ impl RetentionIndex {
     {
         let mut event = event
             .into_event_with_artifact_availability(&mut |reference| {
-                let proof = self
-                    .proof(reference)
-                    .map_err(|error| FactValidationError::new(error.code()))?;
-                if let Some(proof) = proof {
-                    return match proof.disposition {
-                        Some(
-                            ArtifactEvictionDisposition::Deleted
-                            | ArtifactEvictionDisposition::RecoveryAbsent,
-                        ) => Ok(Some(ArtifactAvailability::Evicted(Box::new(proof)))),
-                        None => Ok(Some(ArtifactAvailability::PendingEviction(Box::new(proof)))),
-                        Some(ArtifactEvictionDisposition::Failed) => {
-                            Err(FactValidationError::new("artifact_eviction_failed"))
-                        }
-                    };
+                if let Some(availability) = self.proven_availability(reference)? {
+                    return Ok(Some(availability));
                 }
                 Ok(verifier
                     .as_mut()

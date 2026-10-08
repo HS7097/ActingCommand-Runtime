@@ -477,8 +477,10 @@ up to the same bounded 1 MiB document envelope. Larger legacy documents remain
 native references with an explicit read-limit failure. Unknown schemas remain
 references with `unknown_schema`, never a guessed interpretation.
 
-Missing, unsealed, malformed, wrong-identity or damaged artifacts are explicit
-failures/gaps. A run without an accessible task diagnostic reports
+Unsealed, malformed, wrong-identity or damaged artifacts are explicit
+failures/gaps. On an SQLite root an artifact whose file does not exist (Workflow #375
+R5b: deleted by hand) is listed once in the report's `material_missing` and is neither
+a failure nor a gap; it is not expanded. A run without an accessible task diagnostic reports
 `not_recorded_or_unpublished_or_withheld_or_outside_window` and an unknown record
 count. Missing facts cannot establish how many evaluations preceded a fatal
 termination. Reading uses GlobalLedger's public read-only surface and does not

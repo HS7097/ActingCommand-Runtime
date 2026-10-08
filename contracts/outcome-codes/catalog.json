@@ -294,6 +294,10 @@
       "type": "duration_ms",
       "description": "Time spent restoring state while opening the ledger."
     },
+    "pending_evictions": {
+      "type": "integer",
+      "description": "Artifacts whose eviction intent has no outcome yet."
+    },
     "runtime_code": {
       "type": "code",
       "description": "The Runtime error code of an IPC failure."
@@ -333,6 +337,14 @@
     "transition_id": {
       "type": "id",
       "description": "An installation transition id."
+    },
+    "artifact_id": {
+      "type": "id",
+      "description": "An artifact's opaque identifier."
+    },
+    "event_id": {
+      "type": "id",
+      "description": "A ledger event's opaque identifier."
     },
     "phase": {
       "type": "vocab:install_phase",
@@ -3795,6 +3807,18 @@
       "contract"
     ],
     "dispatch_instance_": [
+      "runtime-host"
+    ],
+    "maintenance_artifact_": [
+      "runtime-host"
+    ],
+    "material_read_": [
+      "runtime-host"
+    ],
+    "proposal_report_": [
+      "runtime-host"
+    ],
+    "strategic_evidence_": [
       "runtime-host"
     ],
     "panic_": [

@@ -214,10 +214,6 @@
       "type": "integer",
       "description": "A count."
     },
-    "holder_kind": {
-      "type": "vocab:claim_kind",
-      "description": "The kind of claim that holds an instance or waits for it (Workflow #369)."
-    },
     "limit_count": {
       "type": "integer",
       "description": "A limit on a number of items or a depth."
@@ -294,6 +290,10 @@
       "type": "duration_ms",
       "description": "Time spent restoring state while opening the ledger."
     },
+    "pending_evictions": {
+      "type": "integer",
+      "description": "Artifacts whose eviction intent has no outcome yet."
+    },
     "runtime_code": {
       "type": "code",
       "description": "The Runtime error code of an IPC failure."
@@ -333,6 +333,14 @@
     "transition_id": {
       "type": "id",
       "description": "An installation transition id."
+    },
+    "artifact_id": {
+      "type": "id",
+      "description": "An artifact's opaque identifier."
+    },
+    "event_id": {
+      "type": "id",
+      "description": "A ledger event's opaque identifier."
     },
     "phase": {
       "type": "vocab:install_phase",
@@ -2777,57 +2785,6 @@
         }
       }
     },
-    "claim_kind": {
-      "description": "Who holds an instance or waits for it, in the one queue per instance (Workflow #369).",
-      "source": {
-        "file": "crates/scheduler/src/lib.rs",
-        "enum": "ClaimKind"
-      },
-      "tokens": {
-        "policy_dispatch": {
-          "description": "A policy dispatch."
-        },
-        "ladder": {
-          "description": "A stuck-recovery ladder."
-        },
-        "ladder_continuation": {
-          "description": "The holding ladder's own continuation."
-        },
-        "startup_package": {
-          "description": "An instance's startup package after an emulator start."
-        },
-        "autostart": {
-          "description": "A configured emulator start at daemon start."
-        },
-        "direct_task_run": {
-          "description": "A direct task run from the CLI, the console or MCP."
-        },
-        "emulator_control": {
-          "description": "An operator emulator control."
-        },
-        "input_lifecycle": {
-          "description": "A safe reset or an application lifecycle command."
-        },
-        "resume_reconnect": {
-          "description": "The reconnect of an instance resume."
-        },
-        "self_check": {
-          "description": "A self-check preparation."
-        },
-        "daemon_start_preparation": {
-          "description": "The dedicated preparation lease of a connection preparation."
-        },
-        "lab_operation": {
-          "description": "A Lab operation."
-        },
-        "client_lease": {
-          "description": "A client AcquireLease or QueueLease."
-        },
-        "resource_close": {
-          "description": "A dedicated retained-session or pause close lease."
-        }
-      }
-    },
     "install_phase": {
       "description": "An installation transition phase.",
       "source": {
@@ -3794,7 +3751,16 @@
     "foreign_": [
       "contract"
     ],
-    "dispatch_instance_": [
+    "maintenance_artifact_": [
+      "runtime-host"
+    ],
+    "material_read_": [
+      "runtime-host"
+    ],
+    "proposal_report_": [
+      "runtime-host"
+    ],
+    "strategic_evidence_": [
       "runtime-host"
     ],
     "panic_": [
@@ -3808,39 +3774,6 @@
     ]
   },
   "codes": {
-    "dispatch_instance_contended": {
-      "category": "info",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "instance_id": "required",
-        "next_eligible_unix_ms": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.11.5",
-      "description": "A policy admission found the instance's admission guard taken by a keyless observe or probe for its whole short retry (about 100 ms). The dispatch intent already written is rejected at info; the candidate may run again from next_eligible_unix_ms, about one second later.",
-      "common_causes": "A read-only observation or a monitor probe of the instance was in progress when the dispatch was admitted.",
-      "handling": "Nothing to repair. The next policy evaluation dispatches the candidate once the observation has finished."
-    },
-    "dispatch_instance_held": {
-      "category": "info",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "count": "required",
-        "holder_kind": "required",
-        "instance_id": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.11.5",
-      "description": "A policy candidate, or its admission, met an instance that a claim holds or that an eligible claim waits for (holder_kind names the holder, or the waiting claim that receives the key next; count is the number of eligible waiting claims). The candidate is deferred with no wake, or its intent is rejected at info; the policy driver evaluates again when a lease is released, transferred or expires.",
-      "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
-      "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
-    },
     "foreign_adb_error": {
       "category": "error",
       "owner": "contract",
@@ -4023,6 +3956,37 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "maintenance_artifact_material_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pending_evictions": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "ledger-maintenance refused a root whose artifact retention is not settled: on a formal root an eviction intent without its outcome (pending_evictions counts the artifacts), on a Segment root any recorded eviction.",
+      "common_causes": "A hard stop (power loss, forced reboot) between an eviction intent and its outcome; a Segment root that already records evictions.",
+      "handling": "Start actingd once on the root so that startup recovery finishes the pending eviction, then run the maintenance operation again."
+    },
+    "material_read_missing": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "event_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A material read found no file for an artifact that has no eviction proof; the read result is missing and the Runtime records nothing.",
+      "common_causes": "A frame deleted by hand from the state root's artifacts folder.",
+      "handling": "Nothing to repair in the Runtime; the frame is gone. Read another frame, or restore the file from a copy if it is still needed."
+    },
     "panic_caught": {
       "category": "warning",
       "owner": "contract",
@@ -4042,6 +4006,36 @@
       "description": "A panic boundary caught a panic; raw_text keeps the panic payload. It is a link under the interrupted operation's own failure code.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "proposal_report_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A proposal or strategic report request was refused because a verified report artifact could not be read back: a proposal's cited report, or the stored report that a strategic report with identical content would reuse.",
+      "common_causes": "The report file was deleted by hand or damaged after it was recorded.",
+      "handling": "Restore the report file from a copy if it is still needed. Otherwise prepare a strategic report whose content differs (for example a later as-of position), which records a new report artifact, and cite that report."
+    },
+    "strategic_evidence_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A strategic report request was refused because one of its verified evidence artifacts could not be read back.",
+      "common_causes": "An evidence frame or file was deleted by hand or damaged after it was recorded.",
+      "handling": "Cite evidence whose files still exist, then submit the report again."
     }
   },
   "locations": {}

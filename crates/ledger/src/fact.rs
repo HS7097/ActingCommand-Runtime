@@ -312,12 +312,17 @@ impl StoredEventRecord {
         self.into_event_with_artifacts(Vec::new())
     }
 
+    /// Restores a stored record with each artifact's availability. `Ok(None)` from
+    /// `availability` leaves that artifact Unrecorded (Workflow #375 R5a: material that is
+    /// not read), as `LedgerEventMetadata::into_event_with_artifact_availability` does.
     pub(crate) fn into_event_with_artifact_availability<F>(
         self,
         availability: &mut F,
     ) -> Result<PersistedEvent, FactValidationError>
     where
-        F: FnMut(&ProjectedArtifactReference) -> Result<ArtifactAvailability, FactValidationError>
+        F: FnMut(
+                &ProjectedArtifactReference,
+            ) -> Result<Option<ArtifactAvailability>, FactValidationError>
             + ?Sized,
     {
         if self.artifacts.is_empty() {
@@ -326,10 +331,10 @@ impl StoredEventRecord {
         let mut artifacts = Vec::with_capacity(self.artifacts.len());
         for stored in &self.artifacts {
             let reference = stored.projected();
-            artifacts.push(LedgerArtifactReference::restored(
-                reference.clone(),
-                availability(&reference)?,
-            )?);
+            artifacts.push(match availability(&reference)? {
+                Some(state) => LedgerArtifactReference::restored(reference, state)?,
+                None => LedgerArtifactReference::recorded(reference)?,
+            });
         }
         self.into_event_with_artifacts(artifacts)
     }
