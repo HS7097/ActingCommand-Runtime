@@ -521,6 +521,16 @@ impl CatalogStore {
     }
 }
 
+/// The event types the catalog replay consumes (`fold_catalog_events`); the check-config
+/// preview selects exactly these (Workflow #375 R375-3).
+pub(super) const CATALOG_PROJECTION_TYPES: [EventType; 5] = [
+    EventType::StateMigrated,
+    EventType::CatalogTransitionIntent,
+    EventType::CatalogActivated,
+    EventType::CatalogRolledBack,
+    EventType::CatalogTransitionFailed,
+];
+
 /// The catalog transition events through `through`, in ledger order: one indexed query per
 /// event type the replay consumes, merged back into ledger order (Workflow #317 rf2). The
 /// replay skips every other event, so it sees exactly the events the unfiltered read gave it.
@@ -529,13 +539,7 @@ pub(super) fn catalog_projection_events(
     query: impl Fn(EventQuery) -> RuntimeHostResult<Vec<PersistedEvent>>,
 ) -> RuntimeHostResult<Vec<PersistedEvent>> {
     let mut events = Vec::new();
-    for event_type in [
-        EventType::StateMigrated,
-        EventType::CatalogTransitionIntent,
-        EventType::CatalogActivated,
-        EventType::CatalogRolledBack,
-        EventType::CatalogTransitionFailed,
-    ] {
+    for event_type in CATALOG_PROJECTION_TYPES {
         events.extend(query(EventQuery {
             to_sequence: Some(through),
             event_type: Some(event_type),

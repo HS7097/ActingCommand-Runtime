@@ -4569,6 +4569,10 @@ const RUNTIME_DATABASE_CONSTRUCTORS: &[(&str, &str)] = &[
         "ledger: forensic metadata opens the existing database read-only",
     ),
     (
+        "crates/ledger/src/global/evidence.rs::GlobalLedger::open_selected -> RuntimeDatabase",
+        "ledger: the selected read of the check-config preview opens the existing database read-only (Workflow #375 R375-3)",
+    ),
+    (
         "crates/runtime-host/src/host.rs::RuntimeHost::start_with_provider -> RuntimeDatabase",
         "runtime-host: startup opens existing storage (fresh storage goes through runtime-state)",
     ),

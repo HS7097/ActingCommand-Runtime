@@ -3742,6 +3742,9 @@
     "panic_": [
       "contract"
     ],
+    "ledger_": [
+      "ledger"
+    ],
     "setup_": [
       "ui"
     ],
