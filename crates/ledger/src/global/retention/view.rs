@@ -1016,7 +1016,7 @@ mod tests {
                 .aliases
                 .entry(instance)
                 .or_default()
-                .insert(1, "AzurLane JP".to_owned());
+                .insert(1, "node.a b".to_owned());
             Self {
                 ids,
                 instance,
@@ -1313,7 +1313,7 @@ mod tests {
         assert!(view.iter().all(|frame| frame.class == C::Lab));
         let folder = view[task[0]].folder.as_ref().expect("Lab folder");
         assert_eq!(folder.date, "2026-10-12");
-        assert_eq!(folder.leaf, "lab-AzurLane_JP");
+        assert_eq!(folder.leaf, "lab-node_a_b");
         assert_eq!(
             folder.file_name,
             format!("061502-117_{}.png", text(&fixture.artifact(task[0])))
@@ -1405,7 +1405,7 @@ mod tests {
         assert_eq!(points[0].sequence, 200);
         assert_eq!(points[0].event_type, EventType::RuntimeTakeover);
         assert_eq!(points[0].at_unix_ms, at(60));
-        assert_eq!(points[0].leaf, "AzurLane_JP-200-runtime_takeover");
+        assert_eq!(points[0].leaf, "node_a_b-200-runtime_takeover");
         // Its window is the run's last 30 s; without a capture summary, nothing in it is
         // dropped and nothing of the run is a duplicate. The neighbour settles at the restart.
         assert_eq!(
@@ -1422,7 +1422,7 @@ mod tests {
         let folder = view[frames[4]].folder.as_ref().expect("error folder");
         assert_eq!(
             (folder.date.as_str(), folder.leaf.as_str()),
-            ("2026-10-12", "AzurLane_JP-200-runtime_takeover")
+            ("2026-10-12", "node_a_b-200-runtime_takeover")
         );
         assert_eq!(view[frames[1]].entry_unix_ms, Some(at(600)));
 
@@ -1454,7 +1454,7 @@ mod tests {
             assert_eq!(view[index].class, C::Error);
             assert_eq!(
                 view[index].folder.as_ref().expect("error folder").leaf,
-                "AzurLane_JP-100-runtime_started"
+                "node_a_b-100-runtime_started"
             );
         }
 
@@ -1466,7 +1466,7 @@ mod tests {
         fixture.start(300, at(5_000), EventType::RuntimeTakeover);
         let (view, points) = fixture.view(at(9_000), ON);
         assert_eq!(points.len(), 1);
-        assert_eq!(points[0].leaf, "AzurLane_JP-100-runtime_started");
+        assert_eq!(points[0].leaf, "node_a_b-100-runtime_started");
         assert_eq!(view[0].class, C::Error);
     }
 
@@ -1499,9 +1499,9 @@ mod tests {
                 .leaf
                 .clone()
         };
-        assert_eq!(leaf(early), "AzurLane_JP-120-return_home_failed");
-        assert_eq!(leaf(middle), "AzurLane_JP-110-contained_task_page_unknown");
-        assert_eq!(leaf(late), "AzurLane_JP-110-contained_task_page_unknown");
+        assert_eq!(leaf(early), "node_a_b-120-return_home_failed");
+        assert_eq!(leaf(middle), "node_a_b-110-contained_task_page_unknown");
+        assert_eq!(leaf(late), "node_a_b-110-contained_task_page_unknown");
         assert_eq!(view[middle].windows, [0, 1, 2]);
         assert_eq!(view[late].windows, [0, 2]);
         assert_eq!(
