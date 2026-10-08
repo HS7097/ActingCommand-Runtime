@@ -350,7 +350,7 @@ without any state material (`runtime-state.sqlite`, `runtime-state.key`,
 The result carries `policy_plan`:
 
 ```json
-{"policy_plan":{"state":"read","active":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"driver":"on","configured":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"plan":"unchanged","approvals":{"record":[],"reapprove":[],"revoke":[]},"phase_ms":{"compile":40,"ledger":150,"projection":900,"approvals":300,"total":1390}}}
+{"policy_plan":{"state":"read","active":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"driver":"on","configured":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"plan":"unchanged","approvals":{"record":[],"reapprove":[],"revoke":[]},"phase_ms":{"compile":40,"ledger":700,"projection":900,"approvals":300,"total":1940}}}
 ```
 
 - `state` is `read` or `state_root_absent`.
@@ -362,7 +362,11 @@ The result carries `policy_plan`:
 - `approvals` lists the approval ids startup would record, approve again and
   revoke.
 - `phase_ms` is the time of each phase in milliseconds: `compile` (the
-  configured catalog), `ledger` (the head, contiguity and the records above),
+  configured catalog), `ledger` (opening the database, including its whole-file
+  `PRAGMA quick_check(1)`, then the head, contiguity and the records above; the
+  check sets the cost, which grows with `runtime-state.sqlite`: about 24 ms per MB
+  when the file is not cached and about 1.2 ms per MB when it is, measured at
+  550 MB),
   `projection` (the State documents, the catalog lineage and the active
   generation), `approvals` (the approval decisions, the plan and its approvals)
   and `total`. A fresh or absent state root reads no ledger.
