@@ -17,6 +17,7 @@ pub mod critical;
 mod durability;
 mod fact;
 pub mod global;
+pub mod local_time;
 pub mod owner_journal;
 pub mod signatures;
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};

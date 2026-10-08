@@ -3763,6 +3763,12 @@
     "strategic_evidence_": [
       "runtime-host"
     ],
+    "frame_retention_": [
+      "runtime-host"
+    ],
+    "artifact_kept_": [
+      "artifact-store"
+    ],
     "panic_": [
       "contract"
     ],

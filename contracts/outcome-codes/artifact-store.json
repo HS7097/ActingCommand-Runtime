@@ -1,0 +1,21 @@
+{
+  "owner": "artifact-store",
+  "codes": {
+    "artifact_kept_walk_failed": {
+      "category": "error",
+      "owner": "artifact-store",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "io_kind": "required",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A read found no file at a frame's object key and could not list the kept folders below the state root's kept folder to look for the frame there. The read fails; the lookup of the previous walk stays.",
+      "common_causes": "Access to the state root's kept folder, or to a date folder or leaf in it, denied; kept made a file.",
+      "handling": "Restore read access to the kept folder, or move away the file that replaces it, then read again."
+    }
+  }
+}

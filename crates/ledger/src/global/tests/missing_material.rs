@@ -3,13 +3,15 @@
 //! Workflow #375: frames that are missing on disk. R5a: no opening of a formal root reads
 //! artifact material; a frame deleted by hand restores `Unrecorded`, a `Failed` eviction
 //! outcome restores `FailedEviction`, and `ledger-maintenance` refuses only an eviction
-//! intent without its outcome. A real formal SQLite root with its State tables and its
+//! intent without its outcome. R5d: the frame view of real events, with a real
+//! `capture.dedup_window`. A real formal SQLite root with its State tables and its
 //! ArtifactStore in the same directory.
 
 use crate::global::tests::sealed_global_ledger::GlobalLedgerSink;
 use crate::global::{
-    ArtifactEvictionAdmission, ArtifactEvictionPermit, GlobalLedger, LedgerMaintenance,
-    LedgerOpenTiming, Sha256SecretFingerprinter, WriterCommand, receive_response, send_command,
+    ArtifactEvictionAdmission, ArtifactEvictionPermit, FrameRetentionClass, FrameRetentionSwitches,
+    GlobalLedger, LedgerMaintenance, LedgerOpenTiming, Sha256SecretFingerprinter, WriterCommand,
+    receive_response, send_command,
 };
 use crate::{ArtifactAvailability, PersistedEvent};
 use actingcommand_artifact_store::{
@@ -198,6 +200,21 @@ fn capture(ledger: &GlobalLedger, artifacts: &ArtifactStore, bytes: &[u8]) -> Ca
     let instance = ids.mint_instance_id().expect("instance");
     // The owner epoch is recorded before the frame, so its pin's trigger is in that epoch.
     quiescence(ledger, &ids, owner, instance);
+    let (capture, _) = observe(ledger, artifacts, bytes, &ids, owner, instance);
+    // The close follows the pin, so the Explicit pin is releasable at admission.
+    quiescence(ledger, &ids, owner, instance);
+    capture
+}
+
+/// One completed run-less frame of `instance` with its Explicit pin, and the frame's links.
+fn observe(
+    ledger: &GlobalLedger,
+    artifacts: &ArtifactStore,
+    bytes: &[u8],
+    ids: &IdentifierIssuer,
+    owner: OwnerEpoch,
+    instance: IssuedInstanceId,
+) -> (Capture, EventLinksDraft) {
     let request = ids.mint_request_id().expect("request");
     let correlation = ids.mint_correlation_id().expect("correlation");
     let frame = ids.mint_frame_id().expect("frame");
@@ -284,7 +301,7 @@ fn capture(ledger: &GlobalLedger, artifacts: &ArtifactStore, bytes: &[u8]) -> Ca
             OriginModule::Capture,
             EventActor::Runtime,
         ),
-        links,
+        links.clone(),
         CapturePayloadDraft::completed(
             EventAction::CaptureObserve,
             EffectDisposition::Performed,
@@ -297,12 +314,13 @@ fn capture(ledger: &GlobalLedger, artifacts: &ArtifactStore, bytes: &[u8]) -> Ca
     .sanitize(&fingerprinter())
     .expect("capture completed draft");
     append(ledger, completed);
-    // The close follows the pin, so the Explicit pin is releasable at admission.
-    quiescence(ledger, &ids, owner, instance);
-    Capture {
-        reference,
-        material: stored.path().to_path_buf(),
-    }
+    (
+        Capture {
+            reference,
+            material: stored.path().to_path_buf(),
+        },
+        links,
+    )
 }
 
 fn admit(
@@ -542,4 +560,92 @@ fn forensic_reports_list_a_missing_frame_and_complete() {
     assert_eq!(report.material_missing, vec![missing.reference]);
     assert!(report.failures.is_empty());
     assert!(report.gaps.is_empty());
+}
+
+/// Workflow #375 R5d: events, then the index's `apply`, then the frame view. Three frames of one
+/// instance, each later one marked by a real `capture.dedup_window` as nearly repeating the
+/// one before: the interior frame is a Duplicate due at its entry once it settles, its
+/// neighbours are Default, and the view at an unchanged head follows only the clock.
+#[test]
+fn a_dedup_window_makes_the_interior_frame_a_duplicate_in_the_frame_view() {
+    const DAY_MS: u64 = 86_400_000;
+    let root = tempfile::tempdir().expect("root");
+    let (_database, ledger) = formal_root(root.path());
+    let artifacts = material_store(root.path());
+    let ids = IdentifierIssuer::new().expect("issuer");
+    let owner = *ids.mint_owner_epoch().expect("owner").transport();
+    let instance = ids.mint_instance_id().expect("instance");
+    quiescence(&ledger, &ids, owner, instance);
+    let frames = [
+        &b"first frame"[..],
+        &b"second frame"[..],
+        &b"third frame"[..],
+    ]
+    .map(|bytes| observe(&ledger, &artifacts, bytes, &ids, owner, instance));
+    for pair in frames.windows(2) {
+        let (representative, preserved) = (&pair[0].1, &pair[1].1);
+        let marker = EventDraft::new(
+            ids.mint_event_id().expect("event"),
+            now_ms(),
+            EventSeverity::Info,
+            // As the capture pipeline records its markers.
+            EventOrigin::new(
+                EventSource::System,
+                OriginModule::CapturePipeline,
+                EventActor::System,
+            ),
+            representative.clone(),
+            CapturePayloadDraft::dedup_window_preserving_material(
+                preserved,
+                1_000,
+                AuditInput::new(),
+            )
+            .into(),
+        )
+        .sanitize(&fingerprinter())
+        .expect("dedup window draft");
+        assert_eq!(
+            append(&ledger, marker).event_type(),
+            EventType::CaptureDedupWindow
+        );
+    }
+    quiescence(&ledger, &ids, owner, instance);
+
+    let switches = FrameRetentionSwitches {
+        dedup_error: true,
+        dedup_lab: false,
+    };
+    let captured = |index: usize| frames[index].0.reference.created_at_unix_ms;
+    let classes = |now: u64| {
+        let view = ledger
+            .frame_retention_view(now, switches)
+            .expect("frame view");
+        frames
+            .iter()
+            .map(|(capture, _)| {
+                let frame = view
+                    .frames
+                    .iter()
+                    .find(|frame| frame.reference.artifact_id == capture.reference.artifact_id)
+                    .expect("the frame is in the view");
+                (frame.class, frame.due_unix_ms)
+            })
+            .collect::<Vec<_>>()
+    };
+    // Within 60 s of its capture no frame has settled.
+    assert_eq!(
+        classes(captured(0)),
+        [(FrameRetentionClass::Running, None); 3]
+    );
+    let settled = classes(captured(2) + 2 * DAY_MS);
+    assert_eq!(
+        settled,
+        [
+            (FrameRetentionClass::Default, Some(captured(0) + DAY_MS)),
+            (FrameRetentionClass::Duplicate, Some(captured(1))),
+            (FrameRetentionClass::Default, Some(captured(2) + DAY_MS)),
+        ]
+    );
+    // The cached classes at the same head give the same view again.
+    assert_eq!(classes(captured(2) + 2 * DAY_MS), settled);
 }

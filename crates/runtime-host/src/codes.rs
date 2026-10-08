@@ -23,5 +23,14 @@ actingcommand_contract::outcome_codes! {
         /// Error. A strategic report's evidence artifact could not be read; the request is
         /// refused and the Runtime keeps running (keys `artifact_id`).
         StrategicEvidenceUnavailable => "strategic_evidence_unavailable": error,
+        /// Warning. The frame cleaner could not delete a frame for another reason than a
+        /// held or absent file; the frame stays and is tried again after a restart (keys
+        /// `artifact_id`, `io_kind`, `os_error`).
+        FrameRetentionRemoveFailed => "frame_retention_remove_failed": warning,
+        /// Warning. The frame cleaner could not move a frame into its kept folder for another
+        /// reason than a held or absent file, and the frame stays where it is; or the frame
+        /// moved and the move counter `kept/.moves` could not be written (keys `artifact_id`,
+        /// `entry`, `io_kind`, `os_error`).
+        FrameRetentionMoveFailed => "frame_retention_move_failed": warning,
     }
 }

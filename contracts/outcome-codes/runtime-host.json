@@ -61,6 +61,41 @@
       "description": "A strategic report request was refused because one of its verified evidence artifacts could not be read back.",
       "common_causes": "An evidence frame or file was deleted by hand or damaged after it was recorded.",
       "handling": "Cite evidence whose files still exist, then submit the report again."
+    },
+    "frame_retention_remove_failed": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "The frame cleaner could not delete a due frame at its object key for another reason than a held or absent file. The frame stays, is not tried again by this process, and is tried again after a restart.",
+      "common_causes": "Access to the state root's artifacts folder denied by the file system or by security software.",
+      "handling": "Check the file's permissions and any program that blocks it, then restart actingd so that the cleaner tries again."
+    },
+    "frame_retention_move_failed": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "entry": "optional",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "The frame cleaner could not move an error or Lab frame into its kept folder (entry, relative to the state root) for another reason than a held or absent file, and the frame stays at its object key; or the frame moved and the move counter kept/.moves could not be written, so other processes may find the frame only after their next walk of the kept folders, within 60 s.",
+      "common_causes": "A file where the kept date folder or leaf should be; access to the state root's kept folder denied; a full disk.",
+      "handling": "Remove whatever blocks the kept folder named by entry, then restart actingd so that the cleaner tries again."
     }
   }
 }

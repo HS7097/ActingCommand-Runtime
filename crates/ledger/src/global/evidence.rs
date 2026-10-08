@@ -81,6 +81,9 @@ impl GlobalLedgerEvidenceConfig {
 pub struct GlobalLedgerEvidence {
     source: EvidenceSource,
     writer: GlobalLedgerWriterMetadataObservation,
+    /// Workflow #375: the retention index of the events, built for the first frame view.
+    pub(super) frame_index:
+        std::sync::OnceLock<(retention::RetentionIndex, projection::EventIndexes)>,
 }
 enum EvidenceSource {
     Segment(Box<GlobalLedgerReadOnly>),
@@ -599,6 +602,7 @@ impl GlobalLedger {
                     return Ok(GlobalLedgerEvidence {
                         source: EvidenceSource::Sqlite(Box::new(source)),
                         writer,
+                        frame_index: std::sync::OnceLock::new(),
                     });
                 }
                 // The same record authentication, ready marker and eviction annotation as
@@ -637,6 +641,7 @@ impl GlobalLedger {
                         extent,
                     })),
                     writer,
+                    frame_index: std::sync::OnceLock::new(),
                 });
             }
         }
@@ -647,6 +652,7 @@ impl GlobalLedger {
         Ok(GlobalLedgerEvidence {
             source: EvidenceSource::Segment(Box::new(source)),
             writer,
+            frame_index: std::sync::OnceLock::new(),
         })
     }
 }

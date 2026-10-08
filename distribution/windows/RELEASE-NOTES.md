@@ -97,6 +97,22 @@ workers=… sql_read_ms=… verify_ms=… material_ms=… restore_ms=…
 deadline_ms=120000`. Follow its timings as the state root grows: the open
 still has a 120 s deadline, and acsetup waits 60 s for a Runtime it starts.
 
+Kept frames (Workflow #375): this release moves the screenshots it keeps for
+errors and for Lab into `<state root>\kept\<date>\…`. Delete a folder to delete
+them, with Shift+Delete or `Remove-Item -Recurse`; Explorer's Delete keeps them in
+the Recycle Bin. Other screenshots are deleted automatically: near-duplicates once
+their run has ended, resource readings after 7 days, the rest after a day.
+Near-duplicates inside the 30 s before an error are also deleted, and Lab
+screenshots are all kept; to change either, add `"frame_retention_dedup_error":
+false` or `"frame_retention_dedup_lab": true` to `actingd.config.json`, commit it
+with `acsetup --commit-config` and restart actingd. A change applies only to
+screenshots not yet moved into a folder. The cleaner runs while
+`frame_retention_enabled` is on (the default), and prints one
+`actingd frame_retention pass …` line per sweep that visited frames; with it off,
+actingd prints `actingd frame_retention disabled` once at start. Once a
+screenshot has been deleted or moved, or once the file names either switch,
+v0.11.4 can no longer open this state root.
+
 Rollback: an explicit `acsetup --rollback` runs the target slot's own cold
 ledger gate. Rolling back from this release to v0.11.3 or earlier therefore
 runs the old verify described above, and on a large state root it fails, which

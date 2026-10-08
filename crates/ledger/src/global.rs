@@ -16,7 +16,7 @@ mod retention;
 pub use retention::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, LocalOffsetMs,
+    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming,
 };
 mod sqlite;
 mod storage;
@@ -741,6 +741,14 @@ enum WriterCommand {
         after: Option<actingcommand_contract::ArtifactId>,
         policy: actingcommand_contract::FailedRunRetentionPolicy,
         response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
+    },
+    /// Workflow #375 R5d: the frame cleaner's read. Its writer command kind stays
+    /// `RetentionCandidates`, the cleaner's retention read, so task timing records keep their
+    /// closed set of command kinds.
+    FrameRetentionView {
+        now_unix_ms: u64,
+        switches: FrameRetentionSwitches,
+        response: SyncSender<GlobalLedgerResult<FrameRetentionView>>,
     },
     AdmitArtifactEviction {
         guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
@@ -1822,7 +1830,8 @@ fn writer_loop<S: LedgerStore>(
         let started = Instant::now();
         let kind = match &command {
             WriterCommand::ResolveArtifact { .. } => LedgerWriterCommandKind::ResolveArtifact,
-            WriterCommand::RetentionCandidates { .. } => {
+            WriterCommand::RetentionCandidates { .. }
+            | WriterCommand::FrameRetentionView { .. } => {
                 LedgerWriterCommandKind::RetentionCandidates
             }
             WriterCommand::ReleaseLabPin { .. } => LedgerWriterCommandKind::ReleaseLabPin,
@@ -1934,6 +1943,23 @@ fn writer_loop<S: LedgerStore>(
                 response,
             } => {
                 let result = store.retention_candidates(after, policy);
+                command_succeeded = result.is_ok();
+                if let Err(error) = &result
+                    && error.terminal()
+                {
+                    let error = error.clone();
+                    command_observation.replied(response.send(result).is_ok());
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    return Err(error);
+                }
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::FrameRetentionView {
+                now_unix_ms,
+                switches,
+                response,
+            } => {
+                let result = store.frame_retention_view(now_unix_ms, switches);
                 command_succeeded = result.is_ok();
                 if let Err(error) = &result
                     && error.terminal()
