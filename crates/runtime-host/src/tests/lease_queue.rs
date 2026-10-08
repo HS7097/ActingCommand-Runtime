@@ -882,7 +882,9 @@ fn a_run_linked_backend_failure_hands_the_lease_to_the_queue_under_the_run_links
     assert!(transferred.sequence > run_events[0].sequence);
     assert!(transferred.sequence < run_events[1].sequence);
     assert!(host.fatal_error().expect("runtime health").is_none());
-    let release = waiter.request(RuntimeOperation::ReleaseLease { token: next });
+    let release = waiter.request(RuntimeOperation::ReleaseLease {
+        token: next.clone(),
+    });
     assert_eq!(
         waiter.send(&release).state(),
         RuntimeReceiptState::Completed

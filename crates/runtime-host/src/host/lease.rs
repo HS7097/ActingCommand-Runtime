@@ -304,6 +304,10 @@ impl HostShared {
             grant: None,
         })?;
         drop(order);
+        if !queued.preempt_requested() && admission.is_none() {
+            // Q-4: the guard's holder may have let it go before the entry was visible.
+            self.pump(instance_id)?;
+        }
         if queued.preempt_requested() {
             // The request is visible; an idle holder is preempted now, under the guard.
             let admission = match admission {
@@ -3191,7 +3195,12 @@ impl HostShared {
             grant: Some(Arc::clone(&grant)),
         })?;
         drop(order);
-        drop(admission);
+        match admission {
+            // Its drop pumps.
+            Some(admission) => drop(admission),
+            // Q-4: the guard's holder may have let it go before the entry was visible.
+            None => self.pump(instance_id)?,
+        }
         Ok(HostClaimAdmission::Queued {
             status: queued,
             grant,
