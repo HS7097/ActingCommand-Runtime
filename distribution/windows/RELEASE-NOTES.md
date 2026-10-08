@@ -75,11 +75,33 @@ a connection reset and an unchanged selection. This is likely when the Runtime i
 idle and certain while it is running work. For these upgrades, first close the
 old Runtime formally (`actingctl request-shutdown --state-root <state-root>
 --wait 60`; if it is refused as busy, retry once it is idle), then run acsetup,
-which takes the cold ledger gate, then start the Runtime. From this release on
+which takes the cold ledger gate, then start the Runtime. That cold gate runs
+the old version's `ledger-maintenance verify`, which reads every frame twice in
+two passes under a 120 s deadline and refuses ledgers above 200,000 events: on a
+large state root (for example 130k events and 30 GB of frames) it fails with
+`ledger_read_budget_exceeded`, and the upgrade stops with the selection
+unchanged. Such a root cannot be upgraded through either path of the old
+version; check its verify time on a copy before upgrading. From this release on
 the resident daemon waits through a drain, resumes after an abort or the drain
 timeout, and ends with the accepted `commit_shutdown`. A drain that work in
 flight holds past its timeout (60 s by default) still stops the installer, and
 the Runtime keeps running.
+
+Ledger verification and the start (Workflow #375): from this release on,
+`ledger-maintenance verify` and the ledger open at start verify each distinct
+frame once, on up to eight workers, in one pass bounded by the authenticated
+head, with no event-count cap; a frame deleted with an authenticated retention
+proof is accepted. The daemon prints one stdout line after the open, also
+before a failure: `actingd ledger_open events=… artifacts=… artifact_bytes=…
+workers=… sql_read_ms=… verify_ms=… material_ms=… restore_ms=…
+deadline_ms=120000`. Follow its timings as the state root grows: the open
+still has a 120 s deadline, and acsetup waits 60 s for a Runtime it starts.
+
+Rollback: an explicit `acsetup --rollback` runs the target slot's own cold
+ledger gate. Rolling back from this release to v0.11.3 or earlier therefore
+runs the old verify described above, and on a large state root it fails, which
+leaves the installation unchanged. Treat the upgrade to this release as one-way
+on such roots.
 
 Configuration uses `actingcommand.actingd.config.v1` and the existing
 `actingcommand-actingd --config <path>` entry. The supplied template has empty
