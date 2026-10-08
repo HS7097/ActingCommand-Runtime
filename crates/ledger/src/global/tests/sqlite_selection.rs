@@ -178,6 +178,34 @@ fn tamper(root: &TempDir, sql: &str) {
         .expect("tamper fixture");
 }
 
+/// Changes one byte inside the stored record's event id string; the JSON stays valid and
+/// decodable, so only the record hash, tag and index columns detect it.
+fn flip_event_id_byte(root: &TempDir, sequence: u64) {
+    let database = RuntimeDatabase::open_existing(root.path(), false).expect("fixture database");
+    let connection = database
+        .connection("tamper selection fixture")
+        .expect("fixture connection");
+    let mut record: Vec<u8> = connection
+        .query_row(
+            "SELECT canonical_record FROM ledger_events WHERE sequence=?1",
+            [stored(sequence)],
+            |row| row.get(0),
+        )
+        .expect("stored record");
+    let digit = record
+        .windows(5)
+        .position(|window| window == b"\"evt_")
+        .expect("event id string")
+        + 5;
+    record[digit] = if record[digit] == b'0' { b'1' } else { b'0' };
+    connection
+        .execute(
+            "UPDATE ledger_events SET canonical_record=?1 WHERE sequence=?2",
+            rusqlite::params![record, stored(sequence)],
+        )
+        .expect("tamper record");
+}
+
 fn refusal(result: GlobalLedgerResult<GlobalLedgerSelection>) -> (&'static str, &'static str) {
     let error = result.err().expect("refused opening");
     (error.code(), error.operation())
@@ -290,33 +318,7 @@ fn rows_of_other_types_are_not_read() {
         &open_selected(&root, &SELECTED).expect("original"),
         &SELECTED,
     );
-    let database = RuntimeDatabase::open_existing(root.path(), false).expect("fixture database");
-    {
-        let connection = database
-            .connection("tamper selection fixture")
-            .expect("fixture connection");
-        let mut record: Vec<u8> = connection
-            .query_row(
-                "SELECT canonical_record FROM ledger_events WHERE sequence=?1",
-                [stored(2)],
-                |row| row.get(0),
-            )
-            .expect("stored record");
-        // One byte inside the event id string; the JSON stays valid and decodable.
-        let digit = record
-            .windows(5)
-            .position(|window| window == b"\"evt_")
-            .expect("event id string")
-            + 5;
-        record[digit] = if record[digit] == b'0' { b'1' } else { b'0' };
-        connection
-            .execute(
-                "UPDATE ledger_events SET canonical_record=?1 WHERE sequence=?2",
-                rusqlite::params![record, stored(2)],
-            )
-            .expect("tamper record");
-    }
-    drop(database);
+    flip_event_id_byte(&root, 2);
     let after = open_selected(&root, &SELECTED).expect("selected opening skips row 2");
     assert_eq!(answers(&after, &SELECTED), before);
     let error = GlobalLedger::open_evidence(
@@ -438,5 +440,20 @@ fn migrated_root_opens_without_its_prefix_digest() {
     assert_eq!(
         (selection.head_sequence(), head),
         (cutover + 1, cutover + 1)
+    );
+    // Row 1 of the imported prefix is not read: neither selected, the head, nor the
+    // predecessor of a selected row. The prefix digest is not run, so it opens unchanged.
+    flip_event_id_byte(&root, 1);
+    let after = open_selected(&root, &types).expect("selected opening skips prefix row 1");
+    assert_eq!(answers(&after, &types), selected);
+    let error = GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(root.path()).sqlite_material_not_read(),
+        |_| None,
+    )
+    .err()
+    .expect("the complete read detects prefix row 1");
+    assert_eq!(
+        (error.code(), error.operation()),
+        ("ledger_record_mismatch", "verify_sqlite_record")
     );
 }
