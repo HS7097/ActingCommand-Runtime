@@ -2528,13 +2528,11 @@ where
 {
     let budget = raw.budget;
     let bytes = raw.bytes;
-    let check = move |count: usize| check_read_budget(budget, bytes, count);
+    let mut check = move |count: usize| check_read_budget(budget, bytes, count);
     let started = Instant::now();
     let verified = verify_snapshot_records(database, raw).and_then(|verified| {
-        let retention = super::retention::RetentionIndex::from_events_checked(
-            &verified.metadata,
-            &mut |count| check(count),
-        )?;
+        let retention =
+            super::retention::RetentionIndex::from_events_checked(&verified.metadata, &mut check)?;
         Ok((verified.records, verified.head_hash, retention))
     });
     timing.verify_ms = elapsed_ms(started);
@@ -2557,7 +2555,7 @@ where
 {
     let budget = raw.budget;
     let bytes = raw.bytes;
-    let check = move |count: usize| check_read_budget(budget, bytes, count);
+    let mut check = move |count: usize| check_read_budget(budget, bytes, count);
     let started = Instant::now();
     let verified = verify_snapshot_records(database, raw).and_then(
         |VerifiedSnapshotRecords {
@@ -2567,8 +2565,7 @@ where
              marker,
          }| {
             // Workflow #191 C: one retention build serves both the restore and the view prefix.
-            let prefix =
-                VerifiedPrefix::build(marker, metadata, head_hash, &mut |count| check(count))?;
+            let prefix = VerifiedPrefix::build(marker, metadata, head_hash, &mut check)?;
             Ok((records, prefix))
         },
     );
