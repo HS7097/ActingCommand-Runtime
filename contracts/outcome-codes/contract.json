@@ -1,0 +1,208 @@
+{
+  "owner": "contract",
+  "codes": {
+    "foreign_os_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "optional",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional",
+        "os_error": "optional",
+        "io_kind": "optional",
+        "io_op": "optional",
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operating-system or file-system call failed; raw_text keeps the system's text.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_sqlite_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "required",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A SQLite call failed; raw_code is SQLite's extended result code.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_nemu_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "required",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A call into the MuMu external renderer DLL failed; raw_code is the DLL's return value.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_adb_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "optional",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional",
+        "exit_code": "optional",
+        "adb_serial": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "adb failed or printed a failure; raw_text keeps its output.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_mumu_manager_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "optional",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional",
+        "exit_code": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "MuMuManager failed or printed a failure; raw_text keeps its output, exit_code its exit code when it exited.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_vision_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "optional",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The ONNX or OCR vision provider failed; raw_text keeps its message.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_data_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "optional",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional",
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A JSON, zip or TOML parser rejected its input; raw_text keeps the parser's message.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_http_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "optional",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional",
+        "url": "optional",
+        "http_status": "optional",
+        "transport_kind": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An HTTP request failed; raw_text keeps the client's message.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "foreign_other_error": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_source": "required",
+        "raw_text": "required",
+        "raw_code": "optional",
+        "raw_text_truncated": "optional",
+        "raw_text_sensitivity": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Any other third-party component failed; raw_text keeps its message.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "panic_caught": {
+      "category": "warning",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "thread": "required",
+        "boundary": "required",
+        "raw_source": "required",
+        "raw_text": "required",
+        "source_location": "optional",
+        "raw_text_truncated": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A panic boundary caught a panic; raw_text keeps the panic payload. It is a link under the interrupted operation's own failure code.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  },
+  "locations": {}
+}

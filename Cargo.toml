@@ -32,6 +32,7 @@ members = [
     "crates/vision-ffi",
     "providers/ppocr-onnx-json",
     "tools/actinglab-architecture",
+    "tools/outcome-guard",
 ]
 resolver = "3"
 
