@@ -214,6 +214,10 @@
       "type": "integer",
       "description": "A count."
     },
+    "holder_kind": {
+      "type": "vocab:claim_kind",
+      "description": "The kind of claim that holds an instance or waits for it (Workflow #369)."
+    },
     "limit_count": {
       "type": "integer",
       "description": "A limit on a number of items or a depth."
@@ -2773,6 +2777,57 @@
         }
       }
     },
+    "claim_kind": {
+      "description": "Who holds an instance or waits for it, in the one queue per instance (Workflow #369).",
+      "source": {
+        "file": "crates/scheduler/src/lib.rs",
+        "enum": "ClaimKind"
+      },
+      "tokens": {
+        "policy_dispatch": {
+          "description": "A policy dispatch."
+        },
+        "ladder": {
+          "description": "A stuck-recovery ladder."
+        },
+        "ladder_continuation": {
+          "description": "The holding ladder's own continuation."
+        },
+        "startup_package": {
+          "description": "An instance's startup package after an emulator start."
+        },
+        "autostart": {
+          "description": "A configured emulator start at daemon start."
+        },
+        "direct_task_run": {
+          "description": "A direct task run from the CLI, the console or MCP."
+        },
+        "emulator_control": {
+          "description": "An operator emulator control."
+        },
+        "input_lifecycle": {
+          "description": "A safe reset or an application lifecycle command."
+        },
+        "resume_reconnect": {
+          "description": "The reconnect of an instance resume."
+        },
+        "self_check": {
+          "description": "A self-check preparation."
+        },
+        "daemon_start_preparation": {
+          "description": "The dedicated preparation lease of a connection preparation."
+        },
+        "lab_operation": {
+          "description": "A Lab operation."
+        },
+        "client_lease": {
+          "description": "A client AcquireLease or QueueLease."
+        },
+        "resource_close": {
+          "description": "A dedicated retained-session or pause close lease."
+        }
+      }
+    },
     "install_phase": {
       "description": "An installation transition phase.",
       "source": {
@@ -3738,6 +3793,9 @@
   "domains": {
     "foreign_": [
       "contract"
+    ],
+    "dispatch_instance_": [
+      "runtime-host"
     ],
     "panic_": [
       "contract"

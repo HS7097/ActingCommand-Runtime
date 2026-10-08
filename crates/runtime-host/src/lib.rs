@@ -10,6 +10,7 @@
 mod agent_dispatcher;
 mod approval;
 mod catalog_plan;
+mod codes;
 mod emulator_control;
 mod error;
 mod events;

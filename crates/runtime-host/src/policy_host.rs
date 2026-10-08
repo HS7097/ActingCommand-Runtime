@@ -13,6 +13,7 @@ use planning_transaction::planning_state_error;
 pub(crate) use planning_transaction::planning_transaction_error;
 
 use crate::catalog_plan::CatalogLineage;
+use crate::codes::HostCode;
 use crate::failure_identity::SuspensionLiftView;
 use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
@@ -51,6 +52,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const CATALOG_STATE_SCHEMA: &str = "actingcommand.catalog-state.v1";
+/// Workflow #369 W-1: the deferral reason of a candidate whose instance is in takeover
+/// cooldown; the scheduler's own spelling of that state (`SchedulerError::Cooldown`).
+const TAKEOVER_COOLDOWN_DEFERRAL: &str = "lease_cooldown";
 const LEGACY_CATALOG_POINTER_SCHEMA: &str = "actingcommand.catalog-pointer-file.v1";
 const ACTIVE_POINTER_FILE: &str = "active.json";
 const ACTIVE_POINTER_STATE_KEY: &str = "policy.catalog.active";
@@ -236,9 +240,28 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// Workflow #191 ps1: the deferral code of an operator scheduling pause covering the
     /// instance alias, if any.
     pub(crate) scheduling_pause: &'a dyn Fn(&str) -> Option<&'static str>,
+    /// Workflow #369 W-1: what the instance's one queue shows as the cycle starts, if anything
+    /// keeps a dispatch from it.
+    pub(crate) instance_occupancy: &'a dyn Fn(&str) -> Option<InstanceOccupancy>,
     /// Workflow #336 L6 (§12.7): the configuration a paused pair's suspension is lifted
     /// against, exactly as admission judges it.
     pub(crate) suspension_lift: &'a SuspensionLiftView<'a>,
+}
+
+/// Workflow #369 W-1: what keeps a policy dispatch from an instance as a cycle starts. Policy
+/// dispatches only to an instance with no holder, no eligible waiting claim and no takeover
+/// cooldown (Q-3 (6)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstanceOccupancy {
+    /// A claim holds the instance, or an eligible claim waits for it: `holder_kind` is the
+    /// holder, or the waiting claim that receives the key next; `count` is the number of
+    /// eligible waiting claims.
+    Held {
+        holder_kind: actingcommand_scheduler::ClaimKind,
+        count: usize,
+    },
+    /// The instance is free but its takeover cooldown runs until `until_unix_ms`.
+    Cooldown { until_unix_ms: u64 },
 }
 
 /// Correlates an admission request; Runtime rebuilds approval authority and current time.
@@ -1242,6 +1265,7 @@ impl PolicyHost {
             trigger,
             sampled_at_monotonic_ms,
             scheduling_pause,
+            instance_occupancy,
             suspension_lift,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
@@ -1271,17 +1295,41 @@ impl PolicyHost {
             time,
             seed,
             &immediate_retries,
-            |intent| match scheduling_pause(&intent.instance_id) {
+            |intent| match (
+                scheduling_pause(&intent.instance_id),
+                instance_occupancy(&intent.instance_id),
+            ) {
                 // An operator scheduling pause defers the candidate with no wake time: only
                 // `ResumeScheduling` lifts it.
-                Some(code) => Ok(CandidateEligibility::Deferred {
+                (Some(code), _) => Ok(CandidateEligibility::Deferred {
                     reason: DecisionReason {
                         code: code.to_owned(),
                         detail: "Runtime scheduling paused by the operator".to_owned(),
                     },
                     next_wake_unix_ms: None,
                 }),
-                None => match self.control.preview_admission_lifted(
+                // Workflow #369 W-1: a held instance defers its candidates with no wake; the
+                // driver wakes when a key returns (a lease release, transfer or expiry).
+                (None, Some(InstanceOccupancy::Held { holder_kind, count })) => {
+                    Ok(CandidateEligibility::Deferred {
+                        reason: DecisionReason {
+                            code: HostCode::DispatchInstanceHeld.as_str().to_owned(),
+                            detail: format!("holder_kind={} count={count}", holder_kind.as_str()),
+                        },
+                        next_wake_unix_ms: None,
+                    })
+                }
+                // A takeover cooldown defers with a wake at its end.
+                (None, Some(InstanceOccupancy::Cooldown { until_unix_ms })) => {
+                    Ok(CandidateEligibility::Deferred {
+                        reason: DecisionReason {
+                            code: TAKEOVER_COOLDOWN_DEFERRAL.to_owned(),
+                            detail: format!("next_eligible_unix_ms={until_unix_ms}"),
+                        },
+                        next_wake_unix_ms: Some(until_unix_ms),
+                    })
+                }
+                (None, None) => match self.control.preview_admission_lifted(
                     &active.compiled,
                     intent,
                     time.unix_ms,

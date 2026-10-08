@@ -3,11 +3,136 @@
 use super::contained_task::{SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, SchedulingPauseDeadlines};
 use super::scheduling_pause::{PauseOrigin, pause_row};
 use super::*;
+use crate::codes::HostCode;
+use crate::policy_host::InstanceOccupancy;
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
     SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseScope, SchedulingPauseState,
     SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
+
+/// Workflow #369 W-1 (review L-6): how long a policy admission retries an admission guard that
+/// a keyless observe or probe holds, before it ends its intent as contended.
+const POLICY_ADMISSION_CONTENTION_RETRY: Duration = Duration::from_millis(100);
+/// Workflow #369 W-1: how far ahead a contended dispatch may run again.
+const DISPATCH_CONTENDED_RETRY_AFTER_MS: u64 = 1_000;
+
+/// Workflow #369 W-1: a dispatch refused because its instance is held, or because its admission
+/// guard stayed contended, is an Info record; every other refusal stays an Error.
+fn policy_rejection_severity(code: &str) -> EventSeverity {
+    if code == HostCode::DispatchInstanceHeld.as_str()
+        || code == HostCode::DispatchInstanceContended.as_str()
+    {
+        EventSeverity::Info
+    } else {
+        EventSeverity::Error
+    }
+}
+
+/// Workflow #369 W-1 (review L-6): the refusal that ends a dispatch intent whose admission guard
+/// stayed taken; it may run again about one second later.
+fn dispatch_contended_error(now_unix_ms: u64) -> RuntimeHostResult<RuntimeHostError> {
+    let next_eligible_unix_ms = now_unix_ms
+        .checked_add(DISPATCH_CONTENDED_RETRY_AFTER_MS)
+        .ok_or_else(|| {
+            policy_admission_fatal("policy_admission_clock_overflow", "admit_policy_dispatch")
+        })?;
+    let mut error = RuntimeHostError::with_projection(
+        HostCode::DispatchInstanceContended.as_str(),
+        "admit_policy_dispatch",
+        RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false)
+            .with_retry_after(DISPATCH_CONTENDED_RETRY_AFTER_MS),
+    );
+    let mut rejection = error.policy_rejection();
+    rejection.next_eligible_unix_ms = Some(next_eligible_unix_ms);
+    error.lifecycle.policy_rejection = Some(Box::new(rejection));
+    Ok(error)
+}
+
+/// Workflow #369 W-1: what the one queue of an instance shows to policy.
+impl HostShared {
+    /// Every registered instance's occupancy as a policy cycle starts, by alias.
+    fn policy_instance_occupancy(
+        &self,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<BTreeMap<String, InstanceOccupancy>> {
+        let instances = lock(&self.registered_instances, "read_policy_instance_registry")?
+            .values()
+            .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+            .collect::<Vec<_>>();
+        let mut occupancy = BTreeMap::new();
+        for (instance_id, instance_alias) in instances {
+            if let Some(state) = self.instance_occupancy(instance_id, now_unix_ms)? {
+                occupancy.insert(instance_alias, state);
+            }
+        }
+        Ok(occupancy)
+    }
+
+    /// Q-3 (6): policy dispatches only to an instance with no holder, no eligible waiting claim
+    /// and no takeover cooldown. Read under the scheduler lock, with the routine gate read
+    /// just before it.
+    fn instance_occupancy(
+        &self,
+        instance_id: InstanceId,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<Option<InstanceOccupancy>> {
+        let gate = self.routine_gate(instance_id)?;
+        let now_monotonic_ms = self.monotonic_ms()?;
+        let scheduler = lock(&self.scheduler, "read_policy_instance_occupancy")?;
+        let count = scheduler.eligible_count(instance_id, gate, now_monotonic_ms);
+        // A lapsed holder is no hold: the sweep, or the admission's own expiry, ends it.
+        let holder_kind = scheduler
+            .active_lease(instance_id)
+            .filter(|lease| lease.token().expires_at_monotonic_ms() > now_monotonic_ms)
+            .map(|lease| lease.kind())
+            .or_else(|| scheduler.first_eligible_kind(instance_id, gate, now_monotonic_ms));
+        if let Some(holder_kind) = holder_kind {
+            return Ok(Some(InstanceOccupancy::Held { holder_kind, count }));
+        }
+        let Some(remaining_ms) = scheduler.cooldown_remaining_ms(instance_id, now_monotonic_ms)
+        else {
+            return Ok(None);
+        };
+        let until_unix_ms = now_unix_ms.checked_add(remaining_ms).ok_or_else(|| {
+            policy_admission_fatal(
+                "policy_admission_clock_overflow",
+                "read_policy_instance_occupancy",
+            )
+        })?;
+        Ok(Some(InstanceOccupancy::Cooldown { until_unix_ms }))
+    }
+
+    /// The admission's own check (the race since the evaluation): a held instance refuses the
+    /// dispatch with `dispatch_instance_held`, recorded at Info after its intent. A takeover
+    /// cooldown is left to the lease's own refusal.
+    fn dispatch_held_error(
+        &self,
+        instance_alias: &str,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        let instance_id = self
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let Some(InstanceOccupancy::Held { holder_kind, count }) =
+            self.instance_occupancy(instance_id, now_unix_ms)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            RuntimeHostError::request(
+                HostCode::DispatchInstanceHeld.as_str(),
+                "admit_policy_dispatch",
+                RuntimeErrorCode::InvalidRequest,
+            )
+            .with_native_detail(format!(
+                "holder_kind={} count={count}",
+                holder_kind.as_str()
+            )),
+        ))
+    }
+}
 
 fn validate_static_fact_pool_authority(
     catalog: &actingcommand_policy::CompiledCatalog,
@@ -573,6 +698,9 @@ impl HostShared {
         // deferred exactly as admission would refuse it.
         let scheduling_pause =
             lock(&self.scheduling_pause, "read_policy_scheduling_pause")?.clone();
+        // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
+        // candidates are deferred, and nothing is written for them.
+        let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
         // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration.
         let suspension_lift = self.suspension_lift_view(&procedure_manifest);
         let (mut cycle, eligibility_unknown_pairs) = {
@@ -588,6 +716,7 @@ impl HostShared {
                     trigger,
                     sampled_at_monotonic_ms: observed_monotonic_ms,
                     scheduling_pause: &|instance_alias| scheduling_pause.deferral(instance_alias),
+                    instance_occupancy: &|instance_alias| occupancy.get(instance_alias).copied(),
                     suspension_lift: &suspension_lift,
                 },
             )?;
@@ -1142,13 +1271,20 @@ impl HostShared {
             // defers the dispatch before the performance and capacity gates are consulted.
             let pause_deferral = lock(&self.scheduling_pause, "gate_policy_scheduling_pause")?
                 .deferral(&intent.instance_id);
-            let mut gate_error = match pause_deferral {
-                Some(code) => Some(RuntimeHostError::request(
+            // Workflow #369 W-1: a holder or an eligible waiting claim, read under the scheduler
+            // lock, rejects the dispatch at Info after its intent.
+            let held = match pause_deferral {
+                Some(_) => None,
+                None => self.dispatch_held_error(&intent.instance_id, context.now_unix_ms)?,
+            };
+            let mut gate_error = match (pause_deferral, held) {
+                (Some(code), _) => Some(RuntimeHostError::request(
                     code,
                     "admit_policy_dispatch",
                     RuntimeErrorCode::InvalidRequest,
                 )),
-                None => match lock(
+                (None, Some(held)) => Some(held),
+                (None, None) => match lock(
                     &self.performance_control,
                     "gate_policy_performance_dispatch",
                 )?
@@ -1460,16 +1596,32 @@ impl HostShared {
                             };
                         }
                     };
-                    let admission = self.acquire_lease(RuntimeLeaseAcquisition {
-                        request: &validated,
-                        request_id: request.request_id(),
-                        instance_alias: &intent.instance_id,
-                        holder_id,
-                        connection_id,
-                        run_links: Some(run_links),
-                        lease_ttl_ms,
-                        kind: ClaimKind::PolicyDispatch,
-                    });
+                    // Workflow #369 W-1: contention on the admission guard alone is not a
+                    // hold; a retry that still finds it taken ends the intent as contended.
+                    let admission = match self.try_acquire_lease(
+                        RuntimeLeaseAcquisition {
+                            request: &validated,
+                            request_id: request.request_id(),
+                            instance_alias: &intent.instance_id,
+                            holder_id,
+                            connection_id,
+                            run_links: Some(run_links),
+                            lease_ttl_ms,
+                            kind: ClaimKind::PolicyDispatch,
+                        },
+                        POLICY_ADMISSION_CONTENTION_RETRY,
+                    ) {
+                        Ok(Some(success)) => Ok(success),
+                        Ok(None) => match dispatch_contended_error(context.now_unix_ms) {
+                            Ok(error) => Err(RequestFailure::request(
+                                error,
+                                RuntimeReceiptState::Denied,
+                                None,
+                            )),
+                            Err(error) => Err(RequestFailure::poison_without_terminal(error)),
+                        },
+                        Err(failure) => Err(failure),
+                    };
                     match admission {
                         Ok(success) => match success.result {
                             RuntimeResult::LeaseGranted { token } => {
@@ -1532,7 +1684,7 @@ impl HostShared {
                 |failure, effect| {
                     self.events
                         .draft(
-                            EventSeverity::Error,
+                            policy_rejection_severity(failure.error.code()),
                             EventSource::Scheduler,
                             OriginModule::Policy,
                             EventActor::Scheduler,

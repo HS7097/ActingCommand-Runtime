@@ -1,0 +1,38 @@
+{
+  "owner": "runtime-host",
+  "codes": {
+    "dispatch_instance_contended": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "next_eligible_unix_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A policy admission found the instance's admission guard taken by a keyless observe or probe for its whole short retry (about 100 ms). The dispatch intent already written is rejected at info; the candidate may run again from next_eligible_unix_ms, about one second later.",
+      "common_causes": "A read-only observation or a monitor probe of the instance was in progress when the dispatch was admitted.",
+      "handling": "Nothing to repair. The next policy evaluation dispatches the candidate once the observation has finished."
+    },
+    "dispatch_instance_held": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "holder_kind": "required",
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A policy candidate, or its admission, met an instance that a claim holds or that an eligible claim waits for (holder_kind names the holder, or the waiting claim that receives the key next; count is the number of eligible waiting claims). The candidate is deferred with no wake, or its intent is rejected at info; the policy driver evaluates again when a lease is released, transferred or expires.",
+      "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
+      "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
+    }
+  }
+}

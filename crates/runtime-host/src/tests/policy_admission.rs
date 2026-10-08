@@ -1413,3 +1413,237 @@ fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
     );
     host.close().expect("close host");
 }
+
+// Workflow #369 S4: policy waits (model-369-queue.md v3.1 W-1).
+
+fn two_instance_pending_policy_host(root: &TempDir) -> RuntimeHost {
+    let host = RuntimeHost::start(
+        config(root),
+        Arc::new(FakeProvider::from_entries([
+            (
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                instance_id(),
+                Arc::new(FakeState::default()),
+            ),
+            (
+                POLICY_INSTANCE_ALIAS_B.to_owned(),
+                instance_id(),
+                Arc::new(FakeState::default()),
+            ),
+        ])),
+    )
+    .expect("two-instance policy host");
+    host.activate_policy_catalog(&pending_policy_sources(1))
+        .expect("two-instance catalog activation");
+    host
+}
+
+fn evaluate_pending_policy(host: &RuntimeHost, trigger: PolicyTrigger) -> PolicyCycle {
+    host.evaluate_policy_cycle_with_test_inputs(
+        &pending_policy_facts(),
+        &pending_policy_resources(),
+        EvaluationTime {
+            unix_ms: POLICY_NOW_UNIX_MS,
+            monotonic_ms: POLICY_NOW_UNIX_MS,
+        },
+        7,
+        trigger,
+    )
+    .expect("two-instance evaluation")
+}
+
+fn policy_rejections(host: &RuntimeHost) -> Vec<PersistedEvent> {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(EventType::PolicyDispatchRejected),
+        ..EventQuery::default()
+    })
+    .expect("policy rejections")
+}
+
+#[test]
+fn a_held_instance_defers_its_candidates_while_another_instance_dispatches() {
+    // W-1: a held instance's candidates are deferred `dispatch_instance_held` with no wake and
+    // nothing written; another instance dispatches in the same cycle; once the key returns, the
+    // held instance dispatches.
+    use actingcommand_policy::SchedulingDecisionState;
+
+    let root = TempDir::new().expect("tempdir");
+    let host = two_instance_pending_policy_host(&root);
+    let mut holder = TestClient::connect(&host);
+    let (_, token) = holder.acquire(POLICY_INSTANCE_ALIAS);
+
+    let cycle = evaluate_pending_policy(&host, PolicyTrigger::FactsChanged);
+    assert_eq!(
+        cycle
+            .pending_dispatch_intents
+            .iter()
+            .map(|intent| intent.instance_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![POLICY_INSTANCE_ALIAS_B],
+        "B dispatches in the cycle that defers A"
+    );
+    let evaluation = cycle.evaluation.as_ref().expect("evaluation");
+    let deferred = evaluation
+        .decisions
+        .iter()
+        .find(|decision| decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS))
+        .expect("A's decision");
+    assert_eq!(deferred.state, SchedulingDecisionState::Deferred);
+    let held = deferred
+        .reasons
+        .iter()
+        .find(|reason| reason.code == "dispatch_instance_held")
+        .expect("held deferral reason");
+    assert_eq!(held.detail, "holder_kind=client_lease count=0");
+    assert!(
+        host.query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::PolicyDispatchIntent),
+            ..EventQuery::default()
+        })
+        .expect("dispatch intents")
+        .is_empty(),
+        "nothing is written for a deferred candidate"
+    );
+
+    let release = holder.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        holder.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    let cycle = evaluate_pending_policy(&host, PolicyTrigger::Recovery);
+    assert!(
+        cycle
+            .pending_dispatch_intents
+            .iter()
+            .any(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS),
+        "A dispatches once its key returned: {:#?}",
+        cycle.pending_dispatch_intents
+    );
+    drop(holder);
+    host.close().expect("close host");
+}
+
+#[test]
+fn an_admission_that_meets_a_holder_is_rejected_held_at_info() {
+    // W-1 (admission race): the admission reads the holder under the scheduler lock; only then
+    // does it write the intent and an Info `dispatch_rejected` with `dispatch_instance_held`.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("held admission host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let mut holder = TestClient::connect(&host);
+    let (_, token) = holder.acquire(POLICY_INSTANCE_ALIAS);
+
+    let failure = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("a held instance refuses the dispatch");
+    assert_eq!(failure.code(), "dispatch_instance_held");
+    assert!(!failure.is_fatal());
+    let rejections = policy_rejections(&host);
+    let [rejected] = rejections.as_slice() else {
+        panic!("one rejection: {rejections:#?}");
+    };
+    assert_eq!(rejected.severity(), EventSeverity::Info);
+    let EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) = rejected.payload() else {
+        panic!("rejection payload");
+    };
+    assert_eq!(
+        payload.rejection().expect("rejection facts").code,
+        "dispatch_instance_held"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+
+    let release = holder.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        holder.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(holder);
+    host.close().expect("close host");
+}
+
+#[test]
+fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
+    // W-1 (review L-6): an observe or probe holding the admission guard is not a hold. The
+    // admission retries `try_lock` for about 100 ms, then ends the intent it wrote with an
+    // Info `dispatch_instance_contended` carrying `next_eligible_unix_ms` about 1 s ahead; no
+    // `dispatch_instance_held` is written.
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("contended admission host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .instance_admission_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("admission guard");
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let observer = thread::spawn(move || {
+        let _guard = admission.lock().expect("hold the admission guard");
+        held_tx.send(()).expect("report the held guard");
+        release_rx.recv().expect("release signal");
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("guard held");
+
+    let failure = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("a contended guard ends the intent");
+    release_tx.send(()).expect("let the guard go");
+    observer.join().expect("guard holder");
+    assert_eq!(failure.code(), "dispatch_instance_contended");
+    assert!(!failure.is_fatal());
+    let rejections = policy_rejections(&host);
+    let [rejected] = rejections.as_slice() else {
+        panic!("one rejection: {rejections:#?}");
+    };
+    assert_eq!(rejected.severity(), EventSeverity::Info);
+    let EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) = rejected.payload() else {
+        panic!("rejection payload");
+    };
+    let rejection = payload.rejection().expect("rejection facts");
+    assert_eq!(rejection.code, "dispatch_instance_contended");
+    assert_eq!(
+        rejection.next_eligible_unix_ms,
+        Some(intent.prerequisites.evaluated_at_unix_ms + 1_000)
+    );
+    assert!(
+        host.query_persisted_events_for_test(EventQuery::default())
+            .expect("ledger")
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) => {
+                    payload.rejection().map(|rejection| rejection.code.clone())
+                }
+                _ => None,
+            })
+            .all(|code| code != "dispatch_instance_held"),
+        "contention is not a hold"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}

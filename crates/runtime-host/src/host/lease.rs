@@ -1094,6 +1094,46 @@ impl HostShared {
         &self,
         acquisition: RuntimeLeaseAcquisition<'_, '_>,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let instance_id = self
+            .resolve_instance(acquisition.instance_alias)?
+            .instance_id();
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = self.lock_admission(&instance_guard, instance_id)?;
+        self.acquire_lease_guarded(acquisition, instance_id, &admission)
+    }
+
+    /// Workflow #369 W-1: an immediate try whose wait for the admission guard is bounded.
+    /// Contention on the guard alone (a keyless observe or a monitor probe) is retried with
+    /// `try_lock` until `retry` has passed; `None` when the guard stayed taken.
+    pub(super) fn try_acquire_lease(
+        &self,
+        acquisition: RuntimeLeaseAcquisition<'_, '_>,
+        retry: Duration,
+    ) -> Result<Option<OperationSuccess>, RequestFailure> {
+        let instance_id = self
+            .resolve_instance(acquisition.instance_alias)?
+            .instance_id();
+        let instance_guard = self.instance_guard(instance_id)?;
+        let started = Instant::now();
+        let admission = loop {
+            if let Some(admission) = self.try_lock_admission(&instance_guard, instance_id)? {
+                break admission;
+            }
+            if started.elapsed() >= retry {
+                return Ok(None);
+            }
+            thread::sleep(ADMISSION_CONTENTION_POLL_INTERVAL);
+        };
+        self.acquire_lease_guarded(acquisition, instance_id, &admission)
+            .map(Some)
+    }
+
+    fn acquire_lease_guarded(
+        &self,
+        acquisition: RuntimeLeaseAcquisition<'_, '_>,
+        instance_id: InstanceId,
+        admission: &MutexGuard<'_, ()>,
+    ) -> Result<OperationSuccess, RequestFailure> {
         let RuntimeLeaseAcquisition {
             request,
             request_id,
@@ -1104,9 +1144,6 @@ impl HostShared {
             lease_ttl_ms,
             kind,
         } = acquisition;
-        let instance_id = self.resolve_instance(instance_alias)?.instance_id();
-        let instance_guard = self.instance_guard(instance_id)?;
-        let admission = self.lock_admission(&instance_guard, instance_id)?;
         let resolved = self.resolve_instance(instance_alias)?;
         if resolved.instance_id() != instance_id {
             return Err(RequestFailure::poison_without_terminal(
@@ -1117,7 +1154,7 @@ impl HostShared {
                 ),
             ));
         }
-        self.expire_instance_if_due(resolved.instance_id(), Some(&*admission))?;
+        self.expire_instance_if_due(resolved.instance_id(), Some(admission))?;
         if kind.takes_admission_checks() {
             self.require_bound_endpoint(
                 &resolved,
@@ -3315,6 +3352,9 @@ impl HostShared {
         }
     }
 }
+
+/// Workflow #369 W-1: how often a bounded admission retries a taken guard.
+const ADMISSION_CONTENTION_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Q-2a: a grant to a drain-capacity kind never meets business capacity.
 const fn kind_capacity(kind: ClaimKind) -> CapacityUse {

@@ -24,15 +24,18 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
         POLICY_NOW_UNIX_MS + 60_000,
         8,
     );
-    assert!(matches!(
-        host.admit_policy_dispatch(
+    let PolicyDispatchAdmission::Granted {
+        context: approved_context,
+    } = host
+        .admit_policy_dispatch(
             &approved_intent,
             &approved_reasons,
             &policy_context(&host, &approved_intent),
         )
-        .expect("approved dispatch"),
-        PolicyDispatchAdmission::Granted { .. }
-    ));
+        .expect("approved dispatch")
+    else {
+        panic!("expected the approved dispatch to be granted");
+    };
 
     let mut client = TestClient::connect(&host);
     client.declare_governance_identity();
@@ -56,6 +59,9 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
 
     host.complete_policy_dispatch(&approved_intent.decision_id)
         .expect("complete approved dispatch");
+    // Workflow #369 W-1: a held instance defers its candidates; the dispatch's lease ends first.
+    host.release_policy_dispatch_lease_for_test(&approved_context)
+        .expect("end the approved dispatch's lease");
     record_policy_approval_disposition(&host, &approved_intent, ApprovalDisposition::Revoked);
     let (_, after_revoke, after_revoke_reasons) = evaluated_policy_dispatch_at(
         &host,
