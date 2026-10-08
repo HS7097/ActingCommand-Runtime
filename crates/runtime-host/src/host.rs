@@ -387,6 +387,10 @@ pub struct RuntimeHostConfig {
     capacity_thresholds: actingcommand_contract::CapacityThresholds,
     frame_retention_enabled: bool,
     failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy,
+    /// Workflow #375 R5c: whether the error windows and the Lab output lose their interior
+    /// near-duplicates (`frame_retention_dedup_error`, `frame_retention_dedup_lab`).
+    frame_retention_dedup_error: bool,
+    frame_retention_dedup_lab: bool,
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
@@ -430,6 +434,8 @@ impl RuntimeHostConfig {
             capacity_thresholds: actingcommand_contract::CapacityThresholds::default(),
             frame_retention_enabled: true,
             failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy::default(),
+            frame_retention_dedup_error: true,
+            frame_retention_dedup_lab: false,
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
@@ -518,6 +524,14 @@ impl RuntimeHostConfig {
         policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> Self {
         self.failed_run_retention = policy;
+        self
+    }
+
+    /// Workflow #375 R5c: the dedup switches of the frame classes; ordinary frames are always
+    /// deduplicated and have no switch.
+    pub fn with_frame_retention_dedup(mut self, error_windows: bool, lab_output: bool) -> Self {
+        self.frame_retention_dedup_error = error_windows;
+        self.frame_retention_dedup_lab = lab_output;
         self
     }
 
@@ -695,6 +709,14 @@ impl RuntimeHostConfig {
         self.failed_run_retention
     }
 
+    pub const fn frame_retention_dedup_error(&self) -> bool {
+        self.frame_retention_dedup_error
+    }
+
+    pub const fn frame_retention_dedup_lab(&self) -> bool {
+        self.frame_retention_dedup_lab
+    }
+
     pub fn validate(&self) -> RuntimeHostResult<()> {
         self.scheduler
             .validate()
@@ -795,6 +817,11 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("capacity_thresholds", &self.capacity_thresholds)
             .field("frame_retention_enabled", &self.frame_retention_enabled)
             .field("failed_run_retention", &self.failed_run_retention)
+            .field(
+                "frame_retention_dedup_error",
+                &self.frame_retention_dedup_error,
+            )
+            .field("frame_retention_dedup_lab", &self.frame_retention_dedup_lab)
             .field("performance_control", &self.performance_control)
             .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
@@ -1303,6 +1330,7 @@ impl RuntimeHost {
             admission_guards: Mutex::new(BTreeMap::new()),
             queue_order_locks: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
+            observe_marks: Mutex::new(observation::ObserveMarks::default()),
             contained_runs: Mutex::new(BTreeMap::new()),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
@@ -3260,6 +3288,8 @@ struct HostShared {
     // never held across device work.
     queue_order_locks: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
+    /// Workflow #375 R5c: the latest observe frame per instance and origin.
+    observe_marks: Mutex<observation::ObserveMarks>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
     // Workflow #191 ps1: the operator's scheduling pauses (no expiry; since Workflow #361 B1
     // persisted as `host.scheduling_pause`).

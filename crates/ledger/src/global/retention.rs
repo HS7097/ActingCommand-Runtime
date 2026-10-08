@@ -18,8 +18,13 @@ use actingcommand_contract::{
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod material;
 mod prior_epoch;
+mod view;
 pub use material::LedgerOpenTiming;
 pub(super) use material::{PendingMaterial, elapsed_ms};
+pub use view::{
+    FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
+    FrameRetentionView, KeptFrameFolder, LocalOffsetMs,
+};
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
 #[derive(Default)]
@@ -49,6 +54,8 @@ pub(super) struct RetentionIndex {
     quiescent_instances: BTreeMap<(OwnerEpoch, InstanceId), TerminalEvent>,
     pending_objects: BTreeSet<ArtifactId>,
     unlinked_warning: bool,
+    /// Workflow #375 R5c: the facts of the read-only frame retention view.
+    frame_facts: view::FrameFacts,
     through_sequence: u64,
 }
 
@@ -869,6 +876,7 @@ impl RetentionIndex {
         }
         self.apply_prior_epoch(event);
         self.apply_run_terminal(event);
+        self.frame_facts.apply(event);
         if let EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload)) = event.payload()
             && let RuntimeLifecyclePhase::ResourceQuiescence {
                 instance_id,
