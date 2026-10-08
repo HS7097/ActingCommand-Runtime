@@ -334,6 +334,14 @@
       "type": "id",
       "description": "An installation transition id."
     },
+    "artifact_id": {
+      "type": "id",
+      "description": "An artifact's opaque identifier."
+    },
+    "event_id": {
+      "type": "id",
+      "description": "A ledger event's opaque identifier."
+    },
     "phase": {
       "type": "vocab:install_phase",
       "description": "An installation transition phase reported by the Runtime host."
@@ -3744,6 +3752,15 @@
       "contract"
     ],
     "maintenance_artifact_": [
+      "runtime-host"
+    ],
+    "material_read_": [
+      "runtime-host"
+    ],
+    "proposal_report_": [
+      "runtime-host"
+    ],
+    "strategic_evidence_": [
       "runtime-host"
     ],
     "panic_": [

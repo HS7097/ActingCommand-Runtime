@@ -13,5 +13,15 @@ actingcommand_contract::outcome_codes! {
         /// next actingd start completes (keys `pending_evictions`; the detail also names
         /// `remedy=start_actingd_once`); on a Segment root any recorded eviction.
         MaintenanceArtifactMaterialUnavailable => "maintenance_artifact_material_unavailable": error,
+        /// Warning. A material read found no file for an artifact without an eviction proof
+        /// (a frame deleted by hand); the read reports `missing` and nothing is recorded
+        /// (keys `artifact_id`, `event_id`, carried by the read request).
+        MaterialReadMissing => "material_read_missing": warning,
+        /// Error. A proposal's report artifact could not be read; the request is refused
+        /// and the Runtime keeps running (keys `artifact_id`).
+        ProposalReportUnavailable => "proposal_report_unavailable": error,
+        /// Error. A strategic report's evidence artifact could not be read; the request is
+        /// refused and the Runtime keeps running (keys `artifact_id`).
+        StrategicEvidenceUnavailable => "strategic_evidence_unavailable": error,
     }
 }

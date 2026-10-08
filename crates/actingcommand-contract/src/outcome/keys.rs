@@ -89,6 +89,8 @@ outcome_keys! {
     disposition: vocab(disposition),
     host_halted: boolean,
     transition_id: id,
+    artifact_id: id,
+    event_id: id,
     phase: vocab(install_phase),
     slot: vocab(slot),
     target_slot: vocab(slot),

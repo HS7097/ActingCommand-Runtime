@@ -500,3 +500,45 @@ fn maintenance_verify_refuses_only_a_pending_eviction() {
     );
     assert!(pending.material.exists(), "nothing was read or removed");
 }
+
+/// Workflow #375 R5b: on an SQLite root a frame deleted by hand is listed once as
+/// `material_missing`; the export and the stability report complete.
+#[test]
+fn forensic_reports_list_a_missing_frame_and_complete() {
+    use actingcommand_ledger_forensics::{
+        ForensicCommand, ForensicEventsRequest, ForensicOutput, ForensicReport, ForensicRequest,
+        run,
+    };
+    let root = tempfile::tempdir().expect("root");
+    let (database, ledger) = formal_root(root.path());
+    let artifacts = material_store(root.path());
+    let missing = capture(&ledger, &artifacts, b"frame deleted before the export");
+    ledger.close().expect("close the writer");
+    drop(database);
+    std::fs::remove_file(&missing.material).expect("hand deletion");
+
+    let ForensicOutput::Human(export) =
+        run(ForensicRequest::new(root.path(), ForensicCommand::Export))
+            .expect("the export completes")
+    else {
+        panic!("human export");
+    };
+    let listed = export
+        .lines()
+        .find_map(|line| line.strip_prefix("material_missing: "))
+        .expect("material_missing line");
+    assert_eq!(
+        serde_json::from_str::<Vec<ProjectedArtifactReference>>(listed).expect("listed references"),
+        vec![missing.reference.clone()]
+    );
+
+    let ForensicOutput::Machine(ForensicReport::Stability(report)) = run(
+        ForensicRequest::stability(root.path(), ForensicEventsRequest::default()),
+    )
+    .expect("stability report") else {
+        panic!("stability report");
+    };
+    assert_eq!(report.material_missing, vec![missing.reference]);
+    assert!(report.failures.is_empty());
+    assert!(report.gaps.is_empty());
+}

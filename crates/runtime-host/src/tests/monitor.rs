@@ -564,10 +564,14 @@ fn missing_monitor_evidence_never_stops_the_runtime() {
             ..EventQuery::default()
         },
     );
-    let object_key = verified
-        .last()
-        .and_then(|event| event.artifacts.first())
-        .and_then(|artifact| artifact.object_key())
+    let frame_event = verified.last().expect("monitor frame event").clone();
+    let frame = frame_event
+        .artifacts
+        .first()
+        .expect("monitor artifact")
+        .clone();
+    let object_key = frame
+        .object_key()
         .expect("monitor artifact object key")
         .to_string();
     let clear = client.request(RuntimeOperation::ClearMonitor {
@@ -586,6 +590,43 @@ fn missing_monitor_evidence_never_stops_the_runtime() {
         Arc::new(FakeProvider::one("node.a", instance_id, state)),
     )
     .expect("the restart reads no frame");
+    assert!(restarted.fatal_error().expect("runtime health").is_none());
+
+    // Workflow #375 R5b: reading the deleted frame reports `missing`; the Runtime keeps
+    // running.
+    let mut client = TestClient::connect(&restarted);
+    let read = client.request(RuntimeOperation::ReadMaterial {
+        request: Box::new(actingcommand_contract::RuntimeMaterialReadRequest {
+            event: actingcommand_contract::LedgerEventPosition {
+                event_id: frame_event.event_id,
+                sequence: frame_event.sequence,
+            },
+            artifact_id: frame.artifact_id,
+            snapshot_position: frame_event.sequence,
+            byte_count: frame.byte_count,
+            sha256: frame.sha256.clone(),
+            expected_run_id: None,
+            expected_frame_id: None,
+            expected_request_id: None,
+            expected_correlation_id: None,
+            offset: 0,
+            requested_length: 1,
+            max_reply_bytes: actingcommand_contract::MAX_RUNTIME_MATERIAL_REPLY_BYTES,
+        }),
+    });
+    let receipt = client.send(&read);
+    let Some(RuntimeResult::MaterialRead { result }) = receipt.result() else {
+        panic!("material read result");
+    };
+    assert_eq!(
+        result.state,
+        actingcommand_contract::RuntimeMaterialReadState::Missing
+    );
+    assert_eq!(
+        result.failure.as_ref().map(|failure| failure.code.as_str()),
+        Some("material_read_missing")
+    );
+    drop(client);
     assert!(restarted.fatal_error().expect("runtime health").is_none());
     restarted.close().expect("close restarted host");
 }
