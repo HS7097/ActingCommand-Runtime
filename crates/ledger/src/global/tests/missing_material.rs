@@ -495,9 +495,7 @@ fn maintenance_verify_refuses_only_a_pending_eviction() {
         .expect_err("a pending intent refuses verify");
     assert_eq!(refused.code, "maintenance_artifact_material_unavailable");
     assert!(
-        refused
-            .cause
-            .starts_with("pending_evictions=1 remedy=start_actingd_once"),
+        refused.cause.starts_with("pending_evictions=1;"),
         "{}",
         refused.cause
     );

@@ -391,7 +391,7 @@ fn require_settled_retention(events: &[actingcommand_ledger::PersistedEvent]) ->
             HostCode::MaintenanceArtifactMaterialUnavailable.as_str(),
             "verify_complete_artifact_material",
         );
-        error.cause = format!("pending_evictions={pending} remedy=start_actingd_once");
+        error.cause = format!("pending_evictions={pending}");
         return Err(error);
     }
     Ok(())

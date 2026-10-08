@@ -740,9 +740,17 @@ impl HostShared {
             existing.push((artifact_id_text(&reference)?, reference));
         }
         existing.sort_by(|left, right| left.0.cmp(&right.0));
-        if let Some((_, reference)) = existing.into_iter().next() {
-            let stored = read_projected_verified(self.artifacts.root(), &reference)
-                .map_err(RuntimeHostError::artifact)?;
+        if let Some((artifact_id, reference)) = existing.into_iter().next() {
+            // Workflow #375 R5b: a stored report that cannot be read (deleted by hand, say)
+            // refuses the request; it never stops the Runtime.
+            let Ok(stored) = read_projected_verified(self.artifacts.root(), &reference) else {
+                return Err(RuntimeHostError::request(
+                    HostCode::ProposalReportUnavailable.as_str(),
+                    "read_strategic_report",
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_native_detail(format!("artifact_id={artifact_id}")));
+            };
             if stored != bytes {
                 return Err(RuntimeHostError::fatal(
                     "strategic_report_identity_conflict",

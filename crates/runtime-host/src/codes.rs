@@ -10,8 +10,8 @@ actingcommand_contract::outcome_codes! {
     pub(crate) enum HostCode {
         /// Error. `ledger-maintenance` refuses a root whose artifact retention is not
         /// settled: on a formal root an eviction intent without its outcome, which only the
-        /// next actingd start completes (keys `pending_evictions`; the detail also names
-        /// `remedy=start_actingd_once`); on a Segment root any recorded eviction.
+        /// next actingd start completes (keys `pending_evictions`; the catalog's `handling`
+        /// says to start actingd once); on a Segment root any recorded eviction.
         MaintenanceArtifactMaterialUnavailable => "maintenance_artifact_material_unavailable": error,
         /// Warning. A material read found no file for an artifact without an eviction proof
         /// (a frame deleted by hand); the read reports `missing` and nothing is recorded

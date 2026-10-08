@@ -595,6 +595,9 @@ fn missing_monitor_evidence_never_stops_the_runtime() {
     // Workflow #375 R5b: reading the deleted frame reports `missing`; the Runtime keeps
     // running.
     let mut client = TestClient::connect(&restarted);
+    let before_read = projected_events(&mut client, EventQuery::default())
+        .last()
+        .map_or(0, |event| event.sequence);
     let read = client.request(RuntimeOperation::ReadMaterial {
         request: Box::new(actingcommand_contract::RuntimeMaterialReadRequest {
             event: actingcommand_contract::LedgerEventPosition {
@@ -625,6 +628,25 @@ fn missing_monitor_evidence_never_stops_the_runtime() {
     assert_eq!(
         result.failure.as_ref().map(|failure| failure.code.as_str()),
         Some("material_read_missing")
+    );
+    // Neither a fatal record nor a lifecycle failure record is written for the read.
+    let written = projected_events(
+        &mut client,
+        EventQuery {
+            from_sequence: Some(before_read + 1),
+            ..EventQuery::default()
+        },
+    );
+    assert!(
+        written
+            .iter()
+            .all(|event| event.severity != EventSeverity::Fatal
+                && event.event_type != EventType::RuntimeFailed),
+        "records written by the read: {:?}",
+        written
+            .iter()
+            .map(|event| (event.event_type, event.severity))
+            .collect::<Vec<_>>()
     );
     drop(client);
     assert!(restarted.fatal_error().expect("runtime health").is_none());

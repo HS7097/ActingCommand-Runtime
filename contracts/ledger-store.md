@@ -309,8 +309,10 @@ corrupt tail. Neither path opens referenced artifact content.
 Only the Ledger can construct its private `LedgerEventMetadata`. It retains the
 typed envelope/payload and structurally valid `ProjectedArtifactReference` values
 with their original object keys. It has no conversion to `PersistedEvent` or
-`VerifiedArtifactReference`. The ordinary recovery and export APIs still require
-the ArtifactStore verifier and exact verified-reference equality.
+`VerifiedArtifactReference`. The verifying openings (the candidate writer through
+`open_sqlite_candidate_with_artifact_verifier`, and `open_read_only` with a verifier for
+Segment evidence) still require the ArtifactStore verifier and exact verified-reference
+equality; the formal openings read no material (Workflow #375 R5a, below).
 
 `GlobalLedgerMetadata::project_view_page(&EventQuery, ProjectionProfile,
 &RuntimeEventQueryPageRequest)` and the online
@@ -395,10 +397,11 @@ open, hash or stat a referenced file. A reference with an authenticated eviction
 takes the proof's state, a `Failed` outcome included (`FailedEviction`); any other
 reference is restored `Unrecorded`, so a missing or damaged artifact never fails
 startup. Every row still carries the reference's object key, byte count and SHA-256,
-so a later read checks the bytes it reads. The candidate and Segment openings still
-require the ArtifactStore verifier: missing verification or a mismatched/missing
-artifact fails them, and no reference is accepted solely because its metadata is
-self-consistent. File paths, secret fields and forged metadata retain their existing
+so a later read checks the bytes it reads. Only the verifying openings still read
+material: `open_sqlite_candidate_with_artifact_verifier` and `open_read_only` with a
+verifier (Segment evidence). For them, missing verification or a mismatched/missing
+artifact fails the opening, and no reference is accepted solely because its metadata
+is self-consistent. File paths, secret fields and forged metadata retain their existing
 non-disclosure rules. ArtifactStore continues to own files; the ledger owns
 references and verified event facts.
 

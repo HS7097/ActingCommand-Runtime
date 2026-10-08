@@ -132,7 +132,8 @@ the keyed head and the retention replay are unchanged. A formal `verify` refuses
 the retention state the ledger itself leaves unsettled: an eviction intent without its
 outcome, which only the next actingd start completes. It fails with
 `maintenance_artifact_material_unavailable` and the cause
-`pending_evictions=<n> remedy=start_actingd_once`; `Unrecorded`, `Evicted` and
+`pending_evictions=<n>` (start actingd once so that it finishes the eviction, then run
+`verify` again); `Unrecorded`, `Evicted` and
 `FailedEviction` pass. A Segment root still refuses any eviction. After the writer
 open, startup prints one stdout line, also before a failure is returned and never as
 a Ledger event: `actingd ledger_open events=<n> artifacts=<n> artifact_bytes=<b>

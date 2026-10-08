@@ -3,8 +3,8 @@
 #![forbid(unsafe_code)]
 
 use actingcommand_artifact_store::{
-    ArtifactStoreError, EvidenceManifest, read_projected_verified, verify_evidence_archive,
-    verify_projected_read_only,
+    ArtifactStoreError, EvidenceManifest, open_projected_stream, read_projected_verified,
+    verify_evidence_archive, verify_projected_read_only,
 };
 use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::{
@@ -654,19 +654,28 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         },
         |reference| {
             let verified = if stability && reference.kind == ArtifactKind::DiagnosticJson {
-                let size = match task_records::is_task_stream(&artifact_root, reference) {
-                    Ok(true) => Ok(()),
-                    Ok(false) => check_diagnostic_artifact_size(
-                        &artifact_root,
-                        reference,
-                        MAX_STABILITY_ARTIFACT_BYTES,
-                    ),
-                    Err(error) => Err(ArtifactStoreError::fatal(
-                        error.code(),
-                        error.operation(),
-                        error.to_string(),
-                    )),
+                // Workflow #375 R5b: a file that does not exist keeps its native NotFound, so
+                // it is listed as `material_missing` instead of a task-stream failure.
+                // Any other open result is reported by the reads below, as before.
+                let present = match open_projected_stream(&artifact_root, reference) {
+                    Err(error) if error.is_material_missing() => Err(error),
+                    _ => Ok(()),
                 };
+                let size = present.and_then(|()| {
+                    match task_records::is_task_stream(&artifact_root, reference) {
+                        Ok(true) => Ok(()),
+                        Ok(false) => check_diagnostic_artifact_size(
+                            &artifact_root,
+                            reference,
+                            MAX_STABILITY_ARTIFACT_BYTES,
+                        ),
+                        Err(error) => Err(ArtifactStoreError::fatal(
+                            error.code(),
+                            error.operation(),
+                            error.to_string(),
+                        )),
+                    }
+                });
                 size.and_then(|()| verify_projected_read_only(&artifact_root, reference))
             } else {
                 verify_projected_read_only(&artifact_root, reference)
