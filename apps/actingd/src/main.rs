@@ -19,8 +19,8 @@ mod c4_support;
 use actingcommand_contract::{
     EventActor, EventFamily, EventQuery, EventSource, GovernanceIdentityCard,
     MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionProfile,
-    RunId, RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeSubscriptionRequest,
-    SchedulingOutcomeProjection, SubscriptionCursor,
+    RunId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryPageRequest, RuntimeReceipt,
+    RuntimeSubscriptionRequest, SchedulingOutcomeProjection, SubscriptionCursor,
 };
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
@@ -43,7 +43,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const POLICY_EVENT_WAIT_MS: u64 = 250;
-const POLICY_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(1);
+// v0.11.4 flaky-tests report B1: the client default. With `wait_ms = 0` the host answers at
+// once; the budget only matters while a ledger writer stall delays the reply.
+const POLICY_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_POLICY_CYCLE_DURATION: Duration = Duration::from_secs(10 * 60);
 
 fn main() -> ExitCode {
@@ -553,6 +555,8 @@ fn monitor_policy(
         }
     };
 
+    let mut waiting_for_install = false;
+    let mut refusals = PolicySubscriptionRefusals::default();
     let monitor_result = loop {
         match host.fatal_error() {
             Ok(Some(error)) => break Err(ActingdError::runtime(error)),
@@ -567,6 +571,27 @@ fn monitor_policy(
         if driver.is_finished() {
             break Err(ActingdError::process("policy_driver_stopped"));
         }
+        // Workflow #376 M1: an install drain closes root admission and would refuse the
+        // subscription. Wait without subscribing and keep the cursor, so an abort or a drain
+        // timeout resumes exactly here; only the accepted `commit_shutdown` (the shutdown check
+        // above) ends the monitor.
+        match host.is_lifecycle_draining() {
+            Ok(true) => {
+                if !waiting_for_install {
+                    waiting_for_install = true;
+                    report_policy_monitor("waiting install_transition");
+                }
+                thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
+                continue;
+            }
+            Ok(false) => {
+                if waiting_for_install {
+                    waiting_for_install = false;
+                    report_policy_monitor("resumed");
+                }
+            }
+            Err(error) => break Err(ActingdError::runtime(error)),
+        }
         let request = match RuntimeSubscriptionRequest::new(
             EventQuery::default(),
             ProjectionProfile::Concise,
@@ -580,16 +605,40 @@ fn monitor_policy(
             }
         };
         let batch = match client.subscribe_events(request) {
-            Ok(batch) => batch,
+            Ok(batch) => {
+                refusals.succeeded();
+                batch
+            }
             Err(error) => {
                 match host.fatal_error() {
                     Ok(Some(fatal)) | Err(fatal) => break Err(ActingdError::runtime(fatal)),
                     Ok(None) => {}
                 }
-                match host.is_shutdown_requested() {
-                    Ok(true) => break Ok(()),
-                    Ok(false) => break Err(ActingdError::client(error)),
+                let shutdown_requested = match host.is_shutdown_requested() {
+                    Ok(requested) => requested,
                     Err(fatal) => break Err(ActingdError::runtime(fatal)),
+                };
+                let draining = match host.is_lifecycle_draining() {
+                    Ok(draining) => draining,
+                    Err(fatal) => break Err(ActingdError::runtime(fatal)),
+                };
+                // Workflow #376 M2. A non-fatal rejection does not latch the connection, so
+                // the same client subscribes again after a wait or a retry.
+                match refusals.failed(
+                    shutdown_requested,
+                    is_admission_refusal(error.code(), error.projection()),
+                    draining,
+                ) {
+                    PolicySubscriptionFailureAction::End => break Ok(()),
+                    PolicySubscriptionFailureAction::Wait => continue,
+                    PolicySubscriptionFailureAction::RetryOnce => {
+                        report_policy_monitor("retry runtime_unavailable");
+                        thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
+                        continue;
+                    }
+                    PolicySubscriptionFailureAction::Fail => {
+                        break Err(ActingdError::client(error));
+                    }
                 }
             }
         };
@@ -626,6 +675,72 @@ fn monitor_policy(
         driver_result,
         recorded,
     )
+}
+
+/// Workflow #376 M2: what the policy monitor does after its subscription failed and the host
+/// reported no fatal error (a fatal host error ends the monitor with that error first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PolicySubscriptionFailureAction {
+    /// Report the failure: `runtime.failed` and a FATAL exit, as before.
+    Fail,
+    /// The host accepted a shutdown: the monitor's normal end.
+    End,
+    /// An install drain holds admission: wait without subscribing (M1 on the next pass).
+    Wait,
+    /// An admission refusal with neither a drain nor a shutdown behind it (a drain aborted
+    /// between the refusal and the check): retry once after the poll interval.
+    RetryOnce,
+}
+
+/// Admission refusals in a row that neither a drain nor a shutdown explains (Q4: one retry).
+#[derive(Debug, Default)]
+struct PolicySubscriptionRefusals {
+    retried: bool,
+}
+
+impl PolicySubscriptionRefusals {
+    fn succeeded(&mut self) {
+        self.retried = false;
+    }
+
+    fn failed(
+        &mut self,
+        shutdown_requested: bool,
+        admission_refusal: bool,
+        draining: bool,
+    ) -> PolicySubscriptionFailureAction {
+        let action = if shutdown_requested {
+            PolicySubscriptionFailureAction::End
+        } else if !admission_refusal {
+            PolicySubscriptionFailureAction::Fail
+        } else if draining {
+            PolicySubscriptionFailureAction::Wait
+        } else if self.retried {
+            PolicySubscriptionFailureAction::Fail
+        } else {
+            PolicySubscriptionFailureAction::RetryOnce
+        };
+        if action == PolicySubscriptionFailureAction::RetryOnce {
+            self.retried = true;
+        }
+        action
+    }
+}
+
+/// The host's typed refusal of a request it did not admit (`begin_request` gave no work): a
+/// non-fatal `RuntimeUnavailable` rejection. An install drain refuses a subscription this way.
+fn is_admission_refusal(code: &str, projection: Option<&RuntimeErrorProjection>) -> bool {
+    code == "runtime_request_rejected"
+        && projection.is_some_and(|projection| {
+            projection.code == RuntimeErrorCode::RuntimeUnavailable && !projection.fatal
+        })
+}
+
+/// Workflow #376 M6: one informational stdout line per policy monitor change; the ledger's
+/// `host.install_transition` facts stay authoritative. Like the other informational daemon
+/// lines, a failed stdout write does not stop the daemon.
+fn report_policy_monitor(state: &str) {
+    let _ = writeln!(std::io::stdout().lock(), "actingd policy_monitor {state}");
 }
 
 fn finish_policy_closeout(
@@ -1649,6 +1764,56 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    /// Workflow #376 T2: the policy monitor's decision after a failed subscription.
+    #[test]
+    fn policy_monitor_waits_through_an_install_drain_and_otherwise_fails_loud() {
+        use super::PolicySubscriptionFailureAction::{End, Fail, RetryOnce, Wait};
+        let refusal = RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeUnavailable, false);
+        assert!(is_admission_refusal(
+            "runtime_request_rejected",
+            Some(&refusal)
+        ));
+        for (code, projection) in [
+            (
+                "runtime_request_rejected",
+                Some(RuntimeErrorProjection::new(
+                    RuntimeErrorCode::RuntimeUnavailable,
+                    true,
+                )),
+            ),
+            (
+                "runtime_request_rejected",
+                Some(RuntimeErrorProjection::new(
+                    RuntimeErrorCode::InvalidRequest,
+                    false,
+                )),
+            ),
+            ("runtime_receipt_header_failed", None),
+        ] {
+            assert!(!is_admission_refusal(code, projection.as_ref()), "{code}");
+        }
+
+        // (shutdown_requested, admission_refusal, draining)
+        let mut refusals = PolicySubscriptionRefusals::default();
+        assert_eq!(refusals.failed(false, true, true), Wait);
+        assert_eq!(refusals.failed(false, true, true), Wait);
+        assert_eq!(refusals.failed(true, true, true), End);
+        assert_eq!(refusals.failed(true, false, false), End);
+        assert_eq!(refusals.failed(false, false, true), Fail);
+        assert_eq!(refusals.failed(false, false, false), Fail);
+        // One unexplained refusal is retried once; the second in a row fails as before.
+        assert_eq!(refusals.failed(false, true, false), RetryOnce);
+        assert_eq!(refusals.failed(false, true, false), Fail);
+        // A successful subscription in between resets the count.
+        let mut refusals = PolicySubscriptionRefusals::default();
+        assert_eq!(refusals.failed(false, true, false), RetryOnce);
+        refusals.succeeded();
+        assert_eq!(refusals.failed(false, true, false), RetryOnce);
+        // A drain or a shutdown after a retry is still explained.
+        assert_eq!(refusals.failed(false, true, true), Wait);
+        assert_eq!(refusals.failed(true, true, false), End);
     }
 
     #[test]

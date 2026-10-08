@@ -68,6 +68,19 @@ console must be closed first although it is closed; stop the adb server and
 retry (this disconnects other tools sharing port 5037), or roll back by hand
 (see `INSTALL.md`, "Upgrade boundary").
 
+Upgrading in place from v0.11.1, v0.11.2 or v0.11.3 while the Runtime runs
+(Workflow #376): the old daemon's policy monitor fails when acsetup's drain
+closes admission, before `commit_shutdown` is read, so the installer can end with
+a connection reset and an unchanged selection. This is likely when the Runtime is
+idle and certain while it is running work. For these upgrades, first close the
+old Runtime formally (`actingctl request-shutdown --state-root <state-root>
+--wait 60`; if it is refused as busy, retry once it is idle), then run acsetup,
+which takes the cold ledger gate, then start the Runtime. From this release on
+the resident daemon waits through a drain, resumes after an abort or the drain
+timeout, and ends with the accepted `commit_shutdown`. A drain that work in
+flight holds past its timeout (60 s by default) still stops the installer, and
+the Runtime keeps running.
+
 Configuration uses `actingcommand.actingd.config.v1` and the existing
 `actingcommand-actingd --config <path>` entry. The supplied template has empty
 private state-root and salt values and no device instances; once `state_root`

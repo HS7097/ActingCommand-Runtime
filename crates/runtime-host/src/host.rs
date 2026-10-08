@@ -1582,6 +1582,14 @@ impl RuntimeHost {
             .is_shutdown_requested())
     }
 
+    /// Workflow #376: whether an install drain holds root admission (`draining`/`drained`) or
+    /// the host is stopping. An in-process reader only; the daemon's policy monitor waits while
+    /// this is true instead of sending a subscription the drain would refuse.
+    pub fn is_lifecycle_draining(&self) -> RuntimeHostResult<bool> {
+        self.shared_ref("read_lifecycle_draining")?
+            .lifecycle_draining()
+    }
+
     /// Keeps a whole policy cycle inside the same admission boundary as IPC and native probes.
     pub fn begin_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
         Ok(self
