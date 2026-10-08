@@ -2304,6 +2304,12 @@ impl RuntimeHost {
         kind: ClaimKind,
     ) -> RuntimeHostResult<HostClaimForTest> {
         let shared = self.shared_ref("request_host_claim_for_test")?;
+        let (actor, source) = scheduled_request_transport_origin(
+            shared
+                .resolve_instance(instance_alias)
+                .map_err(|failure| *failure.error)?
+                .provenance(),
+        );
         let issuer = shared.events.issuer();
         let holder_id = *issuer
             .mint_holder_id()
@@ -2317,8 +2323,8 @@ impl RuntimeHost {
                 .mint_correlation_id()
                 .map_err(|_| runtime_identifier_error())?,
             None,
-            EventActor::Runtime,
-            EventSource::Runtime,
+            actor,
+            source,
             unix_ms_now()?,
             RuntimeOperation::AcquireLease {
                 instance_alias: instance_alias.to_owned(),
