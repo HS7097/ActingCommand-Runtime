@@ -82,7 +82,10 @@ describe the entire bounded scan, while `row_offset`, returned rows and
 changed input or catalog prefixes reject continuation. Later events beyond the
 bounds do not enter matching.
 
-Unreadable paths return the native read failure. Empty or incomplete catalogs,
+Unreadable paths return the native read failure. On an SQLite root both openings
+verify each artifact separately (Workflow #375 R5b): an artifact that does not verify,
+such as a frame deleted by hand, no longer fails the opening; it makes that prefix
+incomplete, and the Host records the page as a Warning. Empty or incomplete catalogs,
 bad tails, incomplete input and invalid catalog transitions yield explicit gaps.
 Missing selected fields retain their source and registration identities.
 `evidence_complete` is true only for complete prefixes with no gaps or missing

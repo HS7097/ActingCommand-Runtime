@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::HostCode;
 use actingcommand_artifact_store::{ArtifactReader, open_projected_stream};
 use actingcommand_contract::{
     ArtifactEvictionDisposition, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
@@ -218,7 +219,10 @@ impl HostShared {
             Ok(())
         })();
         if let Err(error) = work {
-            let (state, limit, error) = match error {
+            // Workflow #375 R5b: an artifact-store failure of the read never marks the Runtime
+            // fatal. A file that does not exist (a frame deleted by hand) reads as `Missing`
+            // with nothing recorded; any other store failure is recorded as a Warning.
+            let (state, limit, error, severity) = match error {
                 MaterialReadError::Ledger(error) => {
                     let mut host = if error.is_fatal() {
                         RuntimeHostError::fatal(
@@ -249,20 +253,32 @@ impl HostShared {
                             RuntimeMaterialReadState::NotProvided,
                             Some(RuntimeMaterialReadLimit::BudgetExceeded),
                             host,
+                            None,
                         ),
                         "ledger_source_incomplete" => {
-                            (RuntimeMaterialReadState::SourceIncomplete, None, host)
+                            (RuntimeMaterialReadState::SourceIncomplete, None, host, None)
                         }
-                        _ => (RuntimeMaterialReadState::RequestDenied, None, host),
+                        _ => (RuntimeMaterialReadState::RequestDenied, None, host, None),
                     }
                 }
+                MaterialReadError::Artifact(error) if error.is_material_missing() => (
+                    RuntimeMaterialReadState::Missing,
+                    None,
+                    RuntimeHostError::request(
+                        HostCode::MaterialReadMissing.as_str(),
+                        "read_runtime_material",
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_native_detail(format!(
+                        "artifact_id={} event_id={}",
+                        crate::failure_identity::identifier_text(&request.artifact_id),
+                        crate::failure_identity::identifier_text(&request.event.event_id)
+                    )),
+                    None,
+                ),
                 MaterialReadError::Artifact(error) => {
                     let state = if error.code() == "artifact_read_budget_exceeded" {
                         RuntimeMaterialReadState::NotProvided
-                    } else if error.code() == "artifact_read_failed"
-                        && error.io_error_kind() == Some(std::io::ErrorKind::NotFound)
-                    {
-                        RuntimeMaterialReadState::Missing
                     } else if matches!(
                         error.code(),
                         "artifact_hash_mismatch" | "artifact_verify_failed"
@@ -273,17 +289,30 @@ impl HostShared {
                     };
                     let limit = (state == RuntimeMaterialReadState::NotProvided)
                         .then_some(RuntimeMaterialReadLimit::BudgetExceeded);
-                    (state, limit, RuntimeHostError::artifact(error))
+                    (
+                        state,
+                        limit,
+                        RuntimeHostError::artifact_read(error),
+                        Some(EventSeverity::Warning),
+                    )
                 }
                 MaterialReadError::Identity(error) => {
-                    (RuntimeMaterialReadState::IntegrityFailed, None, error)
+                    (RuntimeMaterialReadState::IntegrityFailed, None, error, None)
                 }
                 MaterialReadError::Cache(error) => {
-                    (RuntimeMaterialReadState::ReadFailed, None, error)
+                    (RuntimeMaterialReadState::ReadFailed, None, error, None)
                 }
             };
-            self.record_material_read_failure(validated, &error, request, result.source.is_some())
+            if state != RuntimeMaterialReadState::Missing {
+                self.record_material_read_failure(
+                    validated,
+                    &error,
+                    request,
+                    result.source.is_some(),
+                    severity,
+                )
                 .map_err(RequestFailure::poison_without_terminal)?;
+            }
             result.state = state;
             result.limit = limit;
             result.chunk = None;
@@ -301,12 +330,15 @@ impl HostShared {
         })
     }
 
+    /// Records a failed read; `severity` replaces the primary record's `Error` severity of a
+    /// non-fatal failure (Workflow #375 R5b: `Warning` for an artifact-store failure).
     fn record_material_read_failure(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         error: &RuntimeHostError,
         selection: &RuntimeMaterialReadRequest,
         reference_resolved: bool,
+        severity: Option<EventSeverity>,
     ) -> RuntimeHostResult<()> {
         let error = error
             .clone()
@@ -326,11 +358,12 @@ impl HostShared {
                 .to_string(),
                 Sensitivity::Internal,
             ));
-        self.append_lifecycle_failure(
+        self.append_lifecycle_failure_with_severity(
             RuntimeLifecycleFailureStage::OperationCleanup,
             RuntimeLifecycleFailure::Host(&error),
             request.event_links(None, None, None),
             reference_resolved.then_some(selection.event.event_id),
+            severity,
         )?;
         if error.is_fatal() {
             self.fatal.mark(error.clone())?;
@@ -415,7 +448,7 @@ impl HostShared {
             (request.validate(), request.operation())
         {
             let resolved = matches!(receipt.result(), Some(RuntimeResult::MaterialRead { result }) if result.source.is_some());
-            self.record_material_read_failure(&validated, error, selection, resolved)?;
+            self.record_material_read_failure(&validated, error, selection, resolved, None)?;
         }
         Ok(())
     }

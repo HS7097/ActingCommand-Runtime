@@ -53,3 +53,8 @@ reference/code/operation; their `source_sequence` is null because the failed
 event was not admitted by GlobalLedger. Page projection failures carry its
 admitted source sequence. A report with gaps is written and flushed before the
 CLI returns nonzero `stability_export_incomplete`; pagination alone is successful.
+
+`material_missing` (Workflow #375 R5b) lists, once per artifact, each reference whose
+file does not exist on an SQLite root, such as a diagnostic or frame deleted by hand.
+Such a reference is neither a failure nor a gap, is not projected, and does not make
+the window incomplete. A Segment root keeps reporting it as a failure.

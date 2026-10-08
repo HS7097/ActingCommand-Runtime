@@ -91,6 +91,14 @@ impl ArtifactStoreError {
         self.io_error_kind
     }
 
+    /// Workflow #375: the artifact's file could not be opened because it does not exist
+    /// (`artifact_read_failed` with `NotFound`), such as a frame deleted by hand. A reader
+    /// reports such material as missing instead of failing.
+    pub fn is_material_missing(&self) -> bool {
+        self.code == "artifact_read_failed"
+            && self.io_error_kind == Some(std::io::ErrorKind::NotFound)
+    }
+
     pub(crate) fn read_budget_exceeded() -> Self {
         let mut error = Self::fatal(
             "artifact_read_budget_exceeded",

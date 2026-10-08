@@ -3,8 +3,8 @@
 #![forbid(unsafe_code)]
 
 use actingcommand_artifact_store::{
-    ArtifactStoreError, EvidenceManifest, read_projected_verified, verify_evidence_archive,
-    verify_projected_read_only,
+    ArtifactStoreError, EvidenceManifest, open_projected_stream, read_projected_verified,
+    verify_evidence_archive, verify_projected_read_only,
 };
 use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::{
@@ -382,6 +382,9 @@ pub struct TaskEvidenceReport {
     pub window_complete: bool,
     pub corrupt_tail: Option<CorruptTailReport>,
     pub failures: Vec<StabilityFailure>,
+    /// Workflow #375 R5b: artifacts whose file does not exist (a frame deleted by hand, say),
+    /// one entry per artifact. On an SQLite root they are listed here, not as failures.
+    pub material_missing: Vec<ProjectedArtifactReference>,
     pub gaps: Vec<&'static str>,
     pub diagnostics: Vec<TaskDiagnosticPage>,
     pub diagnostic_gaps: Vec<TaskDiagnosticGap>,
@@ -419,6 +422,9 @@ pub struct StabilityReport {
     pub matched_count: usize,
     pub rows: Vec<StabilityRow>,
     pub failures: Vec<StabilityFailure>,
+    /// Workflow #375 R5b: artifacts whose file does not exist, one entry per artifact; on an
+    /// SQLite root they are listed here, not as failures.
+    pub material_missing: Vec<ProjectedArtifactReference>,
     pub next_after_sequence: Option<u64>,
     pub has_more: bool,
     pub window_complete: bool,
@@ -638,7 +644,8 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     let task_evidence = request.command == ForensicCommand::TaskEvidence;
     let material = stability || export || task_evidence;
     let config = GlobalLedgerEvidenceConfig::new(&request.state_root);
-    let mut artifact_failures = Vec::new();
+    // Each failed artifact, and whether its file does not exist.
+    let mut opening_failures = Vec::new();
     let snapshot = GlobalLedger::open_evidence(
         if material {
             config.sqlite_material_per_artifact()
@@ -647,19 +654,28 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         },
         |reference| {
             let verified = if stability && reference.kind == ArtifactKind::DiagnosticJson {
-                let size = match task_records::is_task_stream(&artifact_root, reference) {
-                    Ok(true) => Ok(()),
-                    Ok(false) => check_diagnostic_artifact_size(
-                        &artifact_root,
-                        reference,
-                        MAX_STABILITY_ARTIFACT_BYTES,
-                    ),
-                    Err(error) => Err(ArtifactStoreError::fatal(
-                        error.code(),
-                        error.operation(),
-                        error.to_string(),
-                    )),
+                // Workflow #375 R5b: a file that does not exist keeps its native NotFound, so
+                // it is listed as `material_missing` instead of a task-stream failure.
+                // Any other open result is reported by the reads below, as before.
+                let present = match open_projected_stream(&artifact_root, reference) {
+                    Err(error) if error.is_material_missing() => Err(error),
+                    _ => Ok(()),
                 };
+                let size = present.and_then(|()| {
+                    match task_records::is_task_stream(&artifact_root, reference) {
+                        Ok(true) => Ok(()),
+                        Ok(false) => check_diagnostic_artifact_size(
+                            &artifact_root,
+                            reference,
+                            MAX_STABILITY_ARTIFACT_BYTES,
+                        ),
+                        Err(error) => Err(ArtifactStoreError::fatal(
+                            error.code(),
+                            error.operation(),
+                            error.to_string(),
+                        )),
+                    }
+                });
                 size.and_then(|()| verify_projected_read_only(&artifact_root, reference))
             } else {
                 verify_projected_read_only(&artifact_root, reference)
@@ -668,12 +684,15 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
                 Ok(verified) => Some(verified),
                 Err(error) => {
                     if stability || export || task_evidence {
-                        artifact_failures.push(StabilityFailure {
-                            source_sequence: None,
-                            artifact: reference.clone(),
-                            code: error.code(),
-                            operation: error.operation(),
-                        });
+                        opening_failures.push((
+                            StabilityFailure {
+                                source_sequence: None,
+                                artifact: reference.clone(),
+                                code: error.code(),
+                                operation: error.operation(),
+                            },
+                            error.is_material_missing(),
+                        ));
                     }
                     None
                 }
@@ -681,6 +700,22 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         },
     )
     .map_err(map_ledger_error)?;
+    // Workflow #375 R5b: on an SQLite root an artifact whose file does not exist is listed
+    // once as `material_missing`, not as a failure; a Segment root keeps its behavior.
+    let mut artifact_failures = Vec::new();
+    let mut material_missing: Vec<ProjectedArtifactReference> = Vec::new();
+    for (failure, missing) in opening_failures {
+        if missing && snapshot.segment().is_none() {
+            if !material_missing
+                .iter()
+                .any(|known| known.artifact_id == failure.artifact.artifact_id)
+            {
+                material_missing.push(failure.artifact);
+            }
+        } else {
+            artifact_failures.push(failure);
+        }
+    }
 
     if export && let Some(failure) = artifact_failures.first() {
         let mut detail = format!(
@@ -718,10 +753,16 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
                 &artifact_root,
                 request.events,
                 artifact_failures,
+                material_missing,
             )?),
         ))),
         ForensicCommand::TaskEvidence => {
-            let mut report = task_evidence_report(&snapshot, request.events, artifact_failures)?;
+            let mut report = task_evidence_report(
+                &snapshot,
+                request.events,
+                artifact_failures,
+                material_missing,
+            )?;
             task_records::expand(&artifact_root, &request.task_records, &mut report)?;
             Ok(ForensicOutput::Machine(ForensicReport::TaskEvidence(
                 Box::new(report),
@@ -759,6 +800,7 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         ForensicCommand::Export => Ok(ForensicOutput::Human(render_export(
             &snapshot,
             &artifact_root,
+            &material_missing,
         )?)),
     }
 }
@@ -801,6 +843,7 @@ fn task_evidence_report(
     snapshot: &GlobalLedgerEvidence,
     request: ForensicEventsRequest,
     failures: Vec<StabilityFailure>,
+    material_missing: Vec<ProjectedArtifactReference>,
 ) -> ForensicResult<TaskEvidenceReport> {
     use actingcommand_contract::{EventPayload, InputPayload, TaskPayload, TaskSemanticFact};
     if request.filter != ForensicEventFilter::default() {
@@ -977,6 +1020,7 @@ fn task_evidence_report(
         steps,
         corrupt_tail,
         failures,
+        material_missing,
         gaps: gaps.into_iter().collect(),
         diagnostics: Vec::new(),
         diagnostic_gaps: Vec::new(),
@@ -1363,6 +1407,7 @@ fn stability_report(
     root: &Path,
     request: ForensicEventsRequest,
     mut failures: Vec<StabilityFailure>,
+    material_missing: Vec<ProjectedArtifactReference>,
 ) -> ForensicResult<StabilityReport> {
     let through_sequence = request
         .through_sequence
@@ -1394,6 +1439,13 @@ fn stability_report(
         {
             scanned_diagnostic_count += 1;
             let reference = artifact.project(true);
+            // Workflow #375 R5b: a missing file is already listed in `material_missing`.
+            if material_missing
+                .iter()
+                .any(|missing| missing.artifact_id == reference.artifact_id)
+            {
+                continue;
+            }
             let result = project_stability(root, event, &reference, &mut matched_count);
             match result {
                 Ok(Some(comparison)) => rows.push(StabilityRow {
@@ -1438,6 +1490,7 @@ fn stability_report(
         matched_count,
         rows,
         failures,
+        material_missing,
         next_after_sequence: has_more.then_some(scanned_through_sequence),
         has_more,
         window_complete: !has_more && gaps.is_empty(),
@@ -1605,7 +1658,11 @@ fn repair_report(repair: &GlobalLedgerRepairRecord) -> RepairReport {
     }
 }
 
-fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult<String> {
+fn render_export(
+    snapshot: &GlobalLedgerEvidence,
+    root: &Path,
+    material_missing: &[ProjectedArtifactReference],
+) -> ForensicResult<String> {
     let open = open_report(snapshot);
     let repairs = repair_reports(snapshot);
     let query = serde_json::from_value(json!({})).map_err(query_error)?;
@@ -1726,6 +1783,15 @@ fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult
         serde_json::to_string(&eviction_proofs(&events)).map_err(serialization_error)?
     )
     .expect("write String");
+    // Workflow #375 R5b: artifacts whose file does not exist; the export still completes.
+    if !material_missing.is_empty() {
+        writeln!(
+            report,
+            "material_missing: {}",
+            serde_json::to_string(material_missing).map_err(serialization_error)?
+        )
+        .expect("write String");
+    }
     writeln!(report, "effective_configuration:").expect("write String");
     for event in &events {
         if event.event_type() != EventType::ArtifactVerified {
@@ -1736,7 +1802,11 @@ fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult
                 && artifact.producer() == ArtifactProducer::ArtifactStore
         }) {
             let reference = artifact.project(true);
-            if task_records::is_task_stream(root, &reference)? {
+            if material_missing
+                .iter()
+                .any(|missing| missing.artifact_id == reference.artifact_id)
+                || task_records::is_task_stream(root, &reference)?
+            {
                 continue;
             }
             let invalid = |code| {

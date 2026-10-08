@@ -536,7 +536,7 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
 }
 
 #[test]
-fn runtime_restart_fails_when_monitor_evidence_is_missing() {
+fn missing_monitor_evidence_never_stops_the_runtime() {
     let root = TempDir::new().expect("tempdir");
     let instance_id = instance_id();
     let state = Arc::new(FakeState::default());
@@ -564,10 +564,14 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
             ..EventQuery::default()
         },
     );
-    let object_key = verified
-        .last()
-        .and_then(|event| event.artifacts.first())
-        .and_then(|artifact| artifact.object_key())
+    let frame_event = verified.last().expect("monitor frame event").clone();
+    let frame = frame_event
+        .artifacts
+        .first()
+        .expect("monitor artifact")
+        .clone();
+    let object_key = frame
+        .object_key()
         .expect("monitor artifact object key")
         .to_string();
     let clear = client.request(RuntimeOperation::ClearMonitor {
@@ -578,21 +582,75 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
     host.close().expect("close host");
     fs::remove_file(root.path().join(object_key)).expect("remove monitor evidence");
 
+    // Workflow #375 R5a: the start reads no artifact material, so a frame deleted by hand
+    // never stops it. Periodic retention stays off: an absent frame at eviction admission is
+    // the cleaner's own case (R5d), not this one.
     let restarted = RuntimeHost::start(
-        config(&root),
+        config(&root).with_frame_retention_enabled(false),
         Arc::new(FakeProvider::one("node.a", instance_id, state)),
-    );
-    let error = match restarted {
-        Ok(host) => {
-            host.close().expect("close unexpected host");
-            panic!("missing monitor evidence must fail restart");
-        }
-        Err(error) => error,
+    )
+    .expect("the restart reads no frame");
+    assert!(restarted.fatal_error().expect("runtime health").is_none());
+
+    // Workflow #375 R5b: reading the deleted frame reports `missing`; the Runtime keeps
+    // running.
+    let mut client = TestClient::connect(&restarted);
+    let before_read = projected_events(&mut client, EventQuery::default())
+        .last()
+        .map_or(0, |event| event.sequence);
+    let read = client.request(RuntimeOperation::ReadMaterial {
+        request: Box::new(actingcommand_contract::RuntimeMaterialReadRequest {
+            event: actingcommand_contract::LedgerEventPosition {
+                event_id: frame_event.event_id,
+                sequence: frame_event.sequence,
+            },
+            artifact_id: frame.artifact_id,
+            snapshot_position: frame_event.sequence,
+            byte_count: frame.byte_count,
+            sha256: frame.sha256.clone(),
+            expected_run_id: None,
+            expected_frame_id: None,
+            expected_request_id: None,
+            expected_correlation_id: None,
+            offset: 0,
+            requested_length: 1,
+            max_reply_bytes: actingcommand_contract::MAX_RUNTIME_MATERIAL_REPLY_BYTES,
+        }),
+    });
+    let receipt = client.send(&read);
+    let Some(RuntimeResult::MaterialRead { result }) = receipt.result() else {
+        panic!("material read result");
     };
-    assert_eq!(error.code(), "artifact_store_verification_failed");
-    assert_eq!(error.operation(), "validate_persisted_event");
-    assert_eq!(error.projection().code, RuntimeErrorCode::LedgerFailure);
-    assert!(error.is_fatal());
+    assert_eq!(
+        result.state,
+        actingcommand_contract::RuntimeMaterialReadState::Missing
+    );
+    assert_eq!(
+        result.failure.as_ref().map(|failure| failure.code.as_str()),
+        Some("material_read_missing")
+    );
+    // Neither a fatal record nor a lifecycle failure record is written for the read.
+    let written = projected_events(
+        &mut client,
+        EventQuery {
+            from_sequence: Some(before_read + 1),
+            ..EventQuery::default()
+        },
+    );
+    assert!(
+        written
+            .iter()
+            .all(|event| event.severity != EventSeverity::Fatal
+                && event.event_type != EventType::RuntimeFailed),
+        "records written by the read: {:?}",
+        written
+            .iter()
+            .map(|event| (event.event_type, event.severity))
+            .collect::<Vec<_>>()
+    );
+    drop(client);
+    assert!(restarted.fatal_error().expect("runtime health").is_none());
+    restarted.close().expect("close restarted host");
 }
 
 #[test]

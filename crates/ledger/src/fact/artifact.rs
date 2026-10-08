@@ -117,7 +117,15 @@ impl LedgerArtifactReference {
                     && proof.validate().is_ok()
                     && proof.outcome.is_none()
             }
-            ArtifactAvailability::Unrecorded | ArtifactAvailability::FailedEviction(_) => false,
+            // Workflow #375 R5a: a recorded failed eviction restores as ledger state; it no
+            // longer stops an opening.
+            ArtifactAvailability::FailedEviction(proof) => {
+                proof.identity.artifact == reference
+                    && proof.validate().is_ok()
+                    && proof.disposition
+                        == Some(actingcommand_contract::ArtifactEvictionDisposition::Failed)
+            }
+            ArtifactAvailability::Unrecorded => false,
         };
         if !valid {
             return Err(FactValidationError {

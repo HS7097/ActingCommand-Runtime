@@ -5,7 +5,6 @@
 use crate::events::RuntimeEvents;
 use crate::owner::{OwnerUnlock, unlock_retained_owner};
 use crate::{RuntimeClock, RuntimeHostError, RuntimeHostResult};
-use actingcommand_artifact_store::ArtifactStore;
 use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, EventActor, EventSeverity, EventSource, OriginModule,
     OwnerEpoch, OwnerResourceDisposition, OwnerUnlockActor, RuntimeErrorCode,
@@ -70,7 +69,6 @@ fn record(
     let deadline = limits.deadline().map_err(database_error)?;
     // Existing storage only: the retained owner already ran on this root.
     let database = Arc::new(RuntimeDatabase::open_existing(root, false).map_err(database_error)?);
-    let artifacts = ArtifactStore::open(root).map_err(RuntimeHostError::artifact)?;
     let maintenance =
         LedgerMaintenance::acquire(root, false, limits, deadline).map_err(ledger_error)?;
     if !maintenance.formal_ready(&database).map_err(ledger_error)? {
@@ -85,10 +83,9 @@ fn record(
         std::process::id(),
         clock.sample()?.unix_ms
     );
+    // Workflow #375 R5a: the writer open reads no artifact material.
     let ledger = maintenance
-        .open_writer(database, owner_id, |reference| {
-            artifacts.verify_recovery_reference(reference).ok()
-        })
+        .open_writer(database, owner_id)
         .map_err(ledger_error)?;
     let appended = events
         .system_links()
