@@ -352,3 +352,59 @@ fn proposal_rejects_unverified_reports_and_invalid_packs_without_partial_activat
     drop(client);
     host.close().expect("close runtime");
 }
+
+#[test]
+fn proposal_with_a_missing_report_is_refused_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("base catalog");
+    let report = host
+        .store_test_report(b"synthetic deleted proposal report")
+        .expect("proposal report");
+    let proposal = CatalogProposal::new(
+        base.catalog_hash(),
+        base.catalog_version(),
+        2,
+        vec![report.clone()],
+        ProposalKind::ParameterInstantiation {
+            instantiation: TaskTemplateInstantiation::new(
+                "fixture.observe",
+                "fixture.observe-copy",
+                POLICY_INSTANCE_ALIAS,
+                Some(110),
+                Some(1_100),
+            )
+            .expect("template instantiation"),
+        },
+    )
+    .expect("class A proposal");
+    // Workflow #375 R5b: a report file deleted by hand refuses the request; the Runtime keeps
+    // running.
+    fs::remove_file(
+        root.path()
+            .join(report.object_key().expect("report object key")),
+    )
+    .expect("hand deletion");
+    let mut client = TestClient::connect(&host);
+    let request = client.agent_request(RuntimeOperation::CompileProposal {
+        proposal: Box::new(proposal),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    let error = receipt.error_projection().expect("request error");
+    assert_eq!(error.host_code(), Some("proposal_report_unavailable"));
+    assert!(!error.fatal);
+    drop(client);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close runtime");
+}

@@ -887,3 +887,44 @@ fn strategic_report_rejects_unverified_evidence_without_artifact_or_catalog_chan
     drop(client);
     host.close().expect("close runtime");
 }
+
+#[test]
+fn strategic_report_refuses_missing_evidence_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("strategy base catalog");
+    let evidence = host
+        .store_test_report(b"synthetic deleted strategy evidence")
+        .expect("strategy evidence");
+    let base_facts = policy_facts();
+    let (ledger_position, fact_snapshot_id) =
+        strategic_frozen_identity(&host, &base_facts, &policy_resources());
+    let mut facts = base_facts;
+    facts.ledger_position = ledger_position;
+    facts.fact_snapshot_id = fact_snapshot_id;
+    let report = strategy_report(&base, &evidence, &facts);
+    // Workflow #375 R5b: an evidence file deleted by hand refuses the request; the Runtime
+    // keeps running.
+    fs::remove_file(
+        root.path()
+            .join(evidence.object_key().expect("evidence object key")),
+    )
+    .expect("hand deletion");
+    let error = host
+        .prepare_strategic_report(&report, std::slice::from_ref(&evidence))
+        .expect_err("missing evidence refuses the request");
+    assert_eq!(error.code(), "strategic_evidence_unavailable");
+    assert!(!error.is_fatal());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close runtime");
+}

@@ -2663,6 +2663,8 @@ mod store_contract;
 mod forensics_cli;
 #[path = "tests/forensics_read_only.rs"]
 mod forensics_read_only;
+#[path = "tests/missing_material.rs"]
+mod missing_material;
 #[path = "tests/process.rs"]
 mod process;
 #[path = "tests/sealed_global_ledger.rs"]

@@ -83,18 +83,23 @@ flag and bytes. The reference sent outside its owner omits `object_key`.
 
 `not_provided` reports pending eviction, eviction, failed eviction, budget expiry
 or reply-size refusal explicitly. `missing` requires a native NotFound from the
-material read path. Root/lock/other I/O errors retain their own read-failure codes.
-An absent file is never evidence of authorized eviction. `integrity_failed`,
-`source_incomplete`, `request_denied` and `read_failed` contain no success bytes.
-Existing views still report `material_read: not_requested`.
+material read path; its failure code is `material_read_missing` (Workflow #375 R5b).
+Root/lock/other I/O errors retain their own read-failure codes. An absent file is
+never evidence of authorized eviction. `integrity_failed`, `source_incomplete`,
+`request_denied` and `read_failed` contain no success bytes. Existing views still
+report `material_read: not_requested`.
 
 Expected retention states need no new event. Successful ranges create no per-range
 success log and do not reuse publication-time `ArtifactVerified` as a new read event.
-The Host explicitly records non-Ledger material failures through its original
-module-owned lifecycle failure path, preserving operation, native details, secondary
-causes, OS error and fatal disposition. Wire failures use the original redacted
-ErrorProjection and safe codes. Fatal Ledger errors retain the program-failure
-path; a failed Ledger cannot be followed by a successful material receipt.
+Workflow #375 R5b: no ArtifactStore failure of a read marks the Runtime fatal. A
+`missing` read (a frame deleted by hand) records nothing. Any other ArtifactStore
+failure (`integrity_failed`, a lock or sharing conflict as `read_failed`, budget
+expiry) is a non-fatal request failure that the Host records as a Warning through its
+original module-owned lifecycle failure path, preserving operation, native details,
+secondary causes and OS error. Other non-Ledger failures keep that path and their
+fatal disposition. Wire failures use the original redacted ErrorProjection and safe
+codes. Fatal Ledger errors retain the program-failure path; a failed Ledger cannot be
+followed by a successful material receipt.
 
 Material failures use Failed/Denied receipts with the typed failure result and its
 matching ErrorProjection. Existing outcomes for all other operations remain.

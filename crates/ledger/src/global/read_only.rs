@@ -324,6 +324,29 @@ impl GlobalLedgerReadOnly {
     where
         F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
     {
+        let mut verifier = Some(verify_artifact);
+        Self::open_restoring(config, |retention, record| {
+            retention.restore_record(record, &mut verifier)
+        })
+    }
+
+    /// Workflow #375 R5a: `open` without reading artifact material (the Segment import
+    /// source of `ledger-maintenance`). A reference without an eviction proof stays
+    /// `Unrecorded`, so a missing artifact file never ends the snapshot.
+    pub(super) fn open_unread(config: GlobalLedgerReadOnlyConfig) -> GlobalLedgerResult<Self> {
+        Self::open_restoring(
+            config,
+            super::retention::RetentionIndex::restore_record_unread,
+        )
+    }
+
+    fn open_restoring(
+        config: GlobalLedgerReadOnlyConfig,
+        mut restore: impl FnMut(
+            &super::retention::RetentionIndex,
+            StoredEventRecord,
+        ) -> GlobalLedgerResult<PersistedEvent>,
+    ) -> GlobalLedgerResult<Self> {
         let budget = config.budget;
         let mut snapshot = open_snapshot(config, |line| {
             parse_record(line)?.into_metadata().map_err(|error| {
@@ -335,11 +358,10 @@ impl GlobalLedgerReadOnly {
             &snapshot.events,
             &mut |count| check_read_budget(budget, bytes, count),
         )?;
-        let mut verifier = Some(verify_artifact);
         let mut events = Vec::with_capacity(snapshot.events.len());
         let mut event_ids = BTreeSet::new();
         let mut next_sequence = 1;
-        let mut parse = |line: &[u8]| retention.restore_record(parse_record(line)?, &mut verifier);
+        let mut parse = |line: &[u8]| restore(&retention, parse_record(line)?);
         let mut material_prefix_bytes = 0_u64;
         // Metadata and proof validation finished above. Reuse the already bounded bytes;
         // the ordinary scanner retains its exact first-tail position and failure behavior.

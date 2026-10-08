@@ -2302,7 +2302,7 @@ mod tests {
             .initialize_empty(&database)
             .expect("ready ledger");
         let writer = maintenance
-            .open_writer(database, "device-test-read-spec".into(), |_| None)
+            .open_writer(database, "device-test-read-spec".into())
             .expect("test ledger");
         for offset in 0..3 {
             let draft = EventDraft::new(

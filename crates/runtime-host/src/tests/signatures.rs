@@ -25,7 +25,7 @@ fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effect
     .unwrap();
     maintenance.initialize_empty(&database).unwrap();
     let input = maintenance
-        .open_writer(database, "signature-source".into(), |_| None)
+        .open_writer(database, "signature-source".into())
         .unwrap();
     let ids = IdentifierIssuer::new().unwrap();
     input

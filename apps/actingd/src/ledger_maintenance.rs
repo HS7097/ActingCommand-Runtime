@@ -57,6 +57,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             let encoded = serde_json::to_string(&receipt)
                 .map_err(|_| ActingdError::process("maintenance_receipt_encode_failed"))?;
             println!("{encoded}");
+            // Workflow #375 R5a: the referenced material a restore copied or skipped.
+            if let Some(material) = receipt.restored_material {
+                eprintln!(
+                    "INFO actingd: ledger_maintenance restore artifacts_copied={} artifacts_evicted={} artifacts_absent={}",
+                    material.copied, material.evicted, material.absent
+                );
+            }
             Ok(())
         }
         Err(error) => {

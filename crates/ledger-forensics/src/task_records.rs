@@ -322,6 +322,14 @@ pub(super) fn expand(
                 continue;
             }
             let artifact = reference.project(true);
+            // Workflow #375 R5b: a missing file is already listed in `material_missing`.
+            if report
+                .material_missing
+                .iter()
+                .any(|missing| missing.artifact_id == artifact.artifact_id)
+            {
+                continue;
+            }
             if let Some(cursor) = &options.cursor {
                 if cursor.artifact_id != artifact.artifact_id {
                     continue;

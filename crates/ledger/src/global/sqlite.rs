@@ -448,20 +448,18 @@ pub(super) fn formal_ready(database: &RuntimeDatabase) -> GlobalLedgerResult<boo
     Ok(extent.is_some_and(|(marker, _)| marker.state == "ready"))
 }
 
-pub(super) fn storage_status<F>(
+/// Workflow #375 R5a: the status of a formal or candidate medium from one complete
+/// authenticated read that reads no artifact material.
+pub(super) fn storage_status(
     database: &RuntimeDatabase,
-    verifier: &mut F,
     budget: ReadBudget,
-) -> GlobalLedgerResult<super::LedgerStorageStatus>
-where
-    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
-{
+) -> GlobalLedgerResult<super::LedgerStorageStatus> {
     if !has_schema(database)? {
         return Ok(super::LedgerStorageStatus::Missing);
     }
     let raw = read_snapshot(database, budget)?;
     let marker = SqliteMarker::parse(&raw.meta)?;
-    let (events, hash) = verify_snapshot(database, raw, &mut Some(verifier))?;
+    let (events, hash) = verify_snapshot_unread(database, raw, &mut LedgerOpenTiming::default())?;
     Ok(marker.status(&events, hash))
 }
 
@@ -501,20 +499,16 @@ pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedge
     }
 }
 
-/// Workflow #375 H1: the material of the opening is verified once per distinct reference,
-/// in parallel; `timing` keeps the phases that ran, also when an error is returned.
-pub(super) fn open_formal<F>(
+/// Workflow #375 R5a: the writer open reads no artifact material; `timing` keeps the phases
+/// that ran, also when an error is returned.
+pub(super) fn open_formal(
     config: GlobalLedgerConfig,
     database: Arc<RuntimeDatabase>,
     lock: super::storage::LockedWriterFile,
     compatibility: Option<super::storage::LockedWriterFile>,
     deadline: Instant,
-    verifier: F,
     timing: &mut LedgerOpenTiming,
-) -> GlobalLedgerResult<SqliteLedgerStore>
-where
-    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
-{
+) -> GlobalLedgerResult<SqliteLedgerStore> {
     let started = Instant::now();
     let raw = read_formal_snapshot(&database, deadline);
     timing.sql_read_ms = elapsed_ms(started);
@@ -524,7 +518,7 @@ where
     if marker.state != "ready" {
         return Err(failure("ledger_migration_required", "open_runtime_ledger"));
     }
-    let (events, prefix) = verify_snapshot_prefix_parallel(&database, raw, &verifier, timing)?;
+    let (events, prefix) = verify_snapshot_prefix_unread(&database, raw, timing)?;
     let head_hash = prefix.head_hash.clone();
     let head = events.last().map_or(0, PersistedEvent::sequence);
     upgrade_views(&database, head, head_hash.as_deref())?;
@@ -561,19 +555,12 @@ pub(super) fn import_source(
     dry_run: bool,
     budget: ReadBudget,
 ) -> GlobalLedgerResult<super::LedgerStorageStatus> {
-    // This lookup only reuses ArtifactStore proofs acquired outside the database mutex.
-    let mut cached = |reference: &ProjectedArtifactReference| {
-        source
-            .verified
-            .iter()
-            .find(|(projected, _)| projected == reference)
-            .map(|(_, verified)| verified.clone())
-    };
-    match storage_status(database, &mut cached, budget)? {
+    // Workflow #375 R5a: neither the source nor the imported medium reads artifact material.
+    match storage_status(database, budget)? {
         super::LedgerStorageStatus::Ready {
             migration: Some(existing),
             ..
-        } if existing.as_ref() == record => return storage_status(database, &mut cached, budget),
+        } if existing.as_ref() == record => return storage_status(database, budget),
         super::LedgerStorageStatus::Missing => {}
         _ => {
             return Err(failure(
@@ -636,7 +623,8 @@ pub(super) fn import_source(
             ),
         )?;
         let raw = read_snapshot_connection(&transaction, budget)?;
-        let (actual, hash) = verify_snapshot(database, raw, &mut Some(&mut cached))?;
+        let (actual, hash) =
+            verify_snapshot_unread(database, raw, &mut LedgerOpenTiming::default())?;
         if actual != expected {
             return Err(failure(
                 "migration_canonical_mismatch",
@@ -676,7 +664,7 @@ pub(super) fn import_source(
         Err(error) => {
             let mut original = sql_error(error, "commit_segment_import");
             drop(connection);
-            let observed = storage_status(database, &mut cached, budget);
+            let observed = storage_status(database, budget);
             original.detail = Some(format!(
                 "{}; commit_readback={}",
                 original.detail.as_deref().unwrap_or("sqlite_error"),
@@ -2033,20 +2021,15 @@ impl SqliteLedgerReadOnly {
         })
     }
 
-    /// Workflow #375 H1: `open_formal` with a shared verifier (the maintenance binding
-    /// read), whose distinct references are verified once and in parallel.
-    pub(super) fn open_formal_parallel<F>(
+    /// Workflow #375 R5a: `open_formal` for the maintenance binding read, which reads no
+    /// artifact material; a reference without an eviction proof stays `Unrecorded`.
+    pub(super) fn open_formal_unread(
         database: &RuntimeDatabase,
         budget: ReadBudget,
-        verifier: F,
-    ) -> GlobalLedgerResult<Self>
-    where
-        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
-    {
+    ) -> GlobalLedgerResult<Self> {
         let raw = read_snapshot(database, budget)?;
         let marker = SqliteMarker::parse(&raw.meta)?;
-        let (events, _) =
-            verify_snapshot_parallel(database, raw, &verifier, &mut LedgerOpenTiming::default())?;
+        let (events, _) = verify_snapshot_unread(database, raw, &mut LedgerOpenTiming::default())?;
         if marker.state != "ready" {
             return Err(failure(
                 "ledger_candidate_not_production",
@@ -2063,24 +2046,20 @@ impl SqliteLedgerReadOnly {
     /// root. Like the writer open it is bounded by the head of the keyed meta row,
     /// authenticated first in the same read transaction, and by the deadline; it has no
     /// event or byte cap. Returns the restored events and the root's storage status (the
-    /// receipt's `ledger`, as `status` computes it). `timing` keeps the phases that ran,
-    /// also when an error is returned.
-    pub(super) fn read_formal_verified<F>(
+    /// receipt's `ledger`, as `status` computes it). Workflow #375 R5a: it reads no artifact
+    /// material. `timing` keeps the phases that ran, also when an error is returned.
+    pub(super) fn read_formal_verified(
         database: &RuntimeDatabase,
         deadline: Instant,
-        verifier: F,
         timing: &mut LedgerOpenTiming,
-    ) -> GlobalLedgerResult<(Vec<PersistedEvent>, super::LedgerStorageStatus)>
-    where
-        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
-    {
+    ) -> GlobalLedgerResult<(Vec<PersistedEvent>, super::LedgerStorageStatus)> {
         let started = Instant::now();
         let raw = read_formal_snapshot(database, deadline);
         timing.sql_read_ms = elapsed_ms(started);
         let raw = raw?;
         timing.events = raw.events.len() as u64;
         let marker = SqliteMarker::parse(&raw.meta)?;
-        let (events, hash) = verify_snapshot_parallel(database, raw, &verifier, timing)?;
+        let (events, hash) = verify_snapshot_unread(database, raw, timing)?;
         let status = marker.status(&events, hash);
         Ok((events, status))
     }
@@ -2796,18 +2775,15 @@ where
     Ok((events, prefix))
 }
 
-/// Workflow #375 H1: `verify_snapshot` with a shared verifier, whose distinct references
-/// are verified once and in parallel. The retention index is derived from the metadata
-/// authenticated with the records, as the writer open's prefix does.
-fn verify_snapshot_parallel<F>(
+/// Workflow #375 R5a: `verify_snapshot` for a formal opening, which reads no artifact
+/// material: a reference without an eviction proof stays `Unrecorded`. The retention index
+/// is derived from the metadata authenticated with the records, as the writer open's prefix
+/// does. `timing` keeps the phases that ran, also when an error is returned.
+fn verify_snapshot_unread(
     database: &RuntimeDatabase,
     raw: RawSnapshot,
-    verifier: &F,
     timing: &mut LedgerOpenTiming,
-) -> GlobalLedgerResult<(Vec<PersistedEvent>, Option<String>)>
-where
-    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
-{
+) -> GlobalLedgerResult<(Vec<PersistedEvent>, Option<String>)> {
     let budget = raw.budget;
     let bytes = raw.bytes;
     let mut check = move |count: usize| check_read_budget(budget, bytes, count);
@@ -2819,22 +2795,17 @@ where
     });
     timing.verify_ms = elapsed_ms(started);
     let (records, hash, retention) = verified?;
-    let events = super::retention::restore_records_parallel_with(
-        &retention, records, verifier, check, timing,
-    )?;
+    let events = super::retention::restore_records_unread(&retention, records, check, timing)?;
     Ok((events, hash))
 }
 
-/// Workflow #375 H1: `verify_snapshot_prefix` with a shared verifier, for the writer open.
-fn verify_snapshot_prefix_parallel<F>(
+/// Workflow #375 R5a: `verify_snapshot_prefix` for the writer open, which reads no artifact
+/// material.
+fn verify_snapshot_prefix_unread(
     database: &RuntimeDatabase,
     raw: RawSnapshot,
-    verifier: &F,
     timing: &mut LedgerOpenTiming,
-) -> GlobalLedgerResult<(Vec<PersistedEvent>, VerifiedPrefix)>
-where
-    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
-{
+) -> GlobalLedgerResult<(Vec<PersistedEvent>, VerifiedPrefix)> {
     let budget = raw.budget;
     let bytes = raw.bytes;
     let mut check = move |count: usize| check_read_budget(budget, bytes, count);
@@ -2853,13 +2824,8 @@ where
     );
     timing.verify_ms = elapsed_ms(started);
     let (records, prefix) = verified?;
-    let events = super::retention::restore_records_parallel_with(
-        &prefix.retention,
-        records,
-        verifier,
-        check,
-        timing,
-    )?;
+    let events =
+        super::retention::restore_records_unread(&prefix.retention, records, check, timing)?;
     Ok((events, prefix))
 }
 

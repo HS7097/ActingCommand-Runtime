@@ -96,11 +96,14 @@ impl HostShared {
                 .map_err(signature_ledger_error)?;
         let catalog = SignatureCatalog::from_prefix(&catalog_prefix);
         let root = Path::new(&request.input_state_root);
-        let snapshot =
-            GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root), |reference| {
-                verify_projected_read_only(root, reference).ok()
-            })
-            .map_err(|error| signature_request_error(error.code()))?;
+        // Workflow #375 R5b: each artifact is verified separately; one that does not verify
+        // (a frame deleted by hand) makes the page incomplete evidence, recorded as a Warning,
+        // instead of failing the whole opening.
+        let snapshot = GlobalLedger::open_evidence(
+            GlobalLedgerEvidenceConfig::new(root).sqlite_material_per_artifact(),
+            |reference| verify_projected_read_only(root, reference).ok(),
+        )
+        .map_err(|error| signature_request_error(error.code()))?;
         let input = SignaturePrefix::from_evidence(&snapshot, request.input_through)
             .map_err(|error| signature_request_error(error.code()))?;
         let page =

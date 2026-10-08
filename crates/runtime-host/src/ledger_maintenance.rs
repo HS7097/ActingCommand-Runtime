@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::HostCode;
 use crate::events::RuntimeEvents;
 use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::{RuntimeClock, RuntimeHostError};
@@ -50,6 +51,20 @@ pub struct LedgerMaintenanceReceipt {
     pub backup_id: Option<String>,
     pub warnings: Vec<actingcommand_runtime_database::MaintenanceWarning>,
     pub activated: bool,
+    /// Workflow #375 R5a: what `restore` did with the referenced artifact material. It is
+    /// never serialized, so the receipt schema is unchanged; actingd prints it on stderr.
+    #[serde(skip)]
+    pub restored_material: Option<LedgerMaintenanceRestoredMaterial>,
+}
+
+/// Workflow #375 R5a: the distinct referenced artifacts of a `restore`: copied as verified
+/// copies, skipped because their eviction is recorded, or skipped because their file is
+/// absent from the artifact root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerMaintenanceRestoredMaterial {
+    pub copied: u64,
+    pub evicted: u64,
+    pub absent: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -191,18 +206,16 @@ fn run_locked(
     )?);
     let state = RuntimeStateStore::from_database(Arc::clone(&database))?;
     let state_sha256 = state.maintenance_digest(request.limits, deadline)?;
-    let artifacts = ArtifactStore::open(root)?;
     // Workflow #375 H2: a formal root is classified by its keyed meta row, as startup does,
     // and verified by one complete read bounded by its authenticated head and the deadline.
+    // Workflow #375 R5a: no maintenance pass reads, hashes or stats artifact material.
     if request.operation == LedgerMaintenanceOperation::Verify
         && maintenance.formal_ready(&database)?
     {
-        return verify_formal_root(maintenance, &database, &artifacts, request.limits);
+        return verify_formal_root(maintenance, &database, request.limits);
     }
     // Marker lookup precedes source import and any backup decision.
-    let ledger = maintenance.status(&database, |reference| {
-        artifacts.verify_recovery_reference(reference).ok()
-    })?;
+    let ledger = maintenance.status(&database)?;
     if ledger == LedgerStorageStatus::Candidate {
         return Err(failure(
             "candidate_requires_explicit_disposition",
@@ -212,19 +225,16 @@ fn run_locked(
     match request.operation {
         LedgerMaintenanceOperation::Verify => {
             if ledger == LedgerStorageStatus::Missing {
-                let source = maintenance
-                    .source(|reference| artifacts.verify_recovery_reference(reference).ok())?;
+                let source = maintenance.source()?;
                 if !source.artifact_evictions().is_empty() {
                     return Err(failure(
-                        "maintenance_artifact_material_unavailable",
+                        HostCode::MaintenanceArtifactMaterialUnavailable.as_str(),
                         "verify_complete_artifact_material",
                     ));
                 }
             } else {
-                let snapshot = maintenance.read_formal(&database, |reference| {
-                    artifacts.verify_recovery_reference(reference).ok()
-                })?;
-                require_complete_material(snapshot.events())?;
+                let snapshot = maintenance.read_formal(&database)?;
+                require_settled_retention(snapshot.events())?;
             }
             Ok(receipt(
                 if ledger == LedgerStorageStatus::Missing {
@@ -237,13 +247,7 @@ fn run_locked(
             ))
         }
         LedgerMaintenanceOperation::Backup => {
-            let binding = binding(
-                &database,
-                maintenance,
-                &artifacts,
-                ledger.clone(),
-                state_sha256,
-            )?;
+            let binding = binding(&database, maintenance, ledger.clone(), state_sha256)?;
             let mut material = maintenance.source_files()?;
             material.extend(list_material(
                 root,
@@ -262,30 +266,16 @@ fn run_locked(
                 request.limits,
                 deadline,
             )?;
-            verify_backup_binding(
-                &database,
-                destination,
-                root,
-                &backup,
-                request.limits,
-                deadline,
-            )?;
+            verify_backup_binding(&database, destination, &backup, request.limits, deadline)?;
             Ok(receipt("backed-up", ledger, Some(&backup)))
         }
         LedgerMaintenanceOperation::DryRun | LedgerMaintenanceOperation::Import => {
             let backup_path = required(&request.backup)?;
             // A frozen backup is an explicit input, including the first import.
             let backup = database.verify_backup(backup_path, request.limits, deadline)?;
-            let binding = verify_backup_binding(
-                &database,
-                backup_path,
-                root,
-                &backup,
-                request.limits,
-                deadline,
-            )?;
-            let source = maintenance
-                .source(|reference| artifacts.verify_recovery_reference(reference).ok())?;
+            let binding =
+                verify_backup_binding(&database, backup_path, &backup, request.limits, deadline)?;
+            let source = maintenance.source()?;
             if binding.ledger != LedgerStorageStatus::Missing
                 || binding.source.as_ref() != Some(source.identity())
             {
@@ -352,23 +342,19 @@ fn run_locked(
 }
 
 /// Workflow #375 H2: `verify` of a formal root in one pass. A failure's cause also names the
-/// read's phase timings (`ledger_open …`, as the startup line prints them).
+/// read's phase timings (`ledger_open …`, as the startup line prints them). Workflow #375
+/// R5a: the pass reads no artifact material, so its material fields are 0.
 fn verify_formal_root(
     maintenance: &LedgerMaintenance,
     database: &RuntimeDatabase,
-    artifacts: &ArtifactStore,
     limits: MaintenanceLimits,
 ) -> Result<LedgerMaintenanceReceipt> {
     let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
     let verified = maintenance
-        .verify_formal(
-            database,
-            |reference| artifacts.verify_recovery_reference(reference).ok(),
-            &mut timing,
-        )
+        .verify_formal(database, &mut timing)
         .map_err(LedgerMaintenanceFailure::from)
         .and_then(|(events, ledger)| {
-            require_complete_material(&events)?;
+            require_settled_retention(&events)?;
             Ok(ledger)
         });
     match verified {
@@ -383,48 +369,51 @@ fn verify_formal_root(
     }
 }
 
-/// Workflow #375 H2: complete material is every artifact `Available`, or `Evicted` with its
-/// authenticated `Deleted` / `RecoveryAbsent` proof. A pending or failed eviction, and
-/// material that is missing or does not verify, still refuse.
-fn require_complete_material(events: &[actingcommand_ledger::PersistedEvent]) -> Result<()> {
-    if events
+/// Workflow #375 R5a: maintenance reads no artifact material, so it refuses only an artifact
+/// retention state that the ledger itself leaves unsettled: an eviction intent without its
+/// outcome (`PendingEviction`), which only the next actingd start completes. `Unrecorded`,
+/// `Evicted` and `FailedEviction` pass. The detail counts the distinct pending artifacts.
+fn require_settled_retention(events: &[actingcommand_ledger::PersistedEvent]) -> Result<()> {
+    let pending = events
         .iter()
         .flat_map(actingcommand_ledger::PersistedEvent::artifacts)
-        .any(|artifact| {
-            !matches!(
+        .filter(|artifact| {
+            matches!(
                 artifact.availability(),
-                actingcommand_ledger::ArtifactAvailability::Available(_)
-                    | actingcommand_ledger::ArtifactAvailability::Evicted(_)
+                actingcommand_ledger::ArtifactAvailability::PendingEviction(_)
             )
         })
-    {
-        return Err(failure(
-            "maintenance_artifact_material_unavailable",
+        .map(|artifact| *artifact.artifact_id())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if pending > 0 {
+        let mut error = failure(
+            HostCode::MaintenanceArtifactMaterialUnavailable.as_str(),
             "verify_complete_artifact_material",
-        ));
+        );
+        error.cause = format!("pending_evictions={pending}");
+        return Err(error);
     }
     Ok(())
 }
 
+/// Workflow #375 R5a: the binding lists every reference and eviction proof from the rows; it
+/// reads no artifact material.
 fn binding(
     database: &Arc<RuntimeDatabase>,
     maintenance: &LedgerMaintenance,
-    artifacts: &ArtifactStore,
     ledger: LedgerStorageStatus,
     state_sha256: String,
 ) -> Result<BackupBinding> {
     let (source, references, artifact_evictions) = if ledger == LedgerStorageStatus::Missing {
-        let source =
-            maintenance.source(|reference| artifacts.verify_recovery_reference(reference).ok())?;
+        let source = maintenance.source()?;
         (
             Some(source.identity().clone()),
             source.artifacts(),
             source.artifact_evictions(),
         )
     } else {
-        let snapshot = maintenance.read_formal(database, |reference| {
-            artifacts.verify_recovery_reference(reference).ok()
-        })?;
+        let snapshot = maintenance.read_formal(database)?;
         (
             None,
             snapshot
@@ -460,7 +449,6 @@ fn binding(
 fn verify_backup_binding(
     database: &RuntimeDatabase,
     backup_root: &Path,
-    artifact_root: &Path,
     backup: &DatabaseBackup,
     limits: MaintenanceLimits,
     deadline: Instant,
@@ -477,19 +465,10 @@ fn verify_backup_binding(
     let archived_database = Arc::new(RuntimeDatabase::open_existing(backup_root, true)?);
     let state = RuntimeStateStore::from_database(Arc::clone(&archived_database))?;
     let state_sha256 = state.maintenance_digest(limits, deadline)?;
-    let artifacts = ArtifactStore::open(artifact_root)?;
     let archived = LedgerMaintenance::acquire(backup_root, false, limits, deadline)?;
     let result = (|| {
-        let ledger = archived.status(&archived_database, |reference| {
-            artifacts.verify_recovery_reference(reference).ok()
-        })?;
-        let actual = binding(
-            &archived_database,
-            &archived,
-            &artifacts,
-            ledger,
-            state_sha256,
-        )?;
+        let ledger = archived.status(&archived_database)?;
+        let actual = binding(&archived_database, &archived, ledger, state_sha256)?;
         if actual != expected {
             return Err(failure(
                 "backup_projection_mismatch",
@@ -517,20 +496,9 @@ fn restore(
     require_disjoint(backup_root, target)?;
     let backup = database.verify_backup(backup_root, request.limits, deadline)?;
     let artifact_root = request.artifact_root.as_deref().unwrap_or(root);
-    let expected = verify_backup_binding(
-        database,
-        backup_root,
-        artifact_root,
-        &backup,
-        request.limits,
-        deadline,
-    )?;
-    if !expected.artifact_evictions.is_empty() {
-        return Err(failure(
-            "restore_artifact_material_unavailable",
-            "admit_database_restore",
-        ));
-    }
+    // Workflow #375 R5a: a backup that records evictions restores too; the copy below skips
+    // evicted and absent material.
+    let expected = verify_backup_binding(database, backup_root, &backup, request.limits, deadline)?;
     if current_state != expected.state_sha256 {
         return Err(failure(
             "restore_state_has_advanced",
@@ -539,9 +507,7 @@ fn restore(
     }
     match (&expected.ledger, &current) {
         (LedgerStorageStatus::Missing, LedgerStorageStatus::Missing) => {
-            let artifacts = ArtifactStore::open(root)?;
-            let source = maintenance
-                .source(|reference| artifacts.verify_recovery_reference(reference).ok())?;
+            let source = maintenance.source()?;
             if expected.source.as_ref() != Some(source.identity()) {
                 return Err(failure("restore_source_changed", "admit_database_restore"));
             }
@@ -578,10 +544,33 @@ fn restore(
     let result = (|| {
         database.restore_backup(backup_root, target, request.limits, deadline)?;
         let target_artifacts = ArtifactStore::open(target)?;
+        // Workflow #375 R5a: each referenced artifact without a recorded eviction is copied as
+        // a verified copy when its file exists; evicted and absent ones are skipped and
+        // counted. The limits bound the copies attempted.
+        let evicted = expected
+            .artifact_evictions
+            .iter()
+            .filter(|proof| {
+                matches!(
+                    proof.disposition,
+                    Some(
+                        actingcommand_contract::ArtifactEvictionDisposition::Deleted
+                            | actingcommand_contract::ArtifactEvictionDisposition::RecoveryAbsent
+                    )
+                )
+            })
+            .map(|proof| proof.identity.artifact.artifact_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut material = LedgerMaintenanceRestoredMaterial::default();
         let mut artifact_bytes = 0_u64;
+        let mut attempted = 0_usize;
         let mut seen = std::collections::BTreeSet::new();
         for reference in &expected.artifacts {
             if !seen.insert(reference.object_key().map(str::to_owned)) {
+                continue;
+            }
+            if evicted.contains(&reference.artifact_id) {
+                material.evicted += 1;
                 continue;
             }
             artifact_bytes = artifact_bytes
@@ -592,13 +581,18 @@ fn restore(
                         "restore_artifact_material",
                     )
                 })?;
-            request.limits.check(artifact_bytes, seen.len(), deadline)?;
-            target_artifacts.restore_recovery_reference(
+            attempted += 1;
+            request.limits.check(artifact_bytes, attempted, deadline)?;
+            match target_artifacts.restore_recovery_reference(
                 artifact_root,
                 reference,
                 request.limits.max_bytes,
                 deadline,
-            )?;
+            ) {
+                Ok(_) => material.copied += 1,
+                Err(error) if error.is_material_missing() => material.absent += 1,
+                Err(error) => return Err(error.into()),
+            }
         }
         let restored_db = Arc::new(RuntimeDatabase::open_existing(target, true)?);
         let restored_state = RuntimeStateStore::from_database(Arc::clone(&restored_db))?;
@@ -607,13 +601,10 @@ fn restore(
         }
         let restored = LedgerMaintenance::acquire(target, false, request.limits, deadline)?;
         let verified = (|| {
-            let ledger = restored.status(&restored_db, |reference| {
-                target_artifacts.verify_recovery_reference(reference).ok()
-            })?;
+            let ledger = restored.status(&restored_db)?;
             let actual = binding(
                 &restored_db,
                 &restored,
-                &target_artifacts,
                 ledger,
                 expected.state_sha256.clone(),
             )?;
@@ -623,7 +614,9 @@ fn restore(
                     "verify_restored_root",
                 ));
             }
-            Ok(receipt("restored", actual.ledger, Some(&backup)))
+            let mut restored_receipt = receipt("restored", actual.ledger, Some(&backup));
+            restored_receipt.restored_material = Some(material);
+            Ok(restored_receipt)
         })();
         finish(verified, restored.close().map_err(Into::into))
     })();
@@ -645,6 +638,7 @@ fn receipt(
         backup_id: backup.map(|backup| backup.backup_id.clone()),
         warnings: backup.map_or_else(Vec::new, |backup| backup.warnings.clone()),
         activated: false,
+        restored_material: None,
     }
 }
 fn required(path: &Option<PathBuf>) -> Result<&Path> {

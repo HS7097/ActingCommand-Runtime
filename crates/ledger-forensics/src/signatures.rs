@@ -38,10 +38,13 @@ pub fn replay_signatures_read_only(
             "both state roots, positive frozen bounds and a bounded page are required",
         ));
     }
+    // Workflow #375 R5b: each artifact is verified separately; one that does not verify (a
+    // frame deleted by hand) makes the replay incomplete evidence instead of failing it.
     let open = |root: &Path| {
-        GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root), |reference| {
-            verify_projected_read_only(root, reference).ok()
-        })
+        GlobalLedger::open_evidence(
+            GlobalLedgerEvidenceConfig::new(root).sqlite_material_per_artifact(),
+            |reference| verify_projected_read_only(root, reference).ok(),
+        )
         .map_err(map_ledger_error)
     };
     let input_snapshot = open(&request.input_state_root)?;

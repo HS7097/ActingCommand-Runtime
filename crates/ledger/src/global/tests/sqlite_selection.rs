@@ -116,7 +116,7 @@ fn selection_root(drafts: Vec<actingcommand_contract::SanitizedEventDraft>) -> T
         .initialize_empty(&database)
         .expect("formal empty ledger");
     let ledger = maintenance
-        .open_writer(database, "selection".into(), |_| None)
+        .open_writer(database, "selection".into())
         .expect("formal writer");
     for draft in drafts {
         ledger.append(draft).expect("append");

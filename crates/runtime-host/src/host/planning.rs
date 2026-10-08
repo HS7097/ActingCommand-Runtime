@@ -2,6 +2,7 @@
 
 use super::agent_control::append_agent_wake;
 use super::*;
+use crate::codes::HostCode;
 
 /// Every `ArtifactVerified` reference read so far, in ledger order (Workflow #317 item C).
 /// The first read after start reads every verified event; each later read starts after the
@@ -481,13 +482,20 @@ impl HostShared {
                     RuntimeErrorCode::InvalidRequest,
                 )));
             }
-            read_projected_verified(self.artifacts.root(), reference).map_err(|_| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "proposal_report_unavailable",
-                    "verify_proposal_reports",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
+            // Workflow #375 R5b: a report file that cannot be read (deleted by hand, say)
+            // refuses the request; it never stops the Runtime.
+            if read_projected_verified(self.artifacts.root(), reference).is_err() {
+                let artifact_id =
+                    artifact_id_text(reference).map_err(RequestFailure::poison_without_terminal)?;
+                return Err(proposal_request_failure(
+                    RuntimeHostError::request(
+                        HostCode::ProposalReportUnavailable.as_str(),
+                        "verify_proposal_reports",
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_native_detail(format!("artifact_id={artifact_id}")),
+                ));
+            }
         }
         Ok(())
     }
@@ -690,13 +698,16 @@ impl HostShared {
                     RuntimeErrorCode::InvalidRequest,
                 ));
             }
-            read_projected_verified(self.artifacts.root(), reference).map_err(|_| {
-                RuntimeHostError::fatal(
-                    "strategic_evidence_unavailable",
+            // Workflow #375 R5b: an evidence frame that cannot be read (deleted by hand, say)
+            // refuses the request; it never stops the Runtime.
+            if read_projected_verified(self.artifacts.root(), reference).is_err() {
+                return Err(RuntimeHostError::request(
+                    HostCode::StrategicEvidenceUnavailable.as_str(),
                     "verify_strategic_evidence",
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::InvalidRequest,
                 )
-            })?;
+                .with_native_detail(format!("artifact_id={}", artifact_id_text(reference)?)));
+            }
             pointers.push(strategic_evidence_pointer(reference)?);
         }
         pointers.sort();
@@ -729,9 +740,17 @@ impl HostShared {
             existing.push((artifact_id_text(&reference)?, reference));
         }
         existing.sort_by(|left, right| left.0.cmp(&right.0));
-        if let Some((_, reference)) = existing.into_iter().next() {
-            let stored = read_projected_verified(self.artifacts.root(), &reference)
-                .map_err(RuntimeHostError::artifact)?;
+        if let Some((artifact_id, reference)) = existing.into_iter().next() {
+            // Workflow #375 R5b: a stored report that cannot be read (deleted by hand, say)
+            // refuses the request; it never stops the Runtime.
+            let Ok(stored) = read_projected_verified(self.artifacts.root(), &reference) else {
+                return Err(RuntimeHostError::request(
+                    HostCode::ProposalReportUnavailable.as_str(),
+                    "read_strategic_report",
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_native_detail(format!("artifact_id={artifact_id}")));
+            };
             if stored != bytes {
                 return Err(RuntimeHostError::fatal(
                     "strategic_report_identity_conflict",
