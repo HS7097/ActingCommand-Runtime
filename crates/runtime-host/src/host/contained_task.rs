@@ -188,7 +188,11 @@ fn resource_reading_fact_record(
             "resource_reading:{}/{}",
             readings.task_label, declaration.id
         ),
-        source_snapshot_id: format!("run:{run_text}/frame:{frame_text}/{}", declaration.id),
+        source_snapshot_id: actingcommand_contract::resource_reading_snapshot_id(
+            run_text,
+            frame_text,
+            &declaration.id,
+        ),
         schema_version: "fact.v1".to_owned(),
         resource_bundle_hash: readings.resource_bundle_hash.clone(),
         invalidate_on: Vec::new(),

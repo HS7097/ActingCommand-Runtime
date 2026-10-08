@@ -86,7 +86,7 @@ A frame required to explain an operation, recognition decision, state transition
 
 ## Pinned Frame
 
-A semantic frame that cannot be removed by similarity deduplication or ordinary pressure dropping.
+A semantic frame that cannot be removed by similarity deduplication or ordinary pressure dropping. Two kinds of pin do not protect a frame from similarity deduplication (Workflow #375): `recognition_evidence`, which every recognized frame carries, and the frame retention pins `Explicit` and `Lab`, which every frame carries.
 
 ## Retention Class
 

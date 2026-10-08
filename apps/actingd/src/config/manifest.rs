@@ -27,6 +27,9 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) frame_retention_enabled: Option<bool>,
     pub(super) failed_run_successes_explicit: bool,
     pub(super) failed_run_days_explicit: bool,
+    /// Whether the file named `frame_retention_dedup_error` / `frame_retention_dedup_lab`.
+    pub(super) dedup_error_explicit: bool,
+    pub(super) dedup_lab_explicit: bool,
     pub(super) capacity_thresholds_explicit: bool,
     pub(super) pressure_start_samples_explicit: bool,
     pub(super) pressure_end_samples_explicit: bool,
@@ -205,6 +208,16 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             key: "frame_retention_failed_run_days".to_owned(),
             value: FactScalar::Integer(i64::from(failed_run_retention.retention_days)),
             source: explicit_or_default(inputs.failed_run_days_explicit),
+        },
+        ConfigParameter {
+            key: "frame_retention_dedup_error".to_owned(),
+            value: FactScalar::Boolean(host.frame_retention_dedup_error()),
+            source: explicit_or_default(inputs.dedup_error_explicit),
+        },
+        ConfigParameter {
+            key: "frame_retention_dedup_lab".to_owned(),
+            value: FactScalar::Boolean(host.frame_retention_dedup_lab()),
+            source: explicit_or_default(inputs.dedup_lab_explicit),
         },
         explicit(
             "secret_fingerprint_salt_bytes",

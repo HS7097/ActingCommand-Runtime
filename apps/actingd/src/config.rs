@@ -85,6 +85,17 @@ pub(super) struct ActingdConfigFile {
     frame_retention_failed_run_successes: Option<u16>,
     #[serde(default)]
     frame_retention_failed_run_days: Option<u16>,
+    /// Workflow #375 R5c: whether each 30 s error window drops its interior near-duplicates
+    /// (default `true`). Ordinary frames are always deduplicated and have no key.
+    // Interface anchor `actingd-config` revision 4 (contracts/component-interfaces.md): a Runtime
+    // up to v0.11.4 refuses a file that names either dedup switch; one that names neither keeps
+    // its revision. Raise the revision in distribution/windows/component-interfaces.json.
+    #[serde(default)]
+    frame_retention_dedup_error: Option<bool>,
+    /// Workflow #375 R5c: whether Lab output drops its interior near-duplicates (default
+    /// `false`); Lab operation evidence is never deduplicated.
+    #[serde(default)]
+    frame_retention_dedup_lab: Option<bool>,
     /// Workflow #318 cfg4: the retired shared governance secret. Kept only so a file that
     /// still names the key, whatever its value, is refused with the precise
     /// `governance_capability_retired` instead of the generic decode failure.
@@ -1142,6 +1153,10 @@ impl ActingdConfigFile {
                 .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
                 .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or(true))
                 .with_failed_run_retention(failed_run_retention)
+                .with_frame_retention_dedup(
+                    self.frame_retention_dedup_error.unwrap_or(true),
+                    self.frame_retention_dedup_lab.unwrap_or(false),
+                )
                 .with_bind_address(SocketAddr::new(
                     bind_host,
                     self.bind_port.unwrap_or_default(),
@@ -1163,6 +1178,8 @@ impl ActingdConfigFile {
             frame_retention_enabled: self.frame_retention_enabled,
             failed_run_successes_explicit: self.frame_retention_failed_run_successes.is_some(),
             failed_run_days_explicit: self.frame_retention_failed_run_days.is_some(),
+            dedup_error_explicit: self.frame_retention_dedup_error.is_some(),
+            dedup_lab_explicit: self.frame_retention_dedup_lab.is_some(),
             capacity_thresholds_explicit: self.capacity_thresholds.is_some(),
             pressure_start_samples_explicit: pressure_start_samples.is_some(),
             pressure_end_samples_explicit: pressure_end_samples.is_some(),
@@ -2270,6 +2287,9 @@ mod tests {
                 value["frame_retention_enabled"] = json!(configured);
                 value["frame_retention_failed_run_successes"] = json!(4);
                 value["frame_retention_failed_run_days"] = json!(9);
+                // Workflow #375 R5c: both dedup switches, each against its default.
+                value["frame_retention_dedup_error"] = json!(false);
+                value["frame_retention_dedup_lab"] = json!(true);
                 // Workflow #318 cfg2: the new tunables ride the same explicit/default toggle.
                 value["performance"] = json!({
                     "pressure_start_samples": 5,
@@ -2319,6 +2339,25 @@ mod tests {
                 )
             );
             assert_eq!(sample_interval.source, ConfigParameterSource::Default);
+            // Workflow #375 R5c: a file without the dedup switches (the v0.11.4 form) keeps the
+            // defaults, error windows on and Lab output off; each named key is applied.
+            for (key, expected, effective) in [
+                (
+                    "frame_retention_dedup_error",
+                    configured.is_none(),
+                    assembly.host.frame_retention_dedup_error(),
+                ),
+                (
+                    "frame_retention_dedup_lab",
+                    configured.is_some(),
+                    assembly.host.frame_retention_dedup_lab(),
+                ),
+            ] {
+                let parameter = parameter(key).expect("dedup switch parameter");
+                assert_eq!(parameter.value, FactScalar::Boolean(expected));
+                assert_eq!(effective, expected);
+                assert_eq!(parameter.source, source);
+            }
             let scheduler = assembly.host.scheduler();
             assert_eq!(
                 parameter("scheduler.lease_ttl_ms")
