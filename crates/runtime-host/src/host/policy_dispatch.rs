@@ -1841,7 +1841,16 @@ impl HostShared {
         match result {
             Err(error) if !error.is_fatal() || rejection.is_some() => {
                 let recorded = match rejection {
-                    Some((outcome, links)) => self.record_required_failure(&error, &outcome, links),
+                    // Workflow #369 W-1: a held instance is a wait, not a failure. The
+                    // record of its key tokens (`holder_kind`, `count`) takes the Info
+                    // severity of its rejection instead of Error (§5.10: no error point).
+                    Some((outcome, links)) => self.record_required_failure_with_severity(
+                        &error,
+                        &outcome,
+                        links,
+                        (policy_rejection_severity(error.code()) == EventSeverity::Info)
+                            .then_some(EventSeverity::Info),
+                    ),
                     None => self.append_lifecycle_failure(
                         RuntimeLifecycleFailureStage::OperationCleanup,
                         RuntimeLifecycleFailure::PolicyAdmission {

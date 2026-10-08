@@ -17,6 +17,22 @@
       "common_causes": "A read-only observation or a monitor probe of the instance was in progress when the dispatch was admitted.",
       "handling": "Nothing to repair. The next policy evaluation dispatches the candidate once the observation has finished."
     },
+    "dispatch_instance_cooldown": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "next_eligible_unix_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A policy candidate met an instance whose takeover cooldown still runs after a previous owner ended without closing; the candidate is deferred with a wake at next_eligible_unix_ms, the cooldown's end. Nothing is written for it.",
+      "common_causes": "actingd was killed or crashed while it held a lease on the instance, and the new owner started less than the takeover cooldown (6 s by default) ago.",
+      "handling": "Nothing to repair. The candidate is evaluated again when the cooldown ends."
+    },
     "dispatch_instance_held": {
       "category": "info",
       "owner": "runtime-host",

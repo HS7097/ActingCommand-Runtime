@@ -52,9 +52,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const CATALOG_STATE_SCHEMA: &str = "actingcommand.catalog-state.v1";
-/// Workflow #369 W-1: the deferral reason of a candidate whose instance is in takeover
-/// cooldown; the scheduler's own spelling of that state (`SchedulerError::Cooldown`).
-const TAKEOVER_COOLDOWN_DEFERRAL: &str = "lease_cooldown";
 const LEGACY_CATALOG_POINTER_SCHEMA: &str = "actingcommand.catalog-pointer-file.v1";
 const ACTIVE_POINTER_FILE: &str = "active.json";
 const ACTIVE_POINTER_STATE_KEY: &str = "policy.catalog.active";
@@ -1323,7 +1320,7 @@ impl PolicyHost {
                 (None, Some(InstanceOccupancy::Cooldown { until_unix_ms })) => {
                     Ok(CandidateEligibility::Deferred {
                         reason: DecisionReason {
-                            code: TAKEOVER_COOLDOWN_DEFERRAL.to_owned(),
+                            code: HostCode::DispatchInstanceCooldown.as_str().to_owned(),
                             detail: format!("next_eligible_unix_ms={until_unix_ms}"),
                         },
                         next_wake_unix_ms: Some(until_unix_ms),

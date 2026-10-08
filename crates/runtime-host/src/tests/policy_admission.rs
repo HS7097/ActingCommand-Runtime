@@ -1562,6 +1562,20 @@ fn an_admission_that_meets_a_holder_is_rejected_held_at_info() {
         payload.rejection().expect("rejection facts").code,
         "dispatch_instance_held"
     );
+    // Review M1: a wait is not a failure. Its key tokens are recorded at Info; no Error
+    // `runtime.failed` follows the rejection (§5.10: no error point).
+    let failures = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::RuntimeFailed),
+            ..EventQuery::default()
+        })
+        .expect("runtime failures");
+    assert!(
+        failures
+            .iter()
+            .all(|event| event.severity() == EventSeverity::Info),
+        "{failures:#?}"
+    );
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
 
     let release = holder.request(RuntimeOperation::ReleaseLease { token });
@@ -1645,5 +1659,127 @@ fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
     assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+#[test]
+fn takeover_cooldown_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_TAKEOVER_COOLDOWN_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let instance_id: InstanceId =
+        serde_json::from_slice(&fs::read(root.join("instance.json")).expect("instance bytes"))
+            .expect("instance identifier");
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&root, b"takeover-cooldown-process-salt")
+            .with_procedure_manifest(procedure_manifest()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("cooldown child host");
+    let mut client = TestClient::connect(&host);
+    let _ = client.acquire(POLICY_INSTANCE_ALIAS);
+    fs::write(root.join("lease-held.marker"), b"held").expect("held marker");
+    loop {
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[test]
+fn a_takeover_cooldown_defers_candidates_with_a_wake_at_its_end() {
+    // Workflow #369 W-1 (review L3): a candidate on an instance in takeover cooldown is
+    // deferred `dispatch_instance_cooldown`, with a wake at the cooldown's end; nothing is
+    // written for it.
+    let root = TempDir::new().expect("tempdir");
+    let shared_instance_id = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+    )
+    .expect("instance file");
+    let marker = root.path().join("lease-held.marker");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::policy_admission::takeover_cooldown_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_TAKEOVER_COOLDOWN_ROOT", root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn cooldown child");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !marker.is_file() {
+        assert!(Instant::now() < deadline, "held-lease marker timeout");
+        assert!(
+            child.try_wait().expect("poll cooldown child").is_none(),
+            "the child exited before it held the lease"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().expect("kill cooldown child");
+    child.wait().expect("wait cooldown child");
+
+    let host = RuntimeHost::start(
+        config(&root).with_scheduler(SchedulerConfig {
+            maximum_client_heartbeat_interval_ms: 20,
+            takeover_cooldown_ms: 600_000,
+            lease_ttl_ms: 5_000,
+            ..SchedulerConfig::default()
+        }),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("takeover host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluation under a takeover cooldown");
+    let evaluation = cycle.evaluation.expect("evaluation");
+    assert!(evaluation.dispatch_intents.is_empty(), "{evaluation:#?}");
+    let reason = evaluation
+        .decisions
+        .iter()
+        .flat_map(|decision| decision.reasons.iter())
+        .find(|reason| reason.code == "dispatch_instance_cooldown")
+        .unwrap_or_else(|| panic!("cooldown deferral: {evaluation:#?}"));
+    let wake = reason
+        .detail
+        .strip_prefix("next_eligible_unix_ms=")
+        .expect("one key token")
+        .parse::<u64>()
+        .expect("wake time");
+    assert!(
+        wake > POLICY_NOW_UNIX_MS && wake <= POLICY_NOW_UNIX_MS + 600_000,
+        "{wake}"
+    );
+    assert!(
+        evaluation
+            .next_wake_unix_ms
+            .is_some_and(|next_wake| next_wake <= wake)
+    );
+    assert!(
+        policy_rejections(&host).is_empty(),
+        "nothing is written for a deferred candidate"
+    );
     host.close().expect("close host");
 }

@@ -33,5 +33,9 @@ actingcommand_contract::outcome_codes! {
         /// run again from `next_eligible_unix_ms` (keys `instance_id`,
         /// `next_eligible_unix_ms`).
         DispatchInstanceContended => "dispatch_instance_contended": info,
+        /// Info. A policy candidate met an instance in takeover cooldown after an unclean
+        /// previous owner; it is deferred with a wake at the cooldown's end (keys
+        /// `instance_id`, `next_eligible_unix_ms`).
+        DispatchInstanceCooldown => "dispatch_instance_cooldown": info,
     }
 }
