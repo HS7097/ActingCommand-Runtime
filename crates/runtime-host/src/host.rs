@@ -2247,8 +2247,9 @@ impl RuntimeHost {
             .expire_all_queued_runtime()
     }
 
-    /// Workflow #369 S4: the end of a granted policy dispatch's lease, as its agent ends it
-    /// (an explicit release under the run's links); the key returns to the instance's queue.
+    /// Workflow #369 S4: the end of a granted (non-scheduled) policy dispatch's lease, as its
+    /// agent ends it: an explicit release under the dispatch's request links, so no run-linked
+    /// settlement reads it; the key returns to the instance's queue.
     #[cfg(test)]
     pub(crate) fn release_policy_dispatch_lease_for_test(
         &self,
@@ -2273,10 +2274,7 @@ impl RuntimeHost {
                 release_request_id,
                 context.lease_token(),
                 connection_id,
-                Some(RuntimeRunLinks::new(
-                    context.issued_task_id(),
-                    context.issued_run_id(),
-                )),
+                None,
             )
             .map(|_| ())
             .map_err(|failure| *failure.error)
