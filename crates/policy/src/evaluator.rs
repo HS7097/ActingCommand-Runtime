@@ -3689,6 +3689,74 @@ fn timeline_window(
     })
 }
 
+/// Interval clocks shorter than this come due too often to be traced one slot at a time.
+const CLOCK_SLOT_MIN_INTERVAL_MS: u64 = 3_600_000;
+
+/// The clock slots of one (task, instance) pair at one evaluation time. In memory only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockSlotView {
+    /// The greatest clock occurrence the pair has not served yet.
+    pub due_occurrence: Option<u64>,
+    /// The least next occurrence over the same clocks.
+    pub next_occurrence: Option<u64>,
+}
+
+/// Reads the clock predicates of `task.trigger` with the trigger's own due rule: an occurrence
+/// is due when the pair has no dispatch, or its last dispatch precedes the occurrence. Every
+/// `clock` reached through `all` and `any` counts. A `not` subtree and every other predicate
+/// kind are ignored. `state` is the pair's runtime snapshot.
+///
+/// Returns `None` when no clock counts, or when a counted clock is an interval shorter than one
+/// hour. Otherwise the view holds the greatest due occurrence and the least next occurrence.
+pub fn clock_slot_view(
+    task: &TaskSpec,
+    state: Option<&TaskRuntimeSnapshot>,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<Option<ClockSlotView>> {
+    let mut schedules = Vec::new();
+    collect_clock_schedules(&task.trigger, &mut schedules);
+    let short_interval = schedules.iter().any(|schedule| {
+        matches!(schedule, ClockSchedule::Interval { every_ms, .. }
+            if *every_ms < CLOCK_SLOT_MIN_INTERVAL_MS)
+    });
+    if schedules.is_empty() || short_interval {
+        return Ok(None);
+    }
+    let last_dispatched = state.and_then(|state| state.last_dispatched_unix_ms);
+    let mut view = ClockSlotView {
+        due_occurrence: None,
+        next_occurrence: None,
+    };
+    for schedule in schedules {
+        let (latest, next) = schedule_occurrences(schedule, time)?;
+        let due = latest.filter(|occurrence| last_dispatched.is_none_or(|last| last < *occurrence));
+        view.due_occurrence = view.due_occurrence.max(due);
+        view.next_occurrence = min_wake(view.next_occurrence, next);
+    }
+    Ok(Some(view))
+}
+
+fn collect_clock_schedules<'a>(
+    predicate: &'a PredicateSpec,
+    schedules: &mut Vec<&'a ClockSchedule>,
+) {
+    match predicate {
+        PredicateSpec::All { predicates } | PredicateSpec::Any { predicates } => {
+            for child in predicates {
+                collect_clock_schedules(child, schedules);
+            }
+        }
+        PredicateSpec::Clock { schedule } => schedules.push(schedule),
+        PredicateSpec::Not { .. }
+        | PredicateSpec::TimelineActive { .. }
+        | PredicateSpec::ResourceProjection { .. }
+        | PredicateSpec::Fact { .. }
+        | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::DependencyCompleted { .. }
+        | PredicateSpec::Outcome { .. } => {}
+    }
+}
+
 fn schedule_occurrences(
     schedule: &ClockSchedule,
     time: EvaluationTime,
@@ -6420,6 +6488,158 @@ mod tests {
             .expect("local clock"),
             (Some(9_950), Some(10_050))
         );
+    }
+
+    // Workflow #372 K1: the due and next clock occurrence of one pair.
+    #[test]
+    fn clock_slot_view_reads_due_and_next_trigger_clocks() {
+        const DAY: u64 = 86_400_000;
+        const MINUTE: u64 = 60_000;
+        // Minute `minute` of local day `day` (0 = yesterday, 1 = today) at UTC+09:00.
+        let at = |day: u64, minute: u64| (20_000 + day) * DAY - 540 * MINUTE + minute * MINUTE;
+        let daily = |minutes: &[u16]| PredicateSpec::Clock {
+            schedule: ClockSchedule::Daily {
+                clock_source: ClockSource::Server {
+                    timezone_id: "fixture/zone".to_owned(),
+                    utc_offset_minutes: 540,
+                    dst_offset_minutes: 0,
+                    maintenance_drift_ms: 0,
+                },
+                minutes_of_day: minutes.to_vec(),
+            },
+        };
+        let interval = |every_ms: u64| PredicateSpec::Clock {
+            schedule: ClockSchedule::Interval {
+                clock_source: ClockSource::Local,
+                every_ms,
+                anchor_ms: 0,
+            },
+        };
+        let dependency = PredicateSpec::DependencyCompleted {
+            task_id: "fixture.head".to_owned(),
+            terminal_states: vec![TaskTerminalState::Succeeded],
+        };
+        let two_slots = daily(&[360, 1140]);
+        let one_slot = daily(&[390]);
+        let compiled = catalog(|_| {});
+        let mut task = compiled.catalog().tasks.tasks[0].clone();
+        for (case, trigger, last, now, expected) in [
+            (
+                "second slot due after the first was served",
+                two_slots.clone(),
+                Some(at(1, 365)),
+                at(1, 1140) + 30_000,
+                Some((Some(at(1, 1140)), Some(at(2, 360)))),
+            ),
+            (
+                "second slot served",
+                two_slots,
+                Some(at(1, 1140) + 10_000),
+                at(1, 1140) + 30_000,
+                Some((None, Some(at(2, 360)))),
+            ),
+            (
+                "owed slot before the day's own slot",
+                one_slot.clone(),
+                Some(at(0, 367)),
+                at(1, 367),
+                Some((Some(at(0, 390)), Some(at(1, 390)))),
+            ),
+            (
+                "no dispatch history",
+                one_slot.clone(),
+                None,
+                at(1, 367),
+                Some((Some(at(0, 390)), Some(at(1, 390)))),
+            ),
+            (
+                "any: greatest due and least next",
+                PredicateSpec::Any {
+                    predicates: vec![daily(&[360]), daily(&[1140])],
+                },
+                None,
+                at(1, 1140) + 30_000,
+                Some((Some(at(1, 1140)), Some(at(2, 360)))),
+            ),
+            (
+                "a negated clock is ignored",
+                PredicateSpec::All {
+                    predicates: vec![
+                        one_slot.clone(),
+                        PredicateSpec::Not {
+                            predicate: Box::new(daily(&[1140])),
+                        },
+                    ],
+                },
+                Some(at(0, 367)),
+                at(1, 367),
+                Some((Some(at(0, 390)), Some(at(1, 390)))),
+            ),
+            (
+                "all: a clock beside a dependency",
+                PredicateSpec::All {
+                    predicates: vec![one_slot.clone(), dependency.clone()],
+                },
+                Some(at(0, 367)),
+                at(1, 367),
+                Some((Some(at(0, 390)), Some(at(1, 390)))),
+            ),
+            (
+                "only a negated clock",
+                PredicateSpec::Not {
+                    predicate: Box::new(one_slot.clone()),
+                },
+                None,
+                at(1, 367),
+                None,
+            ),
+            ("no clock", dependency, None, at(1, 367), None),
+            (
+                "interval under one hour",
+                interval(60_000),
+                None,
+                at(1, 367),
+                None,
+            ),
+            (
+                "interval under one hour beside a daily clock",
+                PredicateSpec::Any {
+                    predicates: vec![one_slot, interval(60_000)],
+                },
+                None,
+                at(1, 367),
+                None,
+            ),
+            (
+                "hourly interval",
+                interval(3_600_000),
+                None,
+                at(1, 30),
+                Some((Some(at(1, 0)), Some(at(1, 60)))),
+            ),
+        ] {
+            task.trigger = trigger;
+            let state = TaskRuntimeSnapshot {
+                task_id: task.id.clone(),
+                instance_id: "fixture-instance-a".to_owned(),
+                last_dispatched_unix_ms: last,
+                eligible_since_unix_ms: None,
+                terminal_state: None,
+                completed_window: None,
+                last_duration_ms: None,
+                failure_streak: None,
+            };
+            let time = EvaluationTime {
+                unix_ms: now,
+                monotonic_ms: now,
+            };
+            let view = clock_slot_view(&task, last.map(|_| &state), time).expect(case);
+            assert_eq!(
+                view.map(|view| (view.due_occurrence, view.next_occurrence)),
+                expected,
+                "{case}"
+            );
+        }
     }
 
     #[test]
