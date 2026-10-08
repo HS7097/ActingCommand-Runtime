@@ -239,6 +239,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-outcome-guard"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "serde_json",
+ "syn",
+]
+
+[[package]]
 name = "actingcommand-pack-containment"
 version = "0.1.0"
 dependencies = [
