@@ -4018,9 +4018,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.5",
-      "description": "A proposal request was refused because its verified report artifact could not be read back.",
-      "common_causes": "The report file was deleted or damaged after it was recorded.",
-      "handling": "Prepare the report again so that a new report artifact is recorded, then resubmit the proposal."
+      "description": "A proposal or strategic report request was refused because a verified report artifact could not be read back: a proposal's cited report, or the stored report that a strategic report with identical content would reuse.",
+      "common_causes": "The report file was deleted by hand or damaged after it was recorded.",
+      "handling": "Restore the report file from a copy if it is still needed. Otherwise prepare a strategic report whose content differs (for example a later as-of position), which records a new report artifact, and cite that report."
     },
     "strategic_evidence_unavailable": {
       "category": "error",
