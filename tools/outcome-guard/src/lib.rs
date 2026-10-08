@@ -593,8 +593,10 @@ fn scan_member(
 /// The file of an out-of-line module declared in `file`.
 fn module_file(file: &Path, crate_root: bool, declaration: &ModuleDeclaration) -> Option<PathBuf> {
     let directory = file.parent()?;
-    let (inline, name) = declaration.names.split_last()?;
-    let mod_rs = file.file_name().is_some_and(|name| name == "mod.rs");
+    let (name, inline) = declaration.names.split_last()?;
+    let mod_rs = file
+        .file_name()
+        .is_some_and(|file_name| file_name == "mod.rs");
     if let Some(path) = &declaration.path {
         let mut base = directory.to_path_buf();
         if !inline.is_empty() {

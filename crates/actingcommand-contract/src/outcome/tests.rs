@@ -22,7 +22,7 @@ static SINK_TEXTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 fn recording_sink() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
-        install_diagnostic_sink(Box::new(|outcome, text| {
+        install_diagnostic_sink(Box::new(|outcome: &Outcome, text: &str| {
             SINK_TEXTS.lock().expect("lock the test sink").push(format!(
                 "{} {}",
                 outcome.code(),
