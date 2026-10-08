@@ -761,12 +761,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         let client = wait_for_agent_client(&mut child.0, root.path());
         let started = Instant::now();
         let events = loop {
-            let query_started = Instant::now();
             let queried = client.query_events(EventQuery::default(), ProjectionProfile::Forensic);
-            let query_ms = query_started.elapsed().as_millis();
-            if query_ms >= 500 {
-                eprintln!("{case}: slow query_events reply: {query_ms} ms");
-            }
             let events = match queried {
                 Ok(events) => events,
                 Err(error) => {
