@@ -1,0 +1,20 @@
+{
+  "owner": "runtime-host",
+  "codes": {
+    "maintenance_artifact_material_unavailable": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pending_evictions": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "ledger-maintenance refused a root whose artifact retention is not settled: on a formal root an eviction intent without its outcome (pending_evictions counts the artifacts), on a Segment root any recorded eviction.",
+      "common_causes": "A hard stop (power loss, forced reboot) between an eviction intent and its outcome; a Segment root that already records evictions.",
+      "handling": "Start actingd once on the root so that startup recovery finishes the pending eviction, then run the maintenance operation again."
+    }
+  }
+}

@@ -389,11 +389,18 @@ repair journal, with one recovery event; complete corruption and corruption in a
 non-final segment fail closed. Existing crash-boundary and writer ownership
 specifications remain authoritative for this physical backend.
 
-Artifact-bearing recovery requires the ArtifactStore verifier. Missing verification
-or a mismatched/missing artifact fails startup; no reference is accepted solely
-because its metadata is self-consistent. File paths, secret fields and forged
-metadata retain their existing non-disclosure rules. ArtifactStore continues to
-own files; the ledger owns references and verified event facts.
+The formal SQLite openings (the startup writer open, `actingd unlock-owner` and every
+`ledger-maintenance` pass) read no artifact material (Workflow #375 R5a): they never
+open, hash or stat a referenced file. A reference with an authenticated eviction proof
+takes the proof's state, a `Failed` outcome included (`FailedEviction`); any other
+reference is restored `Unrecorded`, so a missing or damaged artifact never fails
+startup. Every row still carries the reference's object key, byte count and SHA-256,
+so a later read checks the bytes it reads. The candidate and Segment openings still
+require the ArtifactStore verifier: missing verification or a mismatched/missing
+artifact fails them, and no reference is accepted solely because its metadata is
+self-consistent. File paths, secret fields and forged metadata retain their existing
+non-disclosure rules. ArtifactStore continues to own files; the ledger owns
+references and verified event facts.
 
 The #257 forensic/query/signature surfaces continue to read the original facts.
 `GlobalLedgerReadOnly` opens a verified read-only prefix without writer ownership
@@ -474,8 +481,9 @@ persist their referenced frames and a bounded preceding window in the same run;
 Lab frames are pinned. Ordinary successful-operation frames may be evicted under
 pressure while the ledger keeps their original hash/reference and the view reports
 the registered hash with an evicted-frame state. This requires explicit retention
-evidence: a missing required artifact must still fail verification. Retention
-cannot silently reinterpret file loss as authorized eviction.
+evidence: retention cannot silently reinterpret file loss as authorized eviction. A
+missing file without an eviction proof stays `Unrecorded`; since Workflow #375 R5a no
+formal opening reads material, so it no longer fails verification.
 
 Failed or cancelled runs may satisfy the status condition through the configured
 K/T policy: by default, three later successful runs with distinct RunIds on the
@@ -569,7 +577,8 @@ equals its position and a failed-run evaluation time equals its ledger time; tha
 every referenced source resolves in the preceding prefix; that an outcome answers
 its exact Intent; and that sealed material is never used again. A reader never
 rejects a root because its own eligibility rules differ from the writer's. A
-missing file without an Intent and outcome still fails verification. Recovery of
+missing file without an Intent and outcome is restored `Unrecorded` (Workflow #375
+R5a: formal openings read no material). Recovery of
 a pending Intent consumes the sealed Intent and does not re-judge eligibility.
 
 The frame owner reuses `frame_store`'s three watermarks, near-duplicate handling and

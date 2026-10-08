@@ -148,7 +148,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         maintenance.locked_material().expect("locked metadata")[0].1,
         original_metadata
     );
-    let source = maintenance.source(|_| None).expect("complete source");
+    let source = maintenance.source().expect("complete source");
     let backup_parent = TempDir::new().expect("backup parent");
     let backup_path = backup_parent.path().join("frozen");
     let files = actingcommand_runtime_database::list_material(
@@ -209,7 +209,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         .expect("dry-run transaction");
     assert_eq!(
         maintenance
-            .status(&imported_database, |_| None)
+            .status(&imported_database)
             .expect("no schema committed"),
         LedgerStorageStatus::Missing
     );
@@ -256,7 +256,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
             .is_err()
     );
     let imported = maintenance
-        .open_writer(Arc::clone(&imported_database), "formal".into(), |_| None)
+        .open_writer(Arc::clone(&imported_database), "formal".into())
         .expect("continuous writer transfer");
     assert_eq!(
         GlobalLedger::open(GlobalLedgerConfig::new(
@@ -443,7 +443,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         .expect("formal lock released");
     assert!(matches!(
         reopened
-            .status(&imported_database, |_| None)
+            .status(&imported_database)
             .expect("marker survives new facts"),
         LedgerStorageStatus::Ready {
             head_sequence: 4,
@@ -458,7 +458,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         .unwrap();
     assert!(
         reopened
-            .status(&imported_database, |_| None)
+            .status(&imported_database)
             .expect_err("malformed marker is fatal")
             .is_fatal()
     );
@@ -471,7 +471,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     imported_database.connection("remove schema in existing integrity specification").unwrap().execute_batch("DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta;").unwrap();
     assert!(
         reopened
-            .status(&imported_database, |_| None)
+            .status(&imported_database)
             .expect_err("formal format cannot fall back to old segments")
             .is_fatal()
     );

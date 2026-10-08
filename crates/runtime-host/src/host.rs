@@ -1004,14 +1004,12 @@ impl RuntimeHost {
             ));
         }
         // Workflow #375 H1: one stdout line with the open's phases, also before a failure is
-        // returned (never a Ledger event). Each distinct artifact is verified once, in parallel.
+        // returned (never a Ledger event). Workflow #375 R5a: the open reads no artifact
+        // material, so a missing or damaged frame never stops the start and the line's
+        // material fields print 0.
         let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
-        let opened = maintenance.open_writer_timed(
-            Arc::clone(&database),
-            ledger_owner,
-            |reference| artifacts.verify_recovery_reference(reference).ok(),
-            &mut timing,
-        );
+        let opened =
+            maintenance.open_writer_timed(Arc::clone(&database), ledger_owner, &mut timing);
         println!(
             "actingd ledger_open {timing} deadline_ms={}",
             limits.timeout_seconds.saturating_mul(1000)

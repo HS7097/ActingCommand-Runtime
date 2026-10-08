@@ -536,7 +536,7 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
 }
 
 #[test]
-fn runtime_restart_fails_when_monitor_evidence_is_missing() {
+fn missing_monitor_evidence_never_stops_the_runtime() {
     let root = TempDir::new().expect("tempdir");
     let instance_id = instance_id();
     let state = Arc::new(FakeState::default());
@@ -578,21 +578,16 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
     host.close().expect("close host");
     fs::remove_file(root.path().join(object_key)).expect("remove monitor evidence");
 
+    // Workflow #375 R5a: the start reads no artifact material, so a frame deleted by hand
+    // never stops it. Periodic retention stays off: an absent frame at eviction admission is
+    // the cleaner's own case (R5d), not this one.
     let restarted = RuntimeHost::start(
-        config(&root),
+        config(&root).with_frame_retention_enabled(false),
         Arc::new(FakeProvider::one("node.a", instance_id, state)),
-    );
-    let error = match restarted {
-        Ok(host) => {
-            host.close().expect("close unexpected host");
-            panic!("missing monitor evidence must fail restart");
-        }
-        Err(error) => error,
-    };
-    assert_eq!(error.code(), "artifact_store_verification_failed");
-    assert_eq!(error.operation(), "validate_persisted_event");
-    assert_eq!(error.projection().code, RuntimeErrorCode::LedgerFailure);
-    assert!(error.is_fatal());
+    )
+    .expect("the restart reads no frame");
+    assert!(restarted.fatal_error().expect("runtime health").is_none());
+    restarted.close().expect("close restarted host");
 }
 
 #[test]

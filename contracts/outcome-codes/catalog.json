@@ -290,6 +290,10 @@
       "type": "duration_ms",
       "description": "Time spent restoring state while opening the ledger."
     },
+    "pending_evictions": {
+      "type": "integer",
+      "description": "Artifacts whose eviction intent has no outcome yet."
+    },
     "runtime_code": {
       "type": "code",
       "description": "The Runtime error code of an IPC failure."
@@ -3738,6 +3742,9 @@
   "domains": {
     "foreign_": [
       "contract"
+    ],
+    "maintenance_artifact_": [
+      "runtime-host"
     ],
     "panic_": [
       "contract"
