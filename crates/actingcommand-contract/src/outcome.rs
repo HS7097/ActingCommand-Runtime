@@ -1565,7 +1565,7 @@ fn drop_deepest_link(outcome: &mut Outcome) -> bool {
     let Some((index, parent)) = path.split_last() else {
         return false;
     };
-    node_mut(outcome, parent).causes.remove(*index);
+    node_mut(outcome, parent).inner.causes.remove(*index);
     true
 }
 
