@@ -240,16 +240,41 @@ impl LedgerMaintenance {
         Ok(material)
     }
 
+    /// A formal read under the maintenance limits (backup binding). Workflow #375 H1: its
+    /// material is verified once per distinct reference, in parallel.
     pub fn read_formal<F>(
         &self,
         database: &RuntimeDatabase,
         verifier: F,
     ) -> GlobalLedgerResult<SqliteLedgerReadOnly>
     where
-        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
     {
         self.validate_database(database)?;
-        sqlite::SqliteLedgerReadOnly::open_formal(database, self.budget(), verifier)
+        sqlite::SqliteLedgerReadOnly::open_formal_parallel(database, self.budget(), verifier)
+    }
+
+    /// Workflow #375 H2: the single complete verification of a formal root for
+    /// `ledger-maintenance verify`. It reads no further than the authenticated head and
+    /// finishes within the held operation deadline, with no event or byte cap, like
+    /// `open_writer`; it returns the restored events with the root's storage status.
+    /// `timing` keeps the phases that ran, also when an error is returned.
+    pub fn verify_formal<F>(
+        &self,
+        database: &RuntimeDatabase,
+        verifier: F,
+        timing: &mut LedgerOpenTiming,
+    ) -> GlobalLedgerResult<(Vec<PersistedEvent>, LedgerStorageStatus)>
+    where
+        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
+    {
+        self.validate_database(database)?;
+        sqlite::SqliteLedgerReadOnly::read_formal_verified(
+            database,
+            self.deadline,
+            verifier,
+            timing,
+        )
     }
 
     pub fn status<F>(
@@ -319,7 +344,27 @@ impl LedgerMaintenance {
         verifier: F,
     ) -> GlobalLedgerResult<GlobalLedger>
     where
-        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
+    {
+        self.open_writer_timed(
+            database,
+            owner_id,
+            verifier,
+            &mut LedgerOpenTiming::default(),
+        )
+    }
+
+    /// `open_writer` that also reports its phase timings (Workflow #375 H1); `timing`
+    /// keeps the phases that ran, also when an error is returned.
+    pub fn open_writer_timed<F>(
+        self,
+        database: Arc<RuntimeDatabase>,
+        owner_id: String,
+        verifier: F,
+        timing: &mut LedgerOpenTiming,
+    ) -> GlobalLedgerResult<GlobalLedger>
+    where
+        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
     {
         self.validate_database(&database)?;
         let config = GlobalLedgerConfig::new(self.root.join("ledger"), owner_id);
@@ -332,6 +377,7 @@ impl LedgerMaintenance {
                 self.compatibility,
                 deadline,
                 verifier,
+                timing,
             )
         })
     }

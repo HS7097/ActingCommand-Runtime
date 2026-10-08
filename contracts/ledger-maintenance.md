@@ -104,12 +104,36 @@ seconds and 128 SQLite pages per step. Typed limits must be positive and cannot
 exceed 4 GiB, 65,536 entries, 1,000,000 events, 600 seconds or 1,024 pages.
 Artifact copying uses bounded chunks and the same operation deadline. Existing
 State validation and database mutex acquisition retain their owner semantics.
-The defaults bound one maintenance operation. Startup and `actingd unlock-owner`
-use only their deadline; their material bound is the authenticated Ledger extent.
-The offline CLI `verify` and `backup` still return `ledger_read_budget_exceeded`
-for a root beyond the default limits; such a root needs
-`RuntimeHost::maintain_ledger` with explicit limits (at most 1,000,000 events,
-4 GiB, 600 seconds). The CLI takes no limit options. Later startup steps keep
+The defaults bound one maintenance operation. Startup, `actingd unlock-owner` and
+`verify` of a formal root use only their deadline; their material bound is the
+authenticated Ledger extent (Workflow #375). `verify` classifies a formal root by
+its keyed meta row, as startup does, and verifies it in one complete read that
+reads no further than the authenticated head; its receipt's `ledger` comes from
+that read. A Missing (Segment) or candidate root keeps the full status read under
+the limits. `backup` (with its binding read), dry-run, import and restore still
+return `ledger_read_budget_exceeded` for a root beyond the default limits; such a
+root needs `RuntimeHost::maintain_ledger` with explicit limits (at most 1,000,000
+events, 4 GiB, 600 seconds). The CLI takes no limit options.
+
+Complete material for a formal `verify` is every artifact `Available`, or
+`Evicted` with its authenticated `Deleted` or `RecoveryAbsent` proof. A pending
+or failed eviction, and missing or unverifiable material, refuse with
+`maintenance_artifact_material_unavailable` (a failed eviction keeps its fatal
+`artifact_eviction_failed`); a Segment root still refuses any eviction. Within
+one opening (startup, `unlock-owner`, `verify`, `status`, the binding read), each
+distinct artifact reference without an eviction proof is verified exactly once,
+before the records are restored in sequence order; with a shared verifier this
+runs on at most eight worker threads, each checking the deadline before every
+file. The first failing reference in sequence order keeps its
+`artifact_store_verification_failed`, and a deadline miss keeps
+`ledger_read_budget_exceeded`. After the writer open, startup prints one stdout
+line, also before a failure is returned and never as a Ledger event:
+`actingd ledger_open events=<n> artifacts=<distinct verified> artifact_bytes=<b>
+workers=<w> sql_read_ms=<ms> verify_ms=<ms> material_ms=<ms> restore_ms=<ms>
+deadline_ms=<ms>`. A failed formal `verify` appends the same fields to its
+failure cause.
+
+Later startup steps keep
 their own bounds: instance-fact and agent-dispatch recovery each query the full
 history from the writer within its 10 second command timeout, and a restart
 fails with `policy_scheduling_outcome_capacity_exceeded` when more than 16,384

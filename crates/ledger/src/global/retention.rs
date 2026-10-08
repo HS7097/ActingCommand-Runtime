@@ -16,7 +16,10 @@ use actingcommand_contract::{
     VerifiedArtifactReference,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+mod material;
 mod prior_epoch;
+pub use material::LedgerOpenTiming;
+pub(super) use material::{PendingMaterial, elapsed_ms};
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
 #[derive(Default)]
@@ -1896,7 +1899,9 @@ where
 }
 
 /// Workflow #191 C: the restoring half of `restore_records`, against a retention index
-/// already derived from the same authenticated records.
+/// already derived from the same authenticated records. Workflow #375 H1: each distinct
+/// reference without an eviction proof is verified once, in first-reference order, before
+/// the records are restored in sequence order.
 pub(super) fn restore_records_with<F>(
     retention: &RetentionIndex,
     records: Vec<StoredEventRecord>,
@@ -1906,10 +1911,56 @@ pub(super) fn restore_records_with<F>(
 where
     F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
 {
+    let verdicts = match verifier.as_mut() {
+        Some(verify) => {
+            Some(PendingMaterial::collect(retention, &records).verify_each(verify, &mut check)?)
+        }
+        None => None,
+    };
+    restore_verified(retention, records, verdicts.as_ref(), check)
+}
+
+/// Workflow #375 H1: `restore_records_with` for a verifier that can be shared. The distinct
+/// references are verified on a bounded worker pool; `timing` keeps the phases that ran,
+/// also when an error is returned.
+pub(super) fn restore_records_parallel_with<F, C>(
+    retention: &RetentionIndex,
+    records: Vec<StoredEventRecord>,
+    verifier: &F,
+    check: C,
+    timing: &mut LedgerOpenTiming,
+) -> GlobalLedgerResult<Vec<PersistedEvent>>
+where
+    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
+    C: Fn(usize) -> GlobalLedgerResult<()> + Sync,
+{
+    let started = std::time::Instant::now();
+    let pending = PendingMaterial::collect(retention, &records);
+    timing.artifacts = pending.count();
+    timing.artifact_bytes = pending.bytes();
+    let verdicts = pending.verify_parallel(verifier, &check, &mut timing.workers);
+    timing.material_ms = elapsed_ms(started);
+    let verdicts = verdicts?;
+    let started = std::time::Instant::now();
+    let events = restore_verified(retention, records, Some(&verdicts), check);
+    timing.restore_ms = elapsed_ms(started);
+    events
+}
+
+/// Restores in sequence order with the verdicts of the pending material; `None` means no
+/// verifier was given, so an artifact without a proof fails as before.
+fn restore_verified(
+    retention: &RetentionIndex,
+    records: Vec<StoredEventRecord>,
+    verdicts: Option<&material::MaterialVerdicts>,
+    mut check: impl FnMut(usize) -> GlobalLedgerResult<()>,
+) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+    let mut lookup = verdicts
+        .map(|verdicts| move |reference: &ProjectedArtifactReference| verdicts.get(reference));
     let mut events = Vec::with_capacity(records.len());
     for record in records {
         check(events.len() + 1)?;
-        let event = retention.restore_record(record, verifier)?;
+        let event = retention.restore_record(record, &mut lookup)?;
         check(events.len() + 1)?;
         events.push(event);
     }

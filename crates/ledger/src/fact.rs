@@ -246,6 +246,13 @@ impl StoredArtifactRecord {
 }
 
 impl StoredEventRecord {
+    /// Workflow #375 H1: the artifact references exactly as restore projects them.
+    pub(crate) fn projected_artifacts(
+        &self,
+    ) -> impl Iterator<Item = ProjectedArtifactReference> + '_ {
+        self.artifacts.iter().map(StoredArtifactRecord::projected)
+    }
+
     /// Borrow only the fields consumed by SQLite's index-column projection.
     /// Canonical serialization continues to use the complete stored record.
     pub(crate) fn index_fields(&self) -> impl Serialize + '_ {

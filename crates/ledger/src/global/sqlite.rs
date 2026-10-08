@@ -4,6 +4,7 @@
 
 use super::projection::EventIndexes;
 use super::read_only::check_read_budget;
+use super::retention::{LedgerOpenTiming, elapsed_ms};
 use super::storage::{
     DurableStorage, EventStore, UniqueJsonValue, WriterOwnership, increment_sequence,
 };
@@ -500,23 +501,30 @@ pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedge
     }
 }
 
+/// Workflow #375 H1: the material of the opening is verified once per distinct reference,
+/// in parallel; `timing` keeps the phases that ran, also when an error is returned.
 pub(super) fn open_formal<F>(
     config: GlobalLedgerConfig,
     database: Arc<RuntimeDatabase>,
     lock: super::storage::LockedWriterFile,
     compatibility: Option<super::storage::LockedWriterFile>,
     deadline: Instant,
-    mut verifier: F,
+    verifier: F,
+    timing: &mut LedgerOpenTiming,
 ) -> GlobalLedgerResult<SqliteLedgerStore>
 where
-    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
 {
-    let raw = read_formal_snapshot(&database, deadline)?;
+    let started = Instant::now();
+    let raw = read_formal_snapshot(&database, deadline);
+    timing.sql_read_ms = elapsed_ms(started);
+    let raw = raw?;
+    timing.events = raw.events.len() as u64;
     let marker = SqliteMarker::parse(&raw.meta)?;
     if marker.state != "ready" {
         return Err(failure("ledger_migration_required", "open_runtime_ledger"));
     }
-    let (events, prefix) = verify_snapshot_prefix(&database, raw, &mut Some(&mut verifier))?;
+    let (events, prefix) = verify_snapshot_prefix_parallel(&database, raw, &verifier, timing)?;
     let head_hash = prefix.head_hash.clone();
     let head = events.last().map_or(0, PersistedEvent::sequence);
     upgrade_views(&database, head, head_hash.as_deref())?;
@@ -2025,6 +2033,58 @@ impl SqliteLedgerReadOnly {
         })
     }
 
+    /// Workflow #375 H1: `open_formal` with a shared verifier (the maintenance binding
+    /// read), whose distinct references are verified once and in parallel.
+    pub(super) fn open_formal_parallel<F>(
+        database: &RuntimeDatabase,
+        budget: ReadBudget,
+        verifier: F,
+    ) -> GlobalLedgerResult<Self>
+    where
+        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
+    {
+        let raw = read_snapshot(database, budget)?;
+        let marker = SqliteMarker::parse(&raw.meta)?;
+        let (events, _) =
+            verify_snapshot_parallel(database, raw, &verifier, &mut LedgerOpenTiming::default())?;
+        if marker.state != "ready" {
+            return Err(failure(
+                "ledger_candidate_not_production",
+                "open_runtime_evidence",
+            ));
+        }
+        Ok(Self {
+            indexes: EventIndexes::from_events(&events),
+            events,
+        })
+    }
+
+    /// Workflow #375 H2: the single complete read of `ledger-maintenance verify` on a formal
+    /// root. Like the writer open it is bounded by the head of the keyed meta row,
+    /// authenticated first in the same read transaction, and by the deadline; it has no
+    /// event or byte cap. Returns the restored events and the root's storage status (the
+    /// receipt's `ledger`, as `status` computes it). `timing` keeps the phases that ran,
+    /// also when an error is returned.
+    pub(super) fn read_formal_verified<F>(
+        database: &RuntimeDatabase,
+        deadline: Instant,
+        verifier: F,
+        timing: &mut LedgerOpenTiming,
+    ) -> GlobalLedgerResult<(Vec<PersistedEvent>, super::LedgerStorageStatus)>
+    where
+        F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
+    {
+        let started = Instant::now();
+        let raw = read_formal_snapshot(database, deadline);
+        timing.sql_read_ms = elapsed_ms(started);
+        let raw = raw?;
+        timing.events = raw.events.len() as u64;
+        let marker = SqliteMarker::parse(&raw.meta)?;
+        let (events, hash) = verify_snapshot_parallel(database, raw, &verifier, timing)?;
+        let status = marker.status(&events, hash);
+        Ok((events, status))
+    }
+
     pub fn events(&self) -> &[PersistedEvent] {
         &self.events
     }
@@ -2451,6 +2511,76 @@ where
     let prefix = VerifiedPrefix::build(marker, metadata, head_hash, &mut check)?;
     let events =
         super::retention::restore_records_with(&prefix.retention, records, verifier, check)?;
+    Ok((events, prefix))
+}
+
+/// Workflow #375 H1: `verify_snapshot` with a shared verifier, whose distinct references
+/// are verified once and in parallel. The retention index is derived from the metadata
+/// authenticated with the records, as the writer open's prefix does.
+fn verify_snapshot_parallel<F>(
+    database: &RuntimeDatabase,
+    raw: RawSnapshot,
+    verifier: &F,
+    timing: &mut LedgerOpenTiming,
+) -> GlobalLedgerResult<(Vec<PersistedEvent>, Option<String>)>
+where
+    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
+{
+    let budget = raw.budget;
+    let bytes = raw.bytes;
+    let check = move |count: usize| check_read_budget(budget, bytes, count);
+    let started = Instant::now();
+    let verified = verify_snapshot_records(database, raw).and_then(|verified| {
+        let retention = super::retention::RetentionIndex::from_events_checked(
+            &verified.metadata,
+            &mut |count| check(count),
+        )?;
+        Ok((verified.records, verified.head_hash, retention))
+    });
+    timing.verify_ms = elapsed_ms(started);
+    let (records, hash, retention) = verified?;
+    let events = super::retention::restore_records_parallel_with(
+        &retention, records, verifier, check, timing,
+    )?;
+    Ok((events, hash))
+}
+
+/// Workflow #375 H1: `verify_snapshot_prefix` with a shared verifier, for the writer open.
+fn verify_snapshot_prefix_parallel<F>(
+    database: &RuntimeDatabase,
+    raw: RawSnapshot,
+    verifier: &F,
+    timing: &mut LedgerOpenTiming,
+) -> GlobalLedgerResult<(Vec<PersistedEvent>, VerifiedPrefix)>
+where
+    F: Fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + Sync,
+{
+    let budget = raw.budget;
+    let bytes = raw.bytes;
+    let check = move |count: usize| check_read_budget(budget, bytes, count);
+    let started = Instant::now();
+    let verified = verify_snapshot_records(database, raw).and_then(
+        |VerifiedSnapshotRecords {
+             records,
+             metadata,
+             head_hash,
+             marker,
+         }| {
+            // Workflow #191 C: one retention build serves both the restore and the view prefix.
+            let prefix =
+                VerifiedPrefix::build(marker, metadata, head_hash, &mut |count| check(count))?;
+            Ok((records, prefix))
+        },
+    );
+    timing.verify_ms = elapsed_ms(started);
+    let (records, prefix) = verified?;
+    let events = super::retention::restore_records_parallel_with(
+        &prefix.retention,
+        records,
+        verifier,
+        check,
+        timing,
+    )?;
     Ok((events, prefix))
 }
 

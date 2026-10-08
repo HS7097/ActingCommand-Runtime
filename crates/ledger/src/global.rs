@@ -15,6 +15,7 @@ mod read_only;
 mod retention;
 pub use retention::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
+    LedgerOpenTiming,
 };
 mod sqlite;
 mod storage;
