@@ -1338,7 +1338,8 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
     let store = fs::read_to_string(root.join("crates/artifact-store/src/store.rs"))
         .expect("read artifact store");
     assert!(host.contains("LedgerMaintenance::acquire"));
-    assert!(host.contains(".open_writer("));
+    // Workflow #375 H1: the startup writer open is the timed variant of open_writer.
+    assert!(host.contains(".open_writer_timed("));
     assert!(host.contains("verify_recovery_reference(reference)"));
     assert!(store.contains("pub fn verify_recovery_reference"));
 }
@@ -4651,6 +4652,7 @@ const FORENSIC_FORBIDDEN_WRITE_ENTRIES: &[&str] = &[
     "LedgerMaintenance::acquire",
     "initialize_empty",
     "open_writer",
+    "open_writer_timed",
     "import",
     "LabLedger::create",
     "LabLedger::open_or_create",
