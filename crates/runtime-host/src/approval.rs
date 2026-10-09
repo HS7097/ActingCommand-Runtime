@@ -2,6 +2,7 @@
 
 //! Ledger-rebuilt approval projection used by Runtime policy admission.
 
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalPayload, ApprovalTarget, EventActor, EventPayload, EventQuery,
@@ -76,11 +77,16 @@ impl ApprovalProjection {
         to_sequence: Option<u64>,
         persist: bool,
     ) -> RuntimeHostResult<Self> {
-        let events = ledger
-            .query(EventQuery {
-                event_type: Some(EventType::ApprovalDecision),
-                to_sequence,
-                ..EventQuery::default()
+        // Workflow #381 R4a: the decisions through one position, in bounded pages.
+        let events = to_sequence
+            .map_or_else(|| ledger.latest_sequence(), Ok)
+            .and_then(|through| {
+                read_event_types(
+                    ledger,
+                    &[EventType::ApprovalDecision],
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
             })
             .map_err(|_| approval_fatal("approval_projection_query_failed"))?;
         let projection = Self::from_events(&events, state)?;

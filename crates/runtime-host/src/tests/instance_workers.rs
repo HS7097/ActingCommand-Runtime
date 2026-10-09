@@ -2,8 +2,9 @@
 
 //! Workflow #369 S2+S3b (model-369-queue v3.1 §7 row 4): the per-instance workers, a failed
 //! policy run's hand-off to its ladder, the ladder's one continuous hold, and the startup
-//! claim. The test fakes have no emulator control: the ladder's emulator-restart rung is
-//! skipped, and an emulator start's startup claim is driven through the control's own tail
+//! claim. The ladder's emulator-restart rung runs only on a fake given emulator control and a
+//! discovery binding (`bind_fake_emulator`, review C-2); elsewhere it is skipped. An emulator
+//! start's startup claim is driven through the control's own tail
 //! (`schedule_startup_package_for_test`).
 
 use super::*;
@@ -125,9 +126,17 @@ struct LadderRun {
 /// A physical policy run that binds a return-home package, on an instance whose startup package
 /// is configured, admitted and then left with captures that stay unknown: the run fails with a
 /// stuck-recovery trigger, and so does every rung run, each `capture_delay_ms` per capture. The
-/// ladder runs rung 1 and rung 2 on its key; rung 3 is skipped (the fakes have no emulator
-/// control).
+/// ladder runs rung 1 and rung 2 on its key; rung 3 is skipped (no emulator control; see
+/// `emulator_ladder_fixture`).
 fn ladder_fixture(capture_delay_ms: u64) -> LadderRun {
+    ladder_fixture_with(capture_delay_ms, |_, _, _| {})
+}
+
+/// `ladder_fixture` with `prepare` applied to the started host before the run's admission.
+fn ladder_fixture_with(
+    capture_delay_ms: u64,
+    prepare: impl FnOnce(&RuntimeHost, InstanceId, &FakeState),
+) -> LadderRun {
     let root = TempDir::new().expect("tempdir");
     let (host_config, request) = ladder_setup(root.path());
     let state = Arc::new(FakeState::default());
@@ -142,6 +151,7 @@ fn ladder_fixture(capture_delay_ms: u64) -> LadderRun {
         )),
     )
     .expect("physical runtime host");
+    prepare(&host, registered, state.as_ref());
     let context = admit_ladder_run(&host, &request);
     state.unknown_capture.store(true, Ordering::Release);
     state
@@ -454,8 +464,8 @@ fn a_failed_policy_run_hands_its_key_to_its_ladder_which_holds_it_through_every_
 /// Workflow #369 H-3 (ruling Q8), §5.1: a pause during a rung run drains the run; its release
 /// hands the key back to the ladder's continuation (the gate never holds it back), the ladder
 /// sees the pause, fails its next rung with `recovery_admission_denied`, finishes exhausted at
-/// Warning and releases once, and the pause completes. (The R4 readiness wait checks the pause
-/// at each poll too; the fakes have no emulator control to reach it.)
+/// Warning and releases once, and the pause completes. (A pause during the R4 readiness wait:
+/// `a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release`.)
 #[test]
 fn a_pause_during_a_rung_run_ends_the_climb_at_warning_and_completes() {
     let run = ladder_fixture(400);
@@ -504,6 +514,283 @@ fn a_pause_during_a_rung_run_ends_the_climb_at_warning_and_completes() {
         phase,
         RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
     )));
+    assert!(run.host.fatal_error().expect("runtime health").is_none());
+    run.host.close().expect("close host");
+}
+
+/// Review C-2 (#666): the ladder fixture on an instance with emulator control and a discovery
+/// binding, so rung 3 runs its Stop and Start on the ladder's key and then the readiness wait
+/// (R4). With `hold_android_boot`, Android reports no foreground activity after the Start, so
+/// R4 keeps polling.
+fn emulator_ladder_fixture(capture_delay_ms: u64, hold_android_boot: bool) -> LadderRun {
+    ladder_fixture_with(capture_delay_ms, |host, registered, state| {
+        state
+            .hold_android_boot
+            .store(hold_android_boot, Ordering::Release);
+        bind_fake_emulator(host, POLICY_INSTANCE_ALIAS, registered, state);
+    })
+}
+
+fn emulator_actions(state: &FakeState) -> Vec<actingcommand_contract::EmulatorInstanceAction> {
+    state
+        .emulator_actions
+        .lock()
+        .expect("fake emulator actions lock")
+        .clone()
+}
+
+/// Rung 3's Stop and Start ran on the fake; the ladder is in its readiness wait or later.
+fn wait_for_rung_three_start(state: &FakeState) {
+    use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+    wait_until("rung 3's Stop and Start", || {
+        emulator_actions(state) == [Stop, Start]
+    });
+}
+
+/// An instance pause with a 1 s drain, as the operator's `actingctl pause` sends it.
+fn pause_instance(host: &RuntimeHost, instance_alias: &str, connection: u64) -> RuntimeReceipt {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let pause = RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::PauseScheduling {
+            scope: SchedulingPauseScope::Instance {
+                instance_alias: instance_alias.to_owned(),
+            },
+            reason_code: "s2_pause_on_the_ladder".to_owned(),
+            drain_timeout_ms: 1_000,
+        },
+    )
+    .expect("pause request");
+    host.process_request_for_test(&pause, ConnectionId::new(connection).expect("connection"))
+        .expect("pause receipt")
+}
+
+/// The ladder claim's own release records (request links only), found through the hand-off
+/// that took the failed run's lease.
+fn ladder_releases<'a>(
+    events: &'a [PersistedEvent],
+    run_lease: LeaseId,
+) -> Vec<&'a PersistedEvent> {
+    let ladder_request = events
+        .iter()
+        .find_map(|event| match event.payload() {
+            EventPayload::Lease(LeasePayload::Transferred(transfer))
+                if transfer.from_lease_id() == run_lease =>
+            {
+                Some(transfer.queued_request_id())
+            }
+            _ => None,
+        })
+        .expect("the hand-off to the ladder");
+    events
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().request_id() == Some(&ladder_request)
+        })
+        .collect()
+}
+
+/// §7 row 4, H-3, review2 L7 (review C-2): a pause during rung 3's readiness wait (R4). The
+/// Stop and Start ran on the ladder's key; while Android has not booted the wait polls, sees
+/// the pause, fails rung 3 with `recovery_admission_denied` and ends the climb exhausted at
+/// Warning; the ladder releases its key once, and the pause completes within its grace.
+#[test]
+fn a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release() {
+    let run = emulator_ladder_fixture(0, true);
+    run.fail_scheduled_run();
+    wait_for_rung_three_start(&run.state);
+    let receipt = pause_instance(&run.host, POLICY_INSTANCE_ALIAS, 74);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "the pause completes within its grace: {receipt:?}"
+    );
+    wait_for_ladder_end(&run.host, POLICY_INSTANCE_ALIAS);
+    let events = all_events(&run.host);
+    let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
+    assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    assert_eq!(finished.severity(), EventSeverity::Warning);
+    let rungs = rung_outcomes(&events);
+    assert_eq!(
+        rungs.last(),
+        Some(&(
+            RecoveryRung::EmulatorRestart,
+            RecoveryRungOutcome::Failed,
+            Some("recovery_admission_denied".to_owned())
+        )),
+        "{rungs:?}"
+    );
+    let releases = ladder_releases(&events, run.context.lease_token().lease_id());
+    assert_eq!(releases.len(), 1, "the ladder releases its key once");
+    assert!(releases[0].sequence() > finished.sequence());
+    {
+        use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+        assert_eq!(emulator_actions(&run.state), [Stop, Start]);
+    }
+    let (_, paused) = run.host.scheduling_pauses_for_test().expect("pauses");
+    assert!(
+        paused.contains_key(POLICY_INSTANCE_ALIAS),
+        "the pause stays"
+    );
+    assert!(run.host.fatal_error().expect("runtime health").is_none());
+    run.host.close().expect("close host");
+}
+
+/// §7 row 4, W-2 (review C-2): instance A's worker blocked in rung 3's readiness wait (R4)
+/// holds only A. Instance B's startup claim is granted meanwhile and its startup run completes
+/// on B's own worker, while A's ladder still holds A and is still waiting.
+#[test]
+fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_startup_claim() {
+    let root = TempDir::new().expect("tempdir");
+    let (host_config, request) = ladder_setup(root.path());
+    let package = fs::read(root.path().join("physical-scheduled-task.zip")).expect("package");
+    let startup = ContainedTaskRequest::new(
+        root.path()
+            .join("physical-scheduled-task.zip")
+            .to_string_lossy()
+            .into_owned(),
+        format!("{:x}", Sha256::digest(&package)),
+    )
+    .expect("startup package");
+    let ladder_state = Arc::new(FakeState::default());
+    ladder_state
+        .physical_task_geometry
+        .store(true, Ordering::Release);
+    let startup_state = Arc::new(FakeState::default());
+    startup_state
+        .physical_task_geometry
+        .store(true, Ordering::Release);
+    startup_state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let ladder_instance = instance_id();
+    let startup_instance = instance_id();
+    let host = RuntimeHost::start(
+        host_config.with_startup_packages(BTreeMap::from([
+            (POLICY_INSTANCE_ALIAS.to_owned(), startup.clone()),
+            (STARTUP_ALIAS.to_owned(), startup),
+        ])),
+        Arc::new(FakeProvider::from_entries([
+            (
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                ladder_instance,
+                Arc::clone(&ladder_state),
+            ),
+            (
+                STARTUP_ALIAS.to_owned(),
+                startup_instance,
+                Arc::clone(&startup_state),
+            ),
+        ])),
+    )
+    .expect("runtime host with two instances");
+    ladder_state
+        .hold_android_boot
+        .store(true, Ordering::Release);
+    bind_fake_emulator(&host, POLICY_INSTANCE_ALIAS, ladder_instance, &ladder_state);
+    let context = admit_ladder_run(&host, &request);
+    ladder_state.unknown_capture.store(true, Ordering::Release);
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails");
+    assert!(actingcommand_contract::is_stuck_recovery_trigger(
+        error.code()
+    ));
+    wait_for_rung_three_start(&ladder_state);
+    assert_eq!(
+        host.schedule_startup_package_for_test(STARTUP_ALIAS)
+            .expect("schedule B's startup package"),
+        StartupPackageDisposition::Scheduled
+    );
+    wait_until("B's startup run", || {
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("B's claims")
+            .0
+            .is_none()
+            && all_events(&host).iter().any(|event| {
+                event.event_type() == EventType::TaskCompleted
+                    && event.links().instance_id() == Some(&startup_instance)
+            })
+    });
+    assert_eq!(
+        host.instance_claims_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("A's claims")
+            .0,
+        Some(ClaimKind::Ladder),
+        "A's ladder still holds A while B's startup run completed"
+    );
+    assert!(
+        ladder_finished(&all_events(&host)).is_none(),
+        "A's ladder is still waiting for readiness"
+    );
+    {
+        use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+        assert_eq!(emulator_actions(&ladder_state), [Stop, Start]);
+    }
+    assert!(startup_state.capture_count.load(Ordering::Acquire) > 0);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Review L6 (#666), §5.10: when every rung ran and failed on its own, a holding interruption at
+/// the climb's end does not soften the outcome. Rung 3's Start ends with the vendor's readiness
+/// wait timing out while a pause has just closed the instance's gate: the climb is exhausted at
+/// Error, the ladder releases its key once, and the pause completes.
+#[test]
+fn a_climb_whose_rungs_all_ran_and_failed_stays_at_error_under_a_pause_at_its_end() {
+    let run = emulator_ladder_fixture(0, false);
+    run.state
+        .block_emulator_start
+        .store(true, Ordering::Release);
+    run.state.fail_emulator_start.store(true, Ordering::Release);
+    run.fail_scheduled_run();
+    wait_until("rung 3's Start", || {
+        run.state.emulator_start_entered.load(Ordering::Acquire)
+    });
+    let receipt = thread::scope(|scope| {
+        let host = &run.host;
+        let pause = scope.spawn(move || pause_instance(host, POLICY_INSTANCE_ALIAS, 75));
+        wait_until("the pause's gate", || {
+            host.scheduling_pauses_for_test()
+                .expect("pauses")
+                .1
+                .contains_key(POLICY_INSTANCE_ALIAS)
+        });
+        run.state
+            .block_emulator_start
+            .store(false, Ordering::Release);
+        pause.join().expect("the pause's thread")
+    });
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    wait_for_ladder_end(&run.host, POLICY_INSTANCE_ALIAS);
+    let events = all_events(&run.host);
+    let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
+    assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    assert_eq!(finished.severity(), EventSeverity::Error);
+    let rungs = rung_outcomes(&events);
+    assert_eq!(
+        rungs.last(),
+        Some(&(
+            RecoveryRung::EmulatorRestart,
+            RecoveryRungOutcome::Failed,
+            Some("emulator_control_wait_timeout".to_owned())
+        )),
+        "rung 3 ran and failed on its own: {rungs:?}"
+    );
+    assert_eq!(
+        ladder_releases(&events, run.context.lease_token().lease_id()).len(),
+        1
+    );
     assert!(run.host.fatal_error().expect("runtime health").is_none());
     run.host.close().expect("close host");
 }
@@ -651,6 +938,16 @@ fn startup_host(
     aliases: &[(&str, Arc<FakeState>)],
     deadline_ms: u64,
 ) -> RuntimeHost {
+    startup_host_with(root, aliases, deadline_ms, |config| config)
+}
+
+/// `startup_host` with `configure` applied to its configuration.
+fn startup_host_with(
+    root: &TempDir,
+    aliases: &[(&str, Arc<FakeState>)],
+    deadline_ms: u64,
+    configure: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
+) -> RuntimeHost {
     let package = neutral_contained_task_package(true);
     let package_path = root.path().join("startup-package.zip");
     fs::write(&package_path, &package).expect("write startup package");
@@ -670,7 +967,7 @@ fn startup_host(
         entries.push(((*alias).to_owned(), instance_id(), Arc::clone(state)));
     }
     RuntimeHost::start(
-        config(root).with_startup_packages(startup_packages),
+        configure(config(root).with_startup_packages(startup_packages)),
         Arc::new(FakeProvider::from_entries(entries)),
     )
     .expect("runtime host with startup packages")
@@ -848,6 +1145,85 @@ fn a_failed_startup_run_starts_no_ladder() {
         RuntimeLifecyclePhase::RecoveryLadderStarted { .. }
             | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
     )));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Review C-1 (#666), model H-6: a startup claim never waits for business capacity. A start
+/// while capacity refuses has its claim granted; the startup run's own capacity check refuses
+/// the run and records the refusal, and the claim's key is released: nothing stays queued and
+/// nothing holds the instance.
+#[test]
+fn a_start_while_capacity_refuses_records_the_refusal_and_leaves_no_queued_entry() {
+    use actingcommand_contract::CapacityThresholds;
+    use actingcommand_host_metrics::{
+        CapacitySample, CapacityTarget, HostSample, HostSampler, ProcessLoadThresholds,
+    };
+
+    struct NoFreeBytes;
+
+    impl HostSampler for NoFreeBytes {
+        fn sample_capacity(&mut self, targets: &[CapacityTarget]) -> Vec<CapacitySample> {
+            actingcommand_host_metrics::sample_capacity(targets)
+                .into_iter()
+                .map(|mut sample| {
+                    if sample.available_bytes.is_ok() {
+                        sample.available_bytes = Ok(0);
+                    }
+                    sample
+                })
+                .collect()
+        }
+
+        fn sample(
+            &mut self,
+            _observed_at_unix_ms: u64,
+            _owned_processes: &BTreeMap<u32, String>,
+            _top_process_count: usize,
+            _thresholds: ProcessLoadThresholds,
+        ) -> Result<HostSample, &'static str> {
+            panic!("capacity-only specification does not enable performance counters")
+        }
+    }
+
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = startup_host_with(
+        &root,
+        &[(STARTUP_ALIAS, Arc::clone(&state))],
+        60_000,
+        |config| config.with_capacity_thresholds(CapacityThresholds::default()),
+    );
+    host.replace_capacity_sampler_for_test(Box::new(NoFreeBytes))
+        .expect("hard capacity pressure");
+    assert_eq!(
+        host.schedule_startup_package_for_test(STARTUP_ALIAS)
+            .expect("schedule startup package"),
+        StartupPackageDisposition::Scheduled
+    );
+    wait_until("the refused startup run and its key's release", || {
+        let events = all_events(&host);
+        let claims = host
+            .instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims");
+        count(&events, EventType::LeaseReleased) == 1 && claims.0.is_none() && claims.1.is_empty()
+    });
+    let events = all_events(&host);
+    // The claim was granted, not held back for capacity, and its key released once.
+    assert_eq!(count(&events, EventType::LeaseGranted), 1);
+    assert_eq!(count(&events, EventType::LeaseReleased), 1);
+    // The run's own capacity check refused it and recorded the refusal; no task ran.
+    assert!(
+        events.iter().any(|event| {
+            event.event_type() == EventType::SchedulerDenied
+                && event.severity() == EventSeverity::Warning
+                && event.payload().action() == actingcommand_contract::EventAction::ScheduleAdmit
+        }),
+        "the capacity refusal is recorded"
+    );
+    assert_eq!(count(&events, EventType::TaskCompleted), 0);
+    assert_eq!(count(&events, EventType::TaskFailed), 0);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }
