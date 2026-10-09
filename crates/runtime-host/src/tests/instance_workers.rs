@@ -974,3 +974,211 @@ fn closed_ledger_events(root: &Path) -> Vec<PersistedEvent> {
     .expect("read the closed ledger")
     .query(&EventQuery::default())
 }
+
+/// Workflow #369 E3: the child process of the crash points around a hand-off. It starts the
+/// ladder fixture's host on `ACTINGCOMMAND_LADDER_CRASH_ROOT`, admits the scheduled run, notes
+/// its identity, arms the crash point and runs it; the crash point ends the process.
+#[test]
+fn ladder_hand_off_crash_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_LADDER_CRASH_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let registered: InstanceId =
+        serde_json::from_slice(&fs::read(root.join("instance.json")).expect("instance bytes"))
+            .expect("instance identifier");
+    let (host_config, request) = ladder_setup(&root);
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config,
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("child runtime host");
+    let context = admit_ladder_run(&host, &request);
+    fs::write(
+        root.join("crash-run.json"),
+        serde_json::to_vec(&(context.run_id(), context.lease_token().lease_id()))
+            .expect("run identity bytes"),
+    )
+    .expect("run identity file");
+    if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+        == Ok("after_lease_release_before_policy_execution")
+    {
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        host.exit_at_scheduled_policy_checkpoint_for_test(&context, PathBuf::from(marker))
+            .expect("arm the checkpoint");
+    }
+    state.unknown_capture.store(true, Ordering::Release);
+    let outcome = host.run_scheduled_contained_task(&context, &request);
+    panic!(
+        "the crash point did not stop the child: {:?}",
+        outcome.err()
+    );
+}
+
+/// Starts the crash child at `point` on `root`, with its marker path.
+fn spawn_ladder_crash_child(root: &Path, point: &str) -> (std::process::Child, PathBuf) {
+    let marker = root.join("ladder-crash-marker");
+    let child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::instance_workers::ladder_hand_off_crash_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_LADDER_CRASH_ROOT", root)
+        .env("ACTINGCOMMAND_POLICY_CRASH_POINT", point)
+        .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn the crash child");
+    (child, marker)
+}
+
+fn restart_ladder_host(root: &Path, registered: InstanceId) -> RuntimeHost {
+    let (host_config, _) = ladder_setup(root);
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    RuntimeHost::start(
+        host_config,
+        Arc::new(FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state)),
+    )
+    .expect("restart after the crash")
+}
+
+fn run_count(events: &[PersistedEvent], run_id: &RunId, event_type: EventType) -> usize {
+    events
+        .iter()
+        .filter(|event| event.event_type() == event_type && event.links().run_id() == Some(run_id))
+        .count()
+}
+
+fn crash_root() -> (TempDir, InstanceId) {
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&registered).expect("instance bytes"),
+    )
+    .expect("instance file");
+    (root, registered)
+}
+
+/// Workflow #369 E3, first crash point: after the hand-off's `lease.released` and before
+/// `policy.execution_recorded`. The restart settles the failed run exactly once.
+#[test]
+fn a_crash_after_the_hand_off_release_settles_the_run_exactly_once() {
+    let (root, registered) = crash_root();
+    let (mut child, marker) =
+        spawn_ladder_crash_child(root.path(), "after_lease_release_before_policy_execution");
+    let deadline = Instant::now() + WAIT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the crash child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill the timed-out child");
+            let _ = child.wait();
+            panic!("the crash child timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(status.code(), Some(87), "the checkpoint ended the child");
+    assert!(marker.is_file());
+    let (run_id, lease_id): (RunId, LeaseId) = serde_json::from_slice(
+        &fs::read(root.path().join("crash-run.json")).expect("run identity bytes"),
+    )
+    .expect("run identity");
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseReleased), 1);
+    assert_eq!(
+        run_count(&prefix, &run_id, EventType::PolicyExecutionRecorded),
+        0
+    );
+    assert!(
+        prefix.iter().any(|event| matches!(
+            event.payload(),
+            EventPayload::Lease(LeasePayload::Transferred(transfer))
+                if transfer.from_lease_id() == lease_id
+        )),
+        "the run's lease end was a hand-off"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    for event_type in [
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            run_count(&events, &run_id, event_type),
+            1,
+            "settled once: {event_type:?}"
+        );
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}
+
+/// Workflow #369 E3, second crash point: between the ladder claim's `scheduler.queued` and the
+/// run's `lease.released`. The failed run then has no release (C1). The outcome: the restart
+/// recovers no release for it, settles it once from its committed `task.failed`, and starts
+/// cleanly with the instance free (the ladder, memory only, is gone).
+#[test]
+fn a_crash_inside_the_hand_off_leaves_the_run_without_a_release_and_settles_it_once() {
+    let (root, registered) = crash_root();
+    let (mut child, marker) =
+        spawn_ladder_crash_child(root.path(), "after_ladder_claim_queued_before_hand_off");
+    let deadline = Instant::now() + WAIT;
+    while !marker.is_file() {
+        assert!(
+            child.try_wait().expect("poll the crash child").is_none(),
+            "the crash child exited before the hand-off"
+        );
+        assert!(Instant::now() < deadline, "the crash barrier timed out");
+        thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().expect("kill the crash child");
+    let _ = child.wait();
+    let (run_id, lease_id): (RunId, LeaseId) = serde_json::from_slice(
+        &fs::read(root.path().join("crash-run.json")).expect("run identity bytes"),
+    )
+    .expect("run identity");
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::TaskFailed), 1);
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseReleased), 0);
+    assert!(prefix.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Scheduler(SchedulerPayload::Queued(queued))
+            if queued.deadline_monotonic_ms() == u64::MAX
+    )));
+    assert!(!prefix.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Lease(LeasePayload::Transferred(transfer))
+            if transfer.from_lease_id() == lease_id
+    )));
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        0,
+        "no release is recovered for the run"
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyExecutionRecorded),
+        1,
+        "the restart settles the run once, from its task.failed"
+    );
+    let (holder, queued) = host
+        .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("claims after restart");
+    assert!(holder.is_none() && queued.is_empty());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}

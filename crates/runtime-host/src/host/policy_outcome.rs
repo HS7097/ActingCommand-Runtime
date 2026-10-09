@@ -1876,37 +1876,58 @@ pub(crate) fn insert_authoritative_policy_outcome(
     Ok(())
 }
 
+/// The recovered runtime of a scheduled run: from its request to its terminal. A
+/// fixture-simulated run's request is its client intent (`lab.request`); a physical run records
+/// none (`append_scheduled_request_lifecycle`), so its request is its scheduler
+/// `command.received` (`runtime.task_run`) under the run's links (Workflow #369 E3: a physical
+/// run cut between its terminal and `policy.execution_recorded` is otherwise unrecoverable).
 fn recovered_scheduled_task_runtime_ms(
     ledger: &GlobalLedger,
     through: u64,
     terminal: &PersistedEvent,
 ) -> RuntimeHostResult<u64> {
     let links = terminal.links();
-    let requests = linked_policy_run_events(
+    let same_run = |event: &PersistedEvent| {
+        event.links().instance_id() == terminal.links().instance_id()
+            && event.links().request_id() == terminal.links().request_id()
+            && event.links().correlation_id() == terminal.links().correlation_id()
+            && event.links().task_id() == terminal.links().task_id()
+            && event.links().run_id() == terminal.links().run_id()
+            && event.links().lease_id().is_none()
+    };
+    let run_query = |event_type: EventType| EventQuery {
+        to_sequence: Some(through),
+        event_type: Some(event_type),
+        instance_id: links.instance_id().copied(),
+        request_id: links.request_id().copied(),
+        correlation_id: links.correlation_id().copied(),
+        task_id: links.task_id().copied(),
+        run_id: links.run_id().copied(),
+        ..EventQuery::default()
+    };
+    let mut requests = linked_policy_run_events(
         ledger,
-        EventQuery {
-            to_sequence: Some(through),
-            event_type: Some(EventType::LabRequest),
-            instance_id: links.instance_id().copied(),
-            request_id: links.request_id().copied(),
-            correlation_id: links.correlation_id().copied(),
-            task_id: links.task_id().copied(),
-            run_id: links.run_id().copied(),
-            ..EventQuery::default()
-        },
+        run_query(EventType::LabRequest),
         through,
         2,
         "reconcile_policy_outcomes",
-        |event| {
-            event.event_type() == EventType::LabRequest
-                && event.links().instance_id() == terminal.links().instance_id()
-                && event.links().request_id() == terminal.links().request_id()
-                && event.links().correlation_id() == terminal.links().correlation_id()
-                && event.links().task_id() == terminal.links().task_id()
-                && event.links().run_id() == terminal.links().run_id()
-                && event.links().lease_id().is_none()
-        },
+        |event| event.event_type() == EventType::LabRequest && same_run(event),
     )?;
+    if requests.is_empty() {
+        requests = linked_policy_run_events(
+            ledger,
+            run_query(EventType::CommandReceived),
+            through,
+            2,
+            "reconcile_policy_outcomes",
+            |event| {
+                event.event_type() == EventType::CommandReceived
+                    && event.origin().source() == EventSource::Scheduler
+                    && event.payload().action() == EventAction::RuntimeTaskRun
+                    && same_run(event)
+            },
+        )?;
+    }
     let [request] = requests.as_slice() else {
         return Err(policy_admission_fatal(
             "policy_run_task_request_not_unique",
