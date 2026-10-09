@@ -1276,6 +1276,10 @@ impl RuntimeHost {
             takeover,
             config.clock.sample()?.unix_ms,
         )?;
+        // Workflow #375 R5d: with the frame cleaner off, the developer log says so once.
+        if !config.frame_retention_enabled {
+            println!("actingd frame_retention disabled");
+        }
         let fatal = FatalState::default();
         let shared = Arc::new(HostShared {
             owner_epoch,
@@ -1285,11 +1289,15 @@ impl RuntimeHost {
             policy: OnceLock::new(),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
-            frame_retention: Mutex::new(
-                config
-                    .frame_retention_enabled
-                    .then(|| frame_retention::FrameRetention::new(config.failed_run_retention)),
-            ),
+            frame_retention: Mutex::new(config.frame_retention_enabled.then(|| {
+                frame_retention::FrameRetention::new(
+                    started_at_unix_ms,
+                    actingcommand_ledger::FrameRetentionSwitches {
+                        dedup_error: config.frame_retention_dedup_error,
+                        dedup_lab: config.frame_retention_dedup_lab,
+                    },
+                )
+            })),
             governance_write_gate: Mutex::new(()),
             governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),

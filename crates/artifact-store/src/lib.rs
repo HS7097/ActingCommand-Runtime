@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod codes;
 mod error;
 #[cfg(feature = "evidence-archive")]
 mod evidence_archive;
@@ -15,6 +16,7 @@ mod evidence_archive;
 mod exporter;
 #[cfg(feature = "capture")]
 mod frame_store;
+mod kept;
 #[cfg(feature = "capture")]
 mod naming;
 #[cfg(feature = "capture")]
@@ -29,6 +31,7 @@ pub use evidence_archive::*;
 pub use exporter::*;
 #[cfg(feature = "capture")]
 pub use frame_store::*;
+pub use kept::{KEPT_DIRECTORY, KeptMoves};
 #[cfg(feature = "capture")]
 pub use naming::*;
 #[cfg(feature = "capture")]
