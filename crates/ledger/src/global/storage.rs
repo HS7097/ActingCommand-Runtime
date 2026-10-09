@@ -715,10 +715,10 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), lease_granted.links())
             })
             .collect::<Vec<_>>();
-        // Workflow #369 E3 (#670 ruling 2): an interrupted run whose lease a transfer handed on
-        // has no release; the transfer ends its lease.
+        // Workflow #369 E3 (#670 rulings 2 and 3): an interrupted run whose lease a transfer
+        // handed on, or that expired, has no release; that transfer or expiry ends its lease.
         let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
-            unique_transfer_from(&self.events, lease_granted.links())
+            unique_lease_end(&self.events, lease_granted.links())
         } else {
             None
         };
@@ -925,11 +925,11 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), recovered_links)
             })
             .collect::<Vec<_>>();
-        // Workflow #369 E3 (#670 ruling 2): a run whose lease a transfer handed on before its
-        // release is settled once as interrupted from that transfer; no release is written for a
-        // lease its new holder owns.
+        // Workflow #369 E3 (#670 rulings 2 and 3): a run whose lease a transfer handed on, or
+        // that expired, before any release is settled once as interrupted from that end; no
+        // release is written for a lease that already ended.
         let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
-            unique_transfer_from(&self.events, recovered_links)
+            unique_lease_end(&self.events, recovered_links)
         } else {
             None
         };
@@ -1755,8 +1755,9 @@ fn same_task_run_chain(actual: &EventLinks, scheduled: &EventLinks) -> bool {
         && actual.recognition_id().is_none()
 }
 
-/// The one `lease.transferred` that handed the lease of `granted` on, on its instance.
-fn unique_transfer_from<'a>(
+/// The one event that ended the lease of `granted` without a release, on its instance: a
+/// `lease.transferred` that handed it on, or its `lease.expired`.
+fn unique_lease_end<'a>(
     events: &'a [PersistedEvent],
     granted: &EventLinks,
 ) -> Option<&'a PersistedEvent> {
@@ -1764,11 +1765,13 @@ fn unique_transfer_from<'a>(
         .iter()
         .filter(|event| {
             event.links().instance_id() == granted.instance_id()
-                && matches!(
+                && (matches!(
                     event.payload(),
                     EventPayload::Lease(LeasePayload::Transferred(transfer))
                         if granted.lease_id() == Some(&transfer.from_lease_id())
-                )
+                ) || (event.event_type() == EventType::LeaseExpired
+                    && granted.lease_id().is_some()
+                    && event.links().lease_id() == granted.lease_id()))
         })
         .collect::<Vec<_>>();
     match transfers.as_slice() {

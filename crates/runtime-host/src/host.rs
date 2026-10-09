@@ -1610,12 +1610,17 @@ impl RuntimeHost {
                 timed(&mut startup_recovery.policy_dispatches_ms, || {
                     // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
                     // before the reconciliation settles it.
-                    shared.recover_unreleased_policy_runs(
+                    let ended_without_release = shared.recover_unreleased_policy_runs(
                         &policy,
                         &registered_instances,
                         &scheduled_policy_bindings,
                     )?;
-                    reconcile_policy_dispatches(&mut policy, &shared.ledger, &shared.events)
+                    reconcile_policy_dispatches(
+                        &mut policy,
+                        &shared.ledger,
+                        &shared.events,
+                        &ended_without_release,
+                    )
                 })?;
                 let authoritative_policy_outcomes =
                     timed(&mut startup_recovery.policy_outcomes_ms, || {
