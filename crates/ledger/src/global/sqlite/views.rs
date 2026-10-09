@@ -14,7 +14,7 @@ const SEVERITIES: [EventSeverity; 5] = [
 ];
 const FAMILY: &str = "json_extract(CAST(canonical_record AS TEXT),'$.payload.family')";
 
-fn key(value: impl Serialize) -> GlobalLedgerResult<String> {
+pub(super) fn key(value: impl Serialize) -> GlobalLedgerResult<String> {
     match serde_json::to_value(value).map_err(|error| {
         GlobalLedgerError::json("event_serialization_failed", "encode_ledger_query", &error)
     })? {

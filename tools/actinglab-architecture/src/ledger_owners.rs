@@ -162,6 +162,18 @@ fn retain_fields(fields: &mut syn::Fields) -> Result<(), String> {
     Ok(())
 }
 
+/// The contract crate's outcome registries, `actingcommand_contract::outcome_codes!` and
+/// `actingcommand_contract::outcome_locations!`, named by their full path.
+fn outcome_registry(invocation: &syn::ItemMacro) -> bool {
+    let path = &invocation.mac.path;
+    invocation.ident.is_none()
+        && path.leading_colon.is_none()
+        && path.segments.len() == 2
+        && path.segments[0].ident == "actingcommand_contract"
+        && (path.segments[1].ident == "outcome_codes"
+            || path.segments[1].ident == "outcome_locations")
+}
+
 pub(crate) fn production_items(items: &[Item]) -> Result<Vec<Item>, String> {
     let mut retained = Vec::new();
     for item in items {
@@ -305,10 +317,14 @@ impl Discovery {
         for item in items {
             if let Item::Mod(child) = item {
                 children.push(child);
-            } else if matches!(item, Item::Macro(_)) {
-                return Err(format!(
-                    "unresolved item macro in production owner {module}"
-                ));
+            } else if let Item::Macro(invocation) = &item {
+                // Workflow #378: an outcome registry expands to a fieldless enum with its
+                // spellings and conversions only; any other item macro could hide an owner item.
+                if !outcome_registry(invocation) {
+                    return Err(format!(
+                        "unresolved item macro in production owner {module}"
+                    ));
+                }
             } else {
                 local.push(item);
             }

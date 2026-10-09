@@ -800,6 +800,7 @@ impl HostShared {
             connection_id,
             run_links: None,
             lease_ttl_ms: None,
+            kind: ClaimKind::InputLifecycle,
         })?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -952,6 +953,7 @@ impl HostShared {
             connection_id,
             run_links: None,
             lease_ttl_ms: None,
+            kind: ClaimKind::InputLifecycle,
         })?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(

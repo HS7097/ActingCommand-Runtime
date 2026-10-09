@@ -166,6 +166,7 @@ impl HostShared {
                 connection_id,
                 run_links,
                 lease_ttl_ms: None,
+                kind: ClaimKind::LabOperation,
             })?;
             let RuntimeResult::LeaseGranted { token: acquired } = lease.result else {
                 return Err(observation_integrity_failure(

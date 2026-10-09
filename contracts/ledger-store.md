@@ -306,6 +306,19 @@ relation indexes, head metadata and the complete migration marker/prefix. Segmen
 uses its original bounded snapshot scan and reports the verified prefix and any
 corrupt tail. Neither path opens referenced artifact content.
 
+`GlobalLedger::open_selected(root, event_types, deadline)` returns the events of
+the given types. On SQLite it authenticates, in one read transaction, the keyed
+meta row, sequence contiguity (`COUNT`, `MIN`, `MAX` equal to head, 1, head), the
+head row against the meta head hash, and each selected row on its own (decode,
+metadata, stored sequence, predecessor hash, tag and index columns), with its
+link and artifact rows; a head of a selected type is read and checked once. It
+uses `ledger_view_index_type_v1` when the derived views exist and scans
+otherwise. It does not read other rows, run the retention replay or check the
+migrated prefix, so it does not establish their integrity; artifacts are
+Unrecorded. Its `query` refuses a query that names no selected type, names a
+type it did not select, or names a view (`ledger_selection_query_unsupported`).
+Segment roots are read whole.
+
 Only the Ledger can construct its private `LedgerEventMetadata`. It retains the
 typed envelope/payload and structurally valid `ProjectedArtifactReference` values
 with their original object keys. It has no conversion to `PersistedEvent` or

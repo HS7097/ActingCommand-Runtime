@@ -1,0 +1,28 @@
+{
+  "owner": "ledger",
+  "codes": {
+    "ledger_selection_query_unsupported": {
+      "category": "error",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A query on a selected ledger read named no event type, an event type the read did not select, or a ledger view; the read refuses instead of returning an incomplete result.",
+      "common_causes": "A caller bug: code that opened the ledger for some event types queries another type or a view. The check-config preview never does.",
+      "handling": "Report it as a Runtime bug together with the command that produced it. The ledger itself is not damaged."
+    }
+  },
+  "locations": {
+    "ledger_query_selection": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "Answering a query on a selected ledger read (GlobalLedger::open_selected)."
+    }
+  }
+}

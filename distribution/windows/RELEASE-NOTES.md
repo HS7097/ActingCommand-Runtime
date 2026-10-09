@@ -113,6 +113,14 @@ actingd prints `actingd frame_retention disabled` once at start. Once a
 screenshot has been deleted or moved, or once the file names either switch,
 v0.11.4 can no longer open this state root.
 
+check-config's catalog preview (Workflow #375) now reads only the catalog and
+approval records (authenticated, with the ledger head and contiguity) instead of
+every ledger record; startup and `ledger-maintenance verify` still check every
+record. Its `ledger` phase includes the whole-file `PRAGMA quick_check(1)` when
+the database is opened, which now sets its cost: about 24 ms per MB of
+`runtime-state.sqlite` when the file is not cached (about 13 s at 550 MB) and
+about 1.2 ms per MB when it is (about 0.7 s).
+
 Rollback: an explicit `acsetup --rollback` runs the target slot's own cold
 ledger gate. Rolling back from this release to v0.11.3 or earlier therefore
 runs the old verify described above, and on a large state root it fails, which

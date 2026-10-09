@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_scheduler::ClaimKind;
 
 #[test]
 fn zero_stagger_host_requests_produce_one_grant_and_one_busy_denial() {
@@ -793,5 +794,486 @@ fn cancel_before_expiry_sweep_replays_one_cancelled_terminal() {
     assert_eq!(owner.send(&release).state(), RuntimeReceiptState::Completed);
     drop(owner);
     drop(waiter);
+    host.close().expect("close host");
+}
+
+// Workflow #369 S1: one queue per instance (model-369-queue.md v3.1 Q-2a, Q-4 to Q-8).
+
+fn lease_expired_count(client: &mut TestClient, token: &LeaseToken) -> usize {
+    projected_events(
+        client,
+        EventQuery {
+            event_type: Some(EventType::LeaseExpired),
+            lease_id: Some(token.lease_id()),
+            ..EventQuery::default()
+        },
+    )
+    .len()
+}
+
+#[test]
+fn a_run_linked_backend_failure_hands_the_lease_to_the_queue_under_the_run_links() {
+    // Q-4, C1, C9: a backend failure no longer cancels the queue. The lease end transfers to
+    // the first eligible entry and writes `release_via_transfer`'s event set, the releaser's
+    // records under the failed run's links.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
+    let claim = host
+        .request_host_claim_for_test("node.a", ClaimKind::DirectTaskRun)
+        .expect("claim on a free instance");
+    let token = claim.granted.clone().expect("granted at once");
+    let mut waiter = TestClient::connect(&host);
+    let (queued_request, status) = waiter.queue("node.a", LeasePriority::Normal, 2_000);
+
+    let (task_id, run_id) = host
+        .fail_scheduled_host_claim_for_test(&claim, &token)
+        .expect("run-linked backend failure cleanup");
+
+    let poll = waiter.request(RuntimeOperation::PollQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    let granted = waiter.send(&poll);
+    let RuntimeResult::LeaseGranted { token: next } = granted.result().expect("poll result") else {
+        panic!("expected the transferred lease, got {:?}", granted.result());
+    };
+    assert_ne!(next.lease_id(), token.lease_id());
+    assert_eq!(
+        event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ],
+        "the waiter was handed the lease, not cancelled"
+    );
+    let run_events = projected_events(
+        &mut waiter,
+        EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(
+        run_events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![EventType::LeaseTransitionIntent, EventType::LeaseReleased],
+        "exactly one run-linked release"
+    );
+    for event in &run_events {
+        assert_eq!(event.links.task_id(), Some(&task_id));
+        assert_eq!(event.links.lease_id(), Some(&token.lease_id()));
+        assert_eq!(event.severity, EventSeverity::Info);
+    }
+    let transferred = projected_events(
+        &mut waiter,
+        EventQuery {
+            event_type: Some(EventType::LeaseTransferred),
+            lease_id: Some(next.lease_id()),
+            ..EventQuery::default()
+        },
+    );
+    let [transferred] = transferred.as_slice() else {
+        panic!("one transfer to the waiter");
+    };
+    assert!(transferred.sequence > run_events[0].sequence);
+    assert!(transferred.sequence < run_events[1].sequence);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let release = waiter.request(RuntimeOperation::ReleaseLease {
+        token: next.clone(),
+    });
+    assert_eq!(
+        waiter.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(waiter);
+    host.close().expect("close host");
+}
+
+#[test]
+fn an_enqueue_racing_a_lease_end_is_recorded_before_its_transfer() {
+    // Q-6 (B2): an enqueue on one thread interleaved with a lease end on another never meets
+    // `lease_transfer_context_missing`, and the request's `lease.requested` and
+    // `scheduler.queued` come before its `lease.transferred`.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
+    for round in 0..12 {
+        let mut owner = TestClient::connect(&host);
+        let mut waiter = TestClient::connect(&host);
+        let (_, owner_token) = owner.acquire("node.a");
+        let queue = waiter.request(RuntimeOperation::queue_lease(
+            "node.a",
+            waiter.ids.mint_holder_id().expect("waiter holder"),
+            LeaseQueuePolicy::new(LeasePriority::Normal, 2_000).expect("queue policy"),
+        ));
+        let release = owner.request(RuntimeOperation::ReleaseLease { token: owner_token });
+        let start = Arc::new(Barrier::new(2));
+        let (waiter_receipt, owner_receipt) = thread::scope(|scope| {
+            let queue_start = Arc::clone(&start);
+            let queue_request = queue.clone();
+            let queued = scope.spawn(move || {
+                queue_start.wait();
+                let receipt = waiter.send(&queue_request);
+                (waiter, receipt)
+            });
+            start.wait();
+            let released = owner.send(&release);
+            (queued.join().expect("queue thread"), released)
+        });
+        let (mut waiter, queued) = waiter_receipt;
+        assert_eq!(
+            owner_receipt.state(),
+            RuntimeReceiptState::Completed,
+            "round {round}"
+        );
+        let token = match queued.result() {
+            Some(RuntimeResult::LeaseGranted { token }) => token.clone(),
+            Some(RuntimeResult::LeaseQueued { status }) => {
+                let started = Instant::now();
+                loop {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "round {round}: the queued request was never granted"
+                    );
+                    let poll = waiter.request(RuntimeOperation::PollQueuedLease {
+                        queued_request_id: status.request_id(),
+                    });
+                    match waiter.send(&poll).result() {
+                        Some(RuntimeResult::LeaseGranted { token }) => break token.clone(),
+                        Some(RuntimeResult::LeasePending { .. }) => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        other => panic!("round {round}: unexpected poll result {other:?}"),
+                    }
+                }
+            }
+            other => panic!("round {round}: unexpected queue result {other:?}"),
+        };
+        assert!(
+            host.fatal_error().expect("runtime health").is_none(),
+            "round {round}"
+        );
+        let types = event_types_for_correlation(&mut waiter, queue.correlation_id());
+        let position = |wanted: EventType| types.iter().position(|kind| *kind == wanted);
+        if let Some(transferred) = position(EventType::LeaseTransferred) {
+            let requested = position(EventType::LeaseRequested).expect("requested");
+            let queued = position(EventType::SchedulerQueued).expect("queued");
+            assert!(
+                requested < queued && queued < transferred,
+                "round {round}: {types:?}"
+            );
+        } else {
+            assert!(
+                types.contains(&EventType::LeaseGranted),
+                "round {round}: {types:?}"
+            );
+        }
+        let release = waiter.request(RuntimeOperation::ReleaseLease { token });
+        assert_eq!(
+            waiter.send(&release).state(),
+            RuntimeReceiptState::Completed,
+            "round {round}"
+        );
+    }
+    host.close().expect("close host");
+}
+
+#[test]
+fn a_sweep_tick_completes_while_another_instance_guard_is_held() {
+    // Q-8: the sweep's queue expiry takes no admission guard, and a lapsed holder's cleanup only
+    // tries it, so one instance held inside a device step stalls no other instance.
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let provider = FakeProvider::from_entries([
+        (
+            "node.a".to_string(),
+            instance_id(),
+            Arc::new(FakeState::default()),
+        ),
+        (
+            "node.c".to_string(),
+            instance_id(),
+            Arc::new(FakeState::default()),
+        ),
+    ]);
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 200,
+                ..SchedulerConfig::default()
+            }),
+        Arc::new(provider),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let (_, held_token) = client.acquire("node.a");
+    let (_, free_token) = client.acquire("node.c");
+    let admission = host
+        .instance_admission_for_test("node.a")
+        .expect("node.a admission guard");
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let holder = thread::spawn(move || {
+        let _guard = admission.lock().expect("hold node.a admission");
+        held_tx.send(()).expect("report the held guard");
+        release_rx.recv().expect("release signal");
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("node.a guard held");
+    clock.advance(250);
+
+    let (swept, held_expired) = thread::scope(|scope| {
+        let (done_tx, done_rx) = mpsc::channel();
+        let host = &host;
+        scope.spawn(move || {
+            done_tx
+                .send(
+                    host.expire_due_leases_for_test()
+                        .map_err(|error| error.code()),
+                )
+                .expect("report the sweep");
+        });
+        let swept = done_rx.recv_timeout(Duration::from_secs(5));
+        let held_expired = lease_expired_count(&mut client, &held_token);
+        release_tx.send(()).expect("let node.a go");
+        (swept, held_expired)
+    });
+    holder.join().expect("guard holder");
+    assert_eq!(
+        swept.expect("the sweep tick must not wait for node.a"),
+        Ok(())
+    );
+    assert_eq!(held_expired, 0, "node.a is retried at a later tick");
+    wait_until(Duration::from_secs(5), || {
+        lease_expired_count(&mut client, &free_token) == 1
+    });
+    host.expire_due_leases_for_test()
+        .expect("the next tick cleans node.a up");
+    wait_until(Duration::from_secs(5), || {
+        lease_expired_count(&mut client, &held_token) == 1
+    });
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn a_renewal_of_a_runtime_hold_writes_the_renew_set_while_the_guard_is_held() {
+    // Q-5: a Runtime holder renews under the queue-order lock, without the admission guard it
+    // may hold across a device step, with today's renew set under its own request links.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
+    let claim = host
+        .request_host_claim_for_test("node.a", ClaimKind::EmulatorControl)
+        .expect("claim on a free instance");
+    let token = claim.granted.clone().expect("granted at once");
+    let admission = host
+        .instance_admission_for_test("node.a")
+        .expect("node.a admission guard");
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let holder = thread::spawn(move || {
+        let _guard = admission.lock().expect("hold node.a admission");
+        held_tx.send(()).expect("report the held guard");
+        release_rx.recv().expect("release signal");
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("node.a guard held");
+    let renewed = thread::scope(|scope| {
+        let (done_tx, done_rx) = mpsc::channel();
+        let host = &host;
+        let claim = &claim;
+        let token = &token;
+        scope.spawn(move || {
+            done_tx
+                .send(
+                    host.renew_host_claim_for_test(claim, token, 90_000)
+                        .map_err(|error| error.code()),
+                )
+                .expect("report the renewal");
+        });
+        let renewed = done_rx.recv_timeout(Duration::from_secs(5));
+        release_tx.send(()).expect("let node.a go");
+        renewed
+    });
+    holder.join().expect("guard holder");
+    let renewed = renewed
+        .expect("the renewal must not wait for the admission guard")
+        .expect("renewal");
+    assert_eq!(renewed.lease_id(), token.lease_id());
+    assert_eq!(renewed.holder_id(), token.holder_id());
+    assert!(renewed.expires_at_monotonic_ms() > token.expires_at_monotonic_ms());
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(claim.request.correlation_id()),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseGranted,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseRenewed,
+        ]
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event.severity == EventSeverity::Info)
+    );
+    host.release_host_claim_for_test(&claim, &renewed)
+        .expect("release the hold");
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn stopped_instance_claims_skip_the_endpoint_and_capacity_checks_other_kinds_keep_them() {
+    // Q-2a: emulator control, autostart, resume reconnect and self-check claims are granted on
+    // a stopped (pending) instance and with drain capacity; every other kind keeps the
+    // bound-endpoint check and business capacity.
+    use actingcommand_contract::CapacityThresholds;
+    use actingcommand_execution_kernel::{
+        DiscoveredInstanceBinding, PendingAdbEndpoint, ResolvedInstanceEndpoint,
+    };
+    use actingcommand_host_metrics::{
+        CapacitySample, CapacityTarget, HostSample, HostSampler, ProcessLoadThresholds,
+    };
+
+    struct HardPressureSampler;
+
+    impl HostSampler for HardPressureSampler {
+        fn sample_capacity(&mut self, targets: &[CapacityTarget]) -> Vec<CapacitySample> {
+            actingcommand_host_metrics::sample_capacity(targets)
+                .into_iter()
+                .map(|mut sample| {
+                    if sample.available_bytes.is_ok() {
+                        sample.available_bytes = Ok(0);
+                    }
+                    sample
+                })
+                .collect()
+        }
+
+        fn sample(
+            &mut self,
+            _observed_at_unix_ms: u64,
+            _owned_processes: &BTreeMap<u32, String>,
+            _top_process_count: usize,
+            _thresholds: ProcessLoadThresholds,
+        ) -> Result<HostSample, &'static str> {
+            panic!("capacity-only specification does not enable performance counters")
+        }
+    }
+
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_capacity_thresholds(CapacityThresholds::default()),
+        Arc::new(FakeProvider::one("node.a", instance_id(), state)),
+    )
+    .expect("runtime host");
+    host.replace_capacity_sampler_for_test(Box::new(HardPressureSampler))
+        .expect("hard capacity pressure");
+    let bound = host
+        .replace_instance_endpoint_for_test(
+            "node.a",
+            Some(ResolvedInstanceEndpoint::Pending(PendingAdbEndpoint::new(
+                "127.0.0.1",
+                DiscoveredInstanceBinding::new(0, "fixture", "1.0.0", "C:/fixture/MuMuManager.exe"),
+            ))),
+        )
+        .expect("stop node.a");
+
+    let control = host
+        .request_host_claim_for_test("node.a", ClaimKind::EmulatorControl)
+        .expect("emulator control on a stopped instance under hard pressure");
+    let control_token = control.granted.clone().expect("granted at once");
+    host.release_host_claim_for_test(&control, &control_token)
+        .expect("release the control");
+    let refused = host
+        .request_host_claim_for_test("node.a", ClaimKind::DirectTaskRun)
+        .expect_err("a direct run keeps the bound-endpoint check");
+    assert_eq!(refused.code(), "instance_not_running");
+
+    host.replace_instance_endpoint_for_test("node.a", bound)
+        .expect("start node.a");
+    let refused = host
+        .request_host_claim_for_test("node.a", ClaimKind::DirectTaskRun)
+        .expect_err("a direct run keeps business capacity");
+    assert_eq!(refused.code(), "capacity_admission_refused");
+    let selfcheck = host
+        .request_host_claim_for_test("node.a", ClaimKind::SelfCheck)
+        .expect("a self-check takes drain capacity");
+    let selfcheck_token = selfcheck.granted.clone().expect("granted at once");
+    host.release_host_claim_for_test(&selfcheck, &selfcheck_token)
+        .expect("release the self-check");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+#[test]
+fn a_queued_runtime_claim_is_granted_when_the_holder_releases() {
+    // Q-4, Q-6, Q-7: a claim on a held instance is queued with no deadline and never preempts;
+    // the holder's release hands it the lease, and the grant reaches the claimant.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
+    let mut owner = TestClient::connect(&host);
+    let (_, owner_token) = owner.acquire("node.a");
+    let claim = host
+        .request_host_claim_for_test("node.a", ClaimKind::StartupPackage)
+        .expect("claim on a held instance");
+    assert!(claim.granted.is_none());
+    let queued = claim.queued.clone().expect("queued");
+    assert_eq!(queued.kind(), ClaimKind::StartupPackage);
+    assert_eq!(queued.deadline_monotonic_ms(), u64::MAX);
+    assert!(!queued.preempt_requested());
+    assert_eq!(
+        claim
+            .wait_for_grant(Duration::from_millis(20))
+            .expect("grant slot"),
+        None
+    );
+    let release = owner.request(RuntimeOperation::ReleaseLease { token: owner_token });
+    assert_eq!(owner.send(&release).state(), RuntimeReceiptState::Completed);
+    let granted = claim
+        .wait_for_grant(Duration::from_secs(5))
+        .expect("grant slot")
+        .expect("granted at the release");
+    assert_eq!(
+        event_types_for_correlation(&mut owner, claim.request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    host.release_host_claim_for_test(&claim, &granted)
+        .expect("release the claim");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(owner);
     host.close().expect("close host");
 }

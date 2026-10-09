@@ -335,11 +335,17 @@ Workflow #361 C3. After every other check passed, the command previews the
 catalog plan startup would make (see "Catalog Lineage" in
 `contracts/scheduling/README.md` and the driver's approval rules in
 `contracts/client-interactions.md`), with the same decision and approval
-functions. It opens the state root's ledger through the lock-free evidence
-reader (SQLite read-only, without referenced material and without the owner
-lock), reads the State documents through a read-only view of the same database
-and the catalog generations from their immutable directories; the configured
-catalog is compiled in memory, nothing is staged. The ledger read is bounded to
+functions. It reads the state root's ledger without the owner lock and without
+referenced material (SQLite read-only). In one read transaction it
+authenticates the keyed head, checks that the stored sequences are exactly 1 to
+the head, and reads and authenticates only the head record and the records the
+plan uses: `state.migrated`, the four `catalog.*` transition types and
+`approval.decision`, with their link and artifact rows. Other records are not
+read, so the preview does not establish their integrity; startup and
+`actingd ledger-maintenance verify` check every record. A segment ledger is read
+whole. The command then reads the State documents through a read-only view of
+the same database and the catalog generations from their immutable directories;
+the configured catalog is compiled in memory, nothing is staged. The ledger read is bounded to
 60 seconds, well under the 90 seconds `acsetup` gives this command, so a slow
 read fails with the reader's own `ledger_read_budget_exceeded` at stage
 `policy_state`. A missing state root is previewed as a fresh one; an existing root
@@ -349,7 +355,7 @@ without any state material (`runtime-state.sqlite`, `runtime-state.key`,
 The result carries `policy_plan`:
 
 ```json
-{"policy_plan":{"state":"read","active":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"driver":"on","configured":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"plan":"unchanged","approvals":{"record":[],"reapprove":[],"revoke":[]},"phase_ms":{"compile":40,"ledger":21000,"projection":900,"approvals":300,"total":22240}}}
+{"policy_plan":{"state":"read","active":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"driver":"on","configured":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"plan":"unchanged","approvals":{"record":[],"reapprove":[],"revoke":[]},"phase_ms":{"compile":40,"ledger":700,"projection":900,"approvals":300,"total":1940}}}
 ```
 
 - `state` is `read` or `state_root_absent`.
@@ -361,8 +367,12 @@ The result carries `policy_plan`:
 - `approvals` lists the approval ids startup would record, approve again and
   revoke.
 - `phase_ms` is the time of each phase in milliseconds: `compile` (the
-  configured catalog), `ledger` (reading and authenticating every ledger
-  record), `projection` (the State documents, the catalog lineage and the active
+  configured catalog), `ledger` (opening the database, including its whole-file
+  `PRAGMA quick_check(1)`, then the head, contiguity and the records above; the
+  check sets the cost, which grows with `runtime-state.sqlite`: about 24 ms per MB
+  when the file is not cached and about 1.2 ms per MB when it is, measured at
+  550 MB),
+  `projection` (the State documents, the catalog lineage and the active
   generation), `approvals` (the approval decisions, the plan and its approvals)
   and `total`. A fresh or absent state root reads no ledger.
 

@@ -4170,6 +4170,8 @@ const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
     "crates/runtime-host/src/host/contained_task.rs::HostShared::run_scheduled_contained_task -> require_business_capacity",
     "crates/runtime-host/src/host/contained_task.rs::HostShared::run_startup_package -> require_business_capacity",
     "crates/runtime-host/src/host/lease.rs::HostShared::grant_prepared_lease_with_links -> require_business_capacity",
+    // Workflow #369 Q-4: the pump reads capacity silently and leaves a business claim queued.
+    "crates/runtime-host/src/host/lease.rs::HostShared::pump -> admit_capacity",
     "crates/runtime-host/src/host/monitor_control.rs::HostShared::run_monitor_probe -> admit_capacity",
     "crates/runtime-host/src/host/observation.rs::HostShared::capture_observation_with_links -> require_business_capacity",
     "crates/runtime-host/src/host/performance.rs::HostShared::admit_capacity -> admit_capacity",
@@ -4572,6 +4574,10 @@ const RUNTIME_DATABASE_CONSTRUCTORS: &[(&str, &str)] = &[
     (
         "crates/ledger/src/global/evidence.rs::GlobalLedger::open_metadata -> RuntimeDatabase",
         "ledger: forensic metadata opens the existing database read-only",
+    ),
+    (
+        "crates/ledger/src/global/evidence.rs::GlobalLedger::open_selected -> RuntimeDatabase",
+        "ledger: the selected read of the check-config preview opens the existing database read-only (Workflow #375 R375-3)",
     ),
     (
         "crates/runtime-host/src/host.rs::RuntimeHost::start_with_provider -> RuntimeDatabase",

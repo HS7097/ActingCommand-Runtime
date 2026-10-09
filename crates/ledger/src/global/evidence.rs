@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::{LedgerEventMetadata, LedgerEventRead};
 use actingcommand_contract::{
     ArtifactEvictionObservation, ArtifactId, EventLinks, FrameId, LedgerEventPosition,
@@ -224,6 +225,46 @@ impl GlobalLedgerEvidence {
         self.read_complete() && self.corrupt_tail().is_none()
     }
 }
+/// The events of some event types from `GlobalLedger::open_selected` (Workflow #375 R375-3),
+/// each authenticated on its own. Rows of other types were never read.
+pub struct GlobalLedgerSelection {
+    types: Vec<EventType>,
+    events: Vec<PersistedEvent>,
+    indexes: projection::EventIndexes,
+    head_sequence: u64,
+    complete: bool,
+    writer: GlobalLedgerWriterMetadataObservation,
+}
+impl GlobalLedgerSelection {
+    /// The authenticated head when opened (not the last selected event).
+    pub fn head_sequence(&self) -> u64 {
+        self.head_sequence
+    }
+    /// `query.event_type` must be one of the selected types and `query.view` must be absent;
+    /// otherwise the request error `ledger_selection_query_unsupported` (never an empty or
+    /// partial result). A view is refused because its Lab relation is decided from events of
+    /// other types.
+    pub fn query(&self, query: &EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let selected = query
+            .event_type
+            .is_some_and(|event_type| self.types.contains(&event_type));
+        if !selected || query.view.is_some() {
+            return Err(GlobalLedgerError::request(
+                LedgerCode::SelectionQueryUnsupported.as_str(),
+                LedgerLocation::QuerySelection.as_str(),
+            ));
+        }
+        Ok(self.indexes.query(&self.events, query))
+    }
+    /// False only for a segment root with an incomplete read or a corrupt tail.
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+    pub fn writer_metadata(&self) -> &GlobalLedgerWriterMetadataObservation {
+        &self.writer
+    }
+}
+
 /// Selects an artifact only from one committed event's original artifact set.
 #[derive(Debug, Clone)]
 pub struct LedgerArtifactSelection {
@@ -653,6 +694,78 @@ impl GlobalLedger {
             source: EvidenceSource::Segment(Box::new(source)),
             writer,
             frame_index: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// Workflow #375 R375-3: the events of `event_types`, each authenticated on its own,
+    /// with the keyed head row and sequence contiguity. Rows of other types are never read,
+    /// so this opening does not establish their integrity; artifacts are restored
+    /// Unrecorded and no retention state is derived. A segment root is read whole, as
+    /// `open_evidence` with `sqlite_material_not_read`.
+    pub fn open_selected(
+        root: impl Into<PathBuf>,
+        event_types: &[EventType],
+        deadline: Instant,
+    ) -> GlobalLedgerResult<GlobalLedgerSelection> {
+        let root = root.into();
+        let budget = Some((u64::MAX, usize::MAX, deadline));
+        let ledger_root = root.join("ledger");
+        let database_exists = root
+            .join(actingcommand_runtime_database::DATABASE_FILE)
+            .try_exists()
+            .map_err(|error| {
+                GlobalLedgerError::io("ledger_io", "inspect_evidence_database", &error)
+            })?;
+        let key_exists = root
+            .join(actingcommand_runtime_database::INTEGRITY_KEY_FILE)
+            .try_exists()
+            .map_err(|error| GlobalLedgerError::io("ledger_io", "inspect_evidence_key", &error))?;
+        if database_exists || key_exists {
+            let database = RuntimeDatabase::open_existing(&root, true)?;
+            if sqlite::has_schema(&database)? {
+                let read = sqlite::read_selected(&database, event_types, budget)?;
+                let mut events = Vec::with_capacity(read.events.len());
+                for event in read.events {
+                    read_only::check_read_budget(budget, 0, events.len() + 1)?;
+                    events.push(
+                        event
+                            .into_event_with_artifact_availability(&mut |_| Ok(None))
+                            .map_err(|error| {
+                                GlobalLedgerError::fatal(error.code(), "validate_persisted_event")
+                            })?,
+                    );
+                }
+                read_only::check_read_budget(budget, 0, events.len())?;
+                let writer = read_only::read_writer_metadata(&ledger_root)?;
+                return Ok(GlobalLedgerSelection {
+                    types: event_types.to_vec(),
+                    indexes: projection::EventIndexes::from_events(&events),
+                    events,
+                    head_sequence: read.head_sequence,
+                    complete: true,
+                    writer,
+                });
+            }
+        }
+        let source = Self::open_evidence(
+            GlobalLedgerEvidenceConfig::new(root)
+                .sqlite_material_not_read()
+                .with_deadline(deadline),
+            |_| None,
+        )?;
+        let events = source
+            .events()
+            .iter()
+            .filter(|event| event_types.contains(&event.event_type()))
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(GlobalLedgerSelection {
+            types: event_types.to_vec(),
+            indexes: projection::EventIndexes::from_events(&events),
+            events,
+            head_sequence: source.latest_sequence(),
+            complete: source.is_complete(),
+            writer: source.writer_metadata().clone(),
         })
     }
 }
