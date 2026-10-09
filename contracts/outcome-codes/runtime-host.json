@@ -163,9 +163,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A start found a scheduled run whose dispatch has no outcome and whose lease has no lease.released under its run links, wrote the missing release (effect not_performed) and settles the run once as interrupted (policy_settlement_interrupted), so the dispatch is closed and the first such interruption of its pair in a row is lifted by the same start. Recorded once, under the run's links, which carry the run id.",
+      "description": "A start found a scheduled run whose dispatch has no outcome and whose lease has no lease.released under its run links, wrote the missing release (effect not_performed) and settles the run once: from its terminal when it has one, otherwise as interrupted (policy_settlement_interrupted), so the dispatch is closed; the first such interruption of its pair in a row is lifted by the same start. Recorded once, under the run's links, which carry the run id.",
       "common_causes": "The Runtime ended between a run's task terminal and its lease end (for example inside a failed run's hand-off to its stuck-recovery ladder), in the middle of a run (a reboot or a killed process), or after a scheduled dispatch's lease grant and before its run's first task event.",
-      "handling": "Nothing to repair: the run counts as interrupted. A second interruption of the same pair in a row keeps the pair paused until its package changes, as for any interrupted settlement."
+      "handling": "Nothing to repair: the run counts as its terminal says, or as interrupted when it has none. A second interruption of the same pair in a row keeps the pair paused until its package changes, as for any interrupted settlement."
     },
     "policy_settlement_dispatch_left_open": {
       "category": "warning",

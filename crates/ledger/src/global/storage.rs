@@ -715,17 +715,18 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), lease_granted.links())
             })
             .collect::<Vec<_>>();
-        // Workflow #369 E3 (#670 rulings 2 and 3, final review): an interrupted run whose lease
-        // a transfer handed on, that expired (or both, one end), or that was released without
-        // run links has no run-linked release; that end ends its lease (`unique_lease_end`).
-        let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
+        // Workflow #369 E3 (#670 rulings 2 and 3, final review, ruling on the open case): a run
+        // whose lease a transfer handed on, that expired (or both, one end), or that was
+        // released without run links has no run-linked release; that end ends its lease
+        // (`unique_lease_end`), whether the run is settled from its terminal or interrupted.
+        let handed_on = if releases.is_empty() {
             unique_lease_end(&self.events, lease_granted.links())
         } else {
             None
         };
         let release = match (releases.as_slice(), handed_on) {
             ([release], _) => *release,
-            ([], Some(transfer)) => transfer,
+            ([], Some((end, _))) => end,
             _ => {
                 return Err(GlobalLedgerError::fatal(
                     "scheduled_recovery_release_not_unique",
@@ -926,18 +927,19 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), recovered_links)
             })
             .collect::<Vec<_>>();
-        // Workflow #369 E3 (#670 rulings 2 and 3, final review): a run whose lease a transfer
-        // handed on, that expired (or both, one end), or that was released without run links,
-        // before any run-linked release, is settled once as interrupted from that end
-        // (`unique_lease_end`); no release is written for a lease that already ended.
-        let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
+        // Workflow #369 E3 (#670 rulings 2 and 3, final review, ruling on the open case): a run
+        // whose lease a transfer handed on, that expired (or both, one end), or that was
+        // released without run links, before any run-linked release, has that end as its lease
+        // end (`unique_lease_end`); no release is written for a lease that already ended. With
+        // a terminal the run is settled from it, otherwise as interrupted from that end.
+        let handed_on = if releases.is_empty() {
             unique_lease_end(&self.events, recovered_links)
         } else {
             None
         };
         let release = match (releases.as_slice(), handed_on) {
             ([release], _) => *release,
-            ([], Some(transfer)) => transfer,
+            ([], Some((end, _))) => end,
             _ => {
                 return Err(GlobalLedgerError::fatal(
                     "scheduled_execution_recovery_release_not_unique",
@@ -980,14 +982,15 @@ impl<B: DurableStorage> EventStore<B> {
                 "recover_policy_execution",
             ));
         }
-        // Workflow #369 E3 (coordinator ruling on #670 review H-1): a run whose release the
-        // restart recovered (the run had none: cut between its task terminal and its release, or
-        // cut mid-run) is settled once as interrupted, from that release, whatever terminal or
-        // effects it has. The recovered release is the run-linked release under the grant's
-        // request with effect `not_performed`. A run's own release is under its task request and
-        // records `not_performed` too when its lease had lapsed or was preempted: with a terminal
-        // the run settles from that terminal; with none it is settled as interrupted from that
-        // release, which `releases` took through `same_task_run_chain` (final review M-1).
+        // Workflow #369 E3 (coordinator ruling on #670 review H-1 and on the open case): a run
+        // with no terminal whose lease ended without a recorded outcome (the start recovered its
+        // release, its own release records `not_performed`, or its lease otherwise ended) is
+        // settled once as interrupted, from that release or end. A run's release with no
+        // terminal is taken through `same_task_run_chain`, under the grant's request or the
+        // run's own task request (final review M-1). A run that has a terminal is settled from
+        // it (`terminal_lease_end_valid`). An interrupted settlement of a run whose terminals all
+        // precede its `not_performed` release on the grant's chain is still accepted, as
+        // before.
         let recovered_interruption = (handed_on.is_some()
             || release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed))
             && is_interrupted_settlement(execution.outcome());
@@ -1002,6 +1005,24 @@ impl<B: DurableStorage> EventStore<B> {
                 ));
             }
         };
+        // Coordinator ruling on #670's open case: a run that has a terminal is settled from it,
+        // whatever the order of its lease end. The lease end is the run's run-linked release
+        // after the terminal: its own (under the terminal's request), or one on the grant's
+        // chain (the release the start recovered, or the one the run's settlement wrote when its
+        // own cleanup left the lease). With no run-linked release it is the end that ended the
+        // lease, after the terminal, or before it only when the lease expired (the run's
+        // terminal followed its lease's expiry); the order check relaxes for that shape only.
+        let terminal_lease_end_valid =
+            |terminal: &PersistedEvent, same_request: bool| match handed_on {
+                None => {
+                    same_task_run_chain(release.links(), recovered_links)
+                        && (!same_request
+                            || release.links().request_id() == terminal.links().request_id()
+                            || same_scheduled_chain(release.links(), recovered_links))
+                        && release.sequence() > terminal.sequence()
+                }
+                Some((end, expired)) => end.sequence() > terminal.sequence() || expired,
+            };
         let recovered_topology_valid = recovered_interruption
             && (handed_on.is_some()
                 || same_scheduled_chain(release.links(), recovered_links)
@@ -1031,8 +1052,7 @@ impl<B: DurableStorage> EventStore<B> {
                 _ if recovered_interruption => recovered_topology_valid,
                 EventType::TaskCompleted | EventType::TaskFailed => {
                     same_task_run_chain(source_fact.links(), recovered_links)
-                        && same_task_run_chain(release.links(), recovered_links)
-                        && release.sequence() > source_fact.sequence()
+                        && terminal_lease_end_valid(source_fact, false)
                 }
                 EventType::LeaseReleased => {
                     same_task_run_chain(source_fact.links(), recovered_links)
@@ -1110,10 +1130,8 @@ impl<B: DurableStorage> EventStore<B> {
                     })?;
                 if *terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
-                    || !same_task_run_chain(release.links(), recovered_links)
-                    || release.links().request_id() != source_fact.links().request_id()
+                    || !terminal_lease_end_valid(source_fact, true)
                     || source_fact.severity() != EventSeverity::Info
-                    || release.sequence() <= source_fact.sequence()
                     || !(admission_fact.sequence() < task_request.sequence()
                         && task_request.sequence() < source_fact.sequence())
                     || !matches!(
@@ -1195,9 +1213,7 @@ impl<B: DurableStorage> EventStore<B> {
                     })?;
                 if *terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
-                    || !same_task_run_chain(release.links(), recovered_links)
-                    || release.links().request_id() != source_fact.links().request_id()
-                    || release.sequence() <= source_fact.sequence()
+                    || !terminal_lease_end_valid(source_fact, true)
                     || !(admission_fact.sequence() < task_request.sequence()
                         && task_request.sequence() < source_fact.sequence())
                     || !matches!(
@@ -1767,10 +1783,11 @@ fn same_task_run_chain(actual: &EventLinks, scheduled: &EventLinks) -> bool {
 /// without run links (the host's close). An expiry handed on to a waiting claim writes a
 /// transfer and the lease's expiry; the two are one end, at the earlier (#670 final review
 /// M-2). Any other set of ends is no one end. The host's `single_lease_end` takes the same end.
+/// Also returns whether the lease expired (an expiry is among the ends).
 fn unique_lease_end<'a>(
     events: &'a [PersistedEvent],
     granted: &EventLinks,
-) -> Option<&'a PersistedEvent> {
+) -> Option<(&'a PersistedEvent, bool)> {
     let lease_id = granted.lease_id()?;
     let ends = events
         .iter()
@@ -1787,15 +1804,15 @@ fn unique_lease_end<'a>(
         })
         .collect::<Vec<_>>();
     match ends.as_slice() {
-        [end] => Some(*end),
+        [end] => Some((*end, end.event_type() == EventType::LeaseExpired)),
         [first, second] => {
             let types = [first.event_type(), second.event_type()];
             (types.contains(&EventType::LeaseTransferred)
                 && types.contains(&EventType::LeaseExpired))
             .then_some(if first.sequence() < second.sequence() {
-                *first
+                (*first, true)
             } else {
-                *second
+                (*second, true)
             })
         }
         _ => None,

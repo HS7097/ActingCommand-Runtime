@@ -86,7 +86,8 @@ actingcommand_contract::outcome_codes! {
         /// has no run-linked `lease.released` (cut between its task terminal and its release,
         /// mid-run, or before its first task event; its lease not transferred, expired or
         /// released without run links), wrote the missing release (effect
-        /// `not_performed`) and settles the run once as interrupted
+        /// `not_performed`) and settles the run once: from its terminal when it has one,
+        /// otherwise as interrupted
         /// (`policy_settlement_interrupted`); recorded once, under the run's links (keys
         /// `instance_id`, `lease_id`, `task_id`; the run id is on the record's links).
         PolicySettlementReleaseRecovered => "policy_settlement_release_recovered": info,

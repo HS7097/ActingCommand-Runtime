@@ -104,11 +104,13 @@ impl HostShared {
     /// ruling 2), one that expired (#670 ruling 3), one an expiry handed on to a waiting claim
     /// (the transfer and the expiry are one end, at the earlier; final review M-2), and one
     /// released without run links (the host's close; final review). Such a run is returned with
-    /// the time its lease ended, and the reconciliation settles it once as interrupted from that
-    /// time. The recovered release is run-linked, under the grant's request, correlation and
-    /// causation, with effect `not_performed` (a run's own release is under its task request),
-    /// and `policy_settlement_release_recovered` is recorded once under the same links at Info.
-    /// `reconcile_policy_dispatches` then settles the run once as interrupted, which closes the
+    /// the time its lease ended, and the reconciliation settles it once, from its terminal when
+    /// it has one, otherwise as interrupted from that time. The recovered release is run-linked,
+    /// under the grant's request, correlation and causation, with effect `not_performed` (a
+    /// run's own release is under its task request), and `policy_settlement_release_recovered`
+    /// is recorded once under the same links at Info.
+    /// `reconcile_policy_dispatches` then settles the run once, from its terminal when it has
+    /// one (coordinator ruling on #670's open case), otherwise as interrupted, which closes the
     /// dispatch; a later start finds the release and writes nothing more. `registered` is the
     /// start's instance set (a run of an instance no longer registered is left as it is, and
     /// `record_open_scheduled_dispatches` records it); `scheduled_procedures` the procedure refs
@@ -1641,8 +1643,9 @@ fn reconcile_scheduled_policy_outcomes(
     reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, ended_without_release)
 }
 
-/// `ended_without_release`: the runs whose lease ended without a release (a transfer or an
-/// expiry) that the start closes, with the time the lease ended (empty online).
+/// `ended_without_release`: the runs whose lease ended without a run-linked release (a
+/// transfer, an expiry, both, or a release without run links) that the start closes, with the
+/// time the lease ended (empty online).
 fn reconcile_scheduled_policy_outcomes_for(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
@@ -1749,20 +1752,21 @@ fn reconcile_scheduled_policy_outcomes_for(
                 },
             )?);
         }
-        // Workflow #369 E3 (coordinator ruling on #670 review H-1): a run whose release the
-        // start recovered (`recover_unreleased_policy_runs`: run-linked, under the grant's
-        // request, with effect `not_performed`) is settled once as interrupted, from that
-        // release, whatever terminal it has. A run's own release is under its task request; it
-        // records `not_performed` too when the lease had already lapsed or was preempted, and
-        // such a run is settled from its terminal, or with none from that release (final
-        // review M-1).
-        let recovered_at = linked_policy_run_events(
+        // Workflow #369 E3 (coordinator ruling on #670's open case): a run that has a terminal is
+        // settled from it, whatever the order of its lease end; only a run with no terminal is
+        // settled as interrupted, from its run-linked release or from the end that already ended
+        // its lease. The ledger records what happened, so a known outcome is never replaced by
+        // an interruption. A run is settled once its lease end is known: its one run-linked
+        // release (its own, or the one the start recovered), or the one end the start found
+        // without one (`recover_unreleased_policy_runs`: a transfer, an expiry, both, or a
+        // release without run links). Otherwise its dispatch stays open, and the start records
+        // it (`record_open_scheduled_dispatches`).
+        let run_releases = linked_policy_run_events(
             ledger,
             EventQuery {
                 to_sequence: Some(through),
                 event_type: Some(EventType::LeaseReleased),
                 instance_id: Some(*instance_id),
-                request_id: Some(*request_id),
                 correlation_id: Some(*correlation_id),
                 task_id: Some(*task_id),
                 run_id: Some(*run_id),
@@ -1770,28 +1774,35 @@ fn reconcile_scheduled_policy_outcomes_for(
                 ..EventQuery::default()
             },
             through,
-            1,
+            2,
             "reconcile_policy_outcomes",
             |event| {
-                scheduled_admission_release_matches(event, intent, lease_id)
-                    && event.payload().effect_disposition() == Some(EffectDisposition::NotPerformed)
+                run_lease_release_matches(
+                    event,
+                    instance_id,
+                    correlation_id,
+                    task_id,
+                    run_id,
+                    lease_id,
+                )
             },
-        )?
-        .first()
-        .map(PersistedEvent::timestamp_unix_ms);
-        // #670 rulings 2 and 3: a run with no release whose lease a transfer handed on, or that
-        // expired, is settled once as interrupted from that end (`recover_unreleased_policy_runs`).
-        let recovered_at =
-            recovered_at.or_else(|| ended_without_release.get(&decision_id).copied());
+        )?;
+        let released_at = match run_releases.as_slice() {
+            [] => None,
+            [release] => Some(release.timestamp_unix_ms()),
+            _ => {
+                return Err(policy_admission_fatal(
+                    "policy_run_release_fact_not_unique",
+                    "reconcile_policy_outcomes",
+                ));
+            }
+        };
+        let Some(lease_ended_at) =
+            released_at.or_else(|| ended_without_release.get(&decision_id).copied())
+        else {
+            continue;
+        };
         let (observed_at_unix_ms, input, runtime_ms) = match terminals.as_slice() {
-            _ if recovered_at.is_some() => (
-                recovered_at.unwrap_or_default(),
-                PolicyExecutionInput::Failed {
-                    error_code: crate::policy_control::POLICY_SETTLEMENT_INTERRUPTED.to_owned(),
-                    class: PolicyFailureClass::Severe,
-                },
-                0,
-            ),
             [terminal] if terminal.event_type() == EventType::TaskCompleted => {
                 let runtime_ms = recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
                 (
@@ -1838,54 +1849,14 @@ fn reconcile_scheduled_policy_outcomes_for(
                     runtime_ms,
                 )
             }
-            [] => {
-                // A run with no terminal is settled as interrupted from its one run-linked
-                // release, under the grant's request or its own task request (final review M-1).
-                let releases = linked_policy_run_events(
-                    ledger,
-                    EventQuery {
-                        to_sequence: Some(through),
-                        event_type: Some(EventType::LeaseReleased),
-                        instance_id: Some(*instance_id),
-                        correlation_id: Some(*correlation_id),
-                        task_id: Some(*task_id),
-                        run_id: Some(*run_id),
-                        lease_id: Some(*lease_id),
-                        ..EventQuery::default()
-                    },
-                    through,
-                    2,
-                    "reconcile_policy_outcomes",
-                    |event| {
-                        run_lease_release_matches(
-                            event,
-                            instance_id,
-                            correlation_id,
-                            task_id,
-                            run_id,
-                            lease_id,
-                        )
-                    },
-                )?;
-                let release = match releases.as_slice() {
-                    [] => continue,
-                    [release] => release,
-                    _ => {
-                        return Err(policy_admission_fatal(
-                            "policy_run_release_fact_not_unique",
-                            "reconcile_policy_outcomes",
-                        ));
-                    }
-                };
-                (
-                    release.timestamp_unix_ms(),
-                    PolicyExecutionInput::Failed {
-                        error_code: crate::policy_control::POLICY_SETTLEMENT_INTERRUPTED.to_owned(),
-                        class: PolicyFailureClass::Severe,
-                    },
-                    0,
-                )
-            }
+            [] => (
+                lease_ended_at,
+                PolicyExecutionInput::Failed {
+                    error_code: crate::policy_control::POLICY_SETTLEMENT_INTERRUPTED.to_owned(),
+                    class: PolicyFailureClass::Severe,
+                },
+                0,
+            ),
             _ => {
                 return Err(policy_admission_fatal(
                     "policy_run_terminal_conflict",
