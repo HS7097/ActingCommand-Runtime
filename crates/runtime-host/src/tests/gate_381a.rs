@@ -184,7 +184,23 @@ fn gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head() 
         },
     });
     let query_receipt = poller.send(&query);
-    let head_after = start.head();
+    assert_eq!(
+        query_receipt.state(),
+        RuntimeReceiptState::Completed,
+        "an undeclared Query while preparing: {:?}",
+        host_failure_code(&query_receipt)
+    );
+    assert!(matches!(
+        query_receipt.result(),
+        Some(RuntimeResult::InstallTransition { status })
+            if status.phase == InstallTransitionPhase::Preparing
+    ));
+    assert_eq!(
+        start.head(),
+        head_before,
+        "the Query appended to the ledger"
+    );
+
     let refusals = [
         InstallTransitionAction::BeginDrain {
             transition_id: "held-381a-next".to_owned(),
@@ -207,37 +223,29 @@ fn gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head() 
             target,
             action: action.clone(),
         });
-        (action, host_failure_code(&poller.send(&request)))
+        let refusal = poller
+            .send_result(&request)
+            .map(|receipt| host_failure_code(&receipt))
+            .map_err(|error| format!("{error:?}"));
+        (action, refusal)
     })
     .collect::<Vec<_>>();
     start.go_on(AtPreparing::Continue);
     drop(poller);
     drop(installer);
-    start
-        .finish()
-        .expect("the released start finishes")
-        .close()
-        .expect("close the released Runtime");
+    let released = start.finish();
 
-    assert_eq!(
-        query_receipt.state(),
-        RuntimeReceiptState::Completed,
-        "an undeclared Query while preparing: {:?}",
-        host_failure_code(&query_receipt)
-    );
-    assert!(matches!(
-        query_receipt.result(),
-        Some(RuntimeResult::InstallTransition { status })
-            if status.phase == InstallTransitionPhase::Preparing
-    ));
-    assert_eq!(head_after, head_before, "the Query appended to the ledger");
-    for (action, code) in refusals {
+    for (action, refusal) in refusals {
         assert_eq!(
-            code.as_deref(),
-            Some("install_identity_required"),
+            refusal,
+            Ok(Some("install_identity_required".to_owned())),
             "{action:?} on an undeclared connection"
         );
     }
+    released
+        .unwrap_or_else(|error| panic!("the released start: {}", error.complete_message()))
+        .close()
+        .expect("close the released Runtime");
 }
 
 /// R3′: a Runtime failure latched while a held start prepares stops the start under its own
