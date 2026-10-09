@@ -369,10 +369,11 @@ fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_
     );
 }
 
-/// The #672 ruling (a), R5′: a release whose deadline passes while the start prepares ends the
-/// start under `release_timeout` (operation `install_transition`), a top code the watchdog
-/// restarts, never under `install_preparation_not_authorized`. The installer's polls tick the
-/// deadline while the start waits at `Preparing`, so the timeout precedes the start's next check.
+/// The #672 ruling (a), R5′: a release whose deadline passes before the start finished preparing
+/// ends the start under `release_timeout` (operation `install_transition`), a top code the
+/// watchdog restarts, never under `install_preparation_not_authorized` and never by staying
+/// held. The start cannot finish first: if it reaches `Preparing` the hook holds it there until
+/// the installer's polls see the transition failed; the Host's own ticks may fail it before.
 #[test]
 fn gate_a_release_that_times_out_ends_the_start_under_release_timeout() {
     const POLL_LIMIT: usize = 100_000;
@@ -380,7 +381,6 @@ fn gate_a_release_that_times_out_ends_the_start_under_release_timeout() {
     let start = HeldStart::spawn(root.path(), HELD_TIMEOUT_MS);
     start.reached(PreparationCheckpoint::Held);
     let mut installer = start.release(EXPIRED_TIMEOUT_MS);
-    start.reached(PreparationCheckpoint::Preparing);
     let target = start.info().shutdown_target();
     let mut failed = None;
     for _ in 0..POLL_LIMIT {
@@ -397,12 +397,16 @@ fn gate_a_release_that_times_out_ends_the_start_under_release_timeout() {
             break;
         }
     }
+    // Read only if the start waits at `Preparing`.
     start.go_on(AtPreparing::Continue);
-    let ended = start.finish();
+    let ended = start.ended();
     drop(installer);
 
-    let failed = failed.expect("the release deadline passes while the start prepares");
+    let failed = failed.expect("the release deadline passes before the start finished preparing");
     assert_eq!(failed.failure_code.as_deref(), Some("release_timeout"));
+    let Some(ended) = ended else {
+        panic!("the start stayed held after its release timed out");
+    };
     let stopped = ended.err().expect("the timed-out start ends with an error");
     assert_eq!(
         (stopped.code(), stopped.operation()),
