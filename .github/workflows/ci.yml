@@ -466,8 +466,10 @@ jobs:
             if (-not $path) {
               throw "FLAKY_TESTS entry '$entry' is not <package>::<target>::<libtest path>[@<features>]"
             }
-            $targetArguments = if ($target -eq 'lib') { @('--lib') } else { @('--test', $target) }
-            $featureArguments = if ($features) { @('--features', $features) } else { @() }
+            # @(...) keeps a one-element result an array: splatting a bare string passes its
+            # characters one by one.
+            $targetArguments = @(if ($target -eq 'lib') { '--lib' } else { '--test'; $target })
+            $featureArguments = @(if ($features) { '--features'; $features })
             $log = Join-Path $results ($selector.Replace('::', '.') + '.log')
             Write-Host "=== $entry"
             cargo test --locked -p $package @targetArguments @featureArguments -- --exact $path 2>&1 |
