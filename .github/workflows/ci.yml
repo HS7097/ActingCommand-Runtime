@@ -13,7 +13,7 @@ name: CI
 # - `needs: [...]` of `gate`: every job except `gate` and the non-gating `flaky`.
 # - `FLAKY_TESTS: <package>::<target>::<libtest path>[@<features>] ...` of `flaky`.
 #
-# A push to main runs only the four jobs that save a dependency cache (lint, light,
+# A push to main runs only the five jobs that save a dependency cache (lint, light, exec-core,
 # exec-tooling, apps); pull requests and pushes to stable run every job.
 
 on:
@@ -112,7 +112,6 @@ jobs:
           if-no-files-found: error
 
   exec-core:
-    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
     timeout-minutes: 35
     env:
@@ -120,9 +119,13 @@ jobs:
       CI_SKIP: ''
     steps:
       - uses: actions/checkout@v4
+      # Its own family (test plan §1.2): `mid`, saved by exec-tooling, lacks ort, trybuild and
+      # this selection's feature set, so a warm exec-core run on `mid` still compiled 58
+      # third-party crates (run 37932458391).
       - uses: ./.github/actions/rust-setup
         with:
-          family: mid
+          family: exec-core
+          save: 'true'
       - name: Build tests
         shell: pwsh
         run: |

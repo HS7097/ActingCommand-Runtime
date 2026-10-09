@@ -5,8 +5,8 @@ description: >-
 inputs:
   family:
     description: >-
-      The compile family whose dependency cache the job shares: lint, light, mid or heavy. The
-      cache key is ci-v2-<family>.
+      The compile family whose dependency cache the job shares: lint, light, exec-core, mid or
+      heavy. The cache key is ci-v2-<family>.
     required: true
   save:
     description: >-
