@@ -5,7 +5,7 @@ use super::*;
 use actingcommand_runtime_database::MaintenanceLimits;
 
 /// A closed formal SQLite root whose writer appended `count` events.
-fn formal_root(count: usize) -> TempDir {
+pub(super) fn formal_root(count: usize) -> TempDir {
     let root = TempDir::new().expect("root");
     let database = sqlite_contract::database(root.path());
     let limits = MaintenanceLimits::default();
@@ -33,7 +33,7 @@ fn formal_root(count: usize) -> TempDir {
 
 /// A closed root migrated from a two-event segment ledger, with one event after the
 /// cutover completion. Returns the cutover sequence.
-fn migrated_root() -> (TempDir, u64) {
+pub(super) fn migrated_root() -> (TempDir, u64) {
     let root = TempDir::new().expect("root");
     let database = sqlite_contract::database(root.path());
     let legacy = GlobalLedger::open(GlobalLedgerConfig::new(

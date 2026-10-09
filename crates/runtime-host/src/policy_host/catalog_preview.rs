@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #361 C3: the startup catalog plan, previewed for `actingd check-config` without
-//! touching the state root. The ledger is read through the lock-free evidence reader (SQLite
-//! read-only, no owner lock, no referenced material), the State documents through a read-only
-//! view of the same database and the catalog generations from their immutable directories,
-//! so the preview runs beside a running daemon: it takes no lock, never writes the database and
-//! stages nothing (SQLite may leave the `-wal` / `-shm` sidecars of a cleanly stopped root). The
-//! decision and the approval plan are the functions startup uses.
+//! touching the state root. The ledger is read selectively (Workflow #375 R375-3; SQLite
+//! read-only, no owner lock, no referenced material): the authenticated head, the contiguity of
+//! the stored sequences and only the records the plan uses, each authenticated on its own, so
+//! the preview does not establish the integrity of other records (startup and
+//! `ledger-maintenance verify` check every record). The State documents are read through a
+//! read-only view of the same database and the catalog generations from their immutable
+//! directories, so the preview runs beside a running daemon: it takes no lock, never writes the
+//! database and stages nothing (SQLite may leave the `-wal` / `-shm` sidecars of a cleanly
+//! stopped root). The decision and the approval plan are the functions startup uses.
 
-use super::catalog_transaction::catalog_projection_events;
+use super::catalog_transaction::{CATALOG_PROJECTION_TYPES, catalog_projection_events};
 use super::*;
 use crate::approval::ApprovalProjection;
 use crate::catalog_plan::{
     CatalogApprovalPlan, CatalogLineage, CatalogTransitionPlanKind, CatalogTransitionRequest,
     decide_catalog_transition, plan_catalog_approvals,
 };
-use actingcommand_ledger::GlobalLedgerEvidenceConfig;
 use std::time::Duration;
 
 const OPERATION: &str = "preview_policy_catalog";
@@ -57,7 +59,8 @@ pub struct CatalogPreview {
 pub struct CatalogPreviewPhases {
     /// Compiling the configured catalog in memory.
     pub compile_ms: u64,
-    /// Reading and authenticating the ledger through the evidence reader.
+    /// Reading and authenticating the ledger head, the contiguity of its sequences and the
+    /// records the plan uses (the catalog and approval records).
     pub ledger_ms: u64,
     /// Opening the State documents, projecting the catalog lineage and loading the active
     /// generation.
@@ -103,6 +106,13 @@ impl CatalogPreview {
 
 fn elapsed_ms(since: Instant) -> u64 {
     u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The records the plan uses: the catalog replay's types and the approval decisions.
+fn preview_event_types() -> Vec<EventType> {
+    let mut types = CATALOG_PROJECTION_TYPES.to_vec();
+    types.push(EventType::ApprovalDecision);
+    types
 }
 
 /// The ledger-derived inputs of the plan.
@@ -190,11 +200,10 @@ fn read_state(
         return Ok(None);
     }
     let reading = Instant::now();
-    let ledger = GlobalLedger::open_evidence(
-        GlobalLedgerEvidenceConfig::new(state_root)
-            .sqlite_material_not_read()
-            .with_deadline(Instant::now() + PREVIEW_LEDGER_DEADLINE),
-        |_| None,
+    let ledger = GlobalLedger::open_selected(
+        state_root,
+        &preview_event_types(),
+        Instant::now() + PREVIEW_LEDGER_DEADLINE,
     )
     .map_err(|error| catalog_ledger_error(&error))?;
     if !ledger.is_complete() {
@@ -224,8 +233,11 @@ fn read_state(
     {
         return Err(fatal("catalog_legacy_pointer_pending", OPERATION));
     }
-    let events =
-        catalog_projection_events(ledger.latest_sequence(), |query| Ok(ledger.query(&query)))?;
+    let events = catalog_projection_events(ledger.head_sequence(), |query| {
+        ledger
+            .query(&query)
+            .map_err(|error| catalog_ledger_error(&error))
+    })?;
     let (current, lineage) = store.fold_catalog_events(&events)?;
     let projected = match current {
         None => None,
@@ -245,10 +257,12 @@ fn read_state(
     }
     phases.projection_ms = elapsed_ms(projecting);
     let approving = Instant::now();
-    let mut approval_events = ledger.query(&EventQuery {
-        event_type: Some(EventType::ApprovalDecision),
-        ..EventQuery::default()
-    });
+    let mut approval_events = ledger
+        .query(&EventQuery {
+            event_type: Some(EventType::ApprovalDecision),
+            ..EventQuery::default()
+        })
+        .map_err(|error| catalog_ledger_error(&error))?;
     approval_events.sort_by_key(PersistedEvent::sequence);
     let approvals = ApprovalProjection::from_events(&approval_events, state)?;
     phases.approvals_ms = elapsed_ms(approving);
