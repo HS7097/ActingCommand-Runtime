@@ -3832,6 +3832,15 @@
     ],
     "console_": [
       "ui"
+    ],
+    "lease_": [
+      "runtime-host"
+    ],
+    "recovery_ladder_key_": [
+      "runtime-host"
+    ],
+    "runtime_restart_": [
+      "runtime-host"
     ]
   },
   "codes": {
@@ -4066,6 +4075,36 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "lease_expired": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "lease_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes.",
+      "common_causes": "A holder that overran its own step bound; a host that was stopping while a ladder held an instance.",
+      "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
+    },
+    "lease_missing": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "lease_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes.",
+      "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
+      "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
+    },
     "ledger_selection_query_unsupported": {
       "category": "error",
       "owner": "ledger",
@@ -4144,6 +4183,35 @@
       "description": "A proposal or strategic report request was refused because a verified report artifact could not be read back: a proposal's cited report, or the stored report that a strategic report with identical content would reuse.",
       "common_causes": "The report file was deleted by hand or damaged after it was recorded.",
       "handling": "Restore the report file from a copy if it is still needed. Otherwise prepare a strategic report whose content differs (for example a later as-of position), which records a new report artifact, and cite that report."
+    },
+    "recovery_ladder_key_lost": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "lease_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A stuck-recovery ladder found, at a holding check, that it no longer holds its instance's key. It cancels its continuation, records the current rung failed with this reason and finishes exhausted at warning, without an error point.",
+      "common_causes": "In practice only a stopping host; otherwise a step that overran its own bound so the key lapsed.",
+      "handling": "Nothing to repair: the instance is handed on, and the next trigger starts a new ladder."
+    },
+    "runtime_restart_required": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category.",
+      "common_causes": "A defect that panics on every payload of one instance.",
+      "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
     },
     "strategic_evidence_unavailable": {
       "category": "error",
