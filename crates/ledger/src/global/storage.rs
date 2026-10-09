@@ -948,7 +948,22 @@ impl<B: DurableStorage> EventStore<B> {
                     && event.links().run_id() == recovered_links.run_id()
             })
             .collect::<Vec<_>>();
+        if terminals.len() > 1 {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_execution_recovery_terminal_not_unique",
+                "recover_policy_execution",
+            ));
+        }
+        // Workflow #369 E3 (coordinator ruling on #670 review H-1): a run whose release the
+        // restart recovered (the run had none: cut between its task terminal and its release, or
+        // cut mid-run) is settled once as interrupted, from that release, whatever terminal or
+        // effects it has. The recovered release is the only run-linked release written with
+        // effect `not_performed`; a run's own release records `performed`.
+        let recovered_interruption = release.payload().effect_disposition()
+            == Some(EffectDisposition::NotPerformed)
+            && is_interrupted_settlement(execution.outcome());
         let source_fact = match terminals.as_slice() {
+            _ if recovered_interruption => *release,
             [] => *release,
             [terminal] => *terminal,
             _ => {
@@ -958,6 +973,11 @@ impl<B: DurableStorage> EventStore<B> {
                 ));
             }
         };
+        let recovered_topology_valid = recovered_interruption
+            && same_scheduled_chain(release.links(), recovered_links)
+            && terminals
+                .iter()
+                .all(|terminal| terminal.sequence() < release.sequence());
         if !(intent_fact.sequence() < lease_granted.sequence()
             && lease_granted.sequence() < admission_fact.sequence()
             && admission_fact.sequence() < source_fact.sequence())
@@ -977,6 +997,7 @@ impl<B: DurableStorage> EventStore<B> {
                 ));
             };
             let topology_valid = match source_fact.event_type() {
+                _ if recovered_interruption => recovered_topology_valid,
                 EventType::TaskCompleted | EventType::TaskFailed => {
                     same_task_run_chain(source_fact.links(), recovered_links)
                         && same_task_run_chain(release.links(), recovered_links)
@@ -1024,6 +1045,14 @@ impl<B: DurableStorage> EventStore<B> {
             return Ok(existing_execution.clone());
         }
         match source_fact.event_type() {
+            _ if recovered_interruption => {
+                if !recovered_topology_valid {
+                    return Err(GlobalLedgerError::fatal(
+                        "scheduled_execution_recovery_interruption_conflict",
+                        "recover_policy_execution",
+                    ));
+                }
+            }
             EventType::TaskCompleted => {
                 let [terminal] = terminals.as_slice() else {
                     return Err(GlobalLedgerError::fatal(
@@ -1700,6 +1729,23 @@ fn same_task_run_chain(actual: &EventLinks, scheduled: &EventLinks) -> bool {
         && actual.lease_id() == scheduled.lease_id()
         && actual.frame_id().is_none()
         && actual.recognition_id().is_none()
+}
+
+/// The interrupted settlement of a scheduled run the daemon's own end cut short
+/// (`policy_settlement_interrupted`), as the startup reconciliation records it.
+fn is_interrupted_settlement(outcome: &PolicyExecutionOutcome) -> bool {
+    matches!(
+        outcome,
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.error_code == "policy_settlement_interrupted"
+                && failure.original_class == PolicyFailureClass::Severe
+                && failure.effective_class == PolicyFailureClass::Severe
+                && failure.disposition == PolicyFailureDisposition::PausedTask
+                && failure.retry_attempt == 0
+                && failure.retry_at_unix_ms.is_none()
+                && !failure.reported_success
+                && failure.runtime_ms == 0
+    )
 }
 
 /// The request a recovered scheduled run is measured from: a fixture-simulated run's client

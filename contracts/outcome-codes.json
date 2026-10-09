@@ -3848,7 +3848,7 @@
     "runtime_restart_": [
       "runtime-host"
     ],
-    "policy_settlement_skipped_": [
+    "policy_settlement_release_": [
       "runtime-host"
     ]
   },
@@ -4247,20 +4247,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "policy_settlement_skipped_no_release": {
-      "category": "warning",
+    "policy_settlement_release_recovered": {
+      "category": "info",
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
       "values": {
-        "instance_id": "required"
+        "instance_id": "required",
+        "lease_id": "required",
+        "task_id": "required"
       },
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
-      "description": "A restart found a scheduled run with its task terminal but no lease.released under its run links, and skipped the run's settlement (a scheduled run ends with exactly one release; with none, settlement skips the run). The run keeps its terminal and records no policy execution; the skip is recorded once per restart.",
-      "common_causes": "The Runtime ended between the run's task terminal and its lease end, for example inside a failed run's hand-off to its stuck-recovery ladder.",
-      "handling": "Nothing to repair for the Runtime, which starts normally. The skipped run stays unsettled in the ledger."
+      "since": "0.11.6",
+      "description": "A start found a scheduled run whose dispatch has no outcome and whose lease has no lease.released under its run links, wrote the missing release (effect not_performed) and settles the run once as interrupted (policy_settlement_interrupted), so the dispatch is closed and the first such interruption of its pair in a row is lifted by the same start. Recorded once, under the run's links, which carry the run id.",
+      "common_causes": "The Runtime ended between a run's task terminal and its lease end (for example inside a failed run's hand-off to its stuck-recovery ladder), or in the middle of a run (a reboot or a killed process).",
+      "handling": "Nothing to repair: the run counts as interrupted. A second interruption of the same pair in a row keeps the pair paused until its package changes, as for any interrupted settlement."
     },
     "proposal_report_unavailable": {
       "category": "error",

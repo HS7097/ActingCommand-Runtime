@@ -64,9 +64,12 @@ actingcommand_contract::outcome_codes! {
         /// Error. An instance worker panicked again before it finished one payload after its
         /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
         RuntimeRestartRequired => "runtime_restart_required": error,
-        /// Warning. A restart found a scheduled run with its task terminal but no
-        /// `lease.released` under its run links (cut between the two) and skipped the run's
-        /// settlement (model C1); recorded once per restart (keys `instance_id`).
-        PolicySettlementSkippedNoRelease => "policy_settlement_skipped_no_release": warning,
+        /// Info. A start found a scheduled run whose dispatch has no outcome and whose lease
+        /// has no run-linked `lease.released` (cut between its task terminal and its release,
+        /// or mid-run), wrote the missing release (effect `not_performed`) and settles the run
+        /// once as interrupted (`policy_settlement_interrupted`); recorded once, under the
+        /// run's links (keys `instance_id`, `lease_id`, `task_id`; the run id is on the
+        /// record's links).
+        PolicySettlementReleaseRecovered => "policy_settlement_release_recovered": info,
     }
 }

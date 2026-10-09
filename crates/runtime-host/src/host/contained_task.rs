@@ -510,6 +510,53 @@ struct ActiveContainedRun<'a> {
     control: Arc<ContainedRunControl>,
 }
 
+/// The original request's identity, as a resubmission of it would arrive: only its request,
+/// correlation and causation reach the recovery links of what a restart writes for it (Workflow
+/// #338 R3; #369 E3). `None` when the identity does not form a request.
+pub(super) fn recovery_request_identity(
+    request_id: RequestId,
+    correlation_id: CorrelationId,
+    causation_id: Option<&actingcommand_contract::CausationId>,
+    submitted_at_unix_ms: u64,
+) -> Option<RuntimeRequest> {
+    let mut identity = serde_json::Map::new();
+    identity.insert(
+        "schema_version".to_owned(),
+        serde_json::Value::from(actingcommand_contract::RUNTIME_REQUEST_SCHEMA_VERSION),
+    );
+    identity.insert(
+        "request_id".to_owned(),
+        serde_json::to_value(request_id).ok()?,
+    );
+    identity.insert(
+        "correlation_id".to_owned(),
+        serde_json::to_value(correlation_id).ok()?,
+    );
+    if let Some(causation_id) = causation_id {
+        identity.insert(
+            "causation_id".to_owned(),
+            serde_json::to_value(causation_id).ok()?,
+        );
+    }
+    identity.insert(
+        "actor".to_owned(),
+        serde_json::to_value(EventActor::Cli).ok()?,
+    );
+    identity.insert(
+        "source".to_owned(),
+        serde_json::to_value(EventSource::Cli).ok()?,
+    );
+    identity.insert(
+        "submitted_at_unix_ms".to_owned(),
+        serde_json::Value::from(submitted_at_unix_ms),
+    );
+    identity.insert(
+        "operation".to_owned(),
+        serde_json::to_value(RuntimeOperation::Health).ok()?,
+    );
+    serde_json::from_value::<RuntimeRequest>(serde_json::Value::Object(identity)).ok()
+}
+
 /// Workflow #369 S3a: the lease a host package run executes under, which its caller holds.
 pub(super) struct HeldPackageLease {
     pub(super) token: LeaseToken,
@@ -6837,50 +6884,17 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         };
-        let encode =
-            |value: serde_json::Result<serde_json::Value>| value.map_err(|_| identity_invalid());
         let submitted_at_unix_ms = self
             .runtime_clock_sample()
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
-        let mut identity = serde_json::Map::new();
-        identity.insert(
-            "schema_version".to_owned(),
-            serde_json::Value::from(actingcommand_contract::RUNTIME_REQUEST_SCHEMA_VERSION),
-        );
-        identity.insert(
-            "request_id".to_owned(),
-            encode(serde_json::to_value(request_id))?,
-        );
-        identity.insert(
-            "correlation_id".to_owned(),
-            encode(serde_json::to_value(correlation_id))?,
-        );
-        if let Some(causation_id) = links.causation_id() {
-            identity.insert(
-                "causation_id".to_owned(),
-                encode(serde_json::to_value(causation_id))?,
-            );
-        }
-        identity.insert(
-            "actor".to_owned(),
-            encode(serde_json::to_value(EventActor::Cli))?,
-        );
-        identity.insert(
-            "source".to_owned(),
-            encode(serde_json::to_value(EventSource::Cli))?,
-        );
-        identity.insert(
-            "submitted_at_unix_ms".to_owned(),
-            serde_json::Value::from(submitted_at_unix_ms),
-        );
-        identity.insert(
-            "operation".to_owned(),
-            encode(serde_json::to_value(RuntimeOperation::Health))?,
-        );
-        let original =
-            serde_json::from_value::<RuntimeRequest>(serde_json::Value::Object(identity))
-                .map_err(|_| identity_invalid())?;
+        let original = recovery_request_identity(
+            request_id,
+            correlation_id,
+            links.causation_id(),
+            submitted_at_unix_ms,
+        )
+        .ok_or_else(identity_invalid)?;
         let validated = original.validate().map_err(|_| identity_invalid())?;
         self.append_recovered_contained_task_terminal(
             &validated,
