@@ -23,7 +23,7 @@ pub use material::LedgerOpenTiming;
 pub(super) use material::{PendingMaterial, elapsed_ms};
 pub use view::{
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, KeptFrameFolder, LocalOffsetMs,
+    FrameRetentionView, KeptFrameFolder,
 };
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
@@ -56,6 +56,8 @@ pub(super) struct RetentionIndex {
     unlinked_warning: bool,
     /// Workflow #375 R5c: the facts of the read-only frame retention view.
     frame_facts: view::FrameFacts,
+    /// Workflow #375 R5d: the frame classes at the latest head they were asked for.
+    frame_cache: std::sync::Mutex<Option<view::FrameCache>>,
     through_sequence: u64,
 }
 

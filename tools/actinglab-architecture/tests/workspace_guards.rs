@@ -3919,6 +3919,10 @@ const ARTIFACT_BYTE_WRITES: &[(&str, &str)] = &[
         "the export temporary, created after its zero-byte admission",
     ),
     (
+        "crates/artifact-store/src/kept.rs::KeptMoves::record_move -> fs::write [NOT admitted]",
+        "the 16-byte move counter kept\\.moves (the cleaner's process start time and move count), which tells other processes to look in the kept folders again; it holds no artifact bytes",
+    ),
+    (
         "crates/artifact-store/src/pipeline.rs::CapturePipeline::publish_candidate [reaches admit_bytes via CapturePipeline::publish_candidate -> ArtifactStore::put -> ArtifactStore::commit_prepared]",
         "the FrameStore overflow segment: spilled frames publish as ordinary artifacts",
     ),
