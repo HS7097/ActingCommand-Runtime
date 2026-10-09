@@ -383,7 +383,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      CI_PACKAGES: -p actingcommand-actingd -p actingcommand-actingctl -p actingcommand-device-test -p actingcommand-vision-provider-check
+      CI_PACKAGES: -p actingcommand-actingd -p actingcommand-actingctl -p actingcommand-vision-provider-check
       CI_SKIP: process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal
     steps:
       - uses: actions/checkout@v4

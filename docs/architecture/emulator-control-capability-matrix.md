@@ -165,9 +165,8 @@ rebuilt through `EmulatorCapabilityProfile::new`, so the completeness and duplic
 again, and a merge that fails validation refuses the registration with
 `execution_capability_profile_merge_invalid`. Explicit (non-discovered) entries, fixtures and
 tests keep the registry-only placeholder profile (`runtime.execution_backend_registry`, version
-unavailable) unchanged. The `mumu-discover` probe prints the same profile as a `capabilities`
-object (`provider_id`, `version` and the sorted `available`, `unverified` and `unavailable` id
-lists) without starting the daemon.
+unavailable) unchanged. The device-test tool's `mumu-discover` probe, which printed the same
+profile without starting the daemon, was retired in Runtime v0.11.6.
 
 ## MuMu instance control (Runtime slice #316-B)
 

@@ -62,15 +62,19 @@ their manifest. An explicit unknown, empty or non-string layout is rejected;
 Tools use their separate artifact (`-ArtifactKind Tools`,
 `actingcommand-tools-<sha>`). Its manifest declares
 `tools_payload_layout: "platform-tools-v3"`: the root holds `actinglab.exe`,
-`actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe`, the watchdog launcher `actingwatch.exe` (see
-"Runtime watchdog") and `BUILD-MANIFEST.json`, and the one subdirectory
+`actingledger.exe`, `actingcommand-vision-provider-check.exe`, the watchdog
+launcher `actingwatch.exe` (see "Runtime watchdog") and `BUILD-MANIFEST.json`,
+and the one subdirectory
 `platform-tools` holds the official Android platform-tools 37.0.1 files `adb.exe`,
 `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. The
-manifest binds all ten payload files (paths use `/`). The OCR engine is linked
+manifest binds all nine payload files (paths use `/`). The OCR engine is linked
 into `actingcommand-actingd.exe`, so no vision provider DLL ships (Workflow #360).
-Historical Tools artifacts with `platform-tools-v2` have the same files without
-`actingwatch.exe` (nine files), those with `platform-tools-v1` have the
+The device-test probe `actingcommand-device-test.exe` was retired in Runtime
+v0.11.6; `platform-tools-v3` Tools artifacts built before that release also hold
+it (ten files). Historical Tools artifacts with `platform-tools-v2` hold
+`actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
+`actingcommand-device-test.exe` and the five `platform-tools` files (nine files),
+those with `platform-tools-v1` have the
 `platform-tools-v2` files plus `ac_fastdeploy_ppocr.dll` (ten files), and those
 without the layout field have only five root files; any other layout is
 rejected.

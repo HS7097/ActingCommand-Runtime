@@ -5,7 +5,6 @@ members = [
     "apps/actingctl",
     "apps/actingd",
     "apps/actinglab",
-    "apps/device-test",
     "apps/ledger-forensics",
     "apps/vision-provider-check",
     "crates/actingcommand-contract",
