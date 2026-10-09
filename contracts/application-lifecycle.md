@@ -190,23 +190,25 @@ Behaviour (`contracts/emulator-control.md`, "Startup package hook"): only a succ
 (the host waits up to 30 s for adbd after the vendor reports `running`;
 `emulator_control_adb_not_ready` otherwise); the control request appends one
 `runtime.lifecycle_observed` (phase `startup_package_scheduled`, the locator in the audit
-path, a fresh causation id) and returns `startup_package: scheduled`; the host's own
-scheduling thread then runs the package as an ordinary contained task under that causation
-id, with self-minted request / correlation / holder ids, origin `(Agent, Adapter)`, a
-synthesized connection, hash admission, its own lease and the full `task.*` chain. A
+path, a fresh causation id), queues the package's claim while it still holds the instance's
+admission guard (Workflow #369 H-6), and returns `startup_package: scheduled`; the claim is
+granted when the control lets the guard go, and the instance's worker then runs the package
+on the claim's key as an ordinary contained task under that causation id, with self-minted
+request and correlation ids, the claim's holder and synthesized connection, origin
+`(Agent, Adapter)`, hash admission, no lease of its own and the full `task.*` chain. A
 configured package is always invoked; no configuration, `stop`, a failed action, or an
 instance found already running at daemon startup pull nothing.
 
-The package runs only after ADB is ready: the scheduling thread probes the ADB baseline once
-more before admission, and a failed probe is `startup_package_adb_not_ready`
-(`backend_operation_failed`), recorded without a lease. Typed admission codes:
+The package runs only after ADB is ready: the worker probes the ADB baseline once more
+before admission, and a failed probe is `startup_package_adb_not_ready`
+(`backend_operation_failed`), recorded before the run; the claim's key is then released. Typed admission codes:
 `startup_package_missing` (a ZIP locator that does not open), `startup_package_admission_failed`
 (every other admission refusal; the underlying `contained_task_package_*` code is the related
 failure). For a digest-named content-directory locator (Workflow #288) a missing or
 unreadable directory is also `startup_package_admission_failed`, with the loader's code as the
 related failure (for example `content_directory_missing` or
 `content_directory_digest_mismatch`). Both are `package_invalid`; all three are recorded
-before any lease as `runtime.failed`
+before the run as `runtime.failed`
 (category `startup_package`, stage `operation_cleanup`) under the instance and the causation
 id. Failures after admission are the ordinary contained task failures (`task.failed`, lease
 release, `runtime.failed` on the cleanup path).
@@ -220,16 +222,17 @@ command.validated (performed)                  receipt terminal
 runtime.instance_bound                          adb_host + adb_port
 runtime.fact_recorded                           device.connected = true
 runtime.lifecycle_observed                      startup_package_scheduled, causation C
---- scheduling thread, every event below carries causation C ---
+lease.requested / scheduler.queued              the startup claim (high, no deadline), causation C
+scheduler.admitted / lease.granted              granted as the control lets the instance go
+--- the instance's worker, every event below carries causation C ---
 command.received / command.validated            runtime.task_run (scheduler / runtime)
-lease.requested / lease.granted
 task.requested / task.started ... task.step_started
 application.intent / application.completed      application.restart
 task.effect_completed ... task.step_finished
 runtime.fact_recorded                           application.foreground = <assigned package>
                                                 (first gated pointer input, if the package has one)
 task.completed | task.failed
-lease.released
+lease.released                                  under the run's links; ends the claim's hold
 ```
 
 ## Typed codes

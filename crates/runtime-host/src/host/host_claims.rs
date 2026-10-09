@@ -187,6 +187,22 @@ impl HostShared {
             .name()
             .unwrap_or("actingd-instance")
             .to_owned();
+        // A diagnostic message carries no path, control character or credential shape: the
+        // panic text is kept as words only, bounded.
+        let detail_text = |text: &str| {
+            text.chars()
+                .take(256)
+                .map(|character| {
+                    if character.is_ascii_alphanumeric()
+                        || matches!(character, ' ' | '_' | '-' | '.')
+                    {
+                        character
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        };
         self.append_event_raw(
             EventSeverity::Warning,
             EventSource::Runtime,
@@ -202,10 +218,12 @@ impl HostShared {
                     "runtime_host",
                     "run_instance_worker",
                     format!(
-                        "code={} thread={thread_name} boundary=instance_worker raw_source=panic raw_text={raw_text}",
-                        actingcommand_contract::codes::ContractCode::PanicCaught.as_str()
+                        "code={} thread={} boundary=instance_worker raw_source=panic raw_text={}",
+                        actingcommand_contract::codes::ContractCode::PanicCaught.as_str(),
+                        detail_text(&thread_name),
+                        detail_text(&raw_text)
                     ),
-                    Sensitivity::Sensitive,
+                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),

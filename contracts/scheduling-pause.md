@@ -45,8 +45,11 @@ is `CandidateEligibility::Deferred` with reason code `dispatch_paused_global` /
 `dispatch_paused_instance` and no next wake time, so a paused cycle emits no dispatch intent
 for it.
 
-The gate covers policy dispatch only. Client requests (`task-run`, leases, observation), the
-startup package and the stuck-recovery ladder are not gated.
+The gate covers policy dispatch only. Client requests (`task-run`, leases, observation) and the
+startup package are not gated (the startup package until Workflow #369 S6b). A stuck-recovery
+ladder is admitted only while its instance is not paused; a pause that arrives while a ladder
+holds the instance ends the ladder at its next step (`recovery_admission_denied`), and its one
+release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
 
 ## Global pause
 

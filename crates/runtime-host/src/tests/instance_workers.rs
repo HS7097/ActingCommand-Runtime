@@ -73,6 +73,16 @@ fn rung_outcomes(
         .collect()
 }
 
+/// The diagnostic message of a `runtime.failed` record.
+fn failure_message(event: &PersistedEvent) -> Option<&str> {
+    match event.payload() {
+        EventPayload::Runtime(RuntimePayload::Failed(record)) => {
+            record.detail().map(|detail| detail.message())
+        }
+        _ => None,
+    }
+}
+
 fn count(events: &[PersistedEvent], event_type: EventType) -> usize {
     events
         .iter()
@@ -424,8 +434,7 @@ fn a_failed_policy_run_hands_its_key_to_its_ladder_which_holds_it_through_every_
     // No rung met `lease_busy`, and rung 2's stop ran on the key.
     assert_eq!(count(&events, EventType::SchedulerDenied), 0);
     assert!(events.iter().all(|event| {
-        event.event_type() != EventType::RuntimeFailed
-            || !format!("{:?}", event.payload()).contains("lease_busy")
+        !failure_message(event).is_some_and(|message| message.contains("lease_busy"))
     }));
     assert_eq!(run.state.application_count.load(Ordering::Acquire), 1);
 
@@ -917,9 +926,9 @@ fn a_worker_panic_is_recorded_and_the_rebuilt_worker_runs_the_next_payload() {
         .expect("schedule the panicking payload");
     wait_until("panic_caught", || {
         all_events(&host).iter().any(|event| {
-            event.event_type() == EventType::RuntimeFailed
-                && event.severity() == EventSeverity::Warning
-                && format!("{:?}", event.payload()).contains("code=panic_caught")
+            event.severity() == EventSeverity::Warning
+                && failure_message(event)
+                    .is_some_and(|message| message.contains("code=panic_caught"))
         })
     });
     // The second claim waits behind the panicked payload's key until that key lapses.
@@ -934,14 +943,25 @@ fn a_worker_panic_is_recorded_and_the_rebuilt_worker_runs_the_next_payload() {
                 .is_none()
     });
     let events = all_events(&host);
-    let panic = events
+    let text = events
         .iter()
-        .find(|event| format!("{:?}", event.payload()).contains("code=panic_caught"))
+        .filter_map(failure_message)
+        .find(|message| message.contains("code=panic_caught"))
         .expect("panic record");
-    let text = format!("{:?}", panic.payload());
-    assert!(text.contains("startup_package"), "{text}");
+    assert!(
+        events.iter().any(|event| matches!(
+            event.payload(),
+            EventPayload::Runtime(RuntimePayload::Failed(record))
+                if record.detail().is_some_and(|detail| detail.category() == "startup_package"
+                    && detail.message().contains("code=panic_caught"))
+        )),
+        "{text}"
+    );
     assert!(text.contains("boundary=instance_worker"), "{text}");
-    assert!(text.contains("injected instance worker panic"), "{text}");
+    assert!(
+        text.contains("raw_text=injected instance worker panic"),
+        "{text}"
+    );
     assert!(
         count(&events, EventType::LeaseExpired) + count(&events, EventType::LeaseTransferred) >= 1,
         "the panicked payload's key lapsed and was handed on"
