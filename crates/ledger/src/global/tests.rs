@@ -2674,3 +2674,5 @@ pub(super) mod sealed_global_ledger;
 pub(super) mod sqlite_contract;
 #[path = "tests/sqlite_prefix.rs"]
 mod sqlite_prefix;
+#[path = "tests/sqlite_selection.rs"]
+mod sqlite_selection;

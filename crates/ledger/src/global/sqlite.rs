@@ -18,9 +18,9 @@ use crate::{
     fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
 };
 use actingcommand_contract::{
-    EventId, EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, LedgerMaterialReadState, LedgerReadScope,
-    LedgerReadSource, ProjectedArtifactReference, ProjectionProfile, RecoveryReason,
-    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, VerifiedArtifactReference,
+    EventId, EventQuery, EventType, GLOBAL_EVENT_SCHEMA_VERSION, LedgerMaterialReadState,
+    LedgerReadScope, LedgerReadSource, ProjectedArtifactReference, ProjectionProfile,
+    RecoveryReason, RuntimeEventQueryPage, RuntimeEventQueryPageRequest, VerifiedArtifactReference,
 };
 use actingcommand_runtime_database::{
     CommitSync, RuntimeDatabase, RuntimeDatabaseError, RuntimeTransaction,
@@ -2303,6 +2303,276 @@ fn read_prefix_snapshot(
     Ok(raw)
 }
 
+/// What one `read_selected` read (Workflow #375 R375-3).
+pub(super) struct SelectedRead {
+    /// The authenticated rows of the selected types, in ledger order.
+    pub(super) events: Vec<LedgerEventMetadata>,
+    /// The authenticated head of the keyed meta row.
+    pub(super) head_sequence: u64,
+}
+
+/// Workflow #375 R375-3: in one read transaction, the keyed meta row, the contiguity of the
+/// stored sequences (`1..=head`), the head row and the rows of `event_types`, each read and
+/// authenticated once on its own (decode, metadata, stored sequence, predecessor hash, tag and
+/// index columns) with its link and artifact rows. Rows of other types are never read, so this
+/// read does not establish their integrity; the migrated-prefix digest is not run.
+pub(super) fn read_selected(
+    database: &RuntimeDatabase,
+    event_types: &[EventType],
+    budget: ReadBudget,
+) -> GlobalLedgerResult<SelectedRead> {
+    check_read_budget(budget, 0, 0)?;
+    let mut connection = database.connection("read_sqlite_snapshot")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+    let read = read_selected_rows(database, &transaction, event_types, budget)?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+    Ok(read)
+}
+
+fn read_selected_rows(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+    event_types: &[EventType],
+    budget: ReadBudget,
+) -> GlobalLedgerResult<SelectedRead> {
+    // A different view schema refuses; absent views leave the selection to a table scan.
+    views::installed(connection)?;
+    let Some((marker, head)) = authenticated_extent(database, connection)? else {
+        return Err(failure("ledger_meta_missing", "read_sqlite_meta"));
+    };
+    if marker.state != "ready" {
+        return Err(failure(
+            "ledger_candidate_not_production",
+            "open_runtime_evidence",
+        ));
+    }
+    // The meta row was authenticated above, in this read transaction.
+    let meta = read_meta(connection)?;
+    let head_hash = match meta.get(4) {
+        Some(SqlValue::Text(hash)) if head != 0 => Some(hash.clone()),
+        Some(SqlValue::Null) if head == 0 => None,
+        _ => return Err(failure("ledger_meta_mismatch", "verify_sqlite_head")),
+    };
+    let mut bytes = 0;
+    verify_sequence_extent(connection, head, budget, &mut bytes)?;
+    let mut types = Vec::with_capacity(event_types.len());
+    for event_type in event_types {
+        types.push(SqlValue::Text(views::key(event_type)?));
+    }
+    let placeholders = vec!["?"; types.len()].join(",");
+    let selected =
+        format!("SELECT sequence FROM ledger_events WHERE event_type IN ({placeholders})");
+    let mut rows = read_rows_bound(
+        connection,
+        &format!(
+            "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE event_type IN ({placeholders}) ORDER BY sequence"
+        ),
+        &types,
+        budget,
+        &mut bytes,
+        true,
+    )?;
+    let selected_count = rows.len();
+    let head_value = [SqlValue::Integer(encode(head))];
+    // The head is read once: a selected head is already the last selected row.
+    let head_unselected =
+        head != 0 && rows.last().and_then(|row| row.first()) != Some(&head_value[0]);
+    if head_unselected {
+        let head_rows = read_rows_bound(
+            connection,
+            &format!("SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence=?"),
+            &head_value,
+            budget,
+            &mut bytes,
+            true,
+        )?;
+        let [head_row] = <[SqlRow; 1]>::try_from(head_rows)
+            .map_err(|_| failure("sequence_discontinuity", "recover_sequence"))?;
+        rows.push(head_row);
+    }
+    let mut ids = BTreeSet::new();
+    let mut metadata = Vec::with_capacity(rows.len());
+    let mut expected_links = Vec::with_capacity(rows.len());
+    let mut expected_artifacts = Vec::new();
+    // The sequence and authenticated record hash of the previous row read.
+    let mut last: Option<(u64, String)> = None;
+    for row in rows {
+        check_read_budget(budget, bytes, metadata.len() + 1)?;
+        let Some(SqlValue::Blob(record)) = row.get(10) else {
+            return Err(failure("corrupt_ledger_record", "read_canonical_record"));
+        };
+        let value = serde_json::from_slice::<UniqueJsonValue>(record)
+            .map_err(|error| {
+                GlobalLedgerError::json("corrupt_ledger_record", "parse_sqlite_record", &error)
+            })?
+            .0;
+        if value.get("schema_version").and_then(Value::as_str) != Some(GLOBAL_EVENT_SCHEMA_VERSION)
+        {
+            return Err(failure("unsupported_event_schema", "recover_event_schema"));
+        }
+        let stored: StoredEventRecord = serde_json::from_value(value).map_err(|error| {
+            GlobalLedgerError::json("corrupt_ledger_record", "decode_sqlite_record", &error)
+        })?;
+        let event = stored
+            .clone()
+            .into_metadata()
+            .map_err(|error| failure(error.code(), "validate_persisted_event"))?;
+        let Some(SqlValue::Integer(stored_sequence)) = row.first() else {
+            return Err(failure("invalid_event_integer", "recover_sqlite_sequence"));
+        };
+        let sequence = event.sequence();
+        if decode(*stored_sequence) != sequence {
+            return Err(failure("ledger_record_mismatch", "recover_sqlite_sequence"));
+        }
+        if !ids.insert(*event.event_id()) {
+            return Err(failure("duplicate_event_id", "recover_event_ids"));
+        }
+        // The predecessor's stored hash, as `verify_transaction_row` reads it; the previous
+        // row read, when it is the predecessor, was authenticated with that same hash.
+        let previous = match sequence.checked_sub(1) {
+            Some(0) => None,
+            Some(predecessor) => match last.take() {
+                Some((read, hash)) if read == predecessor => Some(hash),
+                _ => Some(stored_record_hash(
+                    connection,
+                    predecessor,
+                    budget,
+                    &mut bytes,
+                )?),
+            },
+            None => return Err(failure("sequence_discontinuity", "recover_sequence")),
+        };
+        let projected =
+            project_stored_bytes(database, &stored, record.clone(), previous.as_deref())?;
+        if row != projected.event {
+            return Err(failure("ledger_record_mismatch", "verify_sqlite_record"));
+        }
+        check_read_budget(budget, bytes, metadata.len() + 1)?;
+        expected_links.push(projected.links);
+        expected_artifacts.extend(projected.artifacts);
+        last = Some((sequence, projected.hash));
+        metadata.push(event);
+    }
+    let mut links = read_rows_bound(
+        connection,
+        &format!(
+            "SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence IN ({selected}) ORDER BY sequence"
+        ),
+        &types,
+        budget,
+        &mut bytes,
+        false,
+    )?;
+    let mut artifacts = read_rows_bound(
+        connection,
+        &format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence IN ({selected}) ORDER BY sequence,ordinal"
+        ),
+        &types,
+        budget,
+        &mut bytes,
+        false,
+    )?;
+    if head_unselected {
+        links.extend(read_rows_bound(
+            connection,
+            &format!("SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence=?"),
+            &head_value,
+            budget,
+            &mut bytes,
+            false,
+        )?);
+        artifacts.extend(read_rows_bound(
+            connection,
+            &format!(
+                "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence=? ORDER BY ordinal"
+            ),
+            &head_value,
+            budget,
+            &mut bytes,
+            false,
+        )?);
+    }
+    if links != expected_links || artifacts != expected_artifacts {
+        return Err(failure("ledger_index_mismatch", "verify_sqlite_relations"));
+    }
+    // The last row read is the head: its authenticated hash is the meta row's head hash.
+    if last.map(|(_, hash)| hash) != head_hash {
+        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+    }
+    check_read_budget(budget, bytes, metadata.len())?;
+    metadata.truncate(selected_count);
+    Ok(SelectedRead {
+        events: metadata,
+        head_sequence: head,
+    })
+}
+
+/// The stored sequences are exactly `1..=head`: `sequence` is the integer primary key, so
+/// its values are distinct, and the encoding preserves order. Answered from an index.
+fn verify_sequence_extent(
+    connection: &Connection,
+    head: u64,
+    budget: ReadBudget,
+    bytes: &mut u64,
+) -> GlobalLedgerResult<()> {
+    let rows = read_rows(
+        connection,
+        "SELECT COUNT(*),MIN(sequence),MAX(sequence) FROM ledger_events",
+        budget,
+        bytes,
+        false,
+    )?;
+    let (count, first, last) = match rows.as_slice() {
+        [row] => match row.as_slice() {
+            [SqlValue::Integer(count), SqlValue::Null, SqlValue::Null] => (*count, None, None),
+            [
+                SqlValue::Integer(count),
+                SqlValue::Integer(first),
+                SqlValue::Integer(last),
+            ] => (*count, Some(decode(*first)), Some(decode(*last))),
+            _ => return Err(failure("sequence_discontinuity", "recover_sequence")),
+        },
+        _ => return Err(failure("sequence_discontinuity", "recover_sequence")),
+    };
+    // Rows past the meta head, as the full read reports them.
+    if last.is_some_and(|last| last > head) || (head == 0 && count != 0) {
+        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+    }
+    if u64::try_from(count) != Ok(head) || (head != 0 && (first, last) != (Some(1), Some(head))) {
+        return Err(failure("sequence_discontinuity", "recover_sequence"));
+    }
+    Ok(())
+}
+
+/// One stored record hash, read by its sequence.
+fn stored_record_hash(
+    connection: &Connection,
+    sequence: u64,
+    budget: ReadBudget,
+    bytes: &mut u64,
+) -> GlobalLedgerResult<String> {
+    let rows = read_rows_bound(
+        connection,
+        "SELECT record_sha256 FROM ledger_events WHERE sequence=?",
+        &[SqlValue::Integer(encode(sequence))],
+        budget,
+        bytes,
+        false,
+    )?;
+    match rows.as_slice() {
+        [row] => match row.as_slice() {
+            [SqlValue::Text(hash)] => Ok(hash.clone()),
+            _ => Err(failure("ledger_record_mismatch", "verify_sqlite_record")),
+        },
+        _ => Err(failure("sequence_discontinuity", "recover_sequence")),
+    }
+}
+
 fn read_snapshot_connection(
     connection: &Connection,
     budget: ReadBudget,
@@ -2350,12 +2620,24 @@ fn read_rows(
     bytes: &mut u64,
     count_events: bool,
 ) -> GlobalLedgerResult<Vec<SqlRow>> {
+    read_rows_bound(connection, sql, &[], budget, bytes, count_events)
+}
+
+/// `read_rows` with bound parameter values; values are never interpolated into the SQL.
+fn read_rows_bound(
+    connection: &Connection,
+    sql: &str,
+    parameters: &[SqlValue],
+    budget: ReadBudget,
+    bytes: &mut u64,
+    count_events: bool,
+) -> GlobalLedgerResult<Vec<SqlRow>> {
     let mut statement = connection
         .prepare(sql)
         .map_err(|error| sql_error(error, "prepare_sqlite_read"))?;
     let columns = statement.column_count();
     let mut rows = statement
-        .query([])
+        .query(params_from_iter(parameters.iter()))
         .map_err(|error| sql_error(error, "query_sqlite_rows"))?;
     let mut result = Vec::new();
     while let Some(row) = rows

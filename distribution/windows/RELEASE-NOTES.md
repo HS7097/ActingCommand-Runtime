@@ -97,6 +97,14 @@ workers=… sql_read_ms=… verify_ms=… material_ms=… restore_ms=…
 deadline_ms=120000`. Follow its timings as the state root grows: the open
 still has a 120 s deadline, and acsetup waits 60 s for a Runtime it starts.
 
+check-config's catalog preview (Workflow #375) now reads only the catalog and
+approval records (authenticated, with the ledger head and contiguity) instead of
+every ledger record; startup and `ledger-maintenance verify` still check every
+record. Its `ledger` phase includes the whole-file `PRAGMA quick_check(1)` when
+the database is opened, which now sets its cost: about 24 ms per MB of
+`runtime-state.sqlite` when the file is not cached (about 13 s at 550 MB) and
+about 1.2 ms per MB when it is (about 0.7 s).
+
 Rollback: an explicit `acsetup --rollback` runs the target slot's own cold
 ledger gate. Rolling back from this release to v0.11.3 or earlier therefore
 runs the old verify described above, and on a large state root it fails, which
