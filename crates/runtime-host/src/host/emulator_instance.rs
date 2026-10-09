@@ -29,9 +29,15 @@
 //! with `device_closed`).
 //!
 //! Slice #316-B4: the stuck-recovery ladder's emulator-restart rung drives the same action
-//! through `drive_emulator_control` after recording its own `command.received` intent.
-//! Workflow #369-1: on that recovery path this module neither prepares the connection nor
-//! schedules the startup package; the rung's own readiness wait does both.
+//! through `drive_emulator_control_while_guarded` after recording its own `command.received`
+//! intent. Workflow #369-1: on that recovery path this module neither prepares the connection
+//! nor schedules the startup package; the rung's own readiness wait does both. Workflow #369
+//! H-3: the rung runs on the ladder's key, which the fence admits (lease id and holder id, no
+//! destructive step) and under which the retained session is closed.
+//!
+//! Workflow #369 H-6: after `start` / `restart` the startup package's claim is queued while
+//! the control still holds the instance's admission guard; the guard's release pumps it, so no
+//! dispatch can see the instance free between the start and the startup run.
 
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
@@ -45,13 +51,14 @@ const ADB_BASELINE_WAIT: Duration = Duration::from_secs(30);
 const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// A performed control action: its result terminal and, after `start` / `restart` of an
-/// instance with a startup package, that package with its scheduling intent recorded but
-/// not yet queued.
+/// instance with a startup package, that package with its scheduling intent recorded, and
+/// whether its claim was queued (Workflow #369 H-6).
 pub(super) struct EmulatorControlDriven {
     pub(super) outcome: EmulatorControlOutcome,
     adb_wait_ms: u64,
     pub(super) terminal: TerminalEvent,
     pub(super) startup_package: Option<super::startup_package::PendingStartupPackage>,
+    startup: StartupPackageDisposition,
 }
 
 impl HostShared {
@@ -73,8 +80,8 @@ impl HostShared {
         let driven =
             self.drive_emulator_control(&resolved, links, action, original.request_id())?;
         // Slice #316-B3: after `start` / `restart` the configured startup package is only
-        // scheduled here (intent event + queue); it runs on the host's own scheduling thread.
-        let startup_package = self.schedule_startup_package(driven.startup_package)?;
+        // scheduled (intent event + claim; Workflow #369 H-6); it runs on the instance's worker.
+        let startup_package = driven.startup;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(driven.terminal),
@@ -106,17 +113,43 @@ impl HostShared {
         let instance_id = resolved.instance_id();
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
-        self.drive_emulator_control_while_guarded(
+        let mut driven = self.drive_emulator_control_while_guarded(
             resolved,
             links,
             action,
             control_request_id,
             &admission,
-            false,
-        )
+            None,
+        )?;
+        driven.startup = self.schedule_startup_under_guard(
+            instance_id,
+            driven.startup_package.take(),
+            admission,
+        )?;
+        Ok(driven)
+    }
+
+    /// Workflow #369 H-6: queues the startup claim while the control's admission guard is
+    /// still held, then lets the guard go and pumps, so the claim is granted before any
+    /// dispatch can see the instance free.
+    pub(super) fn schedule_startup_under_guard(
+        &self,
+        instance_id: InstanceId,
+        pending: Option<super::startup_package::PendingStartupPackage>,
+        admission: MutexGuard<'_, ()>,
+    ) -> Result<StartupPackageDisposition, RequestFailure> {
+        let disposition = self.schedule_startup_package(pending)?;
+        drop(admission);
+        self.pump(instance_id)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Ok(disposition)
     }
 
     /// A cold recovery holds this same admission guard across confirmed Stop and Start.
+    /// `held` is the ladder's key on its emulator-restart rung (Workflow #369 H-3): the fence
+    /// admits that lease by its lease id and holder id while no destructive step is open (a
+    /// call-site parameter; `monitor_recovery_admission` is unchanged), the retained session is
+    /// closed under it (`reuse_active_lease`), and nothing is prepared or scheduled here.
     pub(super) fn drive_emulator_control_while_guarded(
         &self,
         resolved: &RegisteredInstance,
@@ -124,14 +157,21 @@ impl HostShared {
         action: EmulatorInstanceAction,
         control_request_id: RequestId,
         admission: &MutexGuard<'_, ()>,
-        recovery: bool,
+        held: Option<&LeaseToken>,
     ) -> Result<EmulatorControlDriven, RequestFailure> {
         let instance_id = resolved.instance_id();
         let event_action = action.event_action();
+        let recovery = held.is_some();
         let fence = self
             .monitor_recovery_admission(instance_id)
             .map_err(RequestFailure::poison_without_terminal)?;
-        if !fence.admitted() {
+        let admitted = match held {
+            Some(own) => self
+                .own_key_admitted(instance_id, own)
+                .map_err(RequestFailure::poison_without_terminal)?,
+            None => fence.admitted(),
+        };
+        if !admitted {
             return Err(self.emulator_control_busy(
                 links,
                 event_action,
@@ -144,7 +184,7 @@ impl HostShared {
         match self.close_retained_instance_while_guarded(
             instance_id,
             links.clone(),
-            false,
+            recovery,
             LeaseReleaseReason::HostShutdown,
             admission,
         ) {
@@ -278,6 +318,7 @@ impl HostShared {
                 adb_wait_ms,
                 terminal: terminal_event,
                 startup_package: None,
+                startup: StartupPackageDisposition::None,
             });
         }
         let preparation_failed =
@@ -288,6 +329,7 @@ impl HostShared {
                         instance_id,
                         links.clone(),
                         admission,
+                        ClaimKind::EmulatorControl,
                     )
                     .map_err(RequestFailure::poison_without_terminal)?;
                 !check.capture.ok || !check.touch.ok || check.failure_code.is_some()
@@ -304,7 +346,27 @@ impl HostShared {
             adb_wait_ms,
             terminal: terminal_event,
             startup_package,
+            startup: StartupPackageDisposition::None,
         })
+    }
+
+    /// Workflow #369 H-3: the call-site fence of the ladder's own Stop and Start: the
+    /// instance's lease is `own` (lease id and holder id), unexpired, with no destructive step
+    /// open.
+    fn own_key_admitted(
+        &self,
+        instance_id: InstanceId,
+        own: &LeaseToken,
+    ) -> RuntimeHostResult<bool> {
+        let now = self.monotonic_ms()?;
+        Ok(lock(&self.scheduler, "fence_own_emulator_control")?
+            .active_lease(instance_id)
+            .is_some_and(|lease| {
+                lease.token().lease_id() == own.lease_id()
+                    && lease.token().holder_id() == own.holder_id()
+                    && lease.token().expires_at_monotonic_ms() > now
+                    && !lease.destructive_step_active()
+            }))
     }
 
     /// Polls the ADB baseline of the freshly bound endpoint until adbd answers `device`

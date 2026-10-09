@@ -231,19 +231,17 @@ impl HostShared {
         }
     }
 
+    /// Workflow #369 §3.5 (review2 L1): idle means no lifecycle work (`active`, which counts
+    /// every running instance worker), no holder and no waiting entry (the scheduler's own
+    /// read), and no install cleanup pending.
     fn installation_idle(&self, admission: &LifecycleAdmission) -> RuntimeHostResult<bool> {
         if !admission.active.is_empty() {
             return Ok(false);
         }
-        Ok(lock(&self.scheduler, "check_install_leases")?
-            .active_tokens()
-            .is_empty()
-            && lock(&self.queued_requests, "check_install_queue")?.is_empty()
-            && lock(&self.pending_host_work, "check_install_host_work")?.is_empty()
-            && !lock(&self.recovery_ladders, "check_install_recovery_work")?
-                .values()
-                .any(recovery_ladder::RecoveryLadderWindow::is_running)
-            && !lock(&self.scheduling_pause, "check_install_cleanup")?.install_cleanup_pending())
+        Ok({
+            let scheduler = lock(&self.scheduler, "check_install_leases")?;
+            scheduler.active_tokens().is_empty() && scheduler.queued_total() == 0
+        } && !lock(&self.scheduling_pause, "check_install_cleanup")?.install_cleanup_pending())
     }
 
     pub(super) fn request_shutdown(

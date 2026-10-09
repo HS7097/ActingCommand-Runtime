@@ -2016,8 +2016,11 @@ impl HostShared {
     }
 
     /// Workflow #191 ps2 (c): waits until the paused instance's device is idle. Under the
-    /// instance admission guard it re-checks that nothing still uses the device: a non-empty
-    /// lease queue fails at once (`TransferNotSafe`); a contained run that started after (b) (a
+    /// instance admission guard it re-checks that nothing still uses the device: a queued entry
+    /// the pause does not hold back fails at once (`TransferNotSafe`; Workflow #369 §5.1, review
+    /// M-2: an operator entry, and until #369 S6b the ungated startup claim; neither a gated
+    /// routine entry nor a holding ladder's continuation, whose ladder is the lease waited
+    /// for below); a contained run that started after (b) (a
     /// policy dispatch admitted before the gate closed) is drained again under the pause's
     /// deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an active
     /// lease are waited for until the grace deadline (`scheduling_pause_release_busy`). The
@@ -2060,11 +2063,15 @@ impl HostShared {
             }
             let instance_guard = self.instance_guard(instance_id)?;
             let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let gate = self.routine_gate(instance_id)?;
+            let now_monotonic_ms = self
+                .monotonic_ms()
+                .map_err(RequestFailure::poison_without_terminal)?;
             let (lease_held, queue_waiting) = {
                 let scheduler = lock(&self.scheduler, "read_released_instance_lease")?;
                 (
                     scheduler.active_lease(instance_id).is_some(),
-                    scheduler.queued_count(instance_id) > 0,
+                    scheduler.refusing_count(instance_id, gate, now_monotonic_ms) > 0,
                 )
             };
             // The close path's own rule (`prepare_resource_close`: a non-empty queue is
@@ -2262,8 +2269,14 @@ impl HostShared {
         let links = self
             .events
             .request_links(request, Some(instance_id), None, None);
-        self.prepare_instance_connection(instance_alias, instance_id, links, admission)
-            .map_err(RequestFailure::poison_without_terminal)
+        self.prepare_instance_connection(
+            instance_alias,
+            instance_id,
+            links,
+            admission,
+            ClaimKind::ResumeReconnect,
+        )
+        .map_err(RequestFailure::poison_without_terminal)
     }
 
     /// Workflow #191 ps2: the client on `connection_id` owes `instance_alias` a reset after its

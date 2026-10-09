@@ -676,11 +676,14 @@ impl HostShared {
             })?;
             let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
                 .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+            // Workflow #369 H-1 (review M-1): this release follows a failure before the run's
+            // terminal or a poisoned cleanup, so it never hands the key to a ladder.
             self.cleanup_scheduled_failure_with_run_links(
                 &request,
                 context.lease_token(),
                 connection_id,
                 RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id()),
+                None,
             )?;
         }
         if release_query()?.len() != 1 {

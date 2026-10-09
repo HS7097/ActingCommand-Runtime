@@ -290,6 +290,7 @@ fn execute_policy_cycle(
                 recompute_wakes,
                 yielded_intents: 0,
                 failed_runs: false,
+                retry_after_ms: None,
             });
         }
         return Err(ActingdError::process(
@@ -298,6 +299,7 @@ fn execute_policy_cycle(
     };
     let mut yielded_intents = 0;
     let mut failed_runs = FailedRunInstances::default();
+    let mut retry_after_ms: Option<u64> = None;
     for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
         if policy_cycle_budget_exhausted(index, started.elapsed()) {
             // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
@@ -348,8 +350,16 @@ fn execute_policy_cycle(
         let admission = match admission {
             Ok(admission) => admission,
             // Host returns a nonfatal refusal only after its admission fact and
-            // any original error details have been committed.
-            Err(error) if !error.is_fatal() => continue,
+            // any original error details have been committed. Workflow #369 W-1 (review
+            // L1): a refusal that says when it may run again (a contended admission guard,
+            // `dispatch_instance_contended`) wakes the driver then.
+            Err(error) if !error.is_fatal() => {
+                if let Some(after_ms) = error.projection().retry_after_ms {
+                    retry_after_ms =
+                        Some(retry_after_ms.map_or(after_ms, |next| next.min(after_ms)));
+                }
+                continue;
+            }
             Err(error) => return Err(ActingdError::runtime(error)),
         };
         let PolicyDispatchAdmission::Granted { context } = admission else {
@@ -393,6 +403,7 @@ fn execute_policy_cycle(
         recompute_wakes,
         yielded_intents,
         failed_runs: failed_runs.any(),
+        retry_after_ms,
     })
 }
 
@@ -434,6 +445,9 @@ struct PolicyCycleExecution {
     /// once, so a failure scheduled for an immediate rerun waits only for its retry backoff,
     /// not for the wake the evaluation before the run computed.
     failed_runs: bool,
+    /// Workflow #369 W-1 (review L1): the earliest retry an admission refusal of this cycle
+    /// named; the driver wakes no later than that.
+    retry_after_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1320,6 +1334,14 @@ impl PolicyDriverSchedule {
         Ok(None)
     }
 
+    /// Workflow #369 W-1 (review L1): wakes the driver at `wake_unix_ms` at the latest.
+    fn wake_no_later_than(&mut self, wake_unix_ms: u64) {
+        self.next_wake_unix_ms = Some(
+            self.next_wake_unix_ms
+                .map_or(wake_unix_ms, |next| next.min(wake_unix_ms)),
+        );
+    }
+
     fn wait_duration(&self, now_unix_ms: u64) -> Duration {
         let next = [
             self.next_wake_unix_ms,
@@ -1464,6 +1486,9 @@ fn apply_policy_cycle_result(
             let policy_consumed = execution.cycle.directive.kind != PolicyRecomputeKind::Deferred;
             let apply = (|| {
                 schedule.apply_cycle(trigger, &execution.cycle, now_unix_ms)?;
+                if let Some(retry_after_ms) = execution.retry_after_ms {
+                    schedule.wake_no_later_than(checked_deadline(now_unix_ms, retry_after_ms)?);
+                }
                 if !policy_consumed {
                     schedule.merge_deferred_work(
                         trigger,

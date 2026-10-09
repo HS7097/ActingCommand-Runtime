@@ -50,6 +50,20 @@ actingcommand_contract::outcome_codes! {
         /// previous owner; it is deferred with a wake at the cooldown's end (keys
         /// `instance_id`, `next_eligible_unix_ms`).
         DispatchInstanceCooldown => "dispatch_instance_cooldown": info,
+        /// Warning. A stuck-recovery ladder no longer holds its instance's key at a holding
+        /// check: it cancels its continuation, fails the current rung with this reason and
+        /// finishes exhausted at warning (keys `instance_id`, `lease_id`).
+        RecoveryLadderKeyLost => "recovery_ladder_key_lost": warning,
+        /// Error. A lease used, renewed or released after its expiry; since #369 S2+S3b also
+        /// a Runtime-held key whose renewal came after it lapsed (keys `lease_id`). The
+        /// scheduler spells it too until A2b moves its spellings into a registry.
+        LeaseExpired => "lease_expired": error,
+        /// Error. A lease that is no longer the instance's lease; since #369 S2+S3b also a
+        /// Runtime-held key whose renewal found it gone (keys `lease_id`).
+        LeaseMissing => "lease_missing": error,
+        /// Error. An instance worker panicked again before it finished one payload after its
+        /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
+        RuntimeRestartRequired => "runtime_restart_required": error,
         /// Error. A held or released start stopped before it finished preparing because the
         /// Runtime latched a failure meanwhile. Operation `install_transition`. Until A2 makes
         /// it a `caused_by` link, the latched failure travels as the tokens

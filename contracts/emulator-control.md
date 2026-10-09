@@ -234,9 +234,9 @@ fact store (`runtime-fact-store.md`).
 
 `adb_port` is omitted when the last observation carried none (a stopped instance). The receipt
 state is `completed` with the `command.validated` event as terminal. `startup_package` is
-`scheduled` when a successful `start` / `restart` handed the instance's configured startup
-package to the host's scheduling thread (see "Startup package hook"), `none` otherwise
-(nothing configured, or `stop`).
+`scheduled` when a successful `start` / `restart` queued the claim of the instance's
+configured startup package (see "Startup package hook"), `none` otherwise (nothing configured,
+or `stop`).
 
 ## Startup package hook (slice #316-B3)
 
@@ -255,17 +255,26 @@ that belongs to emulator control:
   `runtime.instance_bound` and the `device.connected` fact: one `runtime.lifecycle_observed`
   (phase `startup_package_scheduled { instance_id }`, the package locator in the audit machine
   path, links of the control request plus a freshly minted causation id) is appended, the
-  entry is queued for the host's own scheduling thread, and the receipt returns as before with
+  package's claim is queued, and the receipt returns as before with
   `startup_package: scheduled`. The 230 s control wait is never spent on the package.
-- The scheduling thread (`actingcommand-runtime-startup`, a peer of the monitor thread) runs
-  the package as an ordinary contained task under the same causation id: self-minted request,
-  correlation and holder ids, origin `(Agent, Adapter)`, a synthesized connection, hash
-  admission, its own lease, and the complete `command.received` -> `command.validated` ->
-  `lease.*` -> `task.requested` ... `task.completed` / `task.failed` -> `lease.released` chain.
-  Its success or failure is read from those events, never from the control receipt.
-- The thread runs the package only after one more ADB baseline probe of the instance; a
+- Workflow #369 H-6: the claim (high priority, no deadline, never preempting; its own
+  `lease.requested` + `scheduler.queued` under the causation id) is queued while the control
+  still holds the instance's admission guard, and granted (`scheduler.admitted` +
+  `lease.granted`) when the control lets the guard go, so no dispatch can see the instance free
+  between the start and the startup run. Until #369 S6b the claim is not gated by a scheduling
+  pause (`contracts/scheduling-pause.md`). A new startup claim cancels one still queued for the
+  same instance (`scheduler.denied lease.queue_cancelled`, warning).
+- The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
+  the claim's key as an ordinary contained task under the same causation id: self-minted
+  request and correlation ids, the claim's holder and synthesized connection, origin
+  `(Agent, Adapter)`, hash admission, no lease of its own, and the complete
+  `command.received` -> `command.validated` -> `task.requested` ... `task.completed` /
+  `task.failed` -> `lease.released` chain (the release under the run's links ends the claim's
+  hold). Its success or failure is read from those events, never from the control receipt.
+- The worker runs the package only after one more ADB baseline probe of the instance; a
   probe failure is `startup_package_adb_not_ready` (`backend_operation_failed`), recorded
-  and consumed without a lease. Admission refusals fail typed before any lease:
+  before the run, and the claim's key is released. Admission refusals fail typed before the
+  run:
   `startup_package_missing` when a ZIP locator does not open,
   `startup_package_admission_failed` for every other admission refusal (the underlying
   `contained_task_package_*` code attached as related failure, a resource declaration
@@ -292,15 +301,20 @@ prerequisite or return-home package reports while it runs is judged by the rule 
 task run (`actingctl task-run`, the console's task run, MCP `ac_run_pack`) never starts a ladder
 (Workflow #369-3, coordinator rulings Q1 and P1: the ladder exists for the routine; whoever ran
 it has the receipt and decides); nothing is recorded for it. The exemption covers task runs
-only; a task run makes no preparation of its own. The ladder never runs on the run's thread:
-a scheduled run's trigger (no client receipt) is admitted as the run returns its failure, and
-the accepted ladder is queued for the scheduling thread of the startup package hook
-(`actingcommand-runtime-startup`). `task.failed` and every receipt keep their shape; the
-original task is never re-run.
+only; a task run makes no preparation of its own. The ladder never runs on the run's thread.
+Workflow #369 H-1: a scheduled run's ladder is decided inside the run's failed lease end,
+before its release; an admitted ladder turns that end into a transfer of the instance's key to
+the ladder's claim (the claim's own `lease.requested` + `scheduler.queued`, high, no deadline;
+the releaser's and the receiver's `lease.transition_intent`; `lease.transferred` naming the
+claim; then `lease.released` under the run's links), so nothing can take the instance between
+the failure and the climb. The ladder then climbs on the instance's worker and holds the key
+until its own end (H-3). `task.failed` and every receipt keep their shape; the original task is
+never re-run.
 
 Ordinary physical-instance backend failures during startup or connection preparation also
 enter this owner after the original temporary resources and installed session backends have
-confirmed disposition, and the preparation lease has been released. The trigger carries
+confirmed disposition, and the preparation lease has been released; its ladder is queued as
+a claim (routine, high, no deadline) that the free instance grants at once. The trigger carries
 `stage: startup_preparation | connection_preparation`, the actual preparation event reference
 `preparation { sequence, event_id }`, and the original `failure_code`; it has no task/run IDs.
 A connection preparation is the one after emulator `start` / `restart` (including the
@@ -321,15 +335,20 @@ package locators/digests, game/server and target pages come from resource/config
 declarations. The ladder contains no host-specific paths, ports, process IDs or game rules;
 vendor protocols remain in the existing provider adapter.
 
-Rungs, in this fixed order, each existing work under the instance lease:
+Rungs, in this fixed order, each existing work under the ladder's key (Workflow #369 H-3).
+Before each rung run the ladder renews the key to the run's response deadline plus the heartbeat
+reserve and queues its own continuation (ordered first, never gated); the run's release, under
+its own run links, hands the key back to that continuation. Rung 2's entry and stop, and rung
+3's Stop, Start and readiness wait, are each preceded by a renewal to their bound plus 5 s:
 
 - `return_home`: the failed run's bound recovery package (`--recovery-package`) runs as a
-  standalone contained task (default response deadline, self-minted request / correlation /
-  holder ids, its own lease and `task.*` chain, under the ladder's causation id). When the run
+  standalone contained task (default response deadline, self-minted request and correlation
+  ids, the ladder's holder and connection, no lease of its own, its `task.*` chain under the
+  ladder's causation id). When the run
   had none bound, the return-home package that `actingd`'s `return_home_packages` names for the
   failed package's game and server runs instead, with the maximum response deadline; one that
   does not match the failed package's game, server or resolution, fails a check of a return-home
-  chain layer or declares a prerequisite package of its own is refused before any lease with
+  chain layer or declares a prerequisite package of its own is refused before the run with
   `contained_task_prerequisite_incompatible` (Workflow #336 L2d; `contracts/linear-steps.md`,
   "Return-home fallback"). Skipped with `no_recovery_package` when the run had none bound and
   none is configured. A preparation trigger resolves the game/server through the configured
@@ -344,7 +363,7 @@ Rungs, in this fixed order, each existing work under the instance lease:
   channel its entry needs skips the rung (`capture_unavailable` / `input_unavailable`), and an
   ADB baseline that does not answer within 30 s skips it (`adb_unavailable`), with the game
   untouched. Then the assigned `application_id` is force-stopped by a host-minted
-  `ApplicationLifecycle { stop }` request under the ladder's causation id, with its own lease
+  `ApplicationLifecycle { stop }` request under the ladder's causation id, on the ladder's key
   (`command.received`, `command.validated`, `application.intent`, `application.completed`); a
   failed stop fails the rung with its code, recorded as `runtime.failed`. Then the instance's
   startup package is scheduled (`startup_package_scheduled` under the ladder's links, a fresh
@@ -354,7 +373,12 @@ Rungs, in this fixed order, each existing work under the instance lease:
   incompatibility) is run without the stop, so its refusal is recorded as before and the game
   is left alone. Skipped with `no_startup_package` when none is configured.
 - `emulator_restart`: Stop and then Start through this contract's existing provider control
-  path, under one instance admission guard. Each action records `command.received`, then
+  path, under one instance admission guard, on the ladder's key: the control's fence admits that
+  key (lease id and holder id, no destructive step open), the retained session is closed under
+  it, and the readiness preparation runs on it and releases nothing. A Stop or Start that fails
+  or times out (for example `emulator_control_wait_timeout`) records `command.rejected` +
+  `runtime.failed` and fails the rung with its code, so an instance left stopped is reported,
+  never left down silently. Each action records `command.received`, then
   `command.validated` or `command.rejected` + `runtime.failed`. Stop must observe the old
   process gone before `recovery_instance_stopped` is recorded and Start is considered.
   Admission/fencing is checked again before Start. Stop failure, timeout, ambiguous identity
@@ -369,15 +393,16 @@ Rungs, in this fixed order, each existing work under the instance lease:
   baseline does not answer; any other failure ends the rung `recovery_environment_not_ready`
   at once. Before every retry the rung polls the ADB baseline every 500 ms until it answers
   again (bounded by the window), then waits 5 s, 10 s, then 20 s each time, never past the
-  window; each attempt writes its own `instance_preparation_finished` and is rechecked for
-  admission. The instance admission guard is held across Stop, Start and the first attempt,
-  and released while waiting. The waits stop at once on shutdown
-  (`recovery_ladder_shutdown_requested`) or an install drain
-  (`recovery_ladder_drain_requested`). Not ready within the window fails the rung
-  `recovery_environment_not_ready`, or `recovery_android_not_booted` when the boot check never
-  passed and so no preparation ran. The ladder runs on the host's single host-work thread:
-  while the rung waits, queued startup packages and ladders of other instances wait behind it,
-  for at most the window; the policy thread is not blocked. Skipped with
+  window; each attempt writes its own `instance_preparation_finished`, makes the ladder's
+  holding check and renews the key to the window's end. The instance admission guard is held
+  across Stop, Start and the first attempt, and released while waiting. The waits stop at the
+  next 500 ms poll on shutdown (`recovery_ladder_shutdown_requested`), an install drain
+  (`recovery_ladder_drain_requested`), a scheduling pause or a capacity refusal
+  (`recovery_admission_denied`) or a lost key (`recovery_ladder_key_lost`). Not ready within the
+  window fails the rung `recovery_environment_not_ready`, or `recovery_android_not_booted` when
+  the boot check never passed and so no preparation ran. The ladder runs on its instance's
+  worker and holds only that instance: other instances' host work runs on their own workers,
+  and the policy thread is not blocked. Skipped with
   `no_emulator_control` when the instance is not discovery-bound. With no startup package the
   rung and ladder finish `environment_ready`. With a package, the rung then schedules it
   (`startup_package_scheduled` under the ladder's links) and runs it; the environment fact remains separate and its
@@ -402,12 +427,18 @@ successful cold environment without a package ends it `environment_ready`. When 
 failed or was skipped it ends `exhausted`. No result replays an uncertain business operation.
 
 Cool-down: at most one ladder per instance per `stuck_recovery_cooldown_secs` (default 600),
-measured from the accepted trigger. A trigger inside the window records
+measured from when the last ladder got the key. A trigger inside the window records
 `recovery_ladder_suppressed { reason: "cooldown", until_unix_ms }` and does nothing else; a
-trigger while a ladder for the instance is queued or running records `reason:
-"already_running"` (`until_unix_ms` is the running ladder's window end).
-Scheduling pause, shutdown or capacity denial suppresses admission and is rechecked at each
-rung/control boundary (`admission_denied`). A superseded preparation trigger records
+trigger while a ladder holds or waits for the instance (read from the scheduler) records
+`reason: "already_running"` (`until_unix_ms` is the window end).
+Scheduling pause, shutdown or capacity denial suppresses admission (`admission_denied`). Once a
+ladder holds the key (Workflow #369 H-3, ruling Q8), every rung boundary, every control step
+and every readiness poll checks that it still holds the key and that no scheduling pause or
+capacity refusal (`recovery_admission_denied`), install drain
+(`recovery_ladder_drain_requested`) or shutdown (`recovery_ladder_shutdown_requested`)
+intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
+cancelled). Such an interruption fails the current rung with that reason and ends the ladder
+`exhausted` at warning, followed by its one release. A superseded preparation trigger records
 `preparation_superseded`; these two reasons use `until_unix_ms: 0` (no inferred wake time).
 
 Facts are `runtime.lifecycle_observed` events (origin `(Runtime, Runtime, Runtime)`) linked to
