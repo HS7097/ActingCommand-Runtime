@@ -1125,3 +1125,72 @@ fn a_crash_after_the_hand_off_release_settles_the_run_exactly_once() {
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the restarted host");
 }
+
+/// Workflow #369 E3, second crash point: between the ladder claim's `scheduler.queued` and the
+/// run's `lease.released`. The failed run has its `task.failed` and no release. C1: with zero
+/// releases settlement skips the run, so the restart records no settlement for it, records
+/// the skip once at Warning (`policy_settlement_skipped_no_release`) and starts cleanly.
+#[test]
+fn a_crash_inside_the_hand_off_leaves_the_run_without_a_release_and_the_restart_skips_it() {
+    let (root, registered) = crash_root();
+    let (mut child, marker) =
+        spawn_ladder_crash_child(root.path(), "after_ladder_claim_queued_before_hand_off");
+    let deadline = Instant::now() + WAIT;
+    while !marker.is_file() {
+        assert!(
+            child.try_wait().expect("poll the crash child").is_none(),
+            "the crash child exited before the hand-off"
+        );
+        assert!(Instant::now() < deadline, "the crash barrier timed out");
+        thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().expect("kill the crash child");
+    let _ = child.wait();
+    let (run_id, lease_id): (RunId, LeaseId) = serde_json::from_slice(
+        &fs::read(root.path().join("crash-run.json")).expect("run identity bytes"),
+    )
+    .expect("run identity");
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::TaskFailed), 1);
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseReleased), 0);
+    assert!(prefix.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Scheduler(SchedulerPayload::Queued(queued))
+            if queued.deadline_monotonic_ms() == u64::MAX
+    )));
+    assert!(!prefix.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Lease(LeasePayload::Transferred(transfer))
+            if transfer.from_lease_id() == lease_id
+    )));
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        0,
+        "no release is recovered for the run"
+    );
+    for event_type in [
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            run_count(&events, &run_id, event_type),
+            0,
+            "settlement skips the run: {event_type:?}"
+        );
+    }
+    let skips = events
+        .iter()
+        .filter(|event| {
+            event.severity() == EventSeverity::Warning
+                && event.links().instance_id() == Some(&registered)
+                && failure_message(event).is_some_and(|message| {
+                    message.contains("code=policy_settlement_skipped_no_release")
+                })
+        })
+        .count();
+    assert_eq!(skips, 1, "the restart records the skip once");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}
