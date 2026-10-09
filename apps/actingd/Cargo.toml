@@ -24,6 +24,8 @@ sha2 = { workspace = true }
 [dev-dependencies]
 actingcommand-artifact-store = { workspace = true }
 actingcommand-ledger = { workspace = true }
+# Workflow #381 A: the held-start preparation checkpoints (test plan A-2 G3b).
+actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }
 actingcommand-ledger-forensics = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 tempfile = "3"

@@ -6,7 +6,7 @@
 //! locked.
 
 use super::Failure;
-use super::decide::{Fatal, Journal, LiveOwner, OwnerLock, OwnerRecord, RuntimeProcess};
+use super::decide::{Fatal, Journal, LiveOwner, Observed, OwnerLock, OwnerRecord, RuntimeProcess};
 use super::powershell;
 use actingcommand_contract::{
     EventActor, EventSource, InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE,
@@ -27,6 +27,9 @@ const OWNER_CHECKPOINT_SCHEMA: &str = "actingcommand.runtime-owner-checkpoint.v1
 const WRITER_LOCK: &str = "install/writer.lock";
 /// The tail of a candidate log that is searched for a FATAL line.
 const LOG_TAIL_BYTES: u64 = 64 * 1024;
+/// Workflow #381 A R5b: how many owners before the last one a formal close without a log looks
+/// back over (an installer's chained installs leave a few maintenance owners in between).
+const LOOKBACK_OWNERS: usize = 16;
 const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
 pub(crate) const RUNTIME_IMAGE: &str = "actingcommand-actingd.exe";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -167,6 +170,11 @@ pub(crate) fn unix_ms(time: SystemTime) -> u64 {
 /// L and J. A read refused by the owner's lock (os error 33, WouldBlock elsewhere) is Locked;
 /// only complete lines count, so a torn tail of an append in progress is ignored.
 pub(crate) fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), Failure> {
+    read_owner_journal(state_root).map(|(lock, journal, _)| (lock, journal))
+}
+
+/// L and J, with the bytes of an unlocked journal (R5b looks back in them).
+fn read_owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal, Vec<u8>), Failure> {
     let path = state_root.join(OWNER_JOURNAL_FILE);
     let unreadable = |detail: String| {
         Failure::misconfigured(
@@ -177,7 +185,7 @@ pub(crate) fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), F
     let file = match File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Ok((OwnerLock::Missing, Journal::Absent));
+            return Ok((OwnerLock::Missing, Journal::Absent, Vec::new()));
         }
         Err(error) => return Err(unreadable(error.to_string())),
     };
@@ -189,7 +197,7 @@ pub(crate) fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), F
     let mut bytes = Vec::new();
     match file.take(OWNER_JOURNAL_LIMIT + 1).read_to_end(&mut bytes) {
         Err(error) if error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(33) => {
-            return Ok((OwnerLock::Locked, Journal::Absent));
+            return Ok((OwnerLock::Locked, Journal::Absent, Vec::new()));
         }
         Err(error) => return Err(unreadable(error.to_string())),
         Ok(_) if bytes.len() as u64 > OWNER_JOURNAL_LIMIT => {
@@ -197,7 +205,8 @@ pub(crate) fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), F
         }
         Ok(_) => {}
     }
-    Ok((OwnerLock::Unlocked, parse_journal(&bytes, modified_unix_ms)))
+    let journal = parse_journal(&bytes, modified_unix_ms);
+    Ok((OwnerLock::Unlocked, journal, bytes))
 }
 
 pub(crate) fn parse_journal(bytes: &[u8], modified_unix_ms: u64) -> Journal {
@@ -229,6 +238,75 @@ pub(crate) fn parse_journal(bytes: &[u8], modified_unix_ms: u64) -> Journal {
     }
 }
 
+/// Workflow #381 A R5b: each owner's last record, oldest first: one entry per run of
+/// consecutive records of one epoch, from a checkpoint's `last_record` and the physical
+/// records. A complete line that is no owner record is an error.
+fn owner_blocks(bytes: &[u8]) -> Result<Vec<OwnerRecord>, String> {
+    let complete = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |end| end + 1);
+    let text = std::str::from_utf8(&bytes[..complete])
+        .map_err(|_| "the journal is not UTF-8".to_owned())?;
+    let mut owners: Vec<OwnerRecord> = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value =
+            serde_json::from_str(line).map_err(|_| "a journal line is not JSON".to_owned())?;
+        let value = match value["schema_version"].as_str() {
+            Some(OWNER_SCHEMA_V1 | OWNER_SCHEMA_V2) => &value,
+            Some(OWNER_CHECKPOINT_SCHEMA) => &value["last_record"],
+            Some(other) => return Err(format!("schema {other}")),
+            None => return Err("a journal line has no schema_version".to_owned()),
+        };
+        let record = owner_record(value)
+            .ok_or_else(|| "an owner record lacks a required field".to_owned())?;
+        match owners.last_mut() {
+            Some(last) if last.owner_epoch == record.owner_epoch => *last = record,
+            _ => owners.push(record),
+        }
+    }
+    Ok(owners)
+}
+
+/// Workflow #381 A R5b: among the `LOOKBACK_OWNERS` owners before the last one, the newest whose
+/// epoch a candidate log covers (modified from its start to its close plus the clock slack; an
+/// owner without a close ends where the next one starts), and the FATAL line of the newest such
+/// log, if it holds one.
+fn earlier_owner_fatal(
+    log_directories: &[PathBuf],
+    owners: &[OwnerRecord],
+) -> Result<Option<Fatal>, Failure> {
+    let Some((last, earlier)) = owners.split_last() else {
+        return Ok(None);
+    };
+    let logs = candidate_logs(log_directories)?;
+    let mut next_started = last.started_at_unix_ms;
+    for owner in earlier.iter().rev().take(LOOKBACK_OWNERS) {
+        let end = owner
+            .closed_at_unix_ms
+            .unwrap_or(next_started)
+            .saturating_add(super::decide::CLOCK_SLACK_MS);
+        // The candidate logs come newest first.
+        if let Some((path, _)) = logs
+            .iter()
+            .find(|(_, modified)| *modified >= owner.started_at_unix_ms && *modified <= end)
+        {
+            let tail = read_tail(path).map_err(|error| {
+                Failure::misconfigured(
+                    "watchdog_log_unreadable",
+                    format!("{}: {error}", path.display()),
+                )
+            })?;
+            return Ok(fatal_line(&tail).map(|line| Fatal {
+                log: plain_path(path).display().to_string(),
+                line,
+            }));
+        }
+        next_started = owner.started_at_unix_ms;
+    }
+    Ok(None)
+}
+
 fn unrecognised(detail: &str) -> Journal {
     Journal::Unrecognised {
         detail: detail.to_owned(),
@@ -257,6 +335,63 @@ fn epoch_text(value: &Value) -> Option<String> {
         Value::Null => None,
         other => Some(other.to_string()),
     }
+}
+
+/// L, J and F of one state root, the owner observation the decision rows read; `live` is left to
+/// the caller. F is searched only for an unlocked journal with a record, among the logs in
+/// `log_directories` (Workflow #381 A: a state root a test wrote is read the same way, I7).
+pub(crate) fn observe_owner(
+    state_root: &Path,
+    log_directories: &[PathBuf],
+) -> Result<Observed, Failure> {
+    let (lock, journal, bytes) = read_owner_journal(state_root)?;
+    let fatal = match (&lock, &journal) {
+        (
+            OwnerLock::Unlocked,
+            Journal::Record {
+                modified_unix_ms, ..
+            },
+        ) => fatal_after(
+            log_directories,
+            modified_unix_ms.saturating_sub(super::decide::CLOCK_SLACK_MS),
+        )?,
+        _ => None,
+    };
+    // R5b: a formal close that no log covers looks back to the owners before it.
+    let earlier_fatal = match (&lock, &journal) {
+        (OwnerLock::Unlocked, Journal::Record { record, .. })
+            if fatal.is_none() && !record.active =>
+        {
+            let logged = match record.closed_at_unix_ms {
+                Some(closed_at) => {
+                    close_logged(log_directories, record.started_at_unix_ms, closed_at)?
+                }
+                None => false,
+            };
+            if logged {
+                None
+            } else {
+                let owners = owner_blocks(&bytes).map_err(|detail| {
+                    Failure::misconfigured(
+                        "watchdog_journal_unrecognised",
+                        format!(
+                            "{}: {detail}",
+                            state_root.join(OWNER_JOURNAL_FILE).display()
+                        ),
+                    )
+                })?;
+                earlier_owner_fatal(log_directories, &owners)?
+            }
+        }
+        _ => None,
+    };
+    Ok(Observed {
+        lock,
+        live: None,
+        journal,
+        fatal,
+        earlier_fatal,
+    })
 }
 
 /// I, parsed tolerantly for reporting; `None` when absent or unreadable.

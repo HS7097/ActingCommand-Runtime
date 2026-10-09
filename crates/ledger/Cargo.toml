@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+# Workflow #381 A (LED-I3): the writer stall gate (`WriterStallGate`) for tests in other crates.
+test-hooks = []
+
 [dependencies]
 actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
 actingcommand-contract = { workspace = true }
