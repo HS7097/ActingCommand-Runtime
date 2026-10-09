@@ -208,13 +208,11 @@ use contained_task::{
 };
 #[cfg(test)]
 pub(crate) use contained_task::{
-    ContainedTaskCheckpointIdentity, ContainedTaskCheckpointTestControl,
-    require_contained_task_sampling_run_seed,
+    ContainedTaskCheckpointIdentity, ContainedTaskCheckpointPoint,
+    ContainedTaskCheckpointTestControl, require_contained_task_sampling_run_seed,
 };
 #[cfg(test)]
-use contained_task::{
-    ContainedTaskCheckpointPoint, ContainedTaskCheckpointTestHook, ContainedTaskTerminalDraft,
-};
+use contained_task::{ContainedTaskCheckpointTestHook, ContainedTaskTerminalDraft};
 use input::RuntimeInputContext;
 #[cfg(test)]
 use lease::{LeaseExpiryTestCheckpoint, lease_token_identity_match_count};
@@ -2342,12 +2340,12 @@ impl RuntimeHost {
         )
     }
 
-    /// Workflow #369 E3 (#670 final review M-1): runs `action` at the lease end of the failed
-    /// scheduled run on `lease_id` (after its terminal, before the admission guard is taken),
+    /// Workflow #369 E3 (#670 final review): runs `action` at `point` of the run on `lease_id`,
     /// whatever its request (a scheduled run mints its own task request).
     #[cfg(test)]
-    pub(crate) fn run_at_failed_run_lease_end_for_test<F>(
+    pub(crate) fn run_at_leased_checkpoint_for_test<F>(
         &self,
+        point: ContainedTaskCheckpointPoint,
         instance_id: InstanceId,
         lease_id: LeaseId,
         action: F,
@@ -2356,7 +2354,7 @@ impl RuntimeHost {
         F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
     {
         self.install_contained_task_checkpoint_for_test(
-            ContainedTaskCheckpointPoint::FailedRunLeaseEnd,
+            point,
             None,
             instance_id,
             Some(lease_id),

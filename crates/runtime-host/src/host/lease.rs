@@ -1933,6 +1933,9 @@ impl HostShared {
                 token.lease_id(),
             ),
         )?;
+        // The #670 test (f) crash point: after a failed run's terminal, before its lease end.
+        #[cfg(test)]
+        policy_crash_test_barrier("terminal_after_expiry");
         let instance_guard = self
             .instance_guard(token.instance_id())
             .map_err(|failure| *failure.error)?;

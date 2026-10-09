@@ -102,9 +102,12 @@ impl ContainedTaskCheckpointIdentity {
 /// Where a contained-task checkpoint hook runs.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ContainedTaskCheckpointPoint {
+pub(crate) enum ContainedTaskCheckpointPoint {
     /// Before the run's `PackageAdmitted` fact.
     PackageAdmitted,
+    /// Workflow #369 E3 (#670 final review): a run's terminal, after the check that its lease
+    /// is current and before the terminal is appended.
+    BeforeTerminalAppend,
     /// Workflow #369 E3 (#670 final review M-1): a failed scheduled run's lease end, after its
     /// terminal and before the admission guard is taken.
     FailedRunLeaseEnd,
@@ -7144,6 +7147,16 @@ impl HostShared {
                         &error,
                     ))
                 })?;
+            #[cfg(test)]
+            self.consume_contained_task_checkpoint_for_test(
+                ContainedTaskCheckpointPoint::BeforeTerminalAppend,
+                ContainedTaskCheckpointIdentity::new(
+                    request.request_id(),
+                    token.instance_id(),
+                    token.lease_id(),
+                ),
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
             // Workflow #335 S5b: a successful terminal that took resource readings first runs the
             // live pool check, the terminal checks and the publication (stages 0-2); then this
             // original flow runs again in full (stage 3). Every other terminal runs it alone.
