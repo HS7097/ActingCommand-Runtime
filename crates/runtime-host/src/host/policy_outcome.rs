@@ -94,9 +94,10 @@ impl HostShared {
     }
 
     /// Workflow #369 E3 (coordinator ruling on #670 review H-1, model C1): at start, a scheduled
-    /// run whose dispatch has no outcome and whose granted lease ended in no `lease.released`,
-    /// `lease.expired` or transfer gets its missing release. That covers a run cut between its
-    /// task terminal and its release, and one cut mid-run (a reboot or a killed process). The
+    /// run that started (it has a task fact), whose dispatch has no outcome and whose granted
+    /// lease ended in no `lease.released`, `lease.expired` or transfer gets its missing release.
+    /// That covers a run cut between its task terminal and its release, and one cut mid-run (a
+    /// reboot or a killed process). The
     /// release is run-linked, under the grant's request, correlation and causation, with effect
     /// `not_performed` (a run's own release records `performed`), and
     /// `policy_settlement_release_recovered` is recorded once under the same links at Info.
@@ -188,7 +189,24 @@ impl HostShared {
                             )) if transfer.from_lease_id() == *lease_id
                         )
                 });
-            if lease_ended {
+            // A run that never started (no task fact under its run id) is left as it is: its
+            // outcome may still arrive (a client-run dispatch's late outcome).
+            let run_started = self
+                .ledger
+                .query(EventQuery {
+                    to_sequence: Some(through),
+                    run_id: Some(*run_id),
+                    ..EventQuery::default()
+                })
+                .map_err(|_| ledger_error(OPERATION))?
+                .iter()
+                .any(|event| {
+                    matches!(
+                        event.payload(),
+                        EventPayload::Task(TaskPayload::Semantic(_))
+                    )
+                });
+            if lease_ended || !run_started {
                 continue;
             }
             // The start's own instances: the host's registry is filled after the reconciliation.

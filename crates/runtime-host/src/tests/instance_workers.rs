@@ -1708,9 +1708,12 @@ fn a_crash_after_the_hand_off_release_settles_the_run_exactly_once() {
     host.close().expect("close the restarted host");
 }
 
-/// The scheduled policy evaluation time of a later dispatch: a day and two hours on, past the
-/// task's hourly interval and its day.
-const LATER_DISPATCH_MS: u64 = POLICY_NOW_UNIX_MS + 26 * 3_600_000;
+/// The policy evaluation time of a dispatch after a restart: the wall clock. A restart's
+/// interrupted settlement is observed at the wall clock, and an evaluation may not precede
+/// what it reads.
+fn evaluation_now() -> u64 {
+    unix_ms_now().expect("wall clock")
+}
 
 /// A crash at E3's second crash point (between the ladder claim's `scheduler.queued` and the
 /// run's `lease.released`) on `root`, admitted at `eval_ms` when given: the run has its
@@ -1813,14 +1816,15 @@ fn a_crash_inside_the_hand_off_is_settled_as_interrupted_and_a_new_dispatch_proc
     let host = restart_ladder_host(root.path(), registered);
     assert_settled_once_as_interrupted(&all_events(&host), &run_id);
     let (_, request) = ladder_setup(root.path());
-    let context = admit_ladder_run_at(&host, &request, LATER_DISPATCH_MS);
+    let context = admit_ladder_run_at(&host, &request, evaluation_now());
     assert_ne!(context.run_id(), run_id);
+    let at = evaluation_now();
     host.evaluate_policy_cycle_with_test_inputs(
         &policy_facts(),
         &policy_resources(),
         EvaluationTime {
-            unix_ms: LATER_DISPATCH_MS + 60_000,
-            monotonic_ms: LATER_DISPATCH_MS + 60_000,
+            unix_ms: at,
+            monotonic_ms: at,
         },
         9,
         PolicyTrigger::FactsChanged,
@@ -1841,10 +1845,10 @@ fn two_cut_hand_offs_on_one_instance_are_each_settled_and_the_next_start_evaluat
     let host = restart_ladder_host(root.path(), registered);
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close after the first crash");
-    let (second, _) = crash_inside_the_hand_off(root.path(), Some(LATER_DISPATCH_MS));
+    let (second, _) = crash_inside_the_hand_off(root.path(), Some(evaluation_now()));
     assert_ne!(first, second);
     let host = restart_ladder_host(root.path(), registered);
-    let at = LATER_DISPATCH_MS + 26 * 3_600_000;
+    let at = evaluation_now();
     host.evaluate_policy_cycle_with_test_inputs(
         &policy_facts(),
         &policy_resources(),
