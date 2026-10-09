@@ -2028,15 +2028,16 @@ impl HostShared {
             .map_err(|failure| *failure.error)?;
         #[cfg(test)]
         policy_crash_test_barrier("after_ladder_claim_queued_before_hand_off");
+        let claim_request_id = validated_claim.request_id();
         self.register_queued_context(QueuedRequestContext {
-            request: claim_request,
+            request: claim_request.clone(),
             instance: resolved.clone(),
             connection_id: claim_connection,
             grant: None,
         })
         .map_err(|failure| *failure.error)?;
         lock(&self.host_claim_work, "register_host_claim_work")?.insert(
-            validated_claim.request_id(),
+            claim_request_id,
             HostClaimWork::RecoveryLadder(Box::new(ladder)),
         );
         self.cleanup_via_transfer(

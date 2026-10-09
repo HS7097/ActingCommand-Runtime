@@ -121,13 +121,28 @@ impl HostShared {
             &admission,
             None,
         )?;
-        // Workflow #369 H-6: the startup claim is queued under the guard; the pump after its
-        // release grants it before any dispatch can see the instance free.
-        driven.startup = self.schedule_startup_package(driven.startup_package.take())?;
+        driven.startup = self.schedule_startup_under_guard(
+            instance_id,
+            driven.startup_package.take(),
+            admission,
+        )?;
+        Ok(driven)
+    }
+
+    /// Workflow #369 H-6: queues the startup claim while the control's admission guard is
+    /// still held, then lets the guard go and pumps, so the claim is granted before any
+    /// dispatch can see the instance free.
+    pub(super) fn schedule_startup_under_guard(
+        &self,
+        instance_id: InstanceId,
+        pending: Option<super::startup_package::PendingStartupPackage>,
+        admission: MutexGuard<'_, ()>,
+    ) -> Result<StartupPackageDisposition, RequestFailure> {
+        let disposition = self.schedule_startup_package(pending)?;
         drop(admission);
         self.pump(instance_id)
             .map_err(RequestFailure::poison_without_terminal)?;
-        Ok(driven)
+        Ok(disposition)
     }
 
     /// A cold recovery holds this same admission guard across confirmed Stop and Start.

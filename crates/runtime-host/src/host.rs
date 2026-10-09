@@ -2462,6 +2462,79 @@ impl RuntimeHost {
         Ok((claim, result))
     }
 
+    /// Workflow #369 H-6: the tail of an emulator `start` / `restart` without the provider
+    /// (the test fakes have no emulator control): under the instance's admission guard the
+    /// startup package's scheduling intent is recorded and its claim queued, then the guard is
+    /// let go and the queue pumped, exactly as `drive_emulator_control` does.
+    #[cfg(test)]
+    pub(crate) fn schedule_startup_package_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<StartupPackageDisposition> {
+        let shared = self.shared_ref("schedule_startup_package_for_test")?;
+        let resolved = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?;
+        let instance_id = resolved.instance_id();
+        let links = shared.events.system_links()?.with_instance_id(
+            shared
+                .events
+                .issuer()
+                .issue_registered_instance(instance_id),
+        );
+        let control_request_id = *shared
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let instance_guard = shared
+            .instance_guard(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let admission = lock(&instance_guard, "schedule_startup_package_for_test")?;
+        let pending = shared
+            .prepare_startup_package(&resolved, links, control_request_id)
+            .map_err(|failure| *failure.error)?;
+        shared
+            .schedule_startup_under_guard(instance_id, pending, admission)
+            .map_err(|failure| *failure.error)
+    }
+
+    /// Workflow #369 W-2: the next payload any instance worker takes panics at its start.
+    #[cfg(test)]
+    pub(crate) fn inject_instance_worker_panic_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref("inject_instance_worker_panic_for_test")?
+            .worker_panic_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #369: the instance's holder kind and its waiting claims' kinds, in grant order.
+    #[cfg(test)]
+    pub(crate) fn instance_claims_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<(Option<ClaimKind>, Vec<ClaimKind>)> {
+        let shared = self.shared_ref("instance_claims_for_test")?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let scheduler = lock(&shared.scheduler, "read_instance_claims_for_test")?;
+        let queued = scheduler
+            .queued_on(instance_id)
+            .map_err(|error| RuntimeHostError::scheduler("read_instance_claims_for_test", &error))?
+            .iter()
+            .map(QueuedLease::kind)
+            .collect();
+        Ok((
+            scheduler
+                .active_lease(instance_id)
+                .map(|lease| lease.kind()),
+            queued,
+        ))
+    }
+
     /// Workflow #369 S1: a renewal of a Runtime-held lease (Q-5).
     #[cfg(test)]
     pub(crate) fn renew_host_claim_for_test(
