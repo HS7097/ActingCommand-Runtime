@@ -26,9 +26,9 @@ A feature has `value: "identity"` and a required `identity` object:
 }
 ```
 
-The existing slot `targets` map binds an OCR identity feature to its OCR target. Entries are
-bounded to 128 unique `(id, variant)` pairs; identifiers/variants are nonempty, control-free,
-at most 128 bytes. Each entry has 1..=8 aliases of at most 128 Unicode characters/512 bytes.
+The existing slot `targets` map binds an OCR identity feature to its OCR target. The pack
+declares the identity domain as its entries: 1..=1024 unique `(id, variant)` pairs, with no
+separate cap field; identifiers/variants are nonempty, control-free, at most 128 bytes. Each entry has 1..=8 aliases of at most 128 Unicode characters/512 bytes.
 Normalization folds fullwidth ASCII and halfwidth katakana, composes voiced kana, lowercases,
 removes whitespace, then applies up to 32 explicit simultaneous single-character confusion
 substitutions. The same normalization applies to aliases and readings. The bounded edit
@@ -46,7 +46,10 @@ of one ID are not competitors. An equally good unresolved variant of the winning
 ambiguous. Missing, out-of-domain, low-confidence and ambiguous readings are typed `unknown`
 features. A known `identity` feature carries `value` (business ID), `variant`, `source`,
 `distance` and `confidence`; selection-policy consumes `value` through its existing
-`enum_string` field and inline lookup. Its declared enum must equal the identity domain.
+`enum_string` field and inline lookup. Its declared enum must equal the identity domain, so
+the policy's enumerated-member limit is 1024 as well. A large domain reads per-identity values
+from a record-list fact through `keyed_fact` (see selection-policy.md) rather than from a
+lookup, which stays bounded to 512 entries.
 
 For current numeric attributes, `value: "ocr_integer"` requires
 `integer: {min, max, format?, minimum_confidence_milli}`. It reuses the existing
@@ -176,7 +179,7 @@ evidence exceeding the existing observation budget fails instead of being omitte
 `actinglab resource catalog --repo <root> --catalog <JSON> --catalog-server <server>
 [--field business_id]` returns deterministic authoring JSON without network access. The input
 schema is `actingcommand.business-catalog.v1`: `catalog_id`, `recognition` (the identity
-recognition object above), `pools` (ID to positive capacity) and 1..=128 `entries`.
+recognition object above), `pools` (ID to positive capacity) and 1..=1024 `entries`.
 
 Each entry has a unique stable `id`, optional `variant`, `names` (server to 1..=8 names/aliases),
 optional `duration_seconds`, `costs: [{pool_id, amount?}]`, `rewards`, optional

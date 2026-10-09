@@ -32,9 +32,11 @@ Schema version `actingcommand.selection-policy.v1`. One document holds:
 - `tie_break[]` — the ordered tie-break keys applied after the score.
 
 Types are closed: `integer`, `boolean`, and `enum_string` with a declared member
-list. A term or predicate reads either a declared field (`{"source":"field"}`)
-or a declared fact (`{"source":"fact"}`); an undeclared reference is a
-validation error, not an unknown. A `string_in` predicate may list only members
+list; a fact may also be a `record_list` (section "Record lists and
+`keyed_fact`"). A term or predicate reads a declared field (`{"source":"field"}`),
+a declared fact (`{"source":"fact"}`), or one row of a declared record list
+(`{"source":"keyed_fact"}`); an undeclared reference is a validation error, not
+an unknown. A `string_in` predicate may list only members
 the value's declared type declares; a member outside that list is a validation
 error too, not a gate that quietly never holds.
 
@@ -141,6 +143,113 @@ any member is unknown and none is false, true otherwise. `any` is true if any
 member is true, unknown if any member is unknown and none is true, false
 otherwise. `not` negates true and false and leaves unknown alone.
 
+## Record lists and `keyed_fact`
+
+An in-task document may read a record-list fact one row at a time. The list is
+declared in `facts[]`, and only there:
+
+```json
+{"fact_key": "session.example.list.targets", "max_age_ms": 31536000000,
+ "minimum_confidence_milli": 1000,
+ "value_type": {"type": "record_list", "key_column": "id",
+                "columns": {"rank": {"type": "integer"}}}}
+```
+
+Every row holds the string `key_column` and each declared column with its
+declared scalar type (`integer`, `boolean` or `enum_string`); columns the
+document does not declare are not read. A document declares at most 63 columns
+per list, the fact contract's 64 fields per row less the key column.
+
+A term, a gate predicate or a tie-break key reads one column:
+
+```json
+{"source": "keyed_fact", "fact_key": "session.example.list.targets",
+ "key_field": "member", "value_column": "rank",
+ "where": {"column": "kind", "equals": "kind-a"},
+ "absent": {"type": "integer", "value": 0}}
+```
+
+- `key_field` is a declared `enum_string` field; in a select step it is the
+  layout's identity field. The row whose key column equals the candidate's
+  `key_field` value supplies `value_column`.
+- `where` is optional. It keeps only the rows whose `enum_string` column equals
+  `equals`, so one list can hold rows of several kinds.
+- `absent` is required and has the column's type. When no row has the key, the
+  value is `absent`, and it is known: a gate decides on it, and a rejection is a
+  `gate_rejected` verdict, never an unknown.
+- A record list is read only this way. A `record_list` field, or a
+  `{"source":"fact"}` reference to a record list, is a `type_mismatch`
+  validation error.
+
+**Fail-closed declaration.** Every gate and every term that reads `keyed_fact`
+declares `on_unknown: abort_evaluation`; any other handling is a
+`type_mismatch` validation error. A tie-break key may read `keyed_fact` without
+such a clause, because the up-front check below already guarantees the list.
+
+**Up-front check.** Before it assesses any candidate, the evaluator reads every
+declared list once, in document order. A list is unusable when it is missing,
+past its own expiry, older than `max_age_ms`, below its confidence floor, not a
+record list, or has a malformed row (the key or a declared column missing or of
+another type), or when two rows that a reference's `where` keeps share one key.
+An unusable list ends the evaluation with an `unknown` outcome carrying
+`fact_missing`, `fact_expired`, `fact_stale`, `fact_low_confidence` or
+`type_mismatch`, with no candidate verdict. This holds with zero candidates as
+well, so `empty` is reachable only after every list was read. No unknown reason
+is added for lists.
+
+**Snapshot.** `SelectionFactSnapshot::from_instance_snapshot_with_lists` (and
+`from_fact_records_with_lists`) carries the rows of exactly the record lists a
+document declares (`SelectionPolicy::record_list_keys`), with timestamps and
+durations as integer milliseconds. Every other record list stays
+`fact_not_scalar`, so a document that declares none hashes the same
+`input_sha256` as before.
+
+**Staleness.** List facts are state facts: they carry no TTL, and a value-hash
+snapshot identity keeps an unchanged list from being republished, so its
+`published_at` can be old. The document therefore states `max_age_ms`
+explicitly. A target list may use up to `MAX_FACT_TTL_MS` (31,536,000,000). A
+list whose snapshot identity includes a reset window is republished at every
+window switch, and its `max_age_ms` is one window plus a margin, so a missed
+reset reads `fact_stale` and the evaluation aborts.
+
+**Obligations of the list publisher** (the decision layer, which publishes these
+facts; the evaluator only reads them):
+
+- Each list uses `source_snapshot_id = decision-state:<sha256 of (alias,
+  business, fact key, value, window ID)>` and is published only when the active
+  record's snapshot ID differs. Republishing an unchanged list with a fresh
+  `observed_at` under the same ID would be the fact store's fatal
+  `fact_source_snapshot_identity_conflict`; an identical record reuses its
+  event, and a new ID needs a strictly newer `observed_at`.
+- Fact identities are `(scope, key)`; at most 256 are active per ledger
+  lineage and none is reclaimed. A list costs one identity however many rows it
+  holds and however often its rows change, because rows are replaced in place.
+  The publisher refuses to start when the active identities plus the
+  identities it plans would exceed 256.
+
+## Upper bound
+
+`upper_bound(policy, facts, now_unix_ms, identities, field_domains)` returns the
+largest score a candidate that was not read could reach: `NoneEligible`,
+`Max(score_milli)` or `Unbounded`. It is pure, like `evaluate`.
+
+- `field_domains` names the domain of every declared field: an `enum_string`
+  field is `Identity`, which carries the hypothetical identity exactly; a
+  `boolean` field takes either value; an `integer` field takes every value of
+  its `Integer { min, max }`. The caller derives them from the layout.
+- For each of `identities`, identity fields, scalar facts and `keyed_fact`
+  values are exact. A gate excludes the identity only when it is false for every
+  value of the domains; a gate that is true or unknown for some value may pass.
+- Each term contributes the largest of its possible contributions, with the
+  sign of its weight: `identity` at the domain's extremes, `threshold` at
+  whichever of its values the domain reaches, `lookup` at the entries the domain
+  reaches and its default. A `substitute_milli` value joins the candidates
+  whenever the input is ranged or unknown. An exact input that is unknown drops
+  the identity under `drop_candidate` and gives `Unbounded` under
+  `abort_evaluation`.
+- `NoneEligible` means no identity can be ranked. Leaving the 64-bit range, or
+  a declared list that cannot be read, gives `Unbounded`.
+
 ## Decision
 
 The decision reports, for every candidate in input order: its status (`ranked`,
@@ -160,10 +269,11 @@ identifier, or an overflow. An unknown input is not an error.
 ## Limits
 
 Candidates 4096; fields 128; facts 128; gates 128; scoring terms 512; tie-break
-keys 16; lookup entries 512 per transform; enumerated members 128; predicate
-depth 16 and predicate nodes 512 per gate, matching the scheduling predicate
-limits; identifiers, fact keys, and outcome keys 128 bytes; one document 512
-KiB.
+keys 16; lookup entries 512 per transform; enumerated members 1024, the largest
+business identity domain a pack may declare; record-list columns 63 per list;
+predicate depth 16 and predicate nodes 512 per gate, matching the scheduling
+predicate limits; identifiers, fact keys, and outcome keys 128 bytes; one
+document 512 KiB.
 
 ## Scheduling consumer
 
@@ -189,6 +299,9 @@ chooser:
 - The document is hashed into the catalog identity and validated at catalog
   compile time with this crate's `validate`, so an invalid document rejects the
   whole catalog instead of being skipped.
+- A document that declares a record list is refused at catalog compile with
+  `type_mismatch`: record lists stay unusable to the scheduler, and `keyed_fact`
+  is for in-task documents only.
 
 ## In-task consumer
 
@@ -209,9 +322,13 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   not handed to the evaluator in v1.
   Identity rejection, explicit attribute fallback and unresolved consensus obey
   [business-identity-consensus.md](business-identity-consensus.md) before an input is permitted.
-- The fact snapshot is `from_instance_snapshot` of the instance's own ledger-pinned fact
-  snapshot, which the host takes for the step; the evaluation instant is the host's clock
-  when the snapshot is taken. The evaluator still reads no clock and no ledger.
+- The fact snapshot is `from_instance_snapshot_with_lists` of the instance's own
+  ledger-pinned fact snapshot, which the host takes for the step, with the record lists the
+  document declares; the evaluation instant is the host's clock when the snapshot is taken.
+  The evaluator still reads no clock and no ledger.
+- A document that declares a record list needs a layout whose `unknown_identity` is
+  `reject`, so the evaluator never meets an unknown key; admission and the parser refuse it
+  otherwise (`contained_task_select_policy_mismatch`, `resource_declaration_invalid`).
 - `selection.required_count` is `1`: a step chooses exactly one candidate. Only a `selected`
   outcome leads to an input; every other outcome fails the step (`selection_not_selected`).
   The zero-padded candidate IDs make `candidate_id` a stable last tie-break key.
