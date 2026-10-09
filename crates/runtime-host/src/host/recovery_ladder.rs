@@ -738,8 +738,12 @@ impl HostShared {
             },
         )?;
         let mut rungs_tried = 0_u8;
+        // Review L6 (#666): the holding interruption that ended the last rung that ran, if one
+        // did; a rung that ran and failed on its own clears it.
+        let mut last_interruption = None;
         for (rung, skipped) in RecoveryRung::LADDER.into_iter().zip(skipped) {
-            // Workflow #369 H-3: the holding check before every rung (so after every rung run).
+            // Workflow #369 H-3: the holding check before every rung (so after every rung run
+            // but the last one, whose own failure decides the outcome; review L6).
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
                 return self.finish_interrupted_ladder(pending, Some(rung), reason, rungs_tried);
             }
@@ -818,17 +822,23 @@ impl HostShared {
                         None,
                     )?;
                 }
-                RungAttempt::Failed { run_id, reason } => self.append_recovery_rung_finished(
-                    pending,
-                    rung,
-                    RecoveryRungOutcome::Failed,
-                    run_id,
-                    Some(reason),
-                    None,
-                )?,
+                RungAttempt::Failed { run_id, reason } => {
+                    last_interruption = is_hold_interruption(reason).then_some(reason);
+                    self.append_recovery_rung_finished(
+                        pending,
+                        rung,
+                        RecoveryRungOutcome::Failed,
+                        run_id,
+                        Some(reason),
+                        None,
+                    )?;
+                }
             }
         }
-        if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
+        // Review L6 (#666), §5.10: after the last rung the climb is exhausted at Error when the
+        // rungs that ran failed on their own, whatever holds at this moment; it ends at Warning
+        // only when the last rung that ran was itself ended by a holding interruption.
+        if let Some(reason) = last_interruption {
             return self.finish_interrupted_ladder(pending, None, reason, rungs_tried);
         }
         self.append_recovery_ladder_fact(
@@ -1616,6 +1626,24 @@ impl HostShared {
 
 /// The skip a rung package's entry refusal stands for: a known unavailable capture or input
 /// channel, or an ADB baseline that does not answer.
+/// Review L6 (#666): whether a rung's failure reason ended the rung rather than being its own
+/// failure: a reason `ladder_hold_interrupted` gives, or a renewal refusal of the key
+/// (`lease_expired`, `lease_missing`), which its next holding check reports as the key lost.
+fn is_hold_interruption(reason: &str) -> bool {
+    matches!(
+        reason,
+        "recovery_ladder_shutdown_requested"
+            | "recovery_ladder_drain_requested"
+            | "recovery_admission_denied"
+    ) || [
+        HostCode::RecoveryLadderKeyLost,
+        HostCode::LeaseExpired,
+        HostCode::LeaseMissing,
+    ]
+    .into_iter()
+    .any(|code| code.as_str() == reason)
+}
+
 fn recovery_entry_skip(code: &str) -> Option<RecoveryRungSkipReason> {
     match code {
         "recovery_capture_unavailable" => Some(RecoveryRungSkipReason::CaptureUnavailable),

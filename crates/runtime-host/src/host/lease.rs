@@ -1604,7 +1604,7 @@ impl HostShared {
         self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
         match transfer {
             TransferPreparation::Ready(prepared) => {
-                if prepared.to_kind().skips_business_capacity()
+                if !waits_for_business_capacity(prepared.to_kind())
                     || self.capacity_allows_transfer(token)?
                 {
                     return self
@@ -2225,7 +2225,7 @@ impl HostShared {
             };
             match transfer {
                 TransferPreparation::Ready(prepared) => {
-                    if prepared.to_kind().skips_business_capacity()
+                    if !waits_for_business_capacity(prepared.to_kind())
                         || self.capacity_allows_transfer(token)?
                     {
                         self.cleanup_via_transfer(
@@ -3177,8 +3177,9 @@ impl HostShared {
     /// Q-4: grants the first eligible entry of a free instance, with `scheduler.admitted` +
     /// `lease.granted` under the entry's own request links. A pump that grants nothing writes
     /// nothing: an instance held, in takeover cooldown, without an eligible entry, short of
-    /// business capacity for a business claim, or whose admission guard is taken is left as it
-    /// is (the guard's holder pumps when it drops it; the sweep pumps every tick).
+    /// business capacity for a claim that waits for it (`waits_for_business_capacity`), or whose
+    /// admission guard is taken is left as it is (the guard's holder pumps when it drops it; the
+    /// sweep pumps every tick).
     pub(super) fn pump(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() {
             return Ok(());
@@ -3197,7 +3198,7 @@ impl HostShared {
         if kind.takes_admission_checks() && self.performance_control_withholds(instance_id)? {
             return Ok(());
         }
-        if !kind.skips_business_capacity() {
+        if waits_for_business_capacity(kind) {
             match self.admit_capacity() {
                 Ok(_) => {}
                 Err(error) if error.is_fatal() => return Err(error),
@@ -3467,8 +3468,9 @@ impl HostShared {
         };
         let gate = self.routine_gate(instance_id)?;
         // Review L5: business capacity is asked before an immediate grant; a refusal queues the
-        // claim (writing nothing) instead of failing it, and the pump grants it later.
-        let capacity_free = claim.kind.skips_business_capacity()
+        // claim (writing nothing) instead of failing it, and the pump grants it later. A startup
+        // claim is not asked (review C-1).
+        let capacity_free = !waits_for_business_capacity(claim.kind)
             || match self.admit_capacity() {
                 Ok(_) => true,
                 Err(error) if error.is_fatal() => {
@@ -3659,6 +3661,15 @@ impl HostShared {
 
 /// Workflow #369 W-1: how often a bounded admission retries a taken guard.
 const ADMISSION_CONTENTION_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+/// Whether business capacity holds a claim of `kind` back from its grant (the pump, the
+/// immediate path and a transfer). Review C-1 (#666), model H-6: until S6b a startup claim is
+/// not held back, so it never waits while capacity refuses; the startup run's own capacity
+/// check (`prepare_package_run`) refuses it, records the refusal and releases the key, as a
+/// refused startup run did before.
+const fn waits_for_business_capacity(kind: ClaimKind) -> bool {
+    !kind.skips_business_capacity() && !matches!(kind, ClaimKind::StartupPackage)
+}
 
 /// Q-2a: a grant to a drain-capacity kind never meets business capacity.
 const fn kind_capacity(kind: ClaimKind) -> CapacityUse {
