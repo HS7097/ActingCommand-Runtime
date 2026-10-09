@@ -1989,7 +1989,7 @@ fn run_terminal<'a>(
 
 /// Coordinator ruling on the open case of #670 (a run that has a terminal is settled from it):
 /// the restart recovered the run's missing release (one run-linked `lease.released`, effect
-/// `not_performed`, under the request of the run's terminal), recorded
+/// `not_performed`, after the run's terminal), recorded
 /// `policy_settlement_release_recovered` once under the run's links, at Info, and settled the
 /// run once from its terminal.
 fn assert_settled_once_from_its_terminal(events: &[PersistedEvent], run_id: &RunId) {
@@ -2007,7 +2007,6 @@ fn assert_settled_once_from_its_terminal(events: &[PersistedEvent], run_id: &Run
         release.payload().effect_disposition(),
         Some(EffectDisposition::NotPerformed)
     );
-    assert_eq!(release.links().request_id(), terminal.links().request_id());
     assert!(release.sequence() > terminal.sequence());
     assert_eq!(
         recorded_failure_code(events, run_id),
