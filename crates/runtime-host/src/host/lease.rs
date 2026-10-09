@@ -1442,7 +1442,13 @@ impl HostShared {
         token: &LeaseToken,
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let flk02_started = std::time::Instant::now();
+        actingcommand_runtime_database::flk02(format_args!("renew start"));
         let replayed = lock(&self.scheduler, "replay_renew_lease").and_then(|scheduler| {
+            actingcommand_runtime_database::flk02(format_args!(
+                "renew scheduler_lock wait_us={}",
+                flk02_started.elapsed().as_micros()
+            ));
             scheduler
                 .replayed_renew(request_id, token, connection_id)
                 .map_err(|error| RuntimeHostError::scheduler("replay_renew_lease", &error))
@@ -1472,9 +1478,19 @@ impl HostShared {
             });
         }
         let instance_guard = self.instance_guard(token.instance_id())?;
+        let flk02_admission = std::time::Instant::now();
         let _admission = lock(&instance_guard, "lock_instance_admission")?;
+        actingcommand_runtime_database::flk02(format_args!(
+            "renew admission_lock wait_us={}",
+            flk02_admission.elapsed().as_micros()
+        ));
         let resolved = self.validated_instance(request, token, connection_id)?;
+        let flk02_append = std::time::Instant::now();
         self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
+        actingcommand_runtime_database::flk02(format_args!(
+            "renew admitted_append us={}",
+            flk02_append.elapsed().as_micros()
+        ));
         let action_id = self
             .events
             .action_id()
@@ -1485,11 +1501,17 @@ impl HostShared {
             Some(token.lease_id()),
             Some(action_id),
         );
+        let flk02_intent = std::time::Instant::now();
         let intent = self.lease_intent(
             EventAction::LeaseRenew,
             links.clone(),
             resolved.audit_endpoint(),
         )?;
+        actingcommand_runtime_database::flk02(format_args!(
+            "renew intent_draft us={}",
+            flk02_intent.elapsed().as_micros()
+        ));
+        let flk02_critical = std::time::Instant::now();
         let plan = CriticalEventPlan::new(
             CriticalOperation::LeaseTransition(LeaseTransitionTarget::Renewed),
             intent,
@@ -1540,6 +1562,11 @@ impl HostShared {
                 )
             },
         );
+        actingcommand_runtime_database::flk02(format_args!(
+            "renew critical us={} total_us={}",
+            flk02_critical.elapsed().as_micros(),
+            flk02_started.elapsed().as_micros()
+        ));
         self.map_critical_lease_result(result, RuntimeReceiptState::Completed, |token| {
             RuntimeResult::LeaseRenewed { token }
         })

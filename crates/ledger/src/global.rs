@@ -2445,6 +2445,15 @@ fn writer_loop<S: LedgerStore>(
         if command_observation.after_reply.started_at.is_some() {
             command_observation.after_reply.finish(finished, true);
         }
+        let handled = finished.saturating_duration_since(started);
+        if handled >= Duration::from_millis(5)
+            || kind == LedgerWriterCommandKind::RetentionCandidates
+        {
+            actingcommand_runtime_database::flk02(format_args!(
+                "writer cmd={kind:?} handled_us={}",
+                handled.as_micros()
+            ));
+        }
         statistics.record_writer_command(
             kind,
             finished.saturating_duration_since(started),

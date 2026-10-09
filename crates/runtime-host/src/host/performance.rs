@@ -425,6 +425,7 @@ pub(super) fn performance_monitor_loop(
             continue;
         };
         let observed_at_unix_ms = unix_ms_now()?;
+        actingcommand_runtime_database::flk02(format_args!("perf_iteration start"));
         let stop_sampling = match shared.sample_performance(observed_at_unix_ms) {
             Ok(stop_sampling) => stop_sampling,
             Err(error) => {
@@ -432,7 +433,9 @@ pub(super) fn performance_monitor_loop(
                 return Err(error);
             }
         };
+        actingcommand_runtime_database::flk02(format_args!("perf_iteration sampled"));
         let retention_enabled = shared.maintain_frame_retention()?;
+        actingcommand_runtime_database::flk02(format_args!("perf_iteration retention_done"));
         // Sealed at most once per RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, whatever the sample interval.
         since_runtime_fact_snapshot = since_runtime_fact_snapshot.saturating_add(sample_interval);
         if since_runtime_fact_snapshot >= snapshot_interval {
