@@ -16,9 +16,9 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const DATABASE_FILE: &str = "runtime-state.sqlite";
 pub const INTEGRITY_KEY_FILE: &str = "runtime-state.key";
@@ -43,6 +43,9 @@ pub struct RuntimeDatabase {
     integrity_key: Box<[u8]>,
     /// Set while the connection may be below `Full`; left set when restoring failed.
     sync_relaxed: AtomicBool,
+    /// Workflow #381 R6: the longest `connection()` lock wait, in nanoseconds, since the last
+    /// `take_connection_wait_peak`. Process-local, never persisted.
+    connection_wait_peak_ns: AtomicU64,
 }
 
 /// Borrowed only for a trusted Runtime owner's work in the writer's transaction.
@@ -157,6 +160,7 @@ impl RuntimeDatabase {
             connection: Mutex::new(connection),
             integrity_key,
             sync_relaxed: AtomicBool::new(false),
+            connection_wait_peak_ns: AtomicU64::new(0),
         })
     }
 
@@ -247,6 +251,7 @@ impl RuntimeDatabase {
             connection: Mutex::new(connection),
             integrity_key: integrity_key.into_boxed_slice(),
             sync_relaxed: AtomicBool::new(false),
+            connection_wait_peak_ns: AtomicU64::new(0),
         })
     }
 
@@ -261,12 +266,51 @@ impl RuntimeDatabase {
         &self,
         operation: &'static str,
     ) -> RuntimeDatabaseResult<MutexGuard<'_, Connection>> {
+        let waiting = Instant::now();
         let guard = self
             .connection
             .lock()
             .map_err(|_| failure("state_connection_poisoned", operation))?;
+        self.connection_wait_peak_ns.fetch_max(
+            u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
         self.require_full_sync(operation)?;
         Ok(guard)
+    }
+
+    /// Workflow #381 R6: the longest wait any `connection()` caller spent on the connection
+    /// lock since the previous call, which opens a new window. `try_connection` never waits.
+    pub fn take_connection_wait_peak(&self) -> Duration {
+        Duration::from_nanos(self.connection_wait_peak_ns.swap(0, Ordering::Relaxed))
+    }
+
+    /// Workflow #381 R4b: a second connection to the same file, read-only, for one long read
+    /// that must not hold the shared connection's lock (the Ledger writer takes that lock for
+    /// every append). The caller runs its whole read inside one transaction on it, which in WAL
+    /// mode reads one snapshot while commits on the shared connection go on. There is no
+    /// `quick_check`: the shared connection's open already checked the file. Every failure is
+    /// returned (`database_maintenance_sql_failed`, `state_database_journal_invalid`); the
+    /// caller never falls back to the shared connection.
+    pub fn read_snapshot_connection(
+        &self,
+        operation: &'static str,
+    ) -> RuntimeDatabaseResult<Connection> {
+        let connection = Connection::open_with_flags(
+            &self.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        connection
+            .busy_timeout(BUSY_TIMEOUT)
+            .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        let journal: String = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        if journal != "wal" {
+            return Err(failure("state_database_journal_invalid", operation));
+        }
+        Ok(connection)
     }
 
     /// Error readback must not wait behind another owner of the connection.

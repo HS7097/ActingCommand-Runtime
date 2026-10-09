@@ -3267,4 +3267,91 @@ mod tests {
             rollback
         );
     }
+
+    // Workflow #381 R4b gate: the release baseline's whole-chain check reads its own snapshot on
+    // a separate connection, so a Ledger writer append completes while that check's read
+    // transaction is still open (the hook runs inside it; no wall clock).
+    #[test]
+    fn release_baseline_check_never_blocks_a_ledger_append() {
+        use actingcommand_contract::{
+            AuditInput, CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction,
+            EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
+            IdentifierIssuer, OriginModule,
+        };
+        let root = TempDir::new().expect("tempdir");
+        let database = Arc::new(
+            RuntimeStateStore::open_database(root.path(), b"release-snapshot-spec")
+                .expect("runtime database"),
+        );
+        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
+            root.path(),
+            true,
+            limits,
+            limits.deadline().expect("maintenance deadline"),
+        )
+        .expect("empty Ledger maintenance");
+        maintenance
+            .initialize_empty(&database)
+            .expect("empty Ledger");
+        let ledger = Arc::new(
+            maintenance
+                .open_writer(Arc::clone(&database), "release-snapshot-spec".to_owned())
+                .expect("Ledger writer"),
+        );
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let fingerprinter =
+            actingcommand_ledger::Sha256SecretFingerprinter::new(b"release-snapshot-spec")
+                .expect("fingerprinter");
+        let draft = |timestamp_unix_ms: u64| {
+            EventDraft::new(
+                ids.mint_event_id().expect("event id"),
+                timestamp_unix_ms,
+                EventSeverity::Error,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                CommandPayloadDraft::rejected(
+                    EventAction::RuntimeStart,
+                    DiagnosticCode::CommandRejected,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&fingerprinter)
+            .expect("sanitized draft")
+        };
+        ledger.append(draft(1)).expect("first Ledger event");
+        let during_check = draft(2);
+        let appended = Arc::new(std::sync::Mutex::new(None));
+        let hook_ledger = Arc::clone(&ledger);
+        let hook_appended = Arc::clone(&appended);
+        release::BASELINE_SNAPSHOT_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                *hook_appended.lock().expect("append result") = Some(
+                    hook_ledger
+                        .append(during_check)
+                        .map(|event| event.sequence()),
+                );
+            }));
+        });
+        let store =
+            Arc::new(RuntimeStateStore::from_database(Arc::clone(&database)).expect("state store"));
+        store
+            .prepare_release_boundary(None)
+            .expect("release boundary check");
+        let appended = appended
+            .lock()
+            .expect("append result")
+            .take()
+            .expect("the hook ran inside the check's read transaction");
+        assert_eq!(
+            appended.expect("the append completed while the check was open"),
+            2
+        );
+    }
 }
