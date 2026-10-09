@@ -1,0 +1,50 @@
+# Flaky-test table, CI mirror (test plan v2.2 §2.2, Alice 10-09 D5).
+#
+# The register is board issue HS7097/ActingCommand-Workflow #71: FLK-01..06 in comment
+# 6073813916, FLK-01/02 corrected in 6074097808, FLK-05 removed as fixed in 6073946990. Only the
+# coordinator registers an entry there; this file only mirrors it, and a change lands on #71
+# first, then here. FLK-03 (`watchdog_restarts_a_killed_runtime_through_the_fixed_entry`) and
+# FLK-06 (the 500 ms process-test clients) are not mirrored: Batch 0a retired that test (§4 #8)
+# and moved those clients to the production 5 s budget (§4 #11).
+#
+# Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
+# (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests (its
+# `FLAKY_TESTS` line). `gate_ci_jobs_cover_every_member` in
+# `tools/actinglab-architecture/tests/gate_map.rs` checks both lines against this file and that
+# each `name` resolves to a real `#[test]` function.
+#
+# Keys of each entry:
+# - `id`: the register number on #71.
+# - `name`: `<package>::<target>::<libtest path>`; the target is `lib` or an integration test.
+# - `crate`: the package, as in `name`.
+# - `job`: the module job whose selection holds the package.
+# - `features`: the features the `flaky` job runs it with ("" for the default features).
+# - `register`: the #71 comment that holds the entry's current state.
+# - `status`: where the entry stands on #71.
+
+[[test]]
+id = "FLK-01"
+name = "actingcommand-runtime-client::lib::tests::typed_client_discovers_runtime_and_routes_queries_and_input"
+crate = "actingcommand-runtime-client"
+job = "runtime-client"
+features = ""
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6074097808"
+status = "cause located (test lease TTL 1 s); H-6 changes the test to 5 s, then it leaves the table"
+
+[[test]]
+id = "FLK-02"
+name = "actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry"
+crate = "actingcommand-runtime-client"
+job = "runtime-client"
+features = "test-observation"
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6074097808"
+status = "cause located (short lease TTL, real 5.3 s wait); C-4 replaces it with a manual-clock test"
+
+[[test]]
+id = "FLK-04"
+name = "actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal"
+crate = "actingcommand-actingctl"
+job = "apps"
+features = ""
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6073813916"
+status = "cause not located on #71 (ConnectionReset); skipped until it is"
