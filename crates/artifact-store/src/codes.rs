@@ -9,8 +9,9 @@ actingcommand_contract::outcome_codes! {
     /// Codes the artifact store registered ahead of the A2 sweep (Workflow #375).
     pub(crate) enum StoreCode {
         /// Error. A read found no file at a frame's object key and could not list the kept
-        /// folders below `<state root>\kept` to look for it there (keys `io_kind`, `os_error`).
-        /// The read fails; the lookup map of the previous walk stays.
+        /// folders below `<state root>\kept` to look for it there: a listing failed, or `kept`
+        /// itself is a reparse point, which is never followed (keys `entry`, `io_kind`,
+        /// `os_error`). The read fails; the lookup map of the previous walk stays.
         ArtifactKeptWalkFailed => "artifact_kept_walk_failed": error,
     }
 }

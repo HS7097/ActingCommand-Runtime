@@ -125,6 +125,18 @@ impl Root {
             .join(&folder.file_name)
     }
 
+    /// The Lab folder of frame `index`, as the view names it once the frame is Lab.
+    fn lab_folder(&self, index: usize) -> KeptFrameFolder {
+        KeptFrameFolder {
+            date: DATE.to_owned(),
+            leaf: LAB_LEAF.to_owned(),
+            file_name: format!(
+                "061502-117_{}.png",
+                crate::failure_identity::identifier_text(&self.frames[index].reference.artifact_id)
+            ),
+        }
+    }
+
     fn bytes(&self, indexes: &[usize]) -> u64 {
         indexes
             .iter()
@@ -280,7 +292,7 @@ fn a_failed_move_warns_once_and_leaves_the_frame() {
     assert_eq!(warning.code, HostCode::FrameRetentionMoveFailed);
     assert_eq!(
         warning.artifact_id,
-        root.frames[stuck].reference.artifact_id
+        Some(root.frames[stuck].reference.artifact_id)
     );
     assert_eq!(
         warning.entry.as_deref(),
@@ -327,4 +339,65 @@ fn a_kept_frame_stays_after_a_restart_with_another_class() {
         ),
     });
     assert!(root.kept(kept).is_file());
+}
+
+/// Model v4.3 note: a frame whose class changes while the sweep is under way is acted on by its
+/// current class. Here a due default frame becomes Lab-protected after the first round: the
+/// second round moves it into its Lab folder and never removes it.
+#[test]
+fn a_frame_that_becomes_lab_during_a_sweep_is_moved_not_removed() {
+    let mut root = Root::new();
+    let first_round = (0..RETENTION_ROUND_OBJECTS)
+        .map(|_| root.frame(FrameRetentionClass::Default, Some(T0), None, true))
+        .collect::<Vec<_>>();
+    let protected = root.frame(FrameRetentionClass::Default, Some(T0), None, true);
+    let mut retention = cleaner();
+    retention.begin_sweep(&root.view());
+    let first = retention
+        .round(&root.path, &|| false, &mut |_| Ok(()))
+        .expect("round");
+    assert_eq!(first, None, "the sweep needs a second round");
+    for index in &first_round {
+        assert!(!root.object(*index).exists());
+    }
+    assert!(root.object(protected).is_file());
+    // Between the rounds a later Lab use of its run makes the frame Lab-protected.
+    root.frames[protected].class = FrameRetentionClass::Lab;
+    root.frames[protected].due_unix_ms = None;
+    let folder = root.lab_folder(protected);
+    root.frames[protected].folder = Some(folder);
+    retention.rederive(&root.view());
+    let report = retention
+        .round(&root.path, &|| false, &mut |_| Ok(()))
+        .expect("round")
+        .expect("the sweep completes");
+    assert_eq!((report.deleted, report.moved), (16, 1));
+    assert!(!root.object(protected).exists());
+    assert!(root.kept(protected).is_file(), "moved, not removed");
+}
+
+/// Model v4.3 note: a failed write of the move counter after a successful move has its own
+/// code; the frame counts as moved and nothing failed.
+#[test]
+fn a_counter_that_cannot_be_written_has_its_own_warning() {
+    let mut root = Root::new();
+    let kept = root.frame(FrameRetentionClass::Error, None, Some(ERROR_LEAF), true);
+    // A folder where the counter file should be makes its write fail.
+    std::fs::create_dir_all(root.path.join(KEPT_DIRECTORY).join(".moves")).expect("blocker");
+    let mut retention = cleaner();
+    let (report, warnings) = sweep(&mut retention, &root.path, &root.view());
+    let report = report.expect("first sweep");
+    assert_eq!((report.moved, report.failed), (1, 0));
+    assert!(root.kept(kept).is_file());
+    assert_eq!(warnings.len(), 1);
+    let warning = &warnings[0];
+    assert_eq!(warning.code, HostCode::FrameRetentionCounterFailed);
+    assert_eq!(warning.artifact_id, None);
+    assert_eq!(warning.entry.as_deref(), Some("kept/.moves"));
+    assert_eq!(warning.stage(), "frame_retention.counter");
+    assert!(
+        warning
+            .message()
+            .starts_with("host_code=frame_retention_counter_failed entry=kept/.moves")
+    );
 }

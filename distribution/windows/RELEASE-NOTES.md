@@ -109,9 +109,11 @@ with `acsetup --commit-config` and restart actingd. A change applies only to
 screenshots not yet moved into a folder. The cleaner runs while
 `frame_retention_enabled` is on (the default), and prints one
 `actingd frame_retention pass …` line per sweep that visited frames; with it off,
-actingd prints `actingd frame_retention disabled` once at start. Once a
-screenshot has been deleted or moved, or once the file names either switch,
-v0.11.4 can no longer open this state root.
+actingd prints `actingd frame_retention disabled` once at start. Keep `kept`
+a plain folder on the state root's volume: a junction there makes reads of
+kept screenshots fail with `artifact_kept_walk_failed`, and moving a leaf out
+by hand counts as deleting it. Once a screenshot has been deleted or moved, or
+once the file names either switch, v0.11.4 can no longer open this state root.
 
 check-config's catalog preview (Workflow #375) now reads only the catalog and
 approval records (authenticated, with the ledger head and contiguity) instead of

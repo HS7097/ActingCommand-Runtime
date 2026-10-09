@@ -151,6 +151,8 @@ impl ArtifactEventSink for Sink<'_> {
 struct Capture {
     reference: ProjectedArtifactReference,
     material: PathBuf,
+    /// The frame's `artifact.verified` event.
+    verified: TerminalEvent,
 }
 
 fn append(ledger: &GlobalLedger, draft: SanitizedEventDraft) -> PersistedEvent {
@@ -318,6 +320,7 @@ fn observe(
         Capture {
             reference,
             material: stored.path().to_path_buf(),
+            verified: terminal(&verified),
         },
         links,
     )
@@ -648,4 +651,77 @@ fn a_dedup_window_makes_the_interior_frame_a_duplicate_in_the_frame_view() {
     );
     // The cached classes at the same head give the same view again.
     assert_eq!(classes(captured(2) + 2 * DAY_MS), settled);
+}
+
+/// Workflow #375 R5d: actingledger reads a frame that the cleaner moved into its kept folder
+/// (here by hand, as actingd would): the material read verifies it, and task evidence lists no
+/// missing material.
+#[test]
+fn actingledger_reads_a_moved_frame() {
+    use actingcommand_ledger_forensics::{
+        ForensicEventsRequest, ForensicMaterialRequest, ForensicOutput, ForensicReport,
+        ForensicRequest, read_material_to, run,
+    };
+    const BYTES: &[u8] = b"frame moved into its kept folder";
+    let root = tempfile::tempdir().expect("root");
+    let (database, ledger) = formal_root(root.path());
+    let artifacts = material_store(root.path());
+    let moved = capture(&ledger, &artifacts, BYTES);
+    ledger.close().expect("close the writer");
+    drop(database);
+    let object_file = moved
+        .material
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .expect("object file name")
+        .to_owned();
+    let leaf = root
+        .path()
+        .join("kept")
+        .join("2026-10-12")
+        .join("node_a-1-contained_task_page_unknown");
+    std::fs::create_dir_all(&leaf).expect("kept leaf");
+    std::fs::rename(
+        &moved.material,
+        leaf.join(format!("061502-117_{object_file}")),
+    )
+    .expect("move the frame as the cleaner does");
+
+    // `actingledger material`: the read of the moved frame verifies.
+    let request = ForensicMaterialRequest::new(
+        root.path(),
+        actingcommand_contract::RuntimeMaterialReadRequest {
+            event: actingcommand_contract::LedgerEventPosition {
+                event_id: moved.verified.event_id,
+                sequence: moved.verified.sequence,
+            },
+            artifact_id: moved.reference.artifact_id,
+            snapshot_position: moved.verified.sequence,
+            byte_count: moved.reference.byte_count,
+            sha256: moved.reference.sha256.clone(),
+            expected_run_id: None,
+            expected_frame_id: None,
+            expected_request_id: None,
+            expected_correlation_id: None,
+            offset: 0,
+            requested_length: u32::try_from(BYTES.len()).expect("length"),
+            max_reply_bytes: actingcommand_contract::MAX_RUNTIME_MATERIAL_REPLY_BYTES,
+        },
+    )
+    .expect("material request");
+    let mut output = Vec::new();
+    read_material_to(request, &mut output).expect("material read");
+    let output = String::from_utf8(output).expect("UTF-8 report");
+    assert!(output.contains(r#""state":"verified""#), "{output}");
+    assert!(!output.contains("material_read_missing"), "{output}");
+
+    let ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) = run(
+        ForensicRequest::task_evidence(root.path(), ForensicEventsRequest::default()),
+    )
+    .expect("task evidence") else {
+        panic!("task evidence report");
+    };
+    assert!(report.material_missing.is_empty());
+    assert!(report.failures.is_empty());
+    assert!(report.gaps.is_empty());
 }

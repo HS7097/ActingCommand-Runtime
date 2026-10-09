@@ -371,3 +371,64 @@ fn restore_writes_two_kept_frames_at_their_kept_paths() {
         assert_eq!(read(&target_root, reference).expect("target read"), kept);
     }
 }
+
+/// Model v4.3 note: a reader that waited behind another reader's walk uses that walk's map
+/// only while the move counter is unchanged; a move that landed after that walk began makes
+/// it walk again.
+#[test]
+fn a_reader_behind_another_walk_walks_again_after_a_move() {
+    let (_temp, root) = canonical_root();
+    let moved = frame(&root, b"frame moved during another reader's walk");
+    // Another reader's walk completes while this reader waits: it saw no walk yet.
+    let seen = walks(&root);
+    let missing = unpublished(b"the other reader's miss");
+    assert!(
+        read(&root, &missing)
+            .expect_err("miss")
+            .is_material_missing()
+    );
+    assert_eq!(walks(&root), seen + 1);
+    // Another process moves the frame and bumps the counter after that walk began.
+    let leaf = root.join(KEPT_DIRECTORY).join(DATE).join(LEAF);
+    fs::create_dir_all(&leaf).expect("leaf");
+    fs::rename(
+        root.join(moved.object_key().expect("key")),
+        leaf.join(kept_name(&moved)),
+    )
+    .expect("the other process's move");
+    KeptMoves::new(1_791_753_302_117)
+        .record_move(&root)
+        .expect("counter");
+    let name = object_file(&moved);
+    let found = walk_and_find(&root, &root_map(&root), object_id(&name).expect("id"), seen)
+        .expect("lookup");
+    assert_eq!(found, Some(leaf.join(kept_name(&moved))));
+    assert_eq!(walks(&root), seen + 2);
+}
+
+/// Model v4.3 note: a `kept\` that is a junction is never followed and never taken for an
+/// empty folder: the lookup fails loud.
+#[cfg(windows)]
+#[test]
+fn a_kept_folder_that_is_a_junction_fails_the_lookup() {
+    let (temp, root) = canonical_root();
+    let elsewhere = tempfile::tempdir().expect("other drive stand-in");
+    // mklink takes plain paths, not the canonical `\\?\` form.
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(temp.path().join(KEPT_DIRECTORY))
+        .arg(elsewhere.path())
+        .output()
+        .expect("create junction");
+    assert!(
+        output.status.success(),
+        "failed to create junction: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let missing = unpublished(b"a frame looked up through a junction");
+    let error = read(&root, &missing).expect_err("the walk refuses the junction");
+    assert_eq!(error.code(), "artifact_kept_walk_failed");
+    assert!(!error.is_fatal());
+    assert!(!error.is_material_missing());
+    assert_eq!(error.detail(), "entry=kept");
+}

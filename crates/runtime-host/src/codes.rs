@@ -28,10 +28,14 @@ actingcommand_contract::outcome_codes! {
         /// `artifact_id`, `io_kind`, `os_error`).
         FrameRetentionRemoveFailed => "frame_retention_remove_failed": warning,
         /// Warning. The frame cleaner could not move a frame into its kept folder for another
-        /// reason than a held or absent file, and the frame stays where it is; or the frame
-        /// moved and the move counter `kept/.moves` could not be written (keys `artifact_id`,
-        /// `entry`, `io_kind`, `os_error`).
+        /// reason than a held or absent file, and the frame stays where it is (keys
+        /// `artifact_id`, `entry`, `io_kind`, `os_error`).
         FrameRetentionMoveFailed => "frame_retention_move_failed": warning,
+        /// Warning. A frame moved into its kept folder, but the move counter `kept/.moves`
+        /// could not be written, so other processes may find moved frames only at their next
+        /// walk of the kept folders, within 60 s; once per process (keys `entry`, `io_kind`,
+        /// `os_error`).
+        FrameRetentionCounterFailed => "frame_retention_counter_failed": warning,
         /// Info. A policy candidate, or its admission, met an instance that a claim holds or
         /// that an eligible claim waits for: the candidate is deferred, or its intent is
         /// rejected at Info, and the driver wakes when a key returns (keys `instance_id`,

@@ -749,6 +749,72 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     )
     .unwrap();
     assert!(pending_task.get("target_page").is_none() && pending_task.get("entry_page").is_none());
+    // Workflow #375 R5d: `actinglab resource restore` reads frames that the cleaner moved into
+    // their kept folders (here by hand, as actingd would): the same restore after moving the
+    // first request's frames lists the same gaps and no missing material.
+    let first_request: actingcommand_contract::RequestId =
+        serde_json::from_value(json!(request_ids[0])).unwrap();
+    let moved_keys = snapshot
+        .events()
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::ArtifactVerified
+                && event.links().request_id() == Some(&first_request)
+        })
+        .flat_map(|event| event.artifacts().iter())
+        .filter(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
+        .map(|artifact| artifact.project(true).object_key.unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!moved_keys.is_empty());
+    let leaf = runtime_root
+        .join("kept")
+        .join("2026-10-12")
+        .join("node_a-1-lab");
+    fs::create_dir_all(&leaf).unwrap();
+    for (index, key) in moved_keys.iter().enumerate() {
+        let source = runtime_root.join(key.as_str());
+        let object_file = source.file_name().unwrap().to_str().unwrap().to_owned();
+        fs::rename(
+            &source,
+            leaf.join(format!("061502-{index:03}_{object_file}")),
+        )
+        .unwrap();
+    }
+    let moved = root.path().join("moved");
+    let moved_output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            moved.to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_ids[0],
+            "--through-sequence",
+            &through,
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--task-id",
+            "pending",
+        ],
+    );
+    assert_eq!(
+        moved_output["data"]["record_count"],
+        pending_output["data"]["record_count"]
+    );
+    assert_eq!(moved_output["data"]["gaps"], pending_output["data"]["gaps"]);
+    assert!(
+        !moved_output["data"]["gaps"]
+            .to_string()
+            .contains("material_missing")
+    );
     run_actinglab_failure_json(
         &config,
         &runtime_root,

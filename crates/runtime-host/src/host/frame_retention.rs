@@ -14,10 +14,10 @@ use actingcommand_contract::{
     TerminalEvent,
 };
 use actingcommand_ledger::{
-    ArtifactEvictionAdmission, FrameRetentionClass, FrameRetentionSwitches, FrameRetentionView,
-    GlobalLedger, GlobalLedgerError, KeptFrameFolder, PersistedEvent,
+    ArtifactEvictionAdmission, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
+    FrameRetentionView, GlobalLedger, GlobalLedgerError, KeptFrameFolder, PersistedEvent,
 };
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -313,7 +313,8 @@ impl std::fmt::Display for SweepReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FrameRetentionWarning {
     pub(super) code: HostCode,
-    pub(super) artifact_id: ArtifactId,
+    /// The frame that could not be removed or moved; none for the move counter.
+    pub(super) artifact_id: Option<ArtifactId>,
     /// The kept folder of a failed move, relative to the state root.
     pub(super) entry: Option<String>,
     pub(super) io_kind: Option<std::io::ErrorKind>,
@@ -323,7 +324,7 @@ pub(super) struct FrameRetentionWarning {
 impl FrameRetentionWarning {
     fn new(
         code: HostCode,
-        artifact_id: ArtifactId,
+        artifact_id: Option<ArtifactId>,
         entry: Option<String>,
         io_kind: Option<std::io::ErrorKind>,
         os_error: Option<i32>,
@@ -338,20 +339,22 @@ impl FrameRetentionWarning {
     }
 
     fn stage(&self) -> &'static str {
-        if self.code == HostCode::FrameRetentionMoveFailed {
-            "frame_retention.move"
-        } else {
-            "frame_retention.remove"
+        match self.code {
+            HostCode::FrameRetentionMoveFailed => "frame_retention.move",
+            HostCode::FrameRetentionCounterFailed => "frame_retention.counter",
+            _ => "frame_retention.remove",
         }
     }
 
     /// Only `key=value` tokens.
     fn message(&self) -> String {
-        let mut message = format!(
-            "host_code={} artifact_id={}",
-            self.code.as_str(),
-            crate::failure_identity::identifier_text(&self.artifact_id)
-        );
+        let mut message = format!("host_code={}", self.code.as_str());
+        if let Some(artifact_id) = &self.artifact_id {
+            message.push_str(&format!(
+                " artifact_id={}",
+                crate::failure_identity::identifier_text(artifact_id)
+            ));
+        }
         if let Some(entry) = &self.entry {
             message.push_str(&format!(" entry={entry}"));
         }
@@ -365,6 +368,22 @@ impl FrameRetentionWarning {
             message.push_str(&format!(" os_error={code}"));
         }
         message
+    }
+}
+
+/// The action a settled frame is due for at `now`: `Some(Some(folder))` moves a Lab or error
+/// frame, `Some(None)` removes a duplicate, default or resource frame whose due time has come,
+/// and `None` leaves the frame alone.
+fn due_action(frame: &FrameRetentionFrame, now: u64) -> Option<Option<KeptFrameFolder>> {
+    match frame.class {
+        FrameRetentionClass::Lab | FrameRetentionClass::Error => frame.folder.clone().map(Some),
+        FrameRetentionClass::Resource
+        | FrameRetentionClass::Duplicate
+        | FrameRetentionClass::Default => frame
+            .due_unix_ms
+            .is_some_and(|due| due <= now)
+            .then_some(None),
+        FrameRetentionClass::Running => None,
     }
 }
 
@@ -389,7 +408,10 @@ impl FrameRetention {
 
     /// Called by the performance loop after its sampling locks are released. Starts a sweep
     /// from the ledger's frame view when none runs and the last one started at least
-    /// `SWEEP_INTERVAL` ago, then runs one round. Returns the report of a sweep it completed.
+    /// `SWEEP_INTERVAL` ago (model v4.3 note); while a sweep still has queued actions, each
+    /// round re-reads the view, which the writer caches by head, and derives every queued action
+    /// again, so no frame is acted on by a class it no longer has. Then it runs one round.
+    /// Returns the report of a sweep it completed.
     pub(super) fn maintain(
         &mut self,
         ledger: &GlobalLedger,
@@ -410,8 +432,40 @@ impl FrameRetention {
                 .frame_retention_view(now_unix_ms, self.switches)
                 .map_err(ledger_failure)?;
             self.begin_sweep(&view);
+        } else {
+            let view = ledger
+                .frame_retention_view(now_unix_ms, self.switches)
+                .map_err(ledger_failure)?;
+            self.rederive(&view);
         }
         self.round(root, stopping, warn)
+    }
+
+    /// Derives each queued action again from a newer view: a frame now kept (Lab or error) is
+    /// moved to its current folder, a frame still due is removed, and any other frame (not due,
+    /// not settled, or gone from the view) leaves the sweep untouched.
+    fn rederive(&mut self, view: &FrameRetentionView) {
+        let Some(sweep) = self.sweep.as_mut() else {
+            return;
+        };
+        let now = view.evaluated_at_unix_ms;
+        let current = view
+            .frames
+            .iter()
+            .map(|frame| (frame.reference.artifact_id, frame))
+            .collect::<BTreeMap<_, _>>();
+        sweep.actions.retain_mut(|action| {
+            match current
+                .get(&action.reference.artifact_id)
+                .and_then(|frame| due_action(frame, now))
+            {
+                Some(folder) => {
+                    action.folder = folder;
+                    true
+                }
+                None => false,
+            }
+        });
     }
 
     /// Lists the frames the view says are due, in settle order (entry time, then artifact id).
@@ -435,13 +489,8 @@ impl FrameRetention {
             if self.handled.contains(&id) || self.failed.contains(&id) {
                 continue;
             }
-            let folder = match frame.class {
-                FrameRetentionClass::Lab | FrameRetentionClass::Error => match &frame.folder {
-                    Some(folder) => Some(folder.clone()),
-                    None => continue,
-                },
-                _ if frame.due_unix_ms.is_some_and(|due| due <= now) => None,
-                _ => continue,
+            let Some(folder) = due_action(frame, now) else {
+                continue;
             };
             due.push((
                 frame.entry_unix_ms.unwrap_or_default(),
@@ -521,8 +570,8 @@ impl FrameRetention {
                         // to look again is behind, until the next move writes it.
                         self.counter_warned = true;
                         warn(&FrameRetentionWarning::new(
-                            HostCode::FrameRetentionMoveFailed,
-                            id,
+                            HostCode::FrameRetentionCounterFailed,
+                            None,
                             Some(format!("{KEPT_DIRECTORY}/.moves")),
                             Some(error.kind()),
                             error.raw_os_error(),
@@ -545,7 +594,7 @@ impl FrameRetention {
                     };
                     warn(&FrameRetentionWarning::new(
                         code,
-                        id,
+                        Some(id),
                         entry,
                         error.io_error_kind(),
                         error.raw_os_error(),

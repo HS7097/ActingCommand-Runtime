@@ -695,13 +695,18 @@ admission, so the K/T policy, the unlinked-warning latch and the seals gate noth
 replay of eviction records already in a ledger, and startup recovery of an intent left
 without its outcome, stay.
 
-- **Rounds and sweeps.** Each round of the performance-monitor loop (every 2 s) acts on
-  at most 16 frames within 1 s. A sweep starts at most every 10 minutes (the first at the
-  first round after the start) from one frame view at the Runtime's clock, and lists the
-  settled frames that are due: duplicates, default frames 1 day and resource frames
-  7 days after their entry time are removed; error and Lab frames are moved into their
-  kept folder. The sweep visits them in entry-time order over as many rounds as it
-  needs. Running frames and frames not yet due are untouched.
+- **Rounds and sweeps** (model v4.3 note). Each round of the performance-monitor loop
+  (every 2 s) acts on at most 16 frames within 1 s. A sweep starts at most every
+  10 minutes (the first at the first round after the start) from the frame view at the
+  Runtime's clock, and lists the settled frames that are due: duplicates, default frames
+  1 day and resource frames 7 days after their entry time are removed; error and Lab
+  frames are moved into their kept folder. The sweep visits them in entry-time order over
+  as many rounds as it needs. Running frames and frames not yet due are untouched.
+- **Never a stale class.** While a sweep still has queued frames, each round reads the
+  view again (cached by head, so at an unchanged head this only applies the clock) and
+  derives every queued action again before acting: a frame whose class changed during
+  the sweep is acted on by its current class, so a frame that became Lab-protected is
+  moved, never removed, and a frame no longer due stays where it is.
 - **Only the object key.** A removal or a move acts on `<state root>\<object key>` and
   nowhere else; the cleaner never looks in `kept\`. Nothing there means the frame is
   absent: deleted by hand, or already removed or moved. So a frame in a kept folder is
@@ -735,9 +740,10 @@ without its outcome, stay.
   links, once per object per process, whose detail carries `host_code=`
   `frame_retention_remove_failed` (`artifact_id`, `io_kind`, `os_error`) or
   `frame_retention_move_failed` (adds `entry`, the kept folder relative to the state
-  root); a move whose counter could not be written is reported once per process the same
-  way, with `entry=kept/.moves`. Only a ledger error, including a failed append of such
-  a Warning, is fatal; a held file never is.
+  root). A move whose counter `kept\.moves` could not be written counts as moved and is
+  reported once per process by its own code, `frame_retention_counter_failed` (`entry`,
+  `io_kind`, `os_error`). Only a ledger error, including a failed append of such a
+  Warning, is fatal; a held file never is.
 
 ### Moved-frame reads (Workflow #375 R5d)
 
@@ -762,10 +768,13 @@ resolves alike.
   each leaf, reading no file contents and never following a reparse point. `kept\`
   absent is an empty map. An entry that vanishes or is delete-pending (os error 303)
   during the walk, and a file where a folder is expected (`.moves`, `desktop.ini`), are
-  skipped; a name that does not end in `_artifact_<hex>.png` is ignored. Any other
-  listing error fails the read with `artifact_kept_walk_failed` (`io_kind`, `os_error`),
-  and the previous map stays. Each walk replaces the map whole, and one root has one
-  walk at a time: readers that miss meanwhile wait for its result.
+  skipped; a name that does not end in `_artifact_<hex>.png` is ignored. A `kept\` that
+  is itself a reparse point (a junction to another drive, say), and any other listing
+  error, fail the read with `artifact_kept_walk_failed` (`entry`, `io_kind`, `os_error`;
+  model v4.3 note), and the previous map stays: `kept\` must stay a plain folder on the
+  state root's volume. Each walk replaces the map whole, and one root has one walk at a
+  time: a reader that misses meanwhile waits and uses that walk's map, unless
+  `kept\.moves` changed since that walk began, when it walks again.
 - **A read during a move.** The cleaner holds the frame for a moment; a reader then gets
   os error 32 or 33, or a held use lock, not `NotFound`. The whole open, the object key
   and then the lookup, is retried up to 3 times 20 ms apart.

@@ -17,9 +17,12 @@
 //! - A walk lists the date folders and their leaves below `kept\`, and the files in each leaf.
 //!   It reads no file contents and never follows a reparse point. An entry that vanishes or is
 //!   being deleted meanwhile, and a file where a folder is expected, are skipped; a name that
-//!   does not end in `_artifact_<hex>.png` is ignored. Any other listing error fails the read
-//!   (`artifact_kept_walk_failed`) and the previous map stays. Each walk replaces the map whole,
-//!   and one root has one walk at a time: readers that miss meanwhile wait for its result.
+//!   does not end in `_artifact_<hex>.png` is ignored. `kept\` itself absent is an empty map;
+//!   `kept\` that is a reparse point (a junction to another drive, say) or any other listing
+//!   error fails the read (`artifact_kept_walk_failed`, model v4.3 note) and the previous map
+//!   stays. Each walk replaces the map whole, and one root has one walk at a time: a reader that
+//!   misses meanwhile waits and uses that walk's map, unless the move counter changed since that
+//!   walk began, when it walks again.
 
 use crate::codes::StoreCode;
 use crate::{ArtifactStoreError, ArtifactStoreResult};
@@ -146,12 +149,30 @@ pub(crate) fn find(root: &Path, object_file: &str) -> ArtifactStoreResult<Option
         }
         map.walks
     };
+    walk_and_find(root, &shared, id, walks)
+}
+
+/// Walks `root`'s kept folders for `id`, one walk per root at a time. `walks_seen` is the walk
+/// count this reader saw when it decided to walk: if another reader's walk completed while it
+/// waited, that walk's map answers, unless the move counter changed since that walk began.
+fn walk_and_find(
+    root: &Path,
+    shared: &RootMap,
+    id: &str,
+    walks_seen: u64,
+) -> ArtifactStoreResult<Option<PathBuf>> {
     let _walk = relock(&shared.walk);
     {
         let mut map = relock(&shared.map);
-        if map.walks != walks {
-            // Another reader walked while this one waited: its map answers.
-            return Ok(map.present(id));
+        if map.walks != walks_seen {
+            if let Some(path) = map.present(id) {
+                return Ok(Some(path));
+            }
+            let counter = read_counter(root);
+            if counter.is_some() && counter == map.counter {
+                return Ok(None);
+            }
+            // A move landed after that walk began: walk again.
         }
         map.during_walk = Some(Vec::new());
     }
@@ -223,11 +244,13 @@ fn walk(root: &Path) -> ArtifactStoreResult<HashMap<String, PathBuf>> {
     let mut paths = HashMap::new();
     let kept = root.join(KEPT_DIRECTORY);
     match fs::symlink_metadata(&kept) {
-        // Never followed.
-        Ok(metadata) if crate::usage::is_link(&metadata) => return Ok(paths),
+        // Never followed, and never taken for an empty folder.
+        Ok(metadata) if crate::usage::is_link(&metadata) => {
+            return Err(kept_walk_failed(None, Some(KEPT_DIRECTORY)));
+        }
         Ok(_) => {}
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(paths),
-        Err(error) => return Err(walk_failed(&error)),
+        Err(error) => return Err(kept_walk_failed(Some(&error), Some(KEPT_DIRECTORY))),
     }
     for date in entries(&kept, true)?
         .into_iter()
@@ -263,7 +286,12 @@ fn entries(dir: &Path, top: bool) -> ArtifactStoreResult<Vec<Entry>> {
     let listing = match fs::read_dir(dir) {
         Ok(listing) => listing,
         Err(error) if !top && vanished(&error) => return Ok(Vec::new()),
-        Err(error) => return Err(walk_failed(&error)),
+        Err(error) => {
+            return Err(kept_walk_failed(
+                Some(&error),
+                top.then_some(KEPT_DIRECTORY),
+            ));
+        }
     };
     let mut found = Vec::new();
     for entry in listing {
@@ -295,20 +323,35 @@ fn vanished(error: &std::io::Error) -> bool {
 }
 
 fn walk_failed(error: &std::io::Error) -> ArtifactStoreError {
-    let mut detail = format!(
-        "io_kind={}",
-        actingcommand_contract::outcome::IoKind::from_error_kind(error.kind()).as_str()
-    );
-    if let Some(code) = error.raw_os_error() {
-        detail.push_str(&format!(" os_error={code}"));
+    kept_walk_failed(Some(error), None)
+}
+
+/// `artifact_kept_walk_failed`: the I/O error, if any, and the entry below the state root that
+/// could not be listed when it is `kept` itself (a reparse point has no I/O error).
+fn kept_walk_failed(error: Option<&std::io::Error>, entry: Option<&str>) -> ArtifactStoreError {
+    let mut tokens = Vec::new();
+    if let Some(entry) = entry {
+        tokens.push(format!("entry={entry}"));
     }
-    ArtifactStoreError::fatal(
+    if let Some(error) = error {
+        tokens.push(format!(
+            "io_kind={}",
+            actingcommand_contract::outcome::IoKind::from_error_kind(error.kind()).as_str()
+        ));
+        if let Some(code) = error.raw_os_error() {
+            tokens.push(format!("os_error={code}"));
+        }
+    }
+    let failed = ArtifactStoreError::fatal(
         StoreCode::ArtifactKeptWalkFailed.as_str(),
         "read_projected_artifact",
-        detail,
-    )
-    .with_io_error(error)
-    .non_fatal()
+        tokens.join(" "),
+    );
+    let failed = match error {
+        Some(error) => failed.with_io_error(error),
+        None => failed,
+    };
+    failed.non_fatal()
 }
 
 #[cfg(test)]
