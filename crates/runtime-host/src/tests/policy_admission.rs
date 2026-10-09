@@ -1413,3 +1413,373 @@ fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
     );
     host.close().expect("close host");
 }
+
+// Workflow #369 S4: policy waits (model-369-queue.md v3.1 W-1).
+
+fn two_instance_pending_policy_host(root: &TempDir) -> RuntimeHost {
+    let host = RuntimeHost::start(
+        config(root),
+        Arc::new(FakeProvider::from_entries([
+            (
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                instance_id(),
+                Arc::new(FakeState::default()),
+            ),
+            (
+                POLICY_INSTANCE_ALIAS_B.to_owned(),
+                instance_id(),
+                Arc::new(FakeState::default()),
+            ),
+        ])),
+    )
+    .expect("two-instance policy host");
+    host.activate_policy_catalog(&pending_policy_sources(1))
+        .expect("two-instance catalog activation");
+    host
+}
+
+fn evaluate_pending_policy(host: &RuntimeHost, trigger: PolicyTrigger) -> PolicyCycle {
+    host.evaluate_policy_cycle_with_test_inputs(
+        &pending_policy_facts(),
+        &pending_policy_resources(),
+        EvaluationTime {
+            unix_ms: POLICY_NOW_UNIX_MS,
+            monotonic_ms: POLICY_NOW_UNIX_MS,
+        },
+        7,
+        trigger,
+    )
+    .expect("two-instance evaluation")
+}
+
+fn policy_rejections(host: &RuntimeHost) -> Vec<PersistedEvent> {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(EventType::PolicyDispatchRejected),
+        ..EventQuery::default()
+    })
+    .expect("policy rejections")
+}
+
+#[test]
+fn a_held_instance_defers_its_candidates_while_another_instance_dispatches() {
+    // W-1: a held instance's candidates are deferred `dispatch_instance_held` with no wake and
+    // nothing written; another instance dispatches in the same cycle; once the key returns, the
+    // held instance dispatches.
+    use actingcommand_policy::SchedulingDecisionState;
+
+    let root = TempDir::new().expect("tempdir");
+    let host = two_instance_pending_policy_host(&root);
+    let mut holder = TestClient::connect(&host);
+    let (_, token) = holder.acquire(POLICY_INSTANCE_ALIAS);
+
+    let cycle = evaluate_pending_policy(&host, PolicyTrigger::FactsChanged);
+    assert_eq!(
+        cycle
+            .pending_dispatch_intents
+            .iter()
+            .map(|intent| intent.instance_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![POLICY_INSTANCE_ALIAS_B],
+        "B dispatches in the cycle that defers A"
+    );
+    let evaluation = cycle.evaluation.as_ref().expect("evaluation");
+    let deferred = evaluation
+        .decisions
+        .iter()
+        .find(|decision| decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS))
+        .expect("A's decision");
+    assert_eq!(deferred.state, SchedulingDecisionState::Deferred);
+    let held = deferred
+        .reasons
+        .iter()
+        .find(|reason| reason.code == "dispatch_instance_held")
+        .expect("held deferral reason");
+    assert_eq!(held.detail, "holder_kind=client_lease count=0");
+    assert!(
+        host.query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::PolicyDispatchIntent),
+            ..EventQuery::default()
+        })
+        .expect("dispatch intents")
+        .is_empty(),
+        "nothing is written for a deferred candidate"
+    );
+
+    let release = holder.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        holder.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    let cycle = evaluate_pending_policy(&host, PolicyTrigger::Recovery);
+    assert!(
+        cycle
+            .pending_dispatch_intents
+            .iter()
+            .any(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS),
+        "A dispatches once its key returned: {:#?}",
+        cycle.pending_dispatch_intents
+    );
+    drop(holder);
+    host.close().expect("close host");
+}
+
+#[test]
+fn an_admission_that_meets_a_holder_is_rejected_held_at_info() {
+    // W-1 (admission race): the admission reads the holder under the scheduler lock; only then
+    // does it write the intent and an Info `dispatch_rejected` with `dispatch_instance_held`.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("held admission host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let mut holder = TestClient::connect(&host);
+    let (_, token) = holder.acquire(POLICY_INSTANCE_ALIAS);
+
+    let failure = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("a held instance refuses the dispatch");
+    assert_eq!(failure.code(), "dispatch_instance_held");
+    assert!(!failure.is_fatal());
+    let rejections = policy_rejections(&host);
+    let [rejected] = rejections.as_slice() else {
+        panic!("one rejection: {rejections:#?}");
+    };
+    assert_eq!(rejected.severity(), EventSeverity::Info);
+    let EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) = rejected.payload() else {
+        panic!("rejection payload");
+    };
+    assert_eq!(
+        payload.rejection().expect("rejection facts").code,
+        "dispatch_instance_held"
+    );
+    // Review M1: a wait is not a failure. Its key tokens are recorded at Info; no Error
+    // `runtime.failed` follows the rejection (§5.10: no error point).
+    let failures = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::RuntimeFailed),
+            ..EventQuery::default()
+        })
+        .expect("runtime failures");
+    assert!(
+        failures
+            .iter()
+            .all(|event| event.severity() == EventSeverity::Info),
+        "{failures:#?}"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+
+    let release = holder.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        holder.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(holder);
+    host.close().expect("close host");
+}
+
+#[test]
+fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
+    // W-1 (review L-6): an observe or probe holding the admission guard is not a hold. The
+    // admission retries `try_lock` for about 100 ms, then ends the intent it wrote with an
+    // Info `dispatch_instance_contended` carrying `next_eligible_unix_ms` about 1 s ahead; no
+    // `dispatch_instance_held` is written.
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("contended admission host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .instance_admission_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("admission guard");
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let observer = thread::spawn(move || {
+        let _guard = admission.lock().expect("hold the admission guard");
+        held_tx.send(()).expect("report the held guard");
+        release_rx.recv().expect("release signal");
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("guard held");
+
+    let failure = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("a contended guard ends the intent");
+    release_tx.send(()).expect("let the guard go");
+    observer.join().expect("guard holder");
+    assert_eq!(failure.code(), "dispatch_instance_contended");
+    assert!(!failure.is_fatal());
+    let rejections = policy_rejections(&host);
+    let [rejected] = rejections.as_slice() else {
+        panic!("one rejection: {rejections:#?}");
+    };
+    assert_eq!(rejected.severity(), EventSeverity::Info);
+    let EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) = rejected.payload() else {
+        panic!("rejection payload");
+    };
+    let rejection = payload.rejection().expect("rejection facts");
+    assert_eq!(rejection.code, "dispatch_instance_contended");
+    assert_eq!(
+        rejection.next_eligible_unix_ms,
+        Some(intent.prerequisites.evaluated_at_unix_ms + 1_000)
+    );
+    assert!(
+        host.query_persisted_events_for_test(EventQuery::default())
+            .expect("ledger")
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) => {
+                    payload.rejection().map(|rejection| rejection.code.clone())
+                }
+                _ => None,
+            })
+            .all(|code| code != "dispatch_instance_held"),
+        "contention is not a hold"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+#[test]
+fn takeover_cooldown_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_TAKEOVER_COOLDOWN_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let instance_id: InstanceId =
+        serde_json::from_slice(&fs::read(root.join("instance.json")).expect("instance bytes"))
+            .expect("instance identifier");
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&root, b"takeover-cooldown-process-salt")
+            .with_procedure_manifest(procedure_manifest()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("cooldown child host");
+    let mut client = TestClient::connect(&host);
+    let _ = client.acquire(POLICY_INSTANCE_ALIAS);
+    fs::write(root.join("lease-held.marker"), b"held").expect("held marker");
+    loop {
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[test]
+fn a_takeover_cooldown_defers_candidates_with_a_wake_at_its_end() {
+    // Workflow #369 W-1 (review L3): a candidate on an instance in takeover cooldown is
+    // deferred `dispatch_instance_cooldown`, with a wake at the cooldown's end; nothing is
+    // written for it.
+    let root = TempDir::new().expect("tempdir");
+    let shared_instance_id = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+    )
+    .expect("instance file");
+    let marker = root.path().join("lease-held.marker");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::policy_admission::takeover_cooldown_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_TAKEOVER_COOLDOWN_ROOT", root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn cooldown child");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !marker.is_file() {
+        assert!(Instant::now() < deadline, "held-lease marker timeout");
+        assert!(
+            child.try_wait().expect("poll cooldown child").is_none(),
+            "the child exited before it held the lease"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().expect("kill cooldown child");
+    child.wait().expect("wait cooldown child");
+
+    let host = RuntimeHost::start(
+        config(&root).with_scheduler(SchedulerConfig {
+            maximum_client_heartbeat_interval_ms: 20,
+            takeover_cooldown_ms: 600_000,
+            lease_ttl_ms: 5_000,
+            ..SchedulerConfig::default()
+        }),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("takeover host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluation under a takeover cooldown");
+    let evaluation = cycle.evaluation.expect("evaluation");
+    assert!(evaluation.dispatch_intents.is_empty(), "{evaluation:#?}");
+    let reason = evaluation
+        .decisions
+        .iter()
+        .flat_map(|decision| decision.reasons.iter())
+        .find(|reason| reason.code == "dispatch_instance_cooldown")
+        .unwrap_or_else(|| panic!("cooldown deferral: {evaluation:#?}"));
+    let wake = reason
+        .detail
+        .strip_prefix("next_eligible_unix_ms=")
+        .expect("one key token")
+        .parse::<u64>()
+        .expect("wake time");
+    assert!(
+        wake > POLICY_NOW_UNIX_MS && wake <= POLICY_NOW_UNIX_MS + 600_000,
+        "{wake}"
+    );
+    assert!(
+        evaluation
+            .next_wake_unix_ms
+            .is_some_and(|next_wake| next_wake <= wake)
+    );
+    assert!(
+        policy_rejections(&host).is_empty(),
+        "nothing is written for a deferred candidate"
+    );
+    host.close().expect("close host");
+}

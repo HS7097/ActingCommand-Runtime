@@ -59,6 +59,7 @@ outcome_keys! {
     next_occurrence_unix_ms: unix_ms,
     window_start_unix_ms: unix_ms,
     count: integer,
+    holder_kind: vocab(claim_kind),
     limit_count: integer,
     used: integer,
     requested: integer,

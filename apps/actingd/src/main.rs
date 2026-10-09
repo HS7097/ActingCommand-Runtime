@@ -17,7 +17,7 @@ mod suspended;
 mod c4_support;
 
 use actingcommand_contract::{
-    EventActor, EventFamily, EventQuery, EventSource, GovernanceIdentityCard,
+    EventActor, EventFamily, EventQuery, EventSource, EventType, GovernanceIdentityCard,
     MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionProfile,
     RunId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryPageRequest, RuntimeReceipt,
     RuntimeSubscriptionRequest, SchedulingOutcomeProjection, SubscriptionCursor,
@@ -289,7 +289,7 @@ fn execute_policy_cycle(
         ));
     };
     let mut yielded_intents = 0;
-    let mut failed_runs = false;
+    let mut failed_runs = FailedRunInstances::default();
     for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
         if policy_cycle_budget_exhausted(index, started.elapsed()) {
             // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
@@ -301,6 +301,9 @@ fn execute_policy_cycle(
             )
             .map_err(|_| ActingdError::process("policy_cycle_yield_report_failed"))?;
             break;
+        }
+        if failed_runs.skips(&intent.instance_id) {
+            continue;
         }
         let reason_chain = evaluation
             .reason_chains
@@ -354,7 +357,7 @@ fn execute_policy_cycle(
                 // Runtime owns the original failure and same-run settlement. A later
                 // candidate must pass its recovered failure disposition at admission.
                 Err(error) if !error.is_fatal() => {
-                    failed_runs = true;
+                    failed_runs.record(context.instance_alias());
                     continue;
                 }
                 Err(error) => return Err(ActingdError::runtime(error)),
@@ -381,8 +384,30 @@ fn execute_policy_cycle(
         cycle,
         recompute_wakes,
         yielded_intents,
-        failed_runs,
+        failed_runs: failed_runs.any(),
     })
+}
+
+/// Workflow #369 W-1 (review M-6): the instances whose scheduled run failed in this cycle. The
+/// failed run's lease end hands its instance on (to its ladder, from #369 S2+S3b), so the
+/// cycle's remaining intents for that instance are skipped and write nothing; `failed_runs`
+/// makes the driver evaluate again at once, and that evaluation defers them while the
+/// instance is held. Other instances' intents still run.
+#[derive(Default)]
+struct FailedRunInstances(BTreeSet<String>);
+
+impl FailedRunInstances {
+    fn record(&mut self, instance_alias: &str) {
+        self.0.insert(instance_alias.to_owned());
+    }
+
+    fn skips(&self, instance_alias: &str) -> bool {
+        self.0.contains(instance_alias)
+    }
+
+    fn any(&self) -> bool {
+        !self.0.is_empty()
+    }
 }
 
 /// Workflow #191 A1: whether the cycle stops before its pending intent at `index`. Every cycle
@@ -815,8 +840,20 @@ fn combine_monitor_results(
 fn policy_trigger_for_events(events: &[ProjectedEvent]) -> Option<PolicyTrigger> {
     events
         .iter()
-        .filter_map(|event| policy_trigger_for_family(event.event_type.family()))
+        .filter_map(|event| policy_trigger_for_event(event.event_type))
         .reduce(coalesce_policy_trigger)
+}
+
+/// Workflow #369 W-1: a lease end returns a key, so a held instance's deferred candidates may
+/// run: the driver wakes on `lease.released`, `lease.transferred` and `lease.expired`, and on
+/// no other lease, scheduler, capture or runtime record.
+fn policy_trigger_for_event(event_type: EventType) -> Option<PolicyTrigger> {
+    match event_type {
+        EventType::LeaseReleased | EventType::LeaseTransferred | EventType::LeaseExpired => {
+            Some(PolicyTrigger::ResourcesChanged)
+        }
+        other => policy_trigger_for_family(other.family()),
+    }
 }
 
 fn policy_trigger_for_family(family: EventFamily) -> Option<PolicyTrigger> {
@@ -2778,5 +2815,54 @@ mod tests {
             detection_planning_signals: Vec::new(),
             measurement: None,
         }
+    }
+
+    #[test]
+    fn lease_ends_wake_the_resident_driver_and_capture_and_fact_records_do_not() {
+        // Workflow #369 W-1: a lease end returns a key; nothing else of the lease, scheduler,
+        // capture or runtime-fact families wakes the driver.
+        for event_type in [
+            EventType::LeaseReleased,
+            EventType::LeaseTransferred,
+            EventType::LeaseExpired,
+        ] {
+            assert_eq!(
+                policy_trigger_for_event(event_type),
+                Some(PolicyTrigger::ResourcesChanged),
+                "{event_type:?}"
+            );
+        }
+        for event_type in [
+            EventType::LeaseRequested,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseGranted,
+            EventType::LeaseRenewed,
+            EventType::SchedulerQueued,
+            EventType::SchedulerAdmitted,
+            EventType::SchedulerDenied,
+            EventType::CaptureRequested,
+            EventType::CaptureCompleted,
+            EventType::CaptureFailed,
+            EventType::CapturePressureChanged,
+            EventType::CaptureDedupWindow,
+            EventType::CapturePolicyChanged,
+            EventType::CaptureSummaryCommitted,
+            EventType::RuntimeFactRecorded,
+        ] {
+            assert_eq!(policy_trigger_for_event(event_type), None, "{event_type:?}");
+        }
+    }
+
+    #[test]
+    fn a_failed_run_skips_its_instance_for_the_rest_of_the_cycle() {
+        // Workflow #369 W-1 (review M-6): after a failed run the cycle writes no further intent
+        // for that instance, while other instances' intents still run.
+        let mut failed = FailedRunInstances::default();
+        assert!(!failed.any());
+        assert!(!failed.skips("fixture-instance-a"));
+        failed.record("fixture-instance-a");
+        assert!(failed.any());
+        assert!(failed.skips("fixture-instance-a"));
+        assert!(!failed.skips("fixture-instance-b"));
     }
 }
