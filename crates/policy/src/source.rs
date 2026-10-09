@@ -123,6 +123,18 @@ pub(crate) fn parse_selection_document(
         .value
         .validate()
         .map_err(|error| selection_diagnostic(source, schema_version, error))?;
+    // The scheduling consumer reads scalar facts only; a record list, which only `keyed_fact`
+    // reads in a task's select step, would abort every scheduling evaluation.
+    if parsed.value.uses_record_lists() {
+        return Err(selection_diagnostic(
+            source,
+            schema_version,
+            SelectionError::new(
+                SelectionErrorCode::TypeMismatch,
+                "value_type=record_list consumer=scheduling",
+            ),
+        ));
+    }
     Ok(parsed.value)
 }
 
@@ -627,6 +639,44 @@ mod tests {
         assert_eq!(error.code, CatalogDiagnosticCode::DuplicateKey);
         assert_eq!(error.json_path, "/schema_version");
         assert_eq!(error.source.line, 3);
+    }
+
+    #[test]
+    fn a_selection_document_that_reads_a_record_list_is_refused_at_compile() {
+        let list = serde_json::json!({
+            "source": "keyed_fact", "fact_key": "session.example.list.targets",
+            "key_field": "member", "value_column": "rank",
+            "absent": {"type": "integer", "value": 0}
+        });
+        let document = serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-list",
+            "applies_to": {"candidate_layout_id": "layout-list", "outcome_keys": {
+                "selected": "list-selected", "empty": "list-empty",
+                "insufficient": "list-insufficient", "ambiguous": "list-ambiguous",
+                "unknown": "list-unknown"}},
+            "fields": [{"name": "member", "value_type": {
+                "type": "enum_string", "allowed": ["member-a", "member-b"]}}],
+            "facts": [{"fact_key": "session.example.list.targets",
+                       "value_type": {"type": "record_list", "key_column": "id",
+                                      "columns": {"rank": {"type": "integer"}}},
+                       "max_age_ms": 3_600_000, "minimum_confidence_milli": 1_000}],
+            "gates": [],
+            "scoring": [{"term_id": "term-rank", "value": list,
+                         "transform": {"kind": "identity"}, "weight_milli": 1_000,
+                         "on_unknown": {"kind": "abort_evaluation"}}],
+            "selection": {"mode": "none_allowed", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        });
+        let source = CatalogDocumentSource::new(
+            "memory://selection.json",
+            serde_json::to_vec(&document).expect("document bytes"),
+        );
+        // The document is valid for an in-task select step; the scheduler reads scalar facts
+        // only, so it refuses the document instead of aborting every evaluation.
+        let error = parse_selection_document(&source).expect_err("record list for scheduling");
+        assert_eq!(error.code, CatalogDiagnosticCode::TypeMismatch);
+        assert_eq!(error.source.document, SchedulingDocumentKind::Selection);
     }
 
     #[test]

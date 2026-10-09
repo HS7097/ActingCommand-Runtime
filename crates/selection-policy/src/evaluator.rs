@@ -20,13 +20,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::canonical::canonical_sha256;
-use crate::facts::{Candidate, ScalarValue, SelectionFactSnapshot, UnknownReason};
+use crate::facts::{Candidate, RecordRow, ScalarValue, SelectionFactSnapshot, UnknownReason};
 use crate::schema::{
-    FactDeclaration, GateUnknownHandling, LookupKey, MAX_CANDIDATES,
+    FactDeclaration, GateUnknownHandling, LookupKey, MAX_CANDIDATES, RowFilter,
     SELECTION_POLICY_SCHEMA_VERSION, SelectionError, SelectionErrorCode, SelectionMode,
     SelectionPolicy, SortDirection, TermUnknownHandling, TieBreakKey, Transform, ValueRef,
     ValueType,
 };
+
+/// The rows each `keyed_fact` reference reads, by its record list and its `where`, keyed by
+/// the row's key column.
+pub(crate) type ListIndex<'a> =
+    BTreeMap<(&'a str, Option<&'a RowFilter>), BTreeMap<&'a str, &'a RecordRow>>;
 
 /// One entry in the decision's reason chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +233,25 @@ pub fn evaluate(
         ),
     ];
 
+    // Every declared list is read before any candidate, so `empty` is reachable only after the
+    // lists were read, even with no candidate at all.
+    let lists = match read_lists(policy, facts, now_unix_ms) {
+        Ok(lists) => lists,
+        Err((reason, detail)) => {
+            reasons.push(DecisionReason::new("selection.unknown", &detail));
+            return Ok(finish(
+                policy,
+                policy_sha256,
+                input_sha256,
+                facts,
+                now_unix_ms,
+                SelectionOutcome::Unknown { reason, detail },
+                Vec::new(),
+                Vec::new(),
+                reasons,
+            ));
+        }
+    };
     let resolver = Resolver {
         fields: policy
             .fields
@@ -240,6 +264,7 @@ pub fn evaluate(
             .map(|declaration| (declaration.fact_key.as_str(), declaration))
             .collect(),
         snapshot: facts,
+        lists,
         now_unix_ms,
     };
 
@@ -398,10 +423,67 @@ fn finish(
     }
 }
 
+/// The up-front list check. Every record list the document declares is read whole, in
+/// document order; then the rows each `keyed_fact` reference selects with its `where` are
+/// indexed by key. An unreadable list, or one key held by two selected rows, is the reason of
+/// an `unknown` decision, with the list's fact key as its detail.
+pub(crate) fn read_lists<'a>(
+    policy: &'a SelectionPolicy,
+    facts: &'a SelectionFactSnapshot,
+    now_unix_ms: u64,
+) -> Result<ListIndex<'a>, (UnknownReason, String)> {
+    let mut lists = BTreeMap::new();
+    for declaration in &policy.facts {
+        if let ValueType::RecordList { key_column, .. } = &declaration.value_type {
+            let rows = facts
+                .resolve_list(declaration, now_unix_ms)
+                .map_err(|reason| (reason, format!("fact_key={}", declaration.fact_key)))?;
+            lists.insert(declaration.fact_key.as_str(), (key_column.as_str(), rows));
+        }
+    }
+    let mut index = ListIndex::new();
+    for value in policy.value_refs() {
+        let ValueRef::KeyedFact {
+            fact_key,
+            row_filter,
+            ..
+        } = value
+        else {
+            continue;
+        };
+        let reference = (fact_key.as_str(), row_filter.as_ref());
+        if index.contains_key(&reference) {
+            continue;
+        }
+        let malformed = || (UnknownReason::TypeMismatch, format!("fact_key={fact_key}"));
+        let &(key_column, rows) = lists.get(fact_key.as_str()).ok_or_else(malformed)?;
+        let mut keyed = BTreeMap::new();
+        for row in rows {
+            if let Some(filter) = row_filter
+                && !matches!(row.get(&filter.column), Some(ScalarValue::String(value)) if *value == filter.equals)
+            {
+                continue;
+            }
+            let Some(ScalarValue::String(key)) = row.get(key_column) else {
+                return Err(malformed());
+            };
+            if keyed.insert(key.as_str(), row).is_some() {
+                return Err((
+                    UnknownReason::TypeMismatch,
+                    format!("fact_key={fact_key} duplicated_key={key}"),
+                ));
+            }
+        }
+        index.insert(reference, keyed);
+    }
+    Ok(index)
+}
+
 struct Resolver<'a> {
     fields: BTreeMap<&'a str, &'a ValueType>,
     facts: BTreeMap<&'a str, &'a FactDeclaration>,
     snapshot: &'a SelectionFactSnapshot,
+    lists: ListIndex<'a>,
     now_unix_ms: u64,
 }
 
@@ -412,21 +494,7 @@ impl Resolver<'_> {
         candidate: &Candidate,
     ) -> Result<ScalarValue, UnknownReason> {
         match reference {
-            ValueRef::Field { field } => {
-                let declared = self
-                    .fields
-                    .get(field.as_str())
-                    .ok_or(UnknownReason::FieldMissing)?;
-                let value = candidate
-                    .fields
-                    .get(field.as_str())
-                    .ok_or(UnknownReason::FieldMissing)?;
-                if value.matches(declared) {
-                    Ok(value.clone())
-                } else {
-                    Err(UnknownReason::TypeMismatch)
-                }
-            }
+            ValueRef::Field { field } => self.read_field(field, candidate),
             ValueRef::Fact { fact_key } => {
                 let declared = self
                     .facts
@@ -434,6 +502,42 @@ impl Resolver<'_> {
                     .ok_or(UnknownReason::FactMissing)?;
                 self.snapshot.resolve(declared, self.now_unix_ms).cloned()
             }
+            ValueRef::KeyedFact {
+                fact_key,
+                key_field,
+                value_column,
+                row_filter,
+                absent,
+            } => {
+                let ScalarValue::String(key) = self.read_field(key_field, candidate)? else {
+                    return Err(UnknownReason::TypeMismatch);
+                };
+                let rows = self
+                    .lists
+                    .get(&(fact_key.as_str(), row_filter.as_ref()))
+                    .ok_or(UnknownReason::FactMissing)?;
+                // No row is a known value: the list was read, and this key is not on it.
+                match rows.get(key.as_str()) {
+                    Some(row) => row
+                        .get(value_column)
+                        .cloned()
+                        .ok_or(UnknownReason::TypeMismatch),
+                    None => Ok(absent.clone()),
+                }
+            }
+        }
+    }
+
+    fn read_field(&self, field: &str, candidate: &Candidate) -> Result<ScalarValue, UnknownReason> {
+        let declared = self.fields.get(field).ok_or(UnknownReason::FieldMissing)?;
+        let value = candidate
+            .fields
+            .get(field)
+            .ok_or(UnknownReason::FieldMissing)?;
+        if value.matches(declared) {
+            Ok(value.clone())
+        } else {
+            Err(UnknownReason::TypeMismatch)
         }
     }
 }
@@ -738,7 +842,7 @@ fn bool_truth(value: bool) -> Truth {
     if value { Truth::True } else { Truth::False }
 }
 
-fn transform(transform: &Transform, value: &ScalarValue) -> Result<i64, UnknownReason> {
+pub(crate) fn transform(transform: &Transform, value: &ScalarValue) -> Result<i64, UnknownReason> {
     match transform {
         Transform::Identity => match value {
             ScalarValue::Integer(value) => Ok(*value),
@@ -913,6 +1017,294 @@ mod tests {
             first.policy_sha256,
             crate::canonical_sha256(&policy()).expect("identity")
         );
+    }
+
+    /// The instance snapshot of the input identity golden: the fixture's scalar fact and one
+    /// record list that the fixture document does not declare.
+    fn snapshot_with_an_undeclared_list() -> actingcommand_contract::InstanceFactSnapshot {
+        use actingcommand_contract::{
+            FactContent, FactRecord, FactScalar, FactScope, FactValue, InstanceFactContext,
+        };
+        let record = |key: &str, value: FactValue, expires_at_unix_ms: Option<u64>| FactRecord {
+            scope: FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            key: key.to_owned(),
+            content: FactContent::Inline { value },
+            observed_at_unix_ms: 1_000_000,
+            expires_at_unix_ms,
+            ttl_policy: None,
+            confidence_milli: 900,
+            source_detector: "detector-a".to_owned(),
+            source_snapshot_id: "snapshot-a".to_owned(),
+            schema_version: "v1".to_owned(),
+            resource_bundle_hash: "0".repeat(64),
+            invalidate_on: Vec::new(),
+        };
+        actingcommand_contract::InstanceFactSnapshot {
+            snapshot_id: "snapshot-a".to_owned(),
+            ledger_position: 7,
+            context: InstanceFactContext {
+                instance_id: "instance-a".to_owned(),
+                server_id: "server-a".to_owned(),
+                game_id: "game-a".to_owned(),
+            },
+            records: vec![
+                record(FACT_KEY, FactValue::Integer(3), Some(4_600_000)),
+                record(
+                    "session.example.list.targets",
+                    FactValue::RecordList(vec![BTreeMap::from([
+                        ("id".to_owned(), FactScalar::String("member-a".to_owned())),
+                        ("rank".to_owned(), FactScalar::Integer(2)),
+                    ])]),
+                    None,
+                ),
+            ],
+        }
+    }
+
+    /// The `input_sha256` of a document that reads no record list, over an instance snapshot
+    /// that holds one: the undeclared list stays `fact_not_scalar`, so the hashed input keeps
+    /// its bytes.
+    const INPUT_IDENTITY_GOLDEN: &str =
+        "sha256:77ee97e6e9440f13da5be07eefb2e900f5f1c59944e35e4e43a4ad0efc6a73f0";
+
+    #[test]
+    fn a_document_without_keyed_fact_keeps_its_input_identity() {
+        let facts =
+            SelectionFactSnapshot::from_instance_snapshot(&snapshot_with_an_undeclared_list(), NOW);
+        let decision = evaluate(&policy(), &candidates(), &facts, NOW).expect("decision");
+        assert_eq!(decision.input_sha256, INPUT_IDENTITY_GOLDEN);
+
+        // The select step builds the snapshot with the lists its document declares: none here.
+        let policy = policy();
+        let with_lists = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+            &snapshot_with_an_undeclared_list(),
+            NOW,
+            &policy.record_list_keys(),
+        );
+        assert_eq!(with_lists, facts);
+        let decision = evaluate(&policy, &candidates(), &with_lists, NOW).expect("decision");
+        assert_eq!(decision.input_sha256, INPUT_IDENTITY_GOLDEN);
+    }
+
+    const LIST_KEY: &str = "session.example.list.targets";
+
+    fn list_row(id: &str, rank: i64) -> BTreeMap<String, actingcommand_contract::FactScalar> {
+        use actingcommand_contract::FactScalar;
+        BTreeMap::from([
+            ("id".to_owned(), FactScalar::String(id.to_owned())),
+            ("rank".to_owned(), FactScalar::Integer(rank)),
+        ])
+    }
+
+    /// The instance-scoped list `LIST_KEY`, published at 1 000 000 with full confidence and no
+    /// TTL, as a state list is.
+    fn list_record(
+        rows: Vec<BTreeMap<String, actingcommand_contract::FactScalar>>,
+    ) -> actingcommand_contract::FactRecord {
+        use actingcommand_contract::{FactContent, FactRecord, FactScope, FactValue};
+        FactRecord {
+            scope: FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            key: LIST_KEY.to_owned(),
+            content: FactContent::Inline {
+                value: FactValue::RecordList(rows),
+            },
+            observed_at_unix_ms: 1_000_000,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli: 1_000,
+            source_detector: "decision-state".to_owned(),
+            source_snapshot_id: "decision-state:list-a".to_owned(),
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: "0".repeat(64),
+            invalidate_on: Vec::new(),
+        }
+    }
+
+    fn list_facts(
+        policy: &SelectionPolicy,
+        records: &[actingcommand_contract::FactRecord],
+    ) -> SelectionFactSnapshot {
+        SelectionFactSnapshot::from_fact_records_with_lists(
+            "snapshot-list",
+            NOW,
+            records,
+            &policy.record_list_keys(),
+        )
+    }
+
+    /// One candidate per member, `layout-list#00` to `#02`.
+    fn list_candidates() -> Vec<Candidate> {
+        ["member-a", "member-b", "member-c"]
+            .iter()
+            .enumerate()
+            .map(|(index, member)| Candidate {
+                candidate_id: format!("layout-list#{index:02}"),
+                fields: BTreeMap::from([(
+                    "member".to_owned(),
+                    ScalarValue::String((*member).to_owned()),
+                )]),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_keyed_fact_reads_the_listed_row_and_absent_for_an_unlisted_member() {
+        let policy = crate::schema::keyed_policy();
+        let facts = list_facts(
+            &policy,
+            &[list_record(vec![
+                list_row("member-a", 2),
+                list_row("member-c", 3),
+            ])],
+        );
+        let decision = evaluate(&policy, &list_candidates(), &facts, NOW).expect("decision");
+        assert_eq!(decision.outcome, SelectionOutcome::Selected { count: 1 });
+        assert_eq!(decision.selected, ["layout-list#02"]);
+        assert_eq!(verdict(&decision, "layout-list#00").score_milli, Some(2));
+        // No row is the known value `absent`, so the gate decides, and the member is rejected
+        // rather than dropped as unknown.
+        let unlisted = verdict(&decision, "layout-list#01");
+        assert_eq!(unlisted.status, CandidateStatus::GateRejected);
+        assert_eq!(unlisted.gates[0].outcome, GateOutcome::Failed);
+    }
+
+    #[test]
+    fn an_unreadable_list_ends_the_evaluation_before_any_candidate() {
+        use actingcommand_contract::{FactRecord, FactScalar};
+        let policy = crate::schema::keyed_policy();
+        let listed = || list_record(vec![list_row("member-a", 2), list_row("member-c", 3)]);
+        let without_rank =
+            BTreeMap::from([("id".to_owned(), FactScalar::String("member-c".to_owned()))]);
+        let cases: Vec<(&str, Vec<FactRecord>, u64, UnknownReason)> = vec![
+            ("missing", Vec::new(), NOW, UnknownReason::FactMissing),
+            (
+                "stale",
+                vec![listed()],
+                1_000_000 + 3_600_001,
+                UnknownReason::FactStale,
+            ),
+            (
+                "expired",
+                vec![FactRecord {
+                    expires_at_unix_ms: Some(1_000_400),
+                    ..listed()
+                }],
+                NOW,
+                UnknownReason::FactExpired,
+            ),
+            (
+                "low confidence",
+                vec![FactRecord {
+                    confidence_milli: 999,
+                    ..listed()
+                }],
+                NOW,
+                UnknownReason::FactLowConfidence,
+            ),
+            (
+                "duplicated",
+                vec![list_record(vec![
+                    list_row("member-a", 2),
+                    list_row("member-a", 4),
+                ])],
+                NOW,
+                UnknownReason::TypeMismatch,
+            ),
+            (
+                "missing a column",
+                vec![list_record(vec![list_row("member-a", 2), without_rank])],
+                NOW,
+                UnknownReason::TypeMismatch,
+            ),
+        ];
+        for (label, records, now, reason) in cases {
+            let facts = list_facts(&policy, &records);
+            // Zero candidates are checked too: `empty` needs the list read first.
+            for candidates in [list_candidates(), Vec::new()] {
+                let decision = evaluate(&policy, &candidates, &facts, now).expect(label);
+                assert!(
+                    matches!(
+                        &decision.outcome,
+                        SelectionOutcome::Unknown { reason: actual, .. } if *actual == reason
+                    ),
+                    "{label}: {:?}",
+                    decision.outcome
+                );
+                assert_eq!(decision.outcome_key, "list-unknown", "{label}");
+                assert!(decision.candidates.is_empty(), "{label}");
+                assert!(decision.selected.is_empty(), "{label}");
+            }
+        }
+
+        let facts = list_facts(&policy, &[listed()]);
+        let decision = evaluate(&policy, &[], &facts, NOW).expect("decision");
+        assert_eq!(decision.outcome, SelectionOutcome::Empty);
+    }
+
+    #[test]
+    fn where_selects_the_rows_of_one_kind_before_keys_must_be_unique() {
+        use actingcommand_contract::FactScalar;
+        let mut policy = crate::schema::keyed_policy();
+        if let ValueType::RecordList { columns, .. } = &mut policy.facts[0].value_type {
+            columns.insert(
+                "kind".to_owned(),
+                ValueType::EnumString {
+                    allowed: vec!["kind-x".to_owned(), "kind-y".to_owned()],
+                },
+            );
+        }
+        let row = |id: &str, kind: &str, rank: i64| {
+            let mut row = list_row(id, rank);
+            row.insert("kind".to_owned(), FactScalar::String(kind.to_owned()));
+            row
+        };
+        let records = [list_record(vec![
+            row("member-a", "kind-x", 2),
+            row("member-a", "kind-y", 5),
+            row("member-c", "kind-x", 3),
+        ])];
+        let decision = evaluate(
+            &policy,
+            &list_candidates(),
+            &list_facts(&policy, &records),
+            NOW,
+        )
+        .expect("decision");
+        assert!(matches!(
+            decision.outcome,
+            SelectionOutcome::Unknown {
+                reason: UnknownReason::TypeMismatch,
+                ..
+            }
+        ));
+
+        let filter = Some(RowFilter {
+            column: "kind".to_owned(),
+            equals: "kind-x".to_owned(),
+        });
+        let set_filter = |value: &mut ValueRef| {
+            if let ValueRef::KeyedFact { row_filter, .. } = value {
+                *row_filter = filter.clone();
+            }
+        };
+        set_filter(&mut policy.scoring[0].value);
+        if let Predicate::IntegerAtLeast { value, .. } = &mut policy.gates[0].predicate {
+            set_filter(value);
+        }
+        policy.validate().expect("filtered policy validates");
+        let decision = evaluate(
+            &policy,
+            &list_candidates(),
+            &list_facts(&policy, &records),
+            NOW,
+        )
+        .expect("decision");
+        assert_eq!(decision.selected, ["layout-list#02"]);
+        assert_eq!(verdict(&decision, "layout-list#00").score_milli, Some(2));
     }
 
     #[test]
@@ -1368,6 +1760,7 @@ mod tests {
     fn pure_evaluator_source_has_no_runtime_side_effect_authority() {
         const SOURCES: &[(&str, &str)] = &[
             ("lib.rs", include_str!("lib.rs")),
+            ("bound.rs", include_str!("bound.rs")),
             ("canonical.rs", include_str!("canonical.rs")),
             ("evaluator.rs", include_str!("evaluator.rs")),
             ("facts.rs", include_str!("facts.rs")),
