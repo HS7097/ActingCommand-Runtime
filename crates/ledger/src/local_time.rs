@@ -38,18 +38,11 @@ pub fn machine_local_offset_ms(unix_ms: u64) -> Option<i64> {
     };
     // SAFETY: each call reads and writes only the local values it is given, which outlive it;
     // a null time zone pointer selects the machine's current time zone.
-    let flk02_started = std::time::Instant::now();
     let converted = unsafe {
         FileTimeToSystemTime(&universal_file, &mut universal) != 0
             && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &universal, &mut local) != 0
             && SystemTimeToFileTime(&local, &mut local_file) != 0
     };
-    if flk02_started.elapsed() >= std::time::Duration::from_millis(1) {
-        actingcommand_runtime_database::flk02(format_args!(
-            "local_offset us={}",
-            flk02_started.elapsed().as_micros()
-        ));
-    }
     if !converted {
         return None;
     }

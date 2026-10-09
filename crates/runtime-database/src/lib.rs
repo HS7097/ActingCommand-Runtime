@@ -271,13 +271,6 @@ impl RuntimeDatabase {
             .connection
             .lock()
             .map_err(|_| failure("state_connection_poisoned", operation))?;
-        let waited = waiting.elapsed();
-        if waited >= Duration::from_millis(5) {
-            flk02(format_args!(
-                "conn_wait op={operation} wait_us={}",
-                waited.as_micros()
-            ));
-        }
         self.connection_wait_peak_ns.fetch_max(
             u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
@@ -493,18 +486,4 @@ fn update_field(digest: &mut Sha256, field: &[u8]) {
 
 fn failure(code: &'static str, operation: &'static str) -> RuntimeDatabaseError {
     RuntimeDatabaseError::new(code, operation)
-}
-
-/// One-off (to be reverted): FLK-02 timing. One stderr line, microseconds since the first
-/// such line in this process (monotonic), and the thread name.
-#[doc(hidden)]
-pub fn flk02(event: std::fmt::Arguments<'_>) {
-    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let epoch = *EPOCH.get_or_init(Instant::now);
-    let thread = std::thread::current();
-    eprintln!(
-        "FLK02 t_us={} thread={} {event}",
-        epoch.elapsed().as_micros(),
-        thread.name().unwrap_or("unnamed")
-    );
 }

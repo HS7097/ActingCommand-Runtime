@@ -70,7 +70,6 @@ impl super::HostShared {
     pub(super) fn maintain_frame_retention(&self) -> RuntimeHostResult<bool> {
         let result = (|| {
             // Try-only, so a `clear-kept` that holds the lock makes the round skip.
-            actingcommand_runtime_database::flk02(format_args!("cleaner round_start"));
             let mut retention = match self.frame_retention.try_lock() {
                 Ok(retention) => retention,
                 Err(std::sync::TryLockError::WouldBlock) => return Ok(true),
@@ -93,7 +92,6 @@ impl super::HostShared {
             if let Some(report) = report {
                 println!("actingd frame_retention pass {report}");
             }
-            actingcommand_runtime_database::flk02(format_args!("cleaner round_end"));
             Ok(true)
         })();
         match result {
@@ -430,26 +428,17 @@ impl FrameRetention {
             {
                 return Ok(None);
             }
-            actingcommand_runtime_database::flk02(format_args!("cleaner view_call start"));
             let view = ledger
                 .frame_retention_view(now_unix_ms, self.switches)
                 .map_err(ledger_failure)?;
-            actingcommand_runtime_database::flk02(format_args!(
-                "cleaner view_call end frames={}",
-                view.frames.len()
-            ));
             self.begin_sweep(&view);
         } else {
-            actingcommand_runtime_database::flk02(format_args!("cleaner view_call start"));
             let view = ledger
                 .frame_retention_view(now_unix_ms, self.switches)
                 .map_err(ledger_failure)?;
-            actingcommand_runtime_database::flk02(format_args!("cleaner view_call end"));
             self.rederive(&view);
         }
-        let flk02_round = self.round(root, stopping, warn);
-        actingcommand_runtime_database::flk02(format_args!("cleaner sweep_round done"));
-        flk02_round
+        self.round(root, stopping, warn)
     }
 
     /// Derives each queued action again from a newer view: a frame now kept (Lab or error) is

@@ -31,11 +31,9 @@ jobs:
       - name: Build locked workspace
         run: cargo build --locked
       - name: Clippy
-        if: false
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
       - name: Test
         id: test
-        if: false
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
@@ -77,21 +75,15 @@ jobs:
           }
           exit 0
       - name: Test observation
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          # One-off (to be reverted): FLK-02 timing, eight runs with their output.
-          $heartbeatObservationExitCode = 0
-          for ($run = 1; $run -le 8; $run++) {
-            Write-Host "FLK02 run $run begins"
-            cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::runtime_input_proxy_renews_before_short_lease_expiry -- --exact --test-threads=1 --nocapture
-            Write-Host "FLK02 run $run exit code: $LASTEXITCODE"
-            if ($LASTEXITCODE -ne 0) { $heartbeatObservationExitCode = $LASTEXITCODE }
-          }
+          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::runtime_input_proxy_renews_before_short_lease_expiry -- --exact --test-threads=1
+          $heartbeatObservationExitCode = $LASTEXITCODE
           Write-Host "Heartbeat proxy observation test exit code: $heartbeatObservationExitCode"
 
           cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::long_input_extends_only_its_response_wait -- --exact --test-threads=1

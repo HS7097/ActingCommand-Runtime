@@ -588,9 +588,7 @@ impl RetentionIndex {
         }) {
             return Ok(cached.classified.at(self.through_sequence, now));
         }
-        let flk02_started = std::time::Instant::now();
         let frames = self.view_frames(events, indexes)?;
-        let flk02_framed = flk02_started.elapsed();
         let classified = classify(
             &self.frame_facts,
             &self.frames,
@@ -606,13 +604,6 @@ impl RetentionIndex {
             )
         })?;
         let view = classified.at(self.through_sequence, now);
-        actingcommand_runtime_database::flk02(format_args!(
-            "frame_view build frames={} points={} view_frames_us={} total_us={}",
-            view.frames.len(),
-            view.error_points.len(),
-            flk02_framed.as_micros(),
-            flk02_started.elapsed().as_micros()
-        ));
         *cache = Some(FrameCache {
             through_sequence: self.through_sequence,
             switches,
