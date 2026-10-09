@@ -101,10 +101,12 @@ impl HostShared {
     /// `not_performed` (a run's own release records `performed`), and
     /// `policy_settlement_release_recovered` is recorded once under the same links at Info.
     /// `reconcile_policy_dispatches` then settles the run once as interrupted, which closes the
-    /// dispatch; a later start finds the release and writes nothing more.
+    /// dispatch; a later start finds the release and writes nothing more. `registered` is the
+    /// start's instance set (a run of an instance no longer registered is left as it is).
     pub(super) fn recover_unreleased_policy_runs(
         &self,
         policy: &PolicyHost,
+        registered: &BTreeMap<InstanceId, RegisteredInstance>,
     ) -> RuntimeHostResult<()> {
         const OPERATION: &str = "recover_unreleased_policy_runs";
         let pending = policy.pending_dispatch_outcomes();
@@ -189,7 +191,8 @@ impl HostShared {
             if lease_ended {
                 continue;
             }
-            let Some(audit) = lock(&self.registered_instances, "read_instance_registry")?
+            // The start's own instances: the host's registry is filled after the reconciliation.
+            let Some(audit) = registered
                 .get(instance_id)
                 .map(|instance| audit_endpoint(instance.audit_endpoint()))
             else {
