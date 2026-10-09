@@ -1465,6 +1465,14 @@ fn ladder_hand_off_crash_child_process() {
         serde_json::from_slice(&fs::read(root.join("instance.json")).expect("instance bytes"))
             .expect("instance identifier");
     let (host_config, request) = ladder_setup(&root);
+    // The #670 test (e): the child's clock is driven by hand, so the run's lease can expire.
+    let expiry_clock = (std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+        == Ok("lease_expired_before_run"))
+    .then(|| Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)));
+    let host_config = match &expiry_clock {
+        Some(clock) => host_config.with_runtime_clock(clock.clone()),
+        None => host_config,
+    };
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     let host = RuntimeHost::start(
@@ -1488,6 +1496,23 @@ fn ladder_hand_off_crash_child_process() {
             .expect("run identity bytes"),
     )
     .expect("run identity file");
+    // The #670 test (e): the dispatch's lease expires (the sweep writes `lease.expired`), then
+    // the process ends.
+    if let Some(clock) = &expiry_clock {
+        clock.advance(3_600_000);
+        let lease = context.lease_token().lease_id();
+        wait_until("the run's lease expiry", || {
+            all_events(&host).iter().any(|event| {
+                event.event_type() == EventType::LeaseExpired
+                    && event.links().lease_id() == Some(&lease)
+            })
+        });
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        fs::write(marker, b"lease_expired_before_run").expect("crash marker");
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
     // The #670 rulings' test (c): the dispatch is admitted and its lease granted; the process
     // ends before the run's first task event.
     if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
@@ -1927,6 +1952,45 @@ fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() 
         run_count(&events, &run_id, EventType::LeaseReleased),
         0,
         "no release is written for a lease the transfer handed on"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_settlement_interrupted")
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on #670 (the expired lease), test (e): a scheduled dispatch whose lease
+/// expired (`lease.expired`, no release), then a crash and a restart. No release is written (the
+/// lease already ended); the run is settled once as interrupted; a new dispatch on the same
+/// instance proceeds.
+#[test]
+fn a_scheduled_dispatch_whose_lease_expired_is_settled_once_and_a_new_dispatch_proceeds() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "lease_expired_before_run");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    assert!(prefix.iter().any(|event| {
+        event.event_type() == EventType::LeaseExpired && event.links().lease_id() == Some(&lease_id)
+    }));
+    assert!(!prefix.iter().any(|event| {
+        event.event_type() == EventType::LeaseReleased
+            && event.links().lease_id() == Some(&lease_id)
+    }));
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert!(
+        !events.iter().any(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().lease_id() == Some(&lease_id)
+        }),
+        "no release is written for a lease that expired"
     );
     assert_eq!(
         recorded_failure_code(&events, &run_id).as_deref(),
