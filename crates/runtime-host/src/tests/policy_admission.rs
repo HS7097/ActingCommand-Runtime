@@ -1514,7 +1514,21 @@ fn a_dispatch_the_start_cannot_settle_pauses_its_instance_and_the_other_dispatch
     assert_eq!(pause.reason_code, "policy_settlement_dispatch_unsettled");
     assert!(!paused.contains_key(POLICY_INSTANCE_ALIAS_B));
 
-    let cycle = evaluate_pending_policy(&host, PolicyTrigger::Recovery);
+    // The restart's own records (the pause, the Error) are later than the fixture's time, so
+    // the evaluation after it runs at the wall clock.
+    let now = unix_ms_now().expect("wall clock");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms: now,
+                monotonic_ms: now,
+            },
+            9,
+            PolicyTrigger::Recovery,
+        )
+        .expect("the evaluation after the start");
     assert_eq!(
         cycle
             .pending_dispatch_intents
