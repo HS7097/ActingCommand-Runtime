@@ -2419,6 +2419,57 @@ impl RuntimeHost {
         })
     }
 
+    /// Workflow #369 S3a: a startup package run under a held claim's token, with no lease of
+    /// its own; returns the claim and the run's result.
+    #[cfg(test)]
+    pub(crate) fn run_package_on_held_claim_for_test(
+        &self,
+        instance_alias: &str,
+        request: ContainedTaskRequest,
+    ) -> RuntimeHostResult<(HostClaimForTest, Result<RuntimeResult, RuntimeHostError>)> {
+        let claim = self.request_host_claim_for_test(instance_alias, ClaimKind::StartupPackage)?;
+        let token = claim.granted.clone().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "test_claim_not_granted",
+                "run_package_on_held_claim_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let shared = self.shared_ref("run_package_on_held_claim_for_test")?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let pending = startup_package::PendingStartupPackage {
+            instance_id,
+            instance_alias: instance_alias.to_owned(),
+            request,
+            causation_id: shared
+                .events
+                .issuer()
+                .mint_causation_id()
+                .map_err(|_| runtime_identifier_error())?,
+            control_request_id: claim.request.request_id(),
+            run: startup_package::HostPackageRun::StartupPackage,
+            recovery_rung: false,
+            configured_return_home: None,
+        };
+        let result = shared
+            .prepare_package_run(&pending, token.holder_id())
+            .and_then(|run| {
+                shared.run_prepared_package(
+                    run,
+                    contained_task::HeldPackageLease {
+                        token,
+                        connection_id: claim.connection_id,
+                    },
+                )
+            })
+            .map(|success| success.result)
+            .map_err(|failure| *failure.error);
+        Ok((claim, result))
+    }
+
     /// Workflow #369 S1: a renewal of a Runtime-held lease (Q-5).
     #[cfg(test)]
     pub(crate) fn renew_host_claim_for_test(

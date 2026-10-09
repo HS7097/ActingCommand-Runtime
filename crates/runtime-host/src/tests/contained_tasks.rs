@@ -540,3 +540,117 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     drop(replay_client);
     restarted.close().expect("close restarted host");
 }
+
+#[test]
+fn a_package_run_on_a_held_token_takes_no_lease_and_releases_once_under_its_run() {
+    // Workflow #369 S3a (C9, C12): a host package run on a token its caller holds writes no
+    // `lease.requested` or `lease.granted` of its own and exactly one run-linked, performed
+    // `lease.released` (retention's run-scope close); its task evidence is complete.
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("held-token-task.zip");
+    let bytes = neutral_contained_task_package(true);
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let request =
+        ContainedTaskRequest::new(package.display().to_string(), expected).expect("task request");
+
+    let (claim, result) = host
+        .run_package_on_held_claim_for_test("neutral.instance", request)
+        .expect("held-token package run");
+    let token = claim.granted.clone().expect("held claim token");
+    let Ok(RuntimeResult::ContainedTaskCompleted {
+        run_id,
+        outcome: TaskOutcome::Success,
+        ..
+    }) = result
+    else {
+        panic!("expected a successful run: {result:?}");
+    };
+    let mut client = TestClient::connect(&host);
+    let run_events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        },
+    );
+    let count = |wanted: EventType| {
+        run_events
+            .iter()
+            .filter(|event| event.event_type == wanted)
+            .count()
+    };
+    assert_eq!(count(EventType::LeaseRequested), 0);
+    assert_eq!(count(EventType::LeaseGranted), 0);
+    assert_eq!(count(EventType::TaskCompleted), 1);
+    // The run's evidence chain (what `actingledger task-evidence` relates) is under its run.
+    for required in [
+        EventType::TaskStarted,
+        EventType::CaptureCompleted,
+        EventType::TaskEvidenceIndexed,
+        EventType::TaskEffectIntent,
+        EventType::InputIntent,
+        EventType::InputCommitted,
+        EventType::TaskEffectCompleted,
+        EventType::TaskTerminalIntent,
+    ] {
+        assert!(count(required) > 0, "missing {required:?}");
+    }
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let releases = run_events
+        .iter()
+        .filter(|event| event.event_type == EventType::LeaseReleased)
+        .collect::<Vec<_>>();
+    let [release] = releases.as_slice() else {
+        panic!("exactly one run-linked release: {releases:#?}");
+    };
+    assert_eq!(release.links.lease_id(), Some(&token.lease_id()));
+    let ProjectionPayload::Full(payload) = &release.payload else {
+        panic!("forensic release payload");
+    };
+    assert_eq!(
+        payload.effect_disposition(),
+        Some(EffectDisposition::Performed)
+    );
+    // The claim's own grant is under the claim's request links, not the run's.
+    let claim_grants = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::LeaseGranted),
+            lease_id: Some(token.lease_id()),
+            ..EventQuery::default()
+        },
+    );
+    let [grant] = claim_grants.as_slice() else {
+        panic!("one claim grant: {claim_grants:#?}");
+    };
+    assert_eq!(grant.links.run_id(), None);
+    assert_eq!(
+        grant.links.correlation_id(),
+        Some(&claim.request.correlation_id())
+    );
+    // The run's release handed the instance back: a new lease is granted at once.
+    let (_, next) = client.acquire("neutral.instance");
+    let release = client.request(RuntimeOperation::ReleaseLease { token: next });
+    assert_eq!(
+        client.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
+}
