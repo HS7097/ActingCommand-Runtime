@@ -661,12 +661,6 @@ jobs:
             }
             Write-Host "$(Split-Path -Leaf $directory) BUILD-MANIFEST.json interfaces: $written"
           }
-          # one-off (to be reverted): list the staged Tools artifact and its manifest's file paths.
-          Get-ChildItem -LiteralPath $toolsDir -Recurse -File -Force | Sort-Object FullName | ForEach-Object {
-            Write-Host "one-off tools listing: $([IO.Path]::GetRelativePath($toolsDir, $_.FullName).Replace('\', '/')) $($_.Length) bytes"
-          }
-          $oneOffManifest = Get-Content -LiteralPath (Join-Path $toolsDir 'BUILD-MANIFEST.json') -Raw | ConvertFrom-Json -Depth 20
-          Write-Host "one-off tools manifest: layout=$($oneOffManifest.tools_payload_layout) files=$(@($oneOffManifest.files).Count) [$((@($oneOffManifest.files) | ForEach-Object { $_.path }) -join ', ')]"
 
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "runtime_artifact_name=$runtimeArtifactName"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "runtime_artifact_dir=$runtimeDir"
