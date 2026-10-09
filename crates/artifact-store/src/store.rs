@@ -485,7 +485,7 @@ impl ArtifactStore {
         // path in the target, which is verified there and put into the target's kept map.
         let relative = source.resolved_relative_path().to_path_buf();
         let kept = relative != Path::new(object_key);
-        let path = safe_object_path(&self.root, &relative)?;
+        let path = safe_object_path(&self.root, relative.as_path())?;
         let finish_kept = |verified: VerifiedArtifactReference| -> ArtifactStoreResult<_> {
             verify_file(&path, verified.reference())?;
             if let Some(object_file) = Path::new(object_key)

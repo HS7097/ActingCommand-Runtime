@@ -400,8 +400,8 @@ pub(crate) fn move_frame_file_with(
     if relative.components().count() != 4 {
         return Err(failure("artifact_path_invalid", "a kept path has four parts").non_fatal());
     }
-    let destination =
-        crate::store::safe_object_path(&root, &relative).map_err(ArtifactStoreError::non_fatal)?;
+    let destination = crate::store::safe_object_path(&root, relative.as_path())
+        .map_err(ArtifactStoreError::non_fatal)?;
     let folder = destination
         .parent()
         .ok_or_else(|| failure("artifact_path_invalid", "kept folder missing").non_fatal())?
@@ -425,7 +425,8 @@ pub(crate) fn move_frame_file_with(
         && fs::symlink_metadata(&hold.path).is_ok()
     {
         // The folder was deleted between its creation and the rename: once more.
-        renamed = fs::create_dir_all(&folder).and_then(|()| fs::rename(&hold.path, &destination));
+        renamed = fs::create_dir_all(folder.as_path())
+            .and_then(|()| fs::rename(&hold.path, destination.as_path()));
     }
     let outcome = match renamed {
         Ok(()) => Ok(FrameFileOutcome::Moved),

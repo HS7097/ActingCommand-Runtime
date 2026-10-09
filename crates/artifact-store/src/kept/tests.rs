@@ -21,7 +21,7 @@ fn frame(root: &Path, bytes: &[u8]) -> ProjectedArtifactReference {
     let reference = unpublished(bytes);
     let path = root.join(reference.object_key().expect("object key"));
     fs::create_dir_all(path.parent().expect("shard")).expect("shard folder");
-    fs::write(&path, bytes).expect("frame file");
+    fs::write(path, bytes).expect("frame file");
     reference
 }
 
@@ -183,7 +183,7 @@ fn a_leaf_deleted_before_the_rename_is_created_again() {
     })
     .expect("move");
     assert_eq!(outcome, FrameFileOutcome::Moved);
-    assert!(leaf.join(&name).is_file());
+    assert!(leaf.join(name).is_file());
 }
 
 #[test]

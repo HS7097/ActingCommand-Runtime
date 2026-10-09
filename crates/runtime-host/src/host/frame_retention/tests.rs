@@ -76,9 +76,9 @@ impl Root {
         };
         reference.validate().expect("valid reference");
         if written {
-            let path = self.path.join(&object_key);
+            let path = self.path.join(object_key.as_str());
             std::fs::create_dir_all(path.parent().expect("shard")).expect("shard folder");
-            std::fs::write(path, &bytes).expect("frame file");
+            std::fs::write(path, bytes.as_slice()).expect("frame file");
         }
         let settled = class != FrameRetentionClass::Running;
         self.frames.push(FrameRetentionFrame {
