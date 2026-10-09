@@ -1561,14 +1561,15 @@ fn ladder_hand_off_crash_child_process() {
         host.exit_at_scheduled_policy_checkpoint_for_test(&context, PathBuf::from(marker))
             .expect("arm the checkpoint");
     }
-    // The final review's M-1 test: at the run's first checkpoint (its package admission) the
-    // clock passes the run's lease expiry and the run waits until the sweep has recorded
-    // `lease.expired`; the run then fails, and its own cleanup finds the lease gone.
+    // The final review's M-1 test: the run fails (its `task.failed` is written); at its lease
+    // end, before the admission guard, the clock passes the lease's expiry and the run waits
+    // until the sweep has recorded `lease.expired`; the run's own cleanup then finds the lease
+    // gone and releases it `not_performed` under the run's task request.
     let lapsed = Arc::new(AtomicBool::new(false));
     if point == "lease_lapsed_mid_run" {
         let clock = Arc::clone(expiry_clock.as_ref().expect("the manual clock"));
         let lapsed = Arc::clone(&lapsed);
-        host.run_at_leased_contained_task_checkpoint_for_test(
+        host.run_at_failed_run_lease_end_for_test(
             registered,
             context.lease_token().lease_id(),
             move |_| {
@@ -2195,12 +2196,12 @@ fn an_expiry_handed_on_to_a_waiting_claim_is_one_lease_end_and_settles_the_run_o
     host.close().expect("close the restarted host");
 }
 
-/// #670 final review M-1: a scheduled run whose lease lapsed (the sweep's `lease.expired`) fails,
-/// its own cleanup releases the lease with effect `not_performed` under the run's task request,
-/// and the daemon ends after that release and before `policy.execution_recorded`. The restart
-/// writes no recovered release and settles the run once from its own facts: from its terminal
-/// when it has one, otherwise as interrupted from its release; a new dispatch on the same
-/// instance proceeds.
+/// #670 final review M-1: a scheduled run fails (`task.failed`), its lease lapses before its
+/// lease end (the sweep's `lease.expired`), its own cleanup releases the lease with effect
+/// `not_performed` under the run's task request, and the daemon ends after that release and
+/// before `policy.execution_recorded`. The restart writes no recovered release and settles the
+/// run once from its own facts (here its terminal); a new dispatch on the same instance
+/// proceeds.
 #[test]
 fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
     let (root, registered) = crash_root();
@@ -2260,6 +2261,17 @@ fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
         grant.links().request_id(),
         "the run's own release is under its task request:\n{shape}"
     );
+    let expiry = prefix
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::LeaseExpired
+                && event.links().lease_id() == Some(&lease_id)
+        })
+        .expect("the expiry");
+    assert!(
+        expiry.sequence() < own.sequence(),
+        "the lease lapsed before the run's release:\n{shape}"
+    );
     let terminal_code = prefix.iter().find_map(|event| match event.payload() {
         EventPayload::Task(TaskPayload::Semantic(payload))
             if event.links().run_id() == Some(&run_id)
@@ -2275,6 +2287,7 @@ fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
         }
         _ => None,
     });
+    assert!(terminal_code.is_some(), "the run's terminal:\n{shape}");
     let host = restart_ladder_host(root.path(), registered);
     let events = all_events(&host);
     assert_eq!(
@@ -2289,8 +2302,8 @@ fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
     }));
     assert_eq!(
         recorded_failure_code(&events, &run_id),
-        Some(terminal_code.unwrap_or_else(|| "policy_settlement_interrupted".to_owned())),
-        "{shape}"
+        terminal_code,
+        "settled from the run's terminal:\n{shape}"
     );
     assert_eq!(
         run_count(&events, &run_id, EventType::PolicyDispatchCompleted),

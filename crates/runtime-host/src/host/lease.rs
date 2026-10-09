@@ -1924,6 +1924,15 @@ impl HostShared {
         let Some(resolved) = self.cleanup_instance(token)? else {
             return Ok(());
         };
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            super::contained_task::ContainedTaskCheckpointPoint::FailedRunLeaseEnd,
+            super::contained_task::ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )?;
         let instance_guard = self
             .instance_guard(token.instance_id())
             .map_err(|failure| *failure.error)?;

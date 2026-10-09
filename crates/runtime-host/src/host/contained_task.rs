@@ -74,6 +74,18 @@ pub(crate) struct ContainedTaskCheckpointIdentity {
 
 #[cfg(test)]
 impl ContainedTaskCheckpointIdentity {
+    pub(super) const fn new(
+        request_id: RequestId,
+        instance_id: InstanceId,
+        lease_id: LeaseId,
+    ) -> Self {
+        Self {
+            request_id,
+            instance_id,
+            lease_id,
+        }
+    }
+
     pub(crate) const fn request_id(&self) -> RequestId {
         self.request_id
     }
@@ -87,8 +99,20 @@ impl ContainedTaskCheckpointIdentity {
     }
 }
 
+/// Where a contained-task checkpoint hook runs.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ContainedTaskCheckpointPoint {
+    /// Before the run's `PackageAdmitted` fact.
+    PackageAdmitted,
+    /// Workflow #369 E3 (#670 final review M-1): a failed scheduled run's lease end, after its
+    /// terminal and before the admission guard is taken.
+    FailedRunLeaseEnd,
+}
+
 #[cfg(test)]
 pub(super) struct ContainedTaskCheckpointTestHook {
+    pub(super) point: ContainedTaskCheckpointPoint,
     /// `None`: the run on the hook's lease, whatever its request.
     pub(super) request_id: Option<RequestId>,
     pub(super) instance_id: InstanceId,
@@ -3358,11 +3382,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } => {
                 #[cfg(test)]
                 self.host
-                    .consume_contained_task_checkpoint_for_test(ContainedTaskCheckpointIdentity {
-                        request_id: self.control.request_id,
-                        instance_id: self.control.instance_id,
-                        lease_id: self.token.lease_id(),
-                    })
+                    .consume_contained_task_checkpoint_for_test(
+                        ContainedTaskCheckpointPoint::PackageAdmitted,
+                        ContainedTaskCheckpointIdentity {
+                            request_id: self.control.request_id,
+                            instance_id: self.control.instance_id,
+                            lease_id: self.token.lease_id(),
+                        },
+                    )
                     .map_err(RequestFailure::poison_without_terminal)?;
                 self.append_task(
                     EventSeverity::Info,
@@ -4455,8 +4482,9 @@ pub(crate) fn require_contained_task_sampling_run_seed(
 
 impl HostShared {
     #[cfg(test)]
-    fn consume_contained_task_checkpoint_for_test(
+    pub(super) fn consume_contained_task_checkpoint_for_test(
         &self,
+        point: ContainedTaskCheckpointPoint,
         identity: ContainedTaskCheckpointIdentity,
     ) -> RuntimeHostResult<()> {
         let hook = {
@@ -4466,9 +4494,10 @@ impl HostShared {
             )?;
             let should_consume = match slot.as_mut() {
                 Some(hook)
-                    if hook
-                        .request_id
-                        .is_none_or(|request_id| request_id == identity.request_id)
+                    if hook.point == point
+                        && hook
+                            .request_id
+                            .is_none_or(|request_id| request_id == identity.request_id)
                         && hook.instance_id == identity.instance_id
                         && hook.execution_thread == thread::current().id() =>
                 {
