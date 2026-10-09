@@ -6,12 +6,18 @@ name: CI
 #
 # One-line forms (`gate_ci_jobs_cover_every_member` in
 # tools/actinglab-architecture/tests/gate_map.rs reads them without a YAML parser):
-# - `CI_PACKAGES: -p <package> ...`: the job's test selection; every workspace member is in
-#   exactly one module job.
-# - `CI_SKIP: <libtest path> ...`: the registered flaky tests of ci/flaky-tests.toml (board
-#   issue #71) that the job's packages hold; `''` when it holds none.
-# - `needs: [...]` of `gate`: every job except `gate` and the non-gating `flaky`.
-# - `FLAKY_TESTS: <package>::<target>::<libtest path>[@<features>] ...` of `flaky`.
+# - job env `CI_PACKAGES: -p <package> ...`: the job's test selection; every workspace member is
+#   in exactly one module job.
+# - job env `CI_SKIP: <libtest path> ...`: the registered flaky tests of ci/flaky-tests.toml
+#   (board issue #71) that the job's packages hold, `''` when none. libtest's `--skip` matches
+#   substrings, so the guard requires each path to match exactly one test of the job.
+# - optional job env `CI_FEATURES: --features <features>`: the job's feature selection.
+# - optional job env `CI_EXTRA_FEATURES: <features>` with `CI_EXTRA_FILTER: <filter> ...`: a
+#   second `--lib` run under those features, limited to the filters.
+# - `needs: [...]` and `if: ${{ always() ... }}` of `gate`: every job except `gate` and the
+#   non-gating `flaky`; `gate` checks its own needs list again when it runs.
+# - job env `FLAKY_TESTS: <package>::<target>::<libtest path>[@<features>] ...` of `flaky`: each
+#   mirror entry once per configuration its module job runs it in.
 #
 # A push to main runs only the five jobs that save a dependency cache (lint, light, exec-core,
 # exec-tooling, apps); pull requests and pushes to stable run every job.
@@ -311,6 +317,11 @@ jobs:
     env:
       CI_PACKAGES: -p actingcommand-runtime-client
       CI_SKIP: tests::typed_client_discovers_runtime_and_routes_queries_and_input tests::runtime_input_proxy_renews_before_short_lease_expiry
+      # Call 2: the recorder tests that exist only under the feature and the tests with
+      # feature-only trace assertions. A test that gains such an assertion joins this filter in
+      # the same PR.
+      CI_EXTRA_FEATURES: test-observation
+      CI_EXTRA_FILTER: 'test_observation:: runtime_input_proxy_renews_before_short_lease_expiry long_input_extends_only_its_response_wait'
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -327,9 +338,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "test build (default features) failed with exit code $LASTEXITCODE"
           }
-          cargo test --locked --no-run @selection --features test-observation --lib
+          cargo test --locked --no-run @selection --features $env:CI_EXTRA_FEATURES --lib
           if ($LASTEXITCODE -ne 0) {
-            throw "test build (test-observation) failed with exit code $LASTEXITCODE"
+            throw "test build ($env:CI_EXTRA_FEATURES) failed with exit code $LASTEXITCODE"
           }
       - name: Test
         id: test
@@ -348,10 +359,9 @@ jobs:
           $defaultExitCode = $LASTEXITCODE
           Write-Host "runtime-client (default features) exit code: $defaultExitCode"
 
-          # Call 2: the recorder tests that exist only under the feature and the tests with
-          # feature-only trace assertions. A test that gains such an assertion joins this filter
-          # in the same PR.
-          cargo test --locked --no-fail-fast @selection --features test-observation --lib -- test_observation:: runtime_input_proxy_renews_before_short_lease_expiry long_input_extends_only_its_response_wait --test-threads=1 @skip 2>&1 |
+          # Call 2: CI_EXTRA_FEATURES, limited to CI_EXTRA_FILTER.
+          $filter = "$env:CI_EXTRA_FILTER".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-fail-fast @selection --features $env:CI_EXTRA_FEATURES --lib -- @filter --test-threads=1 @skip 2>&1 |
             ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
             Tee-Object -FilePath (Join-Path $results 'runtime-client-test-observation.log')
           $observationExitCode = $LASTEXITCODE
@@ -403,7 +413,9 @@ jobs:
       # The dev test profile (test plan §4 #2 retired opt-level=3). Call 1 runs the binaries' unit
       # tests in parallel; call 2 runs every integration test (process, c4_process,
       # watchdog_process, and any added later) single-threaded, each output line timestamped so
-      # the gap between two lines is one test's time against its deadlines.
+      # the gap between two lines is one test's time against its deadlines. No apps package has
+      # a lib target (cargo refuses `--lib` then); guard 1 fails once one gains one, and `--lib`
+      # with `--doc` join here in that PR.
       - name: Test
         id: test
         shell: pwsh
@@ -449,7 +461,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      FLAKY_TESTS: actingcommand-runtime-client::lib::tests::typed_client_discovers_runtime_and_routes_queries_and_input actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry@test-observation actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal
+      FLAKY_TESTS: actingcommand-runtime-client::lib::tests::typed_client_discovers_runtime_and_routes_queries_and_input actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry@test-observation actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -462,8 +474,13 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          $entries = "$env:FLAKY_TESTS".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          if ($entries.Count -eq 0) {
+            Write-Host "ci/flaky-tests.toml registers no test: nothing to run"
+            exit 0
+          }
           $failed = @()
-          foreach ($entry in "$env:FLAKY_TESTS".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
+          foreach ($entry in $entries) {
             $selector, $features = $entry -split '@', 2
             $package, $target, $path = $selector -split '::', 3
             if (-not $path) {
@@ -471,9 +488,14 @@ jobs:
             }
             # @(...) keeps a one-element result an array: splatting a bare string passes its
             # characters one by one.
-            $targetArguments = @(if ($target -eq 'lib') { '--lib' } else { '--test'; $target })
+            $targetArguments = @(
+              if ($target -eq 'lib') { '--lib' }
+              elseif ($target.StartsWith('bin:')) { '--bin'; $target.Substring(4) }
+              else { '--test'; $target }
+            )
             $featureArguments = @(if ($features) { '--features'; $features })
-            $log = Join-Path $results ($selector.Replace('::', '.') + '.log')
+            $configuration = if ($features) { '@' + $features.Replace('/', '+') } else { '' }
+            $log = Join-Path $results ($selector.Replace('::', '.') + $configuration + '.log')
             Write-Host "=== $entry"
             cargo test --locked -p $package @targetArguments @featureArguments -- --exact $path 2>&1 |
               ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
@@ -495,7 +517,7 @@ jobs:
         with:
           name: test-results-${{ github.job }}
           path: ${{ runner.temp }}/test-results/
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # The summary check. Its check name stays `rust`, the required check of `runtime-main-quality`.
   gate:
@@ -505,6 +527,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+      # Guard 1 runs inside `light`; if `light` left this needs list, its red would not reach
+      # `rust`. So `rust` re-derives the gating jobs from this file itself.
+      - name: needs lists every gating job
+        shell: python3 {0}
+        run: |
+          import pathlib
+          import sys
+
+          jobs, needs, in_jobs, current = [], None, False, None
+          for line in pathlib.Path(".github/workflows/ci.yml").read_text(encoding="utf-8").splitlines():
+              content = line.lstrip()
+              if not content or content.startswith("#"):
+                  continue
+              indent = len(line) - len(content)
+              if indent == 0:
+                  in_jobs = line.rstrip() == "jobs:"
+                  continue
+              if in_jobs and indent == 2:
+                  current = content.rstrip().removesuffix(":")
+                  jobs.append(current)
+              elif in_jobs and indent == 4 and current == "gate" and content.startswith("needs:"):
+                  listed = content.removeprefix("needs:").strip()
+                  if not (listed.startswith("[") and listed.endswith("]")):
+                      sys.exit(f"gate needs is not a one-line list: {listed}")
+                  needs = [job.strip() for job in listed[1:-1].split(",") if job.strip()]
+          gating = sorted(job for job in jobs if job not in ("gate", "flaky"))
+          if needs is None or sorted(needs) != gating:
+              sys.exit(f"gate needs {needs}, but the gating jobs of ci.yml are {gating}")
+          print("gate needs every gating job: " + ", ".join(gating))
       - name: Every job is green
         env:
           NEEDS: ${{ toJSON(needs) }}

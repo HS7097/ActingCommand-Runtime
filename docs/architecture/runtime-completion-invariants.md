@@ -118,8 +118,8 @@ None of these tests is behind a Cargo feature.
 
 The whole-workspace run is the module test jobs of `.github/workflows/ci.yml`, summarized by the
 `rust` check: every workspace member runs in exactly one job, `actingcommand-runtime-client` runs
-single-threaded (`-- --test-threads=1`), and its `test-observation` run covers the recorder tests,
-`tests::runtime_input_proxy_renews_before_short_lease_expiry` and
+single-threaded (`-- --test-threads=1`), and its `test-observation` run selects the recorder
+tests, `tests::runtime_input_proxy_renews_before_short_lease_expiry` and
 `tests::long_input_extends_only_its_response_wait`. The registered flaky tests of
-`ci/flaky-tests.toml` are skipped there and run in the non-gating `flaky` job. The workflow file
-lists the remaining steps.
+`ci/flaky-tests.toml` are skipped in those jobs and run, once in each of those configurations, in
+the non-gating `flaky` job. The workflow file lists the remaining steps.
