@@ -1478,9 +1478,18 @@ fn ladder_hand_off_crash_child_process() {
     let expiry_clock = (lapse_point.is_some()
         || matches!(
             point.as_str(),
-            "lease_expired_before_run" | "lease_expired_with_claim_queued"
+            "lease_expired_before_run" | "lease_expired_with_claim_queued" | "run_over_budget"
         ))
     .then(|| Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)));
+    // Test (k): the run's response deadline, and with it its lease, outlasts its task's 300 s
+    // runtime budget.
+    let request = if point == "run_over_budget" {
+        request
+            .with_response_deadline_ms(600_000)
+            .expect("a ten-minute response deadline")
+    } else {
+        request
+    };
     let host_config = match &expiry_clock {
         Some(clock) => host_config.with_runtime_clock(clock.clone()),
         None => host_config,
@@ -1610,6 +1619,19 @@ fn ladder_hand_off_crash_child_process() {
             },
         )
         .expect("arm the lapse");
+    }
+    // Test (k): before the run's terminal is appended the clock passes 400 s, over the task's
+    // 300 s runtime budget and inside the run's lease; the run then ends at its lease end
+    // (`run_over_budget`).
+    if point == "run_over_budget" {
+        let clock = Arc::clone(expiry_clock.as_ref().expect("the manual clock"));
+        host.run_at_leased_checkpoint_for_test(
+            LapsePoint::BeforeTerminalAppend,
+            registered,
+            context.lease_token().lease_id(),
+            move |_| clock.advance(400_000),
+        )
+        .expect("arm the runtime");
     }
     if std::env::var_os("ACTINGCOMMAND_LADDER_CRASH_SUCCEED").is_some() {
         state
@@ -2497,6 +2519,72 @@ fn a_terminal_written_after_the_lease_expired_is_settled_from_the_terminal() {
     wait_out_retry_backoff(&events, &run_id);
     assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
     host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on #670 (runtime budget rewrite), test (k): a scheduled run runs 400 s,
+/// over its task's 300 s runtime budget, fails (`task.failed`) and is cut before its release.
+/// The restart recovers its release and settles it from its terminal with the policy's own
+/// rewrite, `policy_runtime_budget_exceeded`; the next start settles nothing again, and the next
+/// evaluation proceeds without a fatal error (the rewrite is Severe, so the policy holds the
+/// pair, `policy_task_paused`, as for any Severe failure).
+#[test]
+fn a_run_over_its_runtime_budget_is_settled_with_the_policy_rewrite() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "run_over_budget");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let shape = run_shape(&prefix, &run_id, &lease_id);
+    let (terminal, _) = run_terminal(&prefix, &run_id);
+    assert_eq!(terminal.event_type(), EventType::TaskFailed, "{shape}");
+    assert_eq!(
+        run_count(&prefix, &run_id, EventType::LeaseReleased),
+        0,
+        "{shape}"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_runtime_budget_exceeded"),
+        "{shape}"
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close after the settlement");
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyExecutionRecorded),
+        1,
+        "the next start settles nothing again"
+    );
+    let at = evaluation_now();
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: at,
+                monotonic_ms: at,
+            },
+            12,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("the next evaluation");
+    let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+    assert!(
+        evaluation.decisions.iter().any(|decision| decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "policy_task_paused")),
+        "{evaluation:#?}"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the next start");
 }
 
 /// #670 final review, test (g): a run with no terminal and its run-linked release. The run's

@@ -37,7 +37,7 @@ impl HostShared {
                     .filter(|id| missing_outcomes.contains(*id))
                     .cloned()
                     .collect(),
-                &BTreeMap::new(),
+                None,
             )?;
             let pending_completions = policy
                 .pending_dispatch_completions()
@@ -1559,13 +1559,23 @@ impl HostShared {
     }
 }
 
+/// Workflow #369 E3: what the start's settlement reads besides the ledger.
+pub(super) struct StartSettlement {
+    /// The runs whose lease ended without a run-linked release (a transfer, an expiry, both, or
+    /// a release without run links), with the time the lease ended.
+    pub(super) ended_without_release: BTreeMap<String, u64>,
+    /// Test only: the run whose settlement the start refuses as the ledger would.
+    #[cfg(test)]
+    pub(super) refuse_run_for_test: Option<RunId>,
+}
+
 pub(super) fn reconcile_policy_dispatches(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
-    ended_without_release: &BTreeMap<String, u64>,
+    start: &mut StartSettlement,
 ) -> RuntimeHostResult<()> {
-    reconcile_scheduled_policy_outcomes(policy, ledger, ended_without_release)?;
+    reconcile_scheduled_policy_outcomes(policy, ledger, start)?;
     for decision_id in policy.pending_dispatch_completions() {
         let execution = policy.execution_data(&decision_id)?;
         let completion = ledger
@@ -1637,20 +1647,18 @@ pub(super) fn reconcile_policy_dispatches(
 fn reconcile_scheduled_policy_outcomes(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
-    ended_without_release: &BTreeMap<String, u64>,
+    start: &mut StartSettlement,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
-    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, ended_without_release)
+    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, Some(start))
 }
 
-/// `ended_without_release`: the runs whose lease ended without a run-linked release (a
-/// transfer, an expiry, both, or a release without run links) that the start closes, with the
-/// time the lease ended (empty online).
+/// `start`: the start's settlement context (`None` online).
 fn reconcile_scheduled_policy_outcomes_for(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     pending: Vec<String>,
-    ended_without_release: &BTreeMap<String, u64>,
+    start: Option<&mut StartSettlement>,
 ) -> RuntimeHostResult<()> {
     if pending.is_empty() {
         return Ok(());
@@ -1797,9 +1805,11 @@ fn reconcile_scheduled_policy_outcomes_for(
                 ));
             }
         };
-        let Some(lease_ended_at) =
-            released_at.or_else(|| ended_without_release.get(&decision_id).copied())
-        else {
+        let Some(lease_ended_at) = released_at.or_else(|| {
+            start
+                .as_ref()
+                .and_then(|start| start.ended_without_release.get(&decision_id).copied())
+        }) else {
             continue;
         };
         let (observed_at_unix_ms, input, runtime_ms) = match terminals.as_slice() {
@@ -1883,6 +1893,17 @@ fn reconcile_scheduled_policy_outcomes_for(
             return Err(policy_admission_fatal(
                 "policy_execution_recovery_outcome_conflict",
                 "reconcile_policy_outcomes",
+            ));
+        }
+        #[cfg(test)]
+        if start
+            .as_ref()
+            .is_some_and(|start| start.refuse_run_for_test.as_ref() == Some(run_id))
+        {
+            return Err(RuntimeHostError::fatal(
+                "scheduled_execution_recovery_refused_for_test",
+                "reconcile_policy_outcomes",
+                RuntimeErrorCode::LedgerFailure,
             ));
         }
         let completion = ledger

@@ -492,6 +492,10 @@ pub struct RuntimeHostConfig {
     return_home_packages: BTreeMap<(String, String), String>,
     #[cfg(any(test, feature = "test-hooks"))]
     preparation_test_hook: Option<PreparationTestHook>,
+    /// Workflow #369 E3 (#670 safety net), test only: the run whose settlement the start
+    /// refuses as the ledger would.
+    #[cfg(test)]
+    settlement_refusal_for_test: Option<actingcommand_contract::RunId>,
 }
 
 impl RuntimeHostConfig {
@@ -527,7 +531,20 @@ impl RuntimeHostConfig {
             return_home_packages: BTreeMap::new(),
             #[cfg(any(test, feature = "test-hooks"))]
             preparation_test_hook: None,
+            #[cfg(test)]
+            settlement_refusal_for_test: None,
         }
+    }
+
+    /// Workflow #369 E3 (#670 safety net), test only: the start refuses `run_id`'s settlement
+    /// as the ledger would.
+    #[cfg(test)]
+    pub(crate) fn with_policy_settlement_refusal_for_test(
+        mut self,
+        run_id: actingcommand_contract::RunId,
+    ) -> Self {
+        self.settlement_refusal_for_test = Some(run_id);
+        self
     }
 
     /// Workflow #381 A (HOST-I3): a hook a held start calls at each `PreparationCheckpoint`.
@@ -1598,16 +1615,20 @@ impl RuntimeHost {
                 timed(&mut startup_recovery.policy_dispatches_ms, || {
                     // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
                     // before the reconciliation settles it.
-                    let ended_without_release = shared.recover_unreleased_policy_runs(
-                        &policy,
-                        &registered_instances,
-                        &config.scheduled_procedures,
-                    )?;
+                    let mut settlement = policy_outcome::StartSettlement {
+                        ended_without_release: shared.recover_unreleased_policy_runs(
+                            &policy,
+                            &registered_instances,
+                            &config.scheduled_procedures,
+                        )?,
+                        #[cfg(test)]
+                        refuse_run_for_test: config.settlement_refusal_for_test,
+                    };
                     reconcile_policy_dispatches(
                         &mut policy,
                         &shared.ledger,
                         &shared.events,
-                        &ended_without_release,
+                        &mut settlement,
                     )?;
                     // #670 final review (Fail Loud): a scheduled dispatch still open here is
                     // recorded, never left silently.
