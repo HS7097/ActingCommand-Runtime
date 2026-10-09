@@ -963,7 +963,8 @@ mod tests {
         );
         tie_break.validate().expect("keyed tie-break validates");
 
-        let cases: [(&str, fn(&mut SelectionPolicy), SelectionErrorCode); 10] = [
+        type Mutation = fn(&mut SelectionPolicy);
+        let cases: [(&str, Mutation, SelectionErrorCode); 10] = [
             (
                 "record_list as a field",
                 |policy| policy.fields[0].value_type = policy.facts[0].value_type.clone(),
