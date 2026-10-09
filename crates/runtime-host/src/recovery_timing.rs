@@ -37,7 +37,7 @@ pub(crate) struct StartupRecoveryTiming {
 }
 
 /// Runs one recovery step and records its milliseconds, whether it succeeds or fails.
-pub(super) fn timed<T, E>(
+pub(crate) fn timed<T, E>(
     slot: &mut Option<u64>,
     step: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
@@ -47,11 +47,11 @@ pub(super) fn timed<T, E>(
     result
 }
 
-pub(super) fn elapsed_ms(started: Instant) -> u64 {
+pub(crate) fn elapsed_ms(started: Instant) -> u64 {
     duration_ms(started.elapsed())
 }
 
-pub(super) fn duration_ms(duration: Duration) -> u64 {
+pub(crate) fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 

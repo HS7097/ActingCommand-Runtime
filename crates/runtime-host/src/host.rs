@@ -186,7 +186,6 @@ mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
 mod recovery_ladder;
-mod recovery_timing;
 mod requests;
 mod resource_close;
 mod resource_targets;
@@ -200,6 +199,7 @@ mod state_control;
 mod task_diagnostic;
 mod task_timing;
 
+use crate::recovery_timing::{StartupRecoveryTiming, duration_ms, elapsed_ms, timed};
 use agent_control::reconcile_agent_wakes;
 use contained_task::{
     ContainedRunControl, RuntimeArtifactEventSink, RuntimeContainedTask, task_outcome_event_type,
@@ -236,7 +236,6 @@ use policy_outcome::{
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
 use recovery_ladder::with_recovery_ladder_staging;
-use recovery_timing::{StartupRecoveryTiming, duration_ms, elapsed_ms, timed};
 use requests::{
     ActionFailure, ConnectionFailureContext, ConnectionFailureStage, RequestFailure,
     TaskFailureEvidence, client_fact_conflict, connection_boundary, critical_execution_error,
