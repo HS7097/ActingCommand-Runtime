@@ -236,7 +236,7 @@ use policy_outcome::{
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
 use recovery_ladder::with_recovery_ladder_staging;
-use recovery_timing::{StartupRecoveryTiming, elapsed_ms, timed};
+use recovery_timing::{StartupRecoveryTiming, duration_ms, elapsed_ms, timed};
 use requests::{
     ActionFailure, ConnectionFailureContext, ConnectionFailureStage, RequestFailure,
     TaskFailureEvidence, client_fact_conflict, connection_boundary, critical_execution_error,
@@ -1196,9 +1196,11 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        // Workflow #381 R6: the recovery timing and the writer's peak window start here.
+        // Workflow #381 R6: the recovery timing, the writer's peak window and the shared
+        // connection's wait window start here.
         let mut startup_recovery = StartupRecoveryTiming::default();
         ledger.take_writer_peak();
+        database.take_connection_wait_peak();
         let prepared = (|| {
             let facts = timed(&mut startup_recovery.fact_store_ms, || {
                 InstanceFactStore::recover(&ledger, Arc::clone(&state))
@@ -1239,6 +1241,8 @@ impl RuntimeHost {
                 Ok(prepared) => prepared,
                 Err(original) => {
                     startup_recovery.writer = ledger.take_writer_peak();
+                    startup_recovery.connection_longest_wait_ms =
+                        Some(duration_ms(database.take_connection_wait_peak()));
                     println!("actingd startup_recovery {startup_recovery}");
                     // The aborted start is this summary's boundary: confirm it here so a
                     // failed commit reaches the caller instead of the ledger's own drop.
@@ -1506,6 +1510,8 @@ impl RuntimeHost {
                 startup_recovery.recovery_ms = Some(elapsed_ms(recovery_started));
             }
             startup_recovery.writer = shared.ledger.take_writer_peak();
+            startup_recovery.connection_longest_wait_ms =
+                Some(duration_ms(database.take_connection_wait_peak()));
             println!("actingd startup_recovery {startup_recovery}");
             #[cfg(test)]
             {

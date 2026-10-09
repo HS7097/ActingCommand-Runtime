@@ -1093,6 +1093,10 @@ fn startup_recovery_reads_bounded_pages_and_no_whole_ledger_query() {
         ("runtime_state", recovery.runtime_state_ms),
         ("agent_dispatcher", recovery.agent_dispatcher_ms),
         ("recovery", recovery.recovery_ms),
+        (
+            "connection_longest_wait",
+            recovery.connection_longest_wait_ms,
+        ),
     ] {
         assert!(millis.is_some(), "{step} was not timed");
     }
