@@ -61,11 +61,12 @@ actingcommand_contract::outcome_codes! {
         /// holds it and never restarts it (Workflow #381 A, #672 review M1).
         InstallStartupShutDown => "install_startup_shut_down": error,
         /// Error. A held start received no release before its deadline; the transition fails
-        /// with admission closed (Workflow #352). Operation `install_transition`.
+        /// with admission closed (Workflow #352) and the start ends with it, even when nobody
+        /// polls (#381 A R5′). Operation `install_transition`.
         HeldTimeout => "held_timeout": error,
         /// Error. A released start did not finish preparing before its deadline; the
-        /// transition fails with admission closed (Workflow #352). Operation
-        /// `install_transition`.
+        /// transition fails with admission closed (Workflow #352) and the start ends with it
+        /// (#381 A R5′). Operation `install_transition`.
         ReleaseTimeout => "release_timeout": error,
     }
 }

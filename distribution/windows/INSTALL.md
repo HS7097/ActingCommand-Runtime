@@ -201,10 +201,13 @@ Drain, held and release deadlines default to 60 seconds and are bounded at
 600 seconds; supply a shorter duration when the authorized window is shorter.
 A drain timeout removes only this transaction's barrier. A held timeout stays
 closed before Provider assembly; release failure or timeout stays closed and
-preserves native preparation/cleanup failures. A start that stops before it
-finished preparing, by an accepted shutdown or a Runtime failure latched meanwhile,
-ends as `install_startup_stopped` during `install_transition`; a latched failure is
-named as `cause=<code> cause_operation=<operation>` on the `FATAL actingd:` line,
+preserves native preparation/cleanup failures. A held or release timeout also ends
+the start, as `held_timeout` or `release_timeout` during `install_transition`, even
+when nobody polls; the watchdog restarts such a start (Workflow #381 A R5′). A start that stops before it
+finished preparing because a Runtime failure latched meanwhile ends as
+`install_startup_stopped` during `install_transition`; a held start whose shutdown
+was accepted ends as `install_startup_shut_down`, a formal stop the watchdog holds.
+The latched failure is named as `cause=<code> cause_operation=<operation>` on the `FATAL actingd:` line,
 in the lifecycle failure's detail and in the failed transition's status fact, which
 also records `failure_code` (Workflow #381 A R3′). A missing client receipt is
 unknown: reconnect and query the original transition. The client never retries an
@@ -405,7 +408,8 @@ crash, a closed console window, an end in Task Manager, a reboot), or when its
 held start stopped (`FATAL actingd:` with `install_startup_stopped`, `held_timeout`
 or `release_timeout`, also behind a later formal close that no log covers;
 Workflow #381 A R5′, R5b). It never starts a Runtime that was closed formally
-(`request-shutdown`, an acsetup transition), that is alive, while acsetup holds
+(`request-shutdown`, an acsetup transition; a held start shut down so ends as
+`install_startup_shut_down`), that is alive, while acsetup holds
 `install\writer.lock`, or whose last `actingd-*.log` ends in any other
 `FATAL actingd:` or a `FATAL acforward:` line; that last case stays down loudly. At
 most 3 starts in 30 minutes; then it stays down until a formal start.

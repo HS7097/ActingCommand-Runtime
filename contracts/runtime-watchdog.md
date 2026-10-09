@@ -83,7 +83,7 @@ First match wins.
 | 4′ | J active with `resource_disposition: unconfirmed` (retention) | `owner_retained_unconfirmed` | 10 | ERROR; next step: a formal start, whose startup releases a retained owner whose process has exited |
 | 5 | F present, its top code `install_startup_stopped`, `held_timeout` or `release_timeout` (a held start that stopped) | a start is considered: rows 7a-7f | as rows 7a-7f | as rows 7a-7f |
 | 5′ | F present otherwise | `fatal_hold` | 10 | ERROR, once per log file |
-| 6′ | J inactive, no candidate log written between its start and its close plus 2 s, and the newest earlier owner whose epoch a log covers (from its start to its close plus 2 s, or to the next owner's start) has a FATAL in the newest such log | rows 5 and 5′ for that FATAL | as those rows | as those rows |
+| 6′ | J inactive, no candidate log written between its start and its close plus 2 s, and among the 16 owners before it the newest whose epoch a log covers (from its start to its close plus 2 s, or to the next owner's start) has a FATAL in the newest such log | rows 5 and 5′ for that FATAL | as those rows | as those rows |
 | 6 | J inactive otherwise | `formal_close` | 0 | INFO, once per epoch |
 | 7a | W held | `installer_busy` | 0 | INFO |
 | 7a′ | selection changed | `selection_changed` | 0 | INFO |
@@ -104,7 +104,8 @@ halt a restart may fix (Workflow #381 A R5′), so the start rows, the budget am
 them, decide as after a crash. Row 6′ (R5b) covers an installer that, after such a
 stop, closed a maintenance owner without a log of its own: that later record would
 otherwise hide the FATAL as a formal close. An owner that closed formally has no
-FATAL, so it stays `formal_close`. A
+FATAL, so it stays `formal_close`. A held start whose shutdown was accepted ends as
+`install_startup_shut_down`, a formal stop that row 5′ holds, never restarts. A
 process probe that fails is `start_failed` with `process_probe_failed`.
 
 **Formal starts.** A live owner is the watchdog's own when a start record names its

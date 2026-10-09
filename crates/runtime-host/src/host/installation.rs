@@ -32,6 +32,9 @@ struct LiveTransition {
     status: InstallTransitionStatus,
     deadline: Instant,
     entered_event_id: Option<EventId>,
+    /// The recorded held or release timeout that failed this transition; a held start ends
+    /// with it (Workflow #381 A R5′, #672 ruling).
+    timed_out: Option<RuntimeHostError>,
 }
 
 impl LifecycleAdmission {
@@ -499,6 +502,7 @@ impl HostShared {
                     status,
                     deadline: Instant::now() + Duration::from_millis(*timeout_ms),
                     entered_event_id,
+                    timed_out: None,
                 });
                 self.tick_install_under_gate(&mut admission)?;
             }
@@ -625,6 +629,7 @@ impl HostShared {
             return Ok(());
         }
         let mut status = transition.status.clone();
+        let mut timed_out = None;
         if Instant::now() >= transition.deadline {
             let (stage, code, reopen) = match status.phase {
                 Phase::Draining | Phase::Drained => (
@@ -664,17 +669,29 @@ impl HostShared {
             status.failure_code = Some(code.to_owned());
             self.record_install_status(&status)?;
             admission.closed = !reopen;
+            // A drain timeout reopens the old owner; a held or release timeout ends the start.
+            timed_out = (!reopen).then_some(error);
         } else if status.phase == Phase::Draining && self.installation_idle(admission)? {
             self.record_install_pauses(&status.ticket)?;
             status.phase = Phase::Drained;
             self.record_install_status(&status)?;
         }
+        let live = admission.transition.as_mut().expect("live transition");
+        live.status = status;
+        if timed_out.is_some() {
+            live.timed_out = timed_out;
+        }
+        Ok(())
+    }
+
+    /// Workflow #381 A R5′ (#672 ruling): the recorded held or release timeout of this start's
+    /// transition, if one failed it. The start ends with that error, a top code the watchdog
+    /// restarts.
+    fn install_start_timed_out(admission: &LifecycleAdmission) -> Option<RuntimeHostError> {
         admission
             .transition
-            .as_mut()
-            .expect("live transition")
-            .status = status;
-        Ok(())
+            .as_ref()
+            .and_then(|transition| transition.timed_out.clone())
     }
 
     pub(super) fn initialize_installation(&self) -> RuntimeHostResult<()> {
@@ -718,24 +735,28 @@ impl HostShared {
                 status,
                 deadline: admission.held_deadline.expect("held deadline"),
                 entered_event_id,
+                timed_out: None,
             });
         }
         Ok(())
     }
 
-    /// Workflow #381 A R3′: the error that stops an install start, if anything stops it: an
-    /// accepted shutdown (`stopping`, or the shutdown flag) or a latched failure. The start
-    /// keeps its own code, `install_startup_stopped`, and names the latched condition.
+    /// The error that stops an install start, if anything stops it. A latched failure ends it
+    /// as `install_startup_stopped` with that condition named (Workflow #381 A R3′), a halt a
+    /// restart may fix. An accepted shutdown (`stopping`, or the shutdown flag) ends it as
+    /// `install_startup_shut_down`, a formal stop the watchdog holds (#672 review M1).
     fn install_start_stopped(&self, stopping: bool) -> RuntimeHostResult<Option<RuntimeHostError>> {
-        let latched = self.fatal.current()?;
-        if !stopping && !self.fatal.is_shutdown_requested() && latched.is_none() {
-            return Ok(None);
+        if let Some(cause) = self.fatal.current()? {
+            return Ok(Some(
+                install_error(HostCode::InstallStartupStopped.as_str()).with_latched_cause(&cause),
+            ));
         }
-        let stopped = install_error(HostCode::InstallStartupStopped.as_str());
-        Ok(Some(match latched {
-            Some(cause) => stopped.with_latched_cause(&cause),
-            None => stopped,
-        }))
+        if stopping || self.fatal.is_shutdown_requested() {
+            return Ok(Some(install_error(
+                HostCode::InstallStartupShutDown.as_str(),
+            )));
+        }
+        Ok(None)
     }
 
     pub(super) fn wait_install_release(&self) -> RuntimeHostResult<()> {
@@ -743,7 +764,7 @@ impl HostShared {
             if let Some(stopped) = self.install_start_stopped(false)? {
                 return Err(stopped);
             }
-            let admission = lock(&self.lifecycle_admission, "wait_install_release")?;
+            let mut admission = lock(&self.lifecycle_admission, "wait_install_release")?;
             if admission.held.is_none()
                 || admission
                     .transition
@@ -751,6 +772,12 @@ impl HostShared {
                     .is_some_and(|transition| transition.status.phase == Phase::Preparing)
             {
                 return Ok(());
+            }
+            // #672 ruling (R5′): the held deadline passes even when nobody polls, and the start
+            // then ends under `held_timeout` instead of staying held.
+            self.tick_install_under_gate(&mut admission)?;
+            if let Some(timed_out) = Self::install_start_timed_out(&admission) {
+                return Err(timed_out);
             }
             drop(admission);
             thread::sleep(Duration::from_millis(20));
@@ -769,7 +796,9 @@ impl HostShared {
                 .as_ref()
                 .is_none_or(|transition| transition.status.phase != Phase::Preparing)
         {
-            return Err(install_error("install_preparation_not_authorized"));
+            // #672 ruling (R5′): a release that timed out ends the start under its own code.
+            return Err(Self::install_start_timed_out(&admission)
+                .unwrap_or_else(|| install_error("install_preparation_not_authorized")));
         }
         Ok(())
     }
@@ -810,7 +839,11 @@ impl HostShared {
         }
         if let Some(transition) = &admission.transition {
             if transition.status.phase != Phase::Preparing {
-                return Err(install_error("install_preparation_not_authorized"));
+                // #672 ruling (R5′): a release that timed out ends the start under its own code.
+                return Err(transition
+                    .timed_out
+                    .clone()
+                    .unwrap_or_else(|| install_error("install_preparation_not_authorized")));
             }
             let mut status = transition.status.clone();
             status.phase = Phase::Released;

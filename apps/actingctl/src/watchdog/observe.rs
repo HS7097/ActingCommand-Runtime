@@ -27,6 +27,9 @@ const OWNER_CHECKPOINT_SCHEMA: &str = "actingcommand.runtime-owner-checkpoint.v1
 const WRITER_LOCK: &str = "install/writer.lock";
 /// The tail of a candidate log that is searched for a FATAL line.
 const LOG_TAIL_BYTES: u64 = 64 * 1024;
+/// Workflow #381 A R5b: how many owners before the last one a formal close without a log looks
+/// back over (an installer's chained installs leave a few maintenance owners in between).
+const LOOKBACK_OWNERS: usize = 16;
 const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
 pub(crate) const RUNTIME_IMAGE: &str = "actingcommand-actingd.exe";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -265,9 +268,10 @@ fn owner_blocks(bytes: &[u8]) -> Result<Vec<OwnerRecord>, String> {
     Ok(owners)
 }
 
-/// Workflow #381 A R5b: before the last owner, the newest owner whose epoch a candidate log
-/// covers (modified from its start to its close plus the clock slack; an owner without a close
-/// ends where the next one starts), and the FATAL line of the newest such log, if any.
+/// Workflow #381 A R5b: among the `LOOKBACK_OWNERS` owners before the last one, the newest whose
+/// epoch a candidate log covers (modified from its start to its close plus the clock slack; an
+/// owner without a close ends where the next one starts), and the FATAL line of the newest such
+/// log, if it holds one.
 fn earlier_owner_fatal(
     log_directories: &[PathBuf],
     owners: &[OwnerRecord],
@@ -277,31 +281,26 @@ fn earlier_owner_fatal(
     };
     let logs = candidate_logs(log_directories)?;
     let mut next_started = last.started_at_unix_ms;
-    for owner in earlier.iter().rev() {
+    for owner in earlier.iter().rev().take(LOOKBACK_OWNERS) {
         let end = owner
             .closed_at_unix_ms
             .unwrap_or(next_started)
             .saturating_add(super::decide::CLOCK_SLACK_MS);
-        let covered = logs
+        // The candidate logs come newest first.
+        if let Some((path, _)) = logs
             .iter()
-            .filter(|(_, modified)| *modified >= owner.started_at_unix_ms && *modified <= end)
-            .collect::<Vec<_>>();
-        if !covered.is_empty() {
-            for (path, _) in covered {
-                let tail = read_tail(path).map_err(|error| {
-                    Failure::misconfigured(
-                        "watchdog_log_unreadable",
-                        format!("{}: {error}", path.display()),
-                    )
-                })?;
-                if let Some(line) = fatal_line(&tail) {
-                    return Ok(Some(Fatal {
-                        log: plain_path(path).display().to_string(),
-                        line,
-                    }));
-                }
-            }
-            return Ok(None);
+            .find(|(_, modified)| *modified >= owner.started_at_unix_ms && *modified <= end)
+        {
+            let tail = read_tail(path).map_err(|error| {
+                Failure::misconfigured(
+                    "watchdog_log_unreadable",
+                    format!("{}: {error}", path.display()),
+                )
+            })?;
+            return Ok(fatal_line(&tail).map(|line| Fatal {
+                log: plain_path(path).display().to_string(),
+                line,
+            }));
         }
         next_started = owner.started_at_unix_ms;
     }
