@@ -516,6 +516,7 @@ pub(super) struct HeldPackageLease {
 
 /// Workflow #369 S3a: a host package run prepared before its lease (`prepare_package_run`).
 pub(super) struct PreparedPackageRun<'a> {
+    instance_id: InstanceId,
     instance_alias: String,
     task_request: ContainedTaskRequest,
     task_request_message: RuntimeRequest,
@@ -4087,10 +4088,7 @@ fn contained_task_package_failure(code: &'static str) -> RequestFailure {
     )
 }
 
-/// Types a startup package admission refusal (slice #316-B3): a locator that does not open
-/// is `startup_package_missing`, every other refusal `startup_package_admission_failed`; the
-/// underlying admission code stays attached as the related failure. The resource declaration
-/// rejection, when there is one, travels with it.
+/// Workflow #369 S3a: a host package run's own request did not validate (an invariant).
 fn startup_package_request_invalid() -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
         "startup_package_request_invalid",
@@ -4099,6 +4097,10 @@ fn startup_package_request_invalid() -> RequestFailure {
     ))
 }
 
+/// Types a startup package admission refusal (slice #316-B3): a locator that does not open
+/// is `startup_package_missing`, every other refusal `startup_package_admission_failed`; the
+/// underlying admission code stays attached as the related failure. The resource declaration
+/// rejection, when there is one, travels with it.
 fn startup_package_admission_failure(mut failure: RequestFailure) -> RequestFailure {
     if failure.poison_runtime || failure.error.is_fatal() {
         return failure;
@@ -4983,6 +4985,7 @@ impl HostShared {
             execution_provenance,
         )?;
         Ok(PreparedPackageRun {
+            instance_id: resolved.instance_id(),
             instance_alias: instance_alias.to_owned(),
             task_request: task_request.clone(),
             task_request_message,
@@ -4997,16 +5000,23 @@ impl HostShared {
         })
     }
 
-    /// Workflow #369 S3a: runs a prepared host package under `held`, a lease its caller
-    /// holds (from S2+S3b the ladder's own token, so a rung run takes no lease of its own).
-    /// The run releases that lease once, under its own run links (C9), as every contained run
-    /// does; a failure before the run takes it over leaves the release to the caller.
+    /// Workflow #369 S3a: runs a prepared host package under `held`, a key its caller holds
+    /// (the startup claim's, or the ladder's), so the run takes no lease of its own. The
+    /// caller first renews `held` to the run's response deadline plus the heartbeat reserve
+    /// (5 s; H-3), because the run's deadline is the earlier of its response deadline and the
+    /// lease's expiry less that reserve. `held` must be the lease of the prepared request's
+    /// instance and holder. The run releases the lease once, under its own run links (C9), as
+    /// every contained run does, a refused deadline included (through the run-linked
+    /// cleanup). Only a poison exit before the run (an invalid prepared request, a key of
+    /// another instance or holder, an invalid deadline state) leaves the lease where it is:
+    /// the Runtime is then poisoned, and the host's close releases it.
     pub(super) fn run_prepared_package(
         &self,
         run: PreparedPackageRun<'_>,
         held: HeldPackageLease,
     ) -> Result<OperationSuccess, RequestFailure> {
         let PreparedPackageRun {
+            instance_id,
             instance_alias,
             task_request,
             task_request_message,
@@ -5026,6 +5036,19 @@ impl HostShared {
         let validated = task_request_message
             .validate()
             .map_err(|_| startup_package_request_invalid())?;
+        let holder_matches = matches!(
+            task_request_message.operation(),
+            RuntimeOperation::RunContainedTask { holder_id, .. } if *holder_id == token.holder_id()
+        );
+        if token.instance_id() != instance_id || !holder_matches {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "host_package_lease_identity_mismatch",
+                    "run_prepared_package",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         let deadline_monotonic_ms = match self.contained_task_deadline(&task_request, &token) {
             Ok(deadline) => deadline,
             Err(failure) => {
