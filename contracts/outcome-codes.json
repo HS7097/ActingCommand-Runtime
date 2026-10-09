@@ -3821,6 +3821,15 @@
     "strategic_evidence_": [
       "runtime-host"
     ],
+    "install_startup_": [
+      "runtime-host"
+    ],
+    "held_": [
+      "runtime-host"
+    ],
+    "release_": [
+      "runtime-host"
+    ],
     "frame_retention_": [
       "runtime-host"
     ],
@@ -4141,6 +4150,32 @@
       "common_causes": "Access to the state root's artifacts folder denied by the file system or by security software.",
       "handling": "Check the file's permissions and any program that blocks it, then restart actingd so that the cleaner tries again."
     },
+    "held_timeout": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A held start (actingd --install-held) received no release before its held deadline. The installation transition fails with admission closed; the operation is install_transition.",
+      "common_causes": "The installer stopped, timed out or lost its connection before it sent the release.",
+      "handling": "TBD"
+    },
+    "install_startup_stopped": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A held or released start stopped before it finished preparing, because a shutdown was accepted or the Runtime latched a failure; the operation is install_transition. Until slice A2 turns it into a caused_by link, a latched failure is carried as the tokens cause=<code> cause_operation=<operation> on the FATAL line, in the transition's status fact and in the lifecycle failure's detail. A restart may succeed, so the watchdog considers a start.",
+      "common_causes": "An installer that shut down the held owner; a ledger write that failed on a request thread while the start was preparing.",
+      "handling": "TBD"
+    },
     "ledger_selection_query_unsupported": {
       "category": "error",
       "owner": "ledger",
@@ -4219,6 +4254,19 @@
       "description": "A proposal or strategic report request was refused because a verified report artifact could not be read back: a proposal's cited report, or the stored report that a strategic report with identical content would reuse.",
       "common_causes": "The report file was deleted by hand or damaged after it was recorded.",
       "handling": "Restore the report file from a copy if it is still needed. Otherwise prepare a strategic report whose content differs (for example a later as-of position), which records a new report artifact, and cite that report."
+    },
+    "release_timeout": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A released start did not finish preparing before its release deadline. The installation transition fails with admission closed; the operation is install_transition.",
+      "common_causes": "A slow preparation, such as the startup recovery of a long ledger.",
+      "handling": "TBD"
     },
     "strategic_evidence_unavailable": {
       "category": "error",
