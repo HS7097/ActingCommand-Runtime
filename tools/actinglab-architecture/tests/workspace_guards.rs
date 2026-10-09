@@ -4164,10 +4164,12 @@ fn b2_an_absent_admission_handle_refuses_with_a_distinct_code() {
 const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
     "crates/runtime-host/src/host/contained_task.rs::HostShared::run_contained_task -> require_business_capacity",
     "crates/runtime-host/src/host/contained_task.rs::HostShared::run_scheduled_contained_task -> require_business_capacity",
-    "crates/runtime-host/src/host/contained_task.rs::HostShared::run_startup_package -> require_business_capacity",
+    "crates/runtime-host/src/host/contained_task.rs::HostShared::prepare_package_run -> require_business_capacity",
     "crates/runtime-host/src/host/lease.rs::HostShared::grant_prepared_lease_with_links -> require_business_capacity",
     // Workflow #369 Q-4: the pump reads capacity silently and leaves a business claim queued.
     "crates/runtime-host/src/host/lease.rs::HostShared::pump -> admit_capacity",
+    // Workflow #369 review L5: an immediate host claim asks capacity first and queues on a refusal.
+    "crates/runtime-host/src/host/lease.rs::HostShared::request_host_claim -> admit_capacity",
     "crates/runtime-host/src/host/monitor_control.rs::HostShared::run_monitor_probe -> admit_capacity",
     "crates/runtime-host/src/host/observation.rs::HostShared::capture_observation_with_links -> require_business_capacity",
     "crates/runtime-host/src/host/performance.rs::HostShared::admit_capacity -> admit_capacity",
@@ -4175,6 +4177,8 @@ const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
     "crates/runtime-host/src/host/performance.rs::HostShared::require_business_capacity -> admit_capacity",
     "crates/runtime-host/src/host/policy_dispatch.rs::HostShared::admit_policy_dispatch -> admit_capacity",
     "crates/runtime-host/src/host/recovery_ladder.rs::HostShared::recovery_admitted -> require_business_capacity",
+    // Workflow #369 H-3: a holding ladder rechecks capacity silently at every step.
+    "crates/runtime-host/src/host/recovery_ladder.rs::HostShared::recovery_gate_open -> admit_capacity",
     "crates/runtime-host/src/performance/capacity.rs::PerformanceMonitor::preflight_capacity -> admit_capacity",
 ];
 
@@ -4853,6 +4857,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("foreground_gate", &["HostShared"]),
     host_module("frame_retention", &["HostShared"]),
     host_module("governance", &["HostShared"]),
+    host_module("host_claims", &["HostShared"]),
     host_module("input", &["HostShared"]),
     host_module("instance_discovery", &["HostShared"]),
     host_module("installation", &["HostShared"]),

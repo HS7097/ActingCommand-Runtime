@@ -972,11 +972,15 @@ impl SeedScheduler {
             holder_id,
             connection_id,
             ClaimKind::ResourceClose,
+            ClaimGate::Open,
             now_monotonic_ms,
         )
     }
 
     /// [`Self::prepare_resource_close`] for a dedicated lease of `kind` (Workflow #369 Q-2).
+    /// Workflow #369 §5.1 (review M-2): only an entry that `gate` lets through refuses it
+    /// (`TransferNotSafe`); a routine entry the pause holds back waits for the device.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_dedicated_lease(
         &mut self,
         request_id: RequestId,
@@ -984,13 +988,10 @@ impl SeedScheduler {
         holder_id: HolderId,
         connection_id: ConnectionId,
         kind: ClaimKind,
+        gate: ClaimGate,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
-        if self
-            .instances
-            .get(&instance_id)
-            .is_some_and(|state| !state.queue.is_empty())
-        {
+        if self.refusing_count(instance_id, gate, now_monotonic_ms) > 0 {
             return Err(SchedulerError::TransferNotSafe);
         }
         let lease_ttl_ms = self.config.lease_ttl_ms;
@@ -1394,6 +1395,59 @@ impl SeedScheduler {
                 .filter(|entry| entry.eligible(gate, now_monotonic_ms))
                 .count()
         })
+    }
+
+    /// Workflow #369 §5.1 (review M-2): the entries on `instance_id` that refuse a pause release
+    /// or a dedicated lease: those `gate` lets through, except the holding ladder's own
+    /// continuation (its ladder is the holder that the release already waits for).
+    pub fn refusing_count(
+        &self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> usize {
+        self.instances.get(&instance_id).map_or(0, |state| {
+            state
+                .queue
+                .iter()
+                .filter(|entry| {
+                    entry.eligible(gate, now_monotonic_ms) && !entry.kind.holder_owned()
+                })
+                .count()
+        })
+    }
+
+    /// Workflow #369 §3.5: how many entries wait on every instance together (install idle).
+    pub fn queued_total(&self) -> usize {
+        self.instances.values().map(|state| state.queue.len()).sum()
+    }
+
+    /// Workflow #369 §5.3: whether a ladder holds `instance_id` or waits for it: the holder is
+    /// a ladder (or its continuation's grant), or a ladder claim or continuation is queued.
+    pub fn ladder_active(&self, instance_id: InstanceId) -> bool {
+        let is_ladder =
+            |kind: ClaimKind| matches!(kind, ClaimKind::Ladder | ClaimKind::LadderContinuation);
+        self.instances.get(&instance_id).is_some_and(|state| {
+            state
+                .lease
+                .as_ref()
+                .is_some_and(|lease| is_ladder(lease.kind))
+                || state.queue.iter().any(|entry| is_ladder(entry.kind))
+        })
+    }
+
+    /// Workflow #369 H-6: the queued entries of `kind` on `instance_id`, in grant order.
+    pub fn queued_of_kind(&self, instance_id: InstanceId, kind: ClaimKind) -> Vec<RequestId> {
+        self.instances
+            .get(&instance_id)
+            .map_or_else(Vec::new, |state| {
+                state
+                    .queue
+                    .iter()
+                    .filter(|entry| entry.kind == kind)
+                    .map(|entry| entry.request_id)
+                    .collect()
+            })
     }
 
     pub fn poll_queued(
@@ -1878,7 +1932,12 @@ impl SeedScheduler {
             priority: queued.priority,
             destructive_step: None,
             preempt_requested: false,
-            kind: queued.kind,
+            // Workflow #369 H-3: a granted continuation is its ladder's hold again.
+            kind: if queued.kind == ClaimKind::LadderContinuation {
+                ClaimKind::Ladder
+            } else {
+                queued.kind
+            },
         });
         refresh_preempt_requested(state);
         self.lease_locations.remove(&prepared.from.token.lease_id());

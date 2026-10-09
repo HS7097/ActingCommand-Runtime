@@ -3832,6 +3832,15 @@
     ],
     "console_": [
       "ui"
+    ],
+    "lease_": [
+      "runtime-host"
+    ],
+    "recovery_ladder_key_": [
+      "runtime-host"
+    ],
+    "runtime_restart_": [
+      "runtime-host"
     ]
   },
   "fragments": {

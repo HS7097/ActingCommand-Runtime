@@ -165,6 +165,7 @@ mod failure_settlement;
 mod foreground_gate;
 mod frame_retention;
 mod governance;
+mod host_claims;
 mod input;
 mod installation;
 mod instance_discovery;
@@ -868,7 +869,6 @@ pub struct RuntimeHost {
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
-    startup_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 }
 
@@ -1335,7 +1335,10 @@ impl RuntimeHost {
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
             startup_packages: OnceLock::new(),
-            pending_host_work: Mutex::new(VecDeque::new()),
+            host_claim_work: Mutex::new(BTreeMap::new()),
+            instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
+            #[cfg(test)]
+            worker_panic_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
@@ -1366,7 +1369,6 @@ impl RuntimeHost {
             accept_thread: None,
             sweep_thread: None,
             monitor_thread: None,
-            startup_thread: None,
             performance_thread: None,
         };
         let prepared = (|| {
@@ -1514,6 +1516,9 @@ impl RuntimeHost {
             shared.restore_install_pauses()?;
             host.scheduling_pause_restore =
                 shared.restore_scheduling_pauses(held_startup, previous_owner_epoch)?;
+            // Workflow #369 W-2: the instance workers exist before the daemon-start preparation,
+            // so a failed preparation's ladder already has one.
+            host_claims::spawn_instance_workers(&shared)?;
             shared.prepare_physical_instances_on_start()?;
             shared.check_install_preparation()?;
             lock(&shared.performance, "sample_capacity_before_business")?
@@ -1539,19 +1544,6 @@ impl RuntimeHost {
                     .map_err(|_| {
                         RuntimeHostError::fatal(
                             "runtime_monitor_spawn_failed",
-                            "start_runtime_host",
-                            RuntimeErrorCode::RuntimeFatal,
-                        )
-                    })?,
-            );
-            let startup_shared = Arc::clone(&shared);
-            host.startup_thread = Some(
-                thread::Builder::new()
-                    .name("actingcommand-runtime-startup".to_string())
-                    .spawn(move || startup_package::startup_package_loop(startup_shared))
-                    .map_err(|_| {
-                        RuntimeHostError::fatal(
-                            "runtime_startup_spawn_failed",
                             "start_runtime_host",
                             RuntimeErrorCode::RuntimeFatal,
                         )
@@ -2535,6 +2527,7 @@ impl RuntimeHost {
             token,
             claim.connection_id,
             RuntimeRunLinks::new(task_id, run_id),
+            None,
         )?;
         Ok(ids)
     }
@@ -2971,10 +2964,18 @@ impl RuntimeHost {
             &mut failure,
             join_runtime_thread(self.monitor_thread.take(), "join_runtime_monitor"),
         );
+        // Workflow #369 W-2: pumping stopped with the shutdown request; the queues are
+        // cancelled (`lease.queue_disconnected`), then the instance workers are signalled and
+        // joined, before the host's own close.
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
-            join_runtime_thread(self.startup_thread.take(), "join_runtime_startup"),
+            shared.cancel_all_queues_for_shutdown(),
+        );
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            shared.join_instance_workers(),
         );
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
@@ -3381,10 +3382,15 @@ struct HostShared {
     /// Workflow #361 B1: orders each pause, resume and restore with the record of the pauses
     /// it leads to.
     scheduling_pause_persist_gate: Mutex<()>,
-    // Slice #316-B3: startup packages by registered instance, and the work handed to the
-    // host's own scheduling thread (startup packages; since #316-B4 also recovery ladders).
+    // Slice #316-B3: startup packages by registered instance.
     startup_packages: OnceLock<BTreeMap<InstanceId, ContainedTaskRequest>>,
-    pending_host_work: Mutex<VecDeque<startup_package::PendingHostWork>>,
+    // Workflow #369 W-2: what each queued or handed-off host claim runs once granted, by the
+    // claim's request id (like `queued_requests`, with no state of its own), and the
+    // per-instance workers that run it.
+    host_claim_work: Mutex<BTreeMap<RequestId, host_claims::HostClaimWork>>,
+    instance_workers: Mutex<host_claims::InstanceWorkers>,
+    #[cfg(test)]
+    worker_panic_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
@@ -3848,6 +3854,15 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         let Some(_work) = shared.begin_continuation()? else {
             continue;
         };
+        // Workflow #369 §5.2: while an install drains, every waiting entry except a holding
+        // ladder's continuation is cancelled; holders finish or stop at their next check.
+        if shared.lifecycle_draining()?
+            && !shared.fatal.is_shutdown_requested()
+            && let Err(error) = shared.cancel_queues_for_drain()
+        {
+            shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
         if let Err(error) = shared.expire_due_leases() {
             shared.fatal.mark(error.clone())?;
             return Err(error);

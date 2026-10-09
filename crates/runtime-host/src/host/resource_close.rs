@@ -146,12 +146,19 @@ impl HostShared {
             Err(retain_failure) => return failure.replace_with_poison(retain_failure),
         }
         let cleanup = match run_links {
-            Some(run_links) => self.cleanup_scheduled_failure_with_run_links(
-                request,
-                &token,
-                connection_id,
-                run_links,
-            ),
+            // Workflow #369 H-1 (review M-1): only a policy run's control carries a ladder
+            // trigger; every other run-linked end passes `None`.
+            Some(run_links) => self
+                .ladder_trigger_for(request.request_id())
+                .and_then(|trigger| {
+                    self.cleanup_scheduled_failure_with_run_links(
+                        request,
+                        &token,
+                        connection_id,
+                        run_links,
+                        trigger,
+                    )
+                }),
             None => self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure),
         };
         match cleanup {
@@ -382,13 +389,16 @@ impl HostShared {
     }
 
     /// Grants a dedicated lease on `instance_id` to the Runtime-owned connection
-    /// `connection_value`: a resource-close-only lease (`prepare_resource_close`, a waiting lease
-    /// queue is `TransferNotSafe`), granted with `CapacityUse::Drain`. The caller holds the
-    /// instance admission guard. Returns the token, its connection and the grant's request id.
+    /// `connection_value`: a resource-close-only lease (`prepare_resource_close`: a waiting entry
+    /// the scheduling pause does not hold back is `TransferNotSafe`, Workflow #369 §5.1),
+    /// granted with `CapacityUse::Drain`. `kind` names its holder (Workflow #369 Q-2; review
+    /// L2). The caller holds the instance admission guard. Returns the token, its connection
+    /// and the grant's request id.
     pub(super) fn grant_dedicated_instance_lease(
         &self,
         instance_id: InstanceId,
         connection_value: u64,
+        kind: ClaimKind,
     ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
         let resolved = lock(&self.registered_instances, "read_resource_close_instance")?
             .get(&instance_id)
@@ -413,12 +423,7 @@ impl HostShared {
         let connection_id = ConnectionId::new(connection_value).map_err(|error| {
             RuntimeHostError::scheduler("build_resource_close_connection", &error)
         })?;
-        // Workflow #369 Q-2: a dedicated lease is a close or a connection preparation.
-        let kind = if connection_value == RESOURCE_CLOSE_CONNECTION_VALUE {
-            ClaimKind::ResourceClose
-        } else {
-            ClaimKind::DaemonStartPreparation
-        };
+        let gate = self.routine_gate(instance_id)?;
         let preparation = lock(&self.scheduler, "prepare_resource_close_lease")?
             .prepare_dedicated_lease(
                 *request_id.transport(),
@@ -426,6 +431,7 @@ impl HostShared {
                 *holder_id.transport(),
                 connection_id,
                 kind,
+                gate,
                 self.monotonic_ms()?,
             )
             .map_err(|error| RuntimeHostError::scheduler("prepare_resource_close_lease", &error))?;
@@ -484,8 +490,11 @@ impl HostShared {
                 })?;
             (token, connection_id, false)
         } else {
-            let (token, connection_id, _) =
-                self.grant_dedicated_instance_lease(instance_id, RESOURCE_CLOSE_CONNECTION_VALUE)?;
+            let (token, connection_id, _) = self.grant_dedicated_instance_lease(
+                instance_id,
+                RESOURCE_CLOSE_CONNECTION_VALUE,
+                ClaimKind::ResourceClose,
+            )?;
             (token, connection_id, true)
         };
         let result = self
@@ -687,6 +696,7 @@ impl HostShared {
             links,
             &admission,
             actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
+            PreparationLease::Dedicated(ClaimKind::DaemonStartPreparation),
         )?;
         if cooldown_until.is_none() {
             self.require_install_selfcheck(instance_id, &check)?;
@@ -708,7 +718,13 @@ impl HostShared {
             .events
             .request_links(request, Some(instance_id), None, None);
         let selfcheck = self
-            .prepare_instance_connection(instance_alias, instance_id, links, &admission)
+            .prepare_instance_connection(
+                instance_alias,
+                instance_id,
+                links,
+                &admission,
+                ClaimKind::SelfCheck,
+            )
             .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
@@ -721,14 +737,17 @@ impl HostShared {
     }
 
     /// The preparation phase of one physical instance; the caller holds its admission guard.
-    /// The opens are recorded under `links` (which name the instance). Returns the self-check
-    /// projected from the opens it made, with the code of the failing step, if any.
+    /// The opens are recorded under `links` (which name the instance). `kind` names the
+    /// preparation lease's holder (Workflow #369 Q-2; review L2: emulator control, resume
+    /// reconnect or self-check). Returns the self-check projected from the opens it made, with
+    /// the code of the failing step, if any.
     pub(super) fn prepare_instance_connection(
         &self,
         instance_alias: &str,
         instance_id: InstanceId,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
+        kind: ClaimKind,
     ) -> RuntimeHostResult<SchedulingResumeSelfCheck> {
         self.prepare_instance_connection_with_cooldown(
             instance_alias,
@@ -736,18 +755,21 @@ impl HostShared {
             links,
             admission,
             actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
+            PreparationLease::Dedicated(kind),
         )
         .map(|(selfcheck, _, _, _)| selfcheck)
     }
 
     /// The stuck-recovery ladder's preparation (stage `recovery_preparation`): the self-check,
     /// the `instance_preparation_finished` event, and whether a failure is one the existing
-    /// preparation rule calls recoverable (Workflow #369-1, review M3).
+    /// preparation rule calls recoverable (Workflow #369-1, review M3). Workflow #369 H-3: it
+    /// runs on the ladder's key, takes no dedicated lease and releases nothing.
     pub(super) fn prepare_recovery_connection(
         &self,
         resolved: &RegisteredInstance,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
+        key: &super::host_claims::HostKey,
     ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<TerminalEvent>, bool)> {
         self.prepare_instance_connection_with_cooldown(
             &resolved.instance_alias,
@@ -755,6 +777,10 @@ impl HostShared {
             links,
             admission,
             actingcommand_contract::RecoveryTriggerStage::RecoveryPreparation,
+            PreparationLease::Held {
+                token: &key.token,
+                connection_id: key.connection_id,
+            },
         )
         .map(|(check, _, event, recoverable)| (check, event, recoverable))
     }
@@ -770,6 +796,7 @@ impl HostShared {
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
         stage: actingcommand_contract::RecoveryTriggerStage,
+        lease: PreparationLease<'_>,
     ) -> RuntimeHostResult<(
         SchedulingResumeSelfCheck,
         Option<u64>,
@@ -793,9 +820,21 @@ impl HostShared {
             frame_retention::capture_frame_store_config(),
         )
         .map_err(RuntimeHostError::artifact)?;
-        let (token, connection_id, _) = match self
-            .grant_dedicated_instance_lease(instance_id, CONNECTION_PREPARATION_CONNECTION_VALUE)
-        {
+        let held = matches!(lease, PreparationLease::Held { .. });
+        let granted = match lease {
+            PreparationLease::Held {
+                token,
+                connection_id,
+            } => Ok((token.clone(), connection_id)),
+            PreparationLease::Dedicated(kind) => self
+                .grant_dedicated_instance_lease(
+                    instance_id,
+                    CONNECTION_PREPARATION_CONNECTION_VALUE,
+                    kind,
+                )
+                .map(|(token, connection_id, _)| (token, connection_id)),
+        };
+        let (token, connection_id) = match granted {
             Ok(granted) => granted,
             Err(error) if error.is_fatal() => return Err(error),
             Err(error) => {
@@ -914,7 +953,8 @@ impl HostShared {
             .as_ref()
             .err()
             .is_none_or(|error| error.resource_quiescence() == Some(ResourceQuiescence::Confirmed));
-        if confirmed {
+        // A held key (the ladder's) stays with its holder.
+        if confirmed && !held {
             self.cleanup_token_inner(
                 &token,
                 connection_id,
@@ -973,4 +1013,15 @@ impl HostShared {
         )?;
         self.withhold_policy_instance_availability(instance_id)
     }
+}
+
+/// Workflow #369: whose lease a connection preparation runs under: a dedicated lease of the
+/// given kind that it takes and releases, or a key its caller holds (the ladder's), which it
+/// leaves held.
+pub(super) enum PreparationLease<'a> {
+    Dedicated(ClaimKind),
+    Held {
+        token: &'a LeaseToken,
+        connection_id: ConnectionId,
+    },
 }

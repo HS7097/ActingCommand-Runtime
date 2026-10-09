@@ -291,6 +291,9 @@ pub(super) struct ContainedRunControl {
     /// Workflow #336 L2d: the prepared package's identity, set once the run executes; the
     /// stuck-recovery ladder takes the return-home package configured for its game and server.
     package: std::sync::OnceLock<PackageIdentity>,
+    /// Workflow #369 H-1 (review M-1): set only by the policy-run path; its failed lease end
+    /// hands the key to a ladder.
+    ladder_source: std::sync::OnceLock<super::recovery_ladder::LadderSource>,
 }
 
 /// Workflow #336 L2d: a prepared package's `control.json` game, server and resolution, which a
@@ -335,7 +338,36 @@ impl ContainedRunControl {
             cancellation_reason: AtomicU8::new(Self::NONE),
             failed_terminal: Mutex::new(None),
             package: std::sync::OnceLock::new(),
+            ladder_source: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Workflow #369 H-1: marks this run as a policy run whose failed lease end may hand the
+    /// key to a ladder; set once, before the run executes.
+    pub(super) fn note_ladder_source(
+        &self,
+        source: super::recovery_ladder::LadderSource,
+    ) -> RuntimeHostResult<()> {
+        self.ladder_source.set(source).map_err(|_| {
+            RuntimeHostError::fatal(
+                "contained_task_ladder_source_state_invalid",
+                "note_contained_task_ladder_source",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })
+    }
+
+    /// Workflow #369 H-1: a policy run's ladder trigger, taken with its committed `task.failed`
+    /// terminal; `None` for every other run and for a run that committed no failure.
+    pub(super) fn ladder_trigger(
+        &self,
+    ) -> RuntimeHostResult<Option<super::recovery_ladder::LadderTrigger>> {
+        let Some(source) = self.ladder_source.get() else {
+            return Ok(None);
+        };
+        Ok(self.take_failed_terminal()?.map(|terminal| {
+            super::recovery_ladder::LadderTrigger::new(terminal, source, self.package().cloned())
+        }))
     }
 
     /// The run's committed `task.failed` terminal, taken once.
@@ -4786,66 +4818,6 @@ impl HostShared {
             })
     }
 
-    /// Runs one startup package on the host's own scheduling thread (slice #316-B3): the
-    /// request, correlation and holder ids are minted here, the connection is synthesized,
-    /// the run carries the causation id of its scheduling event, and everything after
-    /// admission is the ordinary contained-task path with its own lease and `task.*` chain.
-    /// Admission refusals are typed `startup_package_missing` /
-    /// `startup_package_admission_failed` before any lease is requested.
-    /// A host package run with its own lease: it is prepared before any lease, takes the lease
-    /// that today's immediate try gives it (`lease_busy` while the instance is held), and runs
-    /// under it (Workflow #369 S3a; `run_prepared_package` runs one under a held token).
-    pub(super) fn run_startup_package(
-        &self,
-        pending: &startup_package::PendingStartupPackage,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let holder_id = *self
-            .events
-            .issuer()
-            .mint_holder_id()
-            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?
-            .transport();
-        let connection_id =
-            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "build_startup_package_connection",
-                    &error,
-                ))
-            })?;
-        let run = self.prepare_package_run(pending, holder_id)?;
-        let validated = run
-            .task_request_message
-            .validate()
-            .map_err(|_| startup_package_request_invalid())?;
-        let lease_ttl_ms = self.contained_task_lease_ttl(&run.task_request)?;
-        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
-            request: &validated,
-            request_id: run.task_request_message.request_id(),
-            instance_alias: &run.instance_alias,
-            holder_id,
-            connection_id,
-            run_links: Some(run.run_links),
-            lease_ttl_ms: Some(lease_ttl_ms),
-            kind: ClaimKind::StartupPackage,
-        })?;
-        let RuntimeResult::LeaseGranted { token } = acquired.result else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "startup_package_lease_result_invalid",
-                    "run_startup_package",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        };
-        self.run_prepared_package(
-            run,
-            HeldPackageLease {
-                token,
-                connection_id,
-            },
-        )
-    }
-
     /// Workflow #369 S3a: everything a host package run does before its lease: identity,
     /// capacity, admission, prerequisite chain, entry checks and its command lifecycle. The run
     /// will hold `holder_id`'s lease; a refusal here takes no lease.
@@ -5240,6 +5212,15 @@ impl HostShared {
             resolved.instance_id(),
             false,
         )?;
+        // Workflow #369 H-1 (review M-1): only this path gives its failed lease end a ladder
+        // trigger.
+        active_run
+            .control
+            .note_ladder_source(super::recovery_ladder::LadderSource {
+                correlation_id: context.issued_correlation_id(),
+                recovery: task_request.recovery().cloned(),
+            })
+            .map_err(RequestFailure::poison_without_terminal)?;
         active_run
             .control
             .set_deadline(
@@ -5340,11 +5321,9 @@ impl HostShared {
             Some(context.request().request_id()),
         );
         // Slice #316-B4: a scheduled run has no client receipt; its failure returns to the
-        // policy driver on this thread while the ladder waits on the scheduling thread.
-        let staged =
-            self.stage_recovery_ladder(&active_run.control, &validated, &resolved, task_request);
-        let success = with_recovery_ladder_staging(executed, staged)?;
-        Ok((task_request_message, success))
+        // policy driver on this thread. Workflow #369 H-1: its ladder, if any, already holds
+        // the instance: the failed lease end handed the key over.
+        Ok((task_request_message, executed?))
     }
 
     #[allow(clippy::too_many_arguments, clippy::let_and_return)]

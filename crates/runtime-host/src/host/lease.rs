@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::host_claims::{HostClaimWork, HostKey};
+use super::recovery_ladder::{LADDER_CLAIM_TTL_MS, LadderTrigger, PendingRecoveryLadder};
 use super::resource_close::LeaseDeviceEnd;
 use super::*;
 
@@ -96,13 +98,6 @@ impl ClaimGrantSlot {
     }
 
     /// The granted token, waiting at most `timeout` for it.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the #369 S2+S3b workers and S5 operator waits read it"
-        )
-    )]
     pub(super) fn wait(&self, timeout: Duration) -> RuntimeHostResult<Option<LeaseToken>> {
         let granted = lock(&self.granted, "wait_claim_grant")?;
         let (granted, _) = self
@@ -147,10 +142,6 @@ impl Drop for AdmissionGuard<'_> {
 
 /// Workflow #369 Q-2, Q-6: a Runtime-internal claim on one instance. `request` is the claim's
 /// own synthetic request; its links carry the claim's waiting records (W-5).
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "the #369 S2+S3b, S5 and S6 claimants build it")
-)]
 pub(super) struct HostClaim<'a> {
     pub(super) request: &'a RuntimeRequest,
     pub(super) instance_alias: &'a str,
@@ -161,10 +152,6 @@ pub(super) struct HostClaim<'a> {
     pub(super) lease_ttl_ms: u64,
 }
 
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "the #369 S2+S3b, S5 and S6 claimants read it")
-)]
 pub(super) enum HostClaimAdmission {
     Granted(LeaseToken),
     Queued {
@@ -759,6 +746,8 @@ impl HostShared {
         for cancelled in removed {
             let context = self.take_queued_context(&cancelled)?;
             self.append_queue_terminal(&context, diagnostic)?;
+            lock(&self.host_claim_work, "forget_host_claim_work")?
+                .remove(&cancelled.queued().request_id());
         }
         Ok(())
     }
@@ -1010,11 +999,8 @@ impl HostShared {
             ));
         }
         self.remove_queued_context(queued_request_id, to_connection_id)?;
-        if let Some(grant) = &context.grant {
-            grant
-                .grant(committed)
-                .map_err(RequestFailure::poison_without_terminal)?;
-        }
+        self.deliver_claim_grant(&context, &committed)
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.persist_active_instances()
             .map_err(RequestFailure::poison_without_terminal)?;
         Ok(transferred)
@@ -1914,19 +1900,179 @@ impl HostShared {
     ///
     /// Its fixed `BackendFailure` reason is intentionally not caller-selectable: the resulting
     /// full run chain is the bounded proof consumed by startup settlement recovery.
+    ///
+    /// Workflow #369 H-1 (review M-1): `trigger` is set only by the policy-run path. Its ladder
+    /// is decided here, inside the lease end and before the release: an admitted ladder turns
+    /// the end into a transfer of the key to the ladder's claim. Host package runs and
+    /// `ensure_scheduled_policy_lease_released` pass `None`, so their failed end is an
+    /// ordinary one that hands the key on through the queue.
     pub(super) fn cleanup_scheduled_failure_with_run_links(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         token: &LeaseToken,
         connection_id: ConnectionId,
         run_links: RuntimeRunLinks,
+        trigger: Option<LadderTrigger>,
     ) -> RuntimeHostResult<()> {
-        self.cleanup_token_inner(
+        let Some(resolved) = self.cleanup_instance(token)? else {
+            return Ok(());
+        };
+        let instance_guard = self
+            .instance_guard(token.instance_id())
+            .map_err(|failure| *failure.error)?;
+        let _admission = self.lock_admission(&instance_guard, token.instance_id())?;
+        let ladder = match trigger {
+            Some(trigger) => self.ladder_at_lease_end(request, &resolved, trigger)?,
+            None => None,
+        };
+        // `Some` after this: an admitted ladder that found no key to hand on.
+        let waiting = match ladder {
+            Some(ladder) => match self.hand_off_to_ladder(
+                token,
+                connection_id,
+                request,
+                run_links,
+                &resolved,
+                ladder,
+            )? {
+                None => return Ok(()),
+                Some(ladder) => Some(ladder),
+            },
+            None => None,
+        };
+        self.cleanup_token_guarded(
             token,
             connection_id,
             LeaseReleaseReason::BackendFailure,
             Some((request, run_links)),
-            None,
+            &resolved,
+        )?;
+        // No key to hand on (the lease already ended): the admitted ladder waits as a claim;
+        // the guard's drop pumps it.
+        match waiting {
+            Some(ladder) => self.enqueue_ladder_claim(ladder),
+            None => Ok(()),
+        }
+    }
+
+    /// Workflow #369 H-1: turns a scheduled run's failed lease end into a transfer of the key
+    /// to its admitted ladder. Under the queue-order lock: the ladder claim's own
+    /// `lease.requested` and `scheduler.queued` (high, deadline `u64::MAX`, under the ladder's
+    /// links; review L-2) and its registration, then the releaser's
+    /// `lease.transition_intent`, the receiver's `lease.transition_intent`, `lease.transferred`
+    /// and `lease.released` under the run's own links (C1, C9). The hand-off bypasses the queue
+    /// and capacity (Q-3 (1), C13). The caller holds the admission guard. Returns the ladder
+    /// back when there is no key to hand on (the lease already ended, a destructive step is
+    /// open, or the gate closed since the admission).
+    fn hand_off_to_ladder(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        request: &ValidatedRuntimeRequest<'_>,
+        run_links: RuntimeRunLinks,
+        resolved: &RegisteredInstance,
+        ladder: PendingRecoveryLadder,
+    ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
+        let instance_id = token.instance_id();
+        self.expire_queued_for_instance(instance_id)
+            .map_err(|failure| *failure.error)?;
+        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)
+            .map_err(|failure| *failure.error)?;
+        let claim_request = ladder.claim().clone();
+        let validated_claim = claim_request.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                "recovery_ladder_claim_request_invalid",
+                "hand_off_to_ladder",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let claim_connection = ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE)
+            .map_err(|error| RuntimeHostError::scheduler("build_ladder_connection", &error))?;
+        let gate = self.routine_gate(instance_id)?;
+        let order_lock = self
+            .queue_order_lock(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
+        let prepared = lock(&self.scheduler, "prepare_ladder_hand_off")?.prepare_hand_off(
+            token,
+            connection_id,
+            LeaseTransferReason::BackendFailure,
+            ClaimRequest {
+                request_id: claim_request.request_id(),
+                instance_id,
+                holder_id: ladder.holder_id(),
+                connection_id: claim_connection,
+                kind: ClaimKind::Ladder,
+                priority: actingcommand_contract::LeasePriority::High,
+                lease_ttl_ms: LADDER_CLAIM_TTL_MS,
+            },
+            gate,
+            self.monotonic_ms()?,
+        );
+        let prepared = match prepared {
+            Ok(TransferPreparation::Ready(prepared)) => prepared,
+            Ok(TransferPreparation::Deferred | TransferPreparation::NoCandidate)
+            | Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch) => {
+                return Ok(Some(ladder));
+            }
+            Err(error) => {
+                return Err(RuntimeHostError::scheduler(
+                    "prepare_ladder_hand_off",
+                    &error,
+                ));
+            }
+        };
+        self.append_lease_requested(&validated_claim, resolved)
+            .map_err(|failure| *failure.error)?;
+        self.append_scheduler_queued_hand_off(&validated_claim, resolved)
+            .map_err(|failure| *failure.error)?;
+        #[cfg(test)]
+        policy_crash_test_barrier("after_ladder_claim_queued_before_hand_off");
+        self.register_queued_context(QueuedRequestContext {
+            request: claim_request,
+            instance: resolved.clone(),
+            connection_id: claim_connection,
+            grant: None,
+        })
+        .map_err(|failure| *failure.error)?;
+        lock(&self.host_claim_work, "register_host_claim_work")?.insert(
+            validated_claim.request_id(),
+            HostClaimWork::RecoveryLadder(Box::new(ladder)),
+        );
+        self.cleanup_via_transfer(
+            token,
+            resolved,
+            LeaseReleaseReason::BackendFailure,
+            prepared,
+            Some((request, run_links)),
+        )?;
+        Ok(None)
+    }
+
+    /// The ladder claim's `scheduler.queued` at a hand-off: high, first in line and with no
+    /// deadline (Q-7), never requesting a preemption.
+    fn append_scheduler_queued_hand_off(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        resolved: &RegisteredInstance,
+    ) -> Result<PersistedEvent, RequestFailure> {
+        let links = self
+            .events
+            .request_links(request, Some(resolved.instance_id()), None, None);
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::Scheduler,
+            EventActor::Scheduler,
+            links,
+            SchedulerPayloadDraft::queued(
+                EventAction::ScheduleAdmit,
+                actingcommand_contract::LeasePriority::High,
+                1,
+                actingcommand_scheduler::CLAIM_NO_DEADLINE_MONOTONIC_MS,
+                false,
+                audit_endpoint(resolved.audit_endpoint()),
+            ),
         )
     }
 
@@ -3040,6 +3186,11 @@ impl HostShared {
         let Some(kind) = candidate else {
             return Ok(());
         };
+        // Review L4: a kind that takes today's admission checks is not granted while the
+        // instance's performance-control directive asks for suspension or shutdown.
+        if kind.takes_admission_checks() && self.performance_control_withholds(instance_id)? {
+            return Ok(());
+        }
         if !kind.skips_business_capacity() {
             match self.admit_capacity() {
                 Ok(_) => {}
@@ -3100,8 +3251,125 @@ impl HostShared {
         .map_err(|failure| *failure.error)?;
         self.remove_queued_context(request_id, context.connection_id)
             .map_err(|failure| *failure.error)?;
+        self.deliver_claim_grant(&context, &token)
+    }
+
+    /// Review L4: whether the instance's performance-control directive withholds a new lease of
+    /// a kind that takes today's admission checks (read only; the pump writes nothing).
+    fn performance_control_withholds(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        let Some(instance_alias) = lock(&self.registered_instances, "read_instance_registry")?
+            .get(&instance_id)
+            .map(|instance| instance.instance_alias.clone())
+        else {
+            return Ok(false);
+        };
+        let directive = lock(&self.performance_control, "gate_pump_performance_control")?
+            .directive(&instance_alias)?;
+        Ok(directive.suspend_requested || directive.shutdown_requested)
+    }
+
+    /// Q-6, W-2: tells a granted claim: a waiting claimant's slot gets the token, and a host
+    /// claim's payload goes to its instance's worker with the key.
+    fn deliver_claim_grant(
+        &self,
+        context: &QueuedRequestContext,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<()> {
         if let Some(grant) = &context.grant {
-            grant.grant(token)?;
+            grant.grant(token.clone())?;
+        }
+        let work = lock(&self.host_claim_work, "take_host_claim_work")?
+            .remove(&context.request.request_id());
+        if let Some(work) = work {
+            self.post_host_claim(
+                context.instance.instance_id(),
+                work,
+                HostKey {
+                    request: context.request.clone(),
+                    token: token.clone(),
+                    connection_id: context.connection_id,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// W-5: cancels one queued Runtime claim (`scheduler.denied lease.queue_cancelled`, its
+    /// request links only, Warning) and forgets its payload. `false` when it is no longer
+    /// queued (granted, or already cancelled by shutdown).
+    pub(super) fn cancel_host_claim(
+        &self,
+        instance_id: InstanceId,
+        request_id: RequestId,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<bool> {
+        let order_lock = self
+            .queue_order_lock(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let _order = lock(&order_lock, "lock_instance_queue_order")?;
+        let cancelled =
+            lock(&self.scheduler, "cancel_host_claim")?.cancel_queued(request_id, connection_id);
+        let cancelled = match cancelled {
+            Ok(cancelled) => cancelled,
+            Err(SchedulerError::QueueMissing) => return Ok(false),
+            Err(error) => return Err(RuntimeHostError::scheduler("cancel_host_claim", &error)),
+        };
+        let context = self
+            .take_queued_context(&cancelled)
+            .map_err(|failure| *failure.error)?;
+        self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueCancelled)
+            .map_err(|failure| *failure.error)?;
+        lock(&self.host_claim_work, "forget_host_claim_work")?.remove(&request_id);
+        Ok(true)
+    }
+
+    /// §5.2: an install drain cancels every waiting entry except a holding ladder's own
+    /// continuation (`lease.queue_cancelled`); a holder finishes, or stops at its next holding
+    /// check. Run by the sweep while the host drains.
+    pub(super) fn cancel_queues_for_drain(&self) -> RuntimeHostResult<()> {
+        let instance_ids = lock(&self.registered_instances, "read_instance_registry")?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for instance_id in instance_ids {
+            let order_lock = self
+                .queue_order_lock(instance_id)
+                .map_err(|failure| *failure.error)?;
+            let _order = lock(&order_lock, "lock_instance_queue_order")?;
+            let removed = lock(&self.scheduler, "cancel_queues_for_drain")?
+                .remove_queued_for_drain(instance_id)
+                .map_err(|error| RuntimeHostError::scheduler("cancel_queues_for_drain", &error))?;
+            for cancelled in removed {
+                let context = self
+                    .read_queued_context_for(cancelled.queued())
+                    .map_err(|failure| *failure.error)?;
+                self.finish_queue_terminal(
+                    &context,
+                    DiagnosticCode::LeaseQueueCancelled,
+                    QueueTerminalOutcome::Cancelled { instance_id },
+                )
+                .map_err(|failure| *failure.error)?;
+                lock(&self.host_claim_work, "forget_host_claim_work")?
+                    .remove(&cancelled.queued().request_id());
+            }
+        }
+        Ok(())
+    }
+
+    /// W-2: a stopping host cancels every queue (`lease.queue_disconnected`) before it joins
+    /// the instance workers; pumping already stopped with the shutdown request.
+    pub(super) fn cancel_all_queues_for_shutdown(&self) -> RuntimeHostResult<()> {
+        let instance_ids = lock(&self.registered_instances, "read_instance_registry")?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for instance_id in instance_ids {
+            let order_lock = self
+                .queue_order_lock(instance_id)
+                .map_err(|failure| *failure.error)?;
+            let _order = lock(&order_lock, "lock_instance_queue_order")?;
+            self.cancel_instance_queue(instance_id, DiagnosticCode::LeaseQueueDisconnected)
+                .map_err(|failure| *failure.error)?;
         }
         Ok(())
     }
@@ -3157,11 +3425,9 @@ impl HostShared {
     /// guard is free and where no eligible entry waits it is granted at once; otherwise it is
     /// queued with no deadline (never preempting) and made visible before it can be granted:
     /// `lease.requested` + `scheduler.queued` and its context, all under the queue-order lock.
-    /// The grant then reaches the claimant through the returned slot.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "the #369 S2+S3b, S5 and S6 claimants call it")
-    )]
+    /// The grant then reaches the claimant through the returned slot. A business claim that
+    /// capacity refuses now is queued, and the pump grants it once capacity recovers (review
+    /// L5).
     pub(super) fn request_host_claim(
         &self,
         claim: HostClaim<'_>,
@@ -3194,11 +3460,21 @@ impl HostShared {
             lease_ttl_ms: claim.lease_ttl_ms,
         };
         let gate = self.routine_gate(instance_id)?;
+        // Review L5: business capacity is asked before an immediate grant; a refusal queues the
+        // claim (writing nothing) instead of failing it, and the pump grants it later.
+        let capacity_free = claim.kind.skips_business_capacity()
+            || match self.admit_capacity() {
+                Ok(_) => true,
+                Err(error) if error.is_fatal() => {
+                    return Err(RequestFailure::poison_without_terminal(error));
+                }
+                Err(_) => false,
+            };
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.try_lock_admission(&instance_guard, instance_id)?;
         let order_lock = self.queue_order_lock(instance_id)?;
         let order = lock(&order_lock, "lock_instance_queue_order")?;
-        if admission.is_some() {
+        if admission.is_some() && capacity_free {
             let preparation = lock(&self.scheduler, "prepare_host_claim")?.prepare_claim_acquire(
                 request,
                 gate,
@@ -3207,13 +3483,14 @@ impl HostShared {
             match preparation {
                 Ok(preparation) => {
                     let token = preparation.token().clone();
+                    // Capacity was admitted above, as the pump does.
                     self.grant_prepared_lease(
                         &validated,
                         request.request_id,
                         &resolved,
                         preparation,
                         None,
-                        kind_capacity(claim.kind),
+                        CapacityUse::Drain,
                     )?;
                     return Ok(HostClaimAdmission::Granted(token));
                 }
@@ -3265,10 +3542,6 @@ impl HostShared {
     /// holder's request links. It runs under the queue-order lock and never takes the admission
     /// guard, which the holder may hold across a device step. A refusal (`lease_expired`,
     /// `lease_missing`) ends the hold loudly at its caller.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "the #369 S2+S3b and S6 holders renew through it")
-    )]
     pub(super) fn renew_held_lease(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
