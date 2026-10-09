@@ -2281,6 +2281,34 @@ impl SeedScheduler {
             .is_some_and(|state| state.cooldown_until_monotonic_ms > now_monotonic_ms)
     }
 
+    /// Workflow #369 W-1: the kind of the first entry the gate lets through on `instance_id`,
+    /// whether or not the instance is held.
+    pub fn first_eligible_kind(
+        &self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> Option<ClaimKind> {
+        let state = self.instances.get(&instance_id)?;
+        first_eligible(state, gate, now_monotonic_ms).map(|position| state.queue[position].kind)
+    }
+
+    /// Workflow #369 W-1: how long the instance's takeover cooldown still runs, if it does.
+    pub fn cooldown_remaining_ms(
+        &self,
+        instance_id: InstanceId,
+        now_monotonic_ms: u64,
+    ) -> Option<u64> {
+        self.instances
+            .get(&instance_id)
+            .and_then(|state| {
+                state
+                    .cooldown_until_monotonic_ms
+                    .checked_sub(now_monotonic_ms)
+            })
+            .filter(|remaining_ms| *remaining_ms > 0)
+    }
+
     pub fn active_instance_ids(&self) -> Vec<InstanceId> {
         self.instances
             .iter()

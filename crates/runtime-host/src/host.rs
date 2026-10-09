@@ -2281,6 +2281,39 @@ impl RuntimeHost {
             .expire_all_queued_runtime()
     }
 
+    /// Workflow #369 S4: the end of a granted (non-scheduled) policy dispatch's lease, as its
+    /// agent ends it: an explicit release under the dispatch's request links, so no run-linked
+    /// settlement reads it; the key returns to the instance's queue.
+    #[cfg(test)]
+    pub(crate) fn release_policy_dispatch_lease_for_test(
+        &self,
+        context: &PolicyRunContext,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref("release_policy_dispatch_lease_for_test")?;
+        let request = context
+            .request()
+            .validate()
+            .map_err(|_| runtime_identifier_error())?;
+        let release_request_id = *shared
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
+            .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+        shared
+            .release_lease(
+                &request,
+                release_request_id,
+                context.lease_token(),
+                connection_id,
+                None,
+            )
+            .map(|_| ())
+            .map_err(|failure| *failure.error)
+    }
+
     /// Workflow #369 S1: one sweep tick (queue expiry, lapsed leases, backstop pump).
     #[cfg(test)]
     pub(crate) fn expire_due_leases_for_test(&self) -> RuntimeHostResult<()> {

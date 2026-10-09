@@ -186,16 +186,22 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         POLICY_NOW_UNIX_MS + 60_000,
         101,
     );
-    assert!(matches!(
-        host.admit_policy_dispatch(
+    let PolicyDispatchAdmission::Granted {
+        context: admitted_context,
+    } = host
+        .admit_policy_dispatch(
             &admitted,
             &admitted_reason,
             &policy_context(&host, &admitted),
         )
-        .expect("approved dispatch"),
-        PolicyDispatchAdmission::Granted { .. }
-    ));
+        .expect("approved dispatch")
+    else {
+        panic!("expected the approved dispatch to be granted");
+    };
     record_policy_approval_disposition(&host, &admitted, ApprovalDisposition::Revoked);
+    // Workflow #369 W-1: a held instance defers its candidates; the dispatch's lease ends first.
+    host.release_policy_dispatch_lease_for_test(&admitted_context)
+        .expect("end the admitted dispatch's lease");
 
     let mut expected = vec![admitted.decision_id.clone()];
     let mut late_approval_intent = None;
@@ -217,6 +223,9 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
     }
     expected.reverse();
 
+    // The pages read a held instance, as the admitted dispatch held it before W-1.
+    let mut holder = TestClient::connect(&host);
+    let _ = holder.acquire(POLICY_INSTANCE_ALIAS);
     let mut client = TestClient::connect(&host);
     let mut cursor = None;
     let mut collected = Vec::new();
@@ -336,6 +345,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         &frozen_projection.as_ref().expect("frozen projection").3
     );
     drop(queued_waiter);
+    drop(holder);
     drop(client);
     host.close().expect("close host");
 }
