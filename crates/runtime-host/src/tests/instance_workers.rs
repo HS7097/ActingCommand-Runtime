@@ -1810,59 +1810,6 @@ fn assert_settled_once_as_interrupted(events: &[PersistedEvent], run_id: &RunId)
 fn a_crash_inside_the_hand_off_is_settled_as_interrupted_and_a_new_dispatch_proceeds() {
     let (root, registered) = crash_root();
     let (run_id, _) = crash_inside_the_hand_off(root.path(), None);
-    // TEMP diagnostic (to be reverted): a failed restart reports the release it left.
-    {
-        let (host_config, _) = ladder_setup(root.path());
-        let state = Arc::new(FakeState::default());
-        state.physical_task_geometry.store(true, Ordering::Release);
-        if let Err(error) = RuntimeHost::start(
-            host_config,
-            Arc::new(FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state)),
-        ) {
-            let events = closed_ledger_events(root.path());
-            let grant = events
-                .iter()
-                .find(|event| {
-                    event.event_type() == EventType::LeaseGranted
-                        && event.links().run_id() == Some(&run_id)
-                })
-                .expect("the run's grant");
-            let report = events
-                .iter()
-                .filter(|event| {
-                    event.event_type() == EventType::LeaseReleased
-                        && event.links().run_id() == Some(&run_id)
-                })
-                .map(|release| {
-                    let (r, g) = (release.links(), grant.links());
-                    format!(
-                        "release effect={:?} request={} instance={} correlation={} causation={} (release_has={} grant_has={}) task={} lease={} frame_none={} recognition_none={} action={}",
-                        release.payload().effect_disposition(),
-                        r.request_id().is_some(),
-                        r.instance_id() == g.instance_id(),
-                        r.correlation_id() == g.correlation_id(),
-                        r.causation_id() == g.causation_id(),
-                        r.causation_id().is_some(),
-                        g.causation_id().is_some(),
-                        r.task_id() == g.task_id(),
-                        r.lease_id() == g.lease_id(),
-                        r.frame_id().is_none(),
-                        r.recognition_id().is_none(),
-                        r.action_id().is_some(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let records = events
-                .iter()
-                .filter(|event| {
-                    failure_message(event).is_some_and(|message| {
-                        message.contains("policy_settlement_release_recovered")
-                    })
-                })
-                .count();
-            panic!("restart failed: {error:?}; releases {report:?}; records {records}");
-        }
-    }
     let host = restart_ladder_host(root.path(), registered);
     assert_settled_once_as_interrupted(&all_events(&host), &run_id);
     let (_, request) = ladder_setup(root.path());
