@@ -281,8 +281,7 @@ jobs:
             --bin actingwatch `
             --bin actinglab `
             --bin actingledger `
-            --bin actingcommand-vision-provider-check `
-            --bin actingcommand-device-test
+            --bin actingcommand-vision-provider-check
           if ($LASTEXITCODE -ne 0) {
             throw "executable cargo build failed with exit code $LASTEXITCODE"
           }
@@ -529,7 +528,6 @@ jobs:
             'actinglab.exe',
             'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
-            'actingcommand-device-test.exe',
             'actingwatch.exe'
           )
           # Workflow #337: the official platform-tools files the fetch step verified, under platform-tools/.
@@ -622,6 +620,8 @@ jobs:
             if ($PlatformToolsLayout) {
               # Workflow #360: v2 is v1 without the retired vision provider DLL.
               # Workflow #374: v3 is v2 plus the watchdog launcher actingwatch.exe.
+              # Runtime v0.11.6: v3 no longer carries the retired actingcommand-device-test.exe;
+              # the layout name stays, so installers that know v3 keep accepting the Tools.
               $manifest.tools_payload_layout = 'platform-tools-v3'
             }
             $manifest.interfaces = $interfaces

@@ -19,18 +19,22 @@ The existing exact-artifact downloader understands this layout and the historica
 fixed two-executable Runtime layout whose manifest omits the field. It continues
 to reject incomplete or unexpected payloads. The separate Tools artifact carries
 `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe`, the watchdog launcher `actingwatch.exe` and,
+the watchdog launcher `actingwatch.exe` and,
 under `platform-tools/`, the official Android platform-tools 37.0.1 files
 `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
 `source.properties`. Its own manifest declares
-`tools_payload_layout: "platform-tools-v3"` and binds all ten files.
+`tools_payload_layout: "platform-tools-v3"` and binds all nine files.
 The OCR and NN engine is linked into `actingcommand-actingd.exe`; no vision
 provider DLL ships (Workflow #360), and actingd reads its models from the vision
 root named by the configuration's `vision` section. The downloader still accepts
-the historical `platform-tools-v2` layout (the same files without
-`actingwatch.exe`), the historical `platform-tools-v1` layout (the
+`platform-tools-v3` Tools artifacts built before v0.11.6 (the same files plus
+`actingcommand-device-test.exe`), the historical `platform-tools-v2` layout (those
+ten files without `actingwatch.exe`), the historical `platform-tools-v1` layout (the
 `platform-tools-v2` files plus `ac_fastdeploy_ppocr.dll`) and the five-file Tools
 layout whose manifest omits the field, and rejects any other layout.
+
+The device-test probe `actingcommand-device-test.exe` is retired (v0.11.6), and the
+Tools artifact no longer contains it.
 
 `actingctl watchdog status` / `run-once` and the launcher `actingwatch.exe`
 (Workflow #374) start an A/B installation's Runtime again after an end without a

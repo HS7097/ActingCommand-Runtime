@@ -13,7 +13,7 @@ source_path = "bin/MaaTouch/maatouch"
 local_hint = "external-tools/maatouch/maatouch"
 included_in_repository = false
 license_review = "Upstream repository license and file-level attribution must be reviewed before redistribution."
-notes = "Used by apps/device-test through an explicit --local path or ignored external-tools copy. Do not commit the binary."
+notes = "Used by the Runtime's MaaTouch input backend through the actingd configuration (device_paths.maatouch_path, or an instance's maatouch_local_path) or an ignored external-tools copy. Do not commit the binary."
 
 [[tools]]
 id = "fastdeploy"
