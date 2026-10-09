@@ -1023,6 +1023,22 @@ impl<B: DurableStorage> EventStore<B> {
                 }
                 Some((end, expired)) => end.sequence() > terminal.sequence() || expired,
             };
+        // Coordinator ruling on #670 (runtime budget): a run settled from its terminal that ran
+        // past its admitted runtime budget carries the policy's rewrite instead of its own
+        // outcome. The ledger does not record the dispatch's expected duration, so it checks the
+        // rewrite's form and the bound every rewrite meets (`runtime_exceeded` with no expected
+        // duration); the host checks the policy's exact rule.
+        let runtime_rewrite_valid = |reported_success: bool, runtime_ms: u64| {
+            matches!(
+                execution.outcome(),
+                PolicyExecutionOutcome::Failed { failure }
+                    if failure.is_runtime_budget_rewrite(reported_success)
+                        && failure.runtime_ms == runtime_ms
+            ) && admission
+                .admission()
+                .and_then(|record| record.budget.runtime_exceeded(0, runtime_ms))
+                == Some(true)
+        };
         let recovered_topology_valid = recovered_interruption
             && (handed_on.is_some()
                 || same_scheduled_chain(release.links(), recovered_links)
@@ -1146,12 +1162,12 @@ impl<B: DurableStorage> EventStore<B> {
                                 }
                             )
                     )
-                    || !matches!(
+                    || !(matches!(
                         execution.outcome(),
                         PolicyExecutionOutcome::Succeeded {
                             runtime_ms: actual
                         } if *actual == runtime_ms
-                    )
+                    ) || runtime_rewrite_valid(true, runtime_ms))
                 {
                     return Err(GlobalLedgerError::fatal(
                         "scheduled_execution_recovery_success_conflict",
@@ -1216,14 +1232,14 @@ impl<B: DurableStorage> EventStore<B> {
                     || !terminal_lease_end_valid(source_fact, true)
                     || !(admission_fact.sequence() < task_request.sequence()
                         && task_request.sequence() < source_fact.sequence())
-                    || !matches!(
+                    || !(matches!(
                         execution.outcome(),
                         PolicyExecutionOutcome::Failed { failure }
                             if failure.error_code == *failure_code
                                 && failure.original_class == class
                                 && !failure.reported_success
                                 && failure.runtime_ms == runtime_ms
-                    )
+                    ) || runtime_rewrite_valid(false, runtime_ms))
                 {
                     return Err(GlobalLedgerError::fatal(
                         "scheduled_execution_recovery_failure_conflict",

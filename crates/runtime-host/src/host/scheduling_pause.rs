@@ -162,6 +162,33 @@ impl HostShared {
         })
     }
 
+    /// Workflow #369 E3 (#670 safety net): holds a pause of `instance_alias` with `reason_code`
+    /// at start, after the persisted pauses are restored and before any instance is prepared,
+    /// unless the instance is paused already (that pause stays as it is). Records the pauses.
+    pub(super) fn hold_instance_pause_at_start(
+        &self,
+        instance_alias: &str,
+        reason_code: &str,
+    ) -> RuntimeHostResult<()> {
+        let _persist = lock(
+            &self.scheduling_pause_persist_gate,
+            "hold_start_instance_pause",
+        )?;
+        let mut prospective = lock(&self.scheduling_pause, "hold_start_instance_pause")?.clone();
+        let since_unix_ms = self.clock.sample()?.unix_ms;
+        if !prospective.hold_instance_at_start(
+            instance_alias,
+            reason_code,
+            since_unix_ms,
+            PauseOrigin::set_in(self.owner_epoch)?,
+        )? {
+            return Ok(());
+        }
+        self.record_scheduling_pauses(&prospective)?;
+        *lock(&self.scheduling_pause, "hold_start_instance_pause")? = prospective;
+        Ok(())
+    }
+
     /// A failed instance pause stage: the persisted pauses without the instance, then the gate
     /// lifted; both are attempted and the first failure is returned.
     pub(super) fn lift_failed_instance_pause(&self, instance_alias: &str) -> RuntimeHostResult<()> {

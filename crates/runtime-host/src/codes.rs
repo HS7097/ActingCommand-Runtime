@@ -97,5 +97,11 @@ actingcommand_contract::outcome_codes! {
         /// `task_id`, and `lease_id` when the dispatch has one grant; the run id is on the
         /// record's links).
         PolicySettlementDispatchLeftOpen => "policy_settlement_dispatch_left_open": warning,
+        /// Error. A start could not settle a scheduled run: the host's recovery or the ledger
+        /// refused its settlement (keys `failure_code`, the refusal's code, and `instance_id`,
+        /// `task_id`, `lease_id` when the dispatch has one grant; the run id is on the record's
+        /// links). The start carries on: the dispatch stays open, out of the active workloads,
+        /// and the run's instance is paused with this code as its reason.
+        PolicySettlementDispatchUnsettled => "policy_settlement_dispatch_unsettled": error,
     }
 }

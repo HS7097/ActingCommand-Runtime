@@ -843,6 +843,10 @@ pub(crate) struct PolicyHost {
     /// instance) pair, the completed run whose admission request the ledger confirmed and the
     /// terminal sequence it was read through. A host starts with none.
     confirmed_run_admissions: BTreeMap<(String, String), (CompletedPolicyRunIdentity, u64)>,
+    /// Workflow #369 E3 (#670 safety net): the dispatches this start could not settle. They
+    /// stay open, out of the pending settlements and the active workloads; a later start that
+    /// settles them leaves them out of this set.
+    quarantined_dispatches: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -875,6 +879,7 @@ impl PolicyHost {
             eligibility: EligibilityAges::default(),
             arbitration: BTreeMap::new(),
             confirmed_run_admissions: BTreeMap::new(),
+            quarantined_dispatches: BTreeSet::new(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -1198,11 +1203,41 @@ impl PolicyHost {
             .collect())
     }
 
+    /// Workflow #369 E3 (#670 safety net): leaves a dispatch the start could not settle open,
+    /// out of the pending settlements and the active workloads.
+    pub(crate) fn quarantine_dispatch(&mut self, decision_id: &str) {
+        self.quarantined_dispatches.insert(decision_id.to_owned());
+    }
+
+    /// Coordinator ruling on #670: whether a run of the dispatch `decision_id` that ran
+    /// `runtime_ms` exceeded its admitted runtime budget, by the policy's own rule.
+    pub(crate) fn runtime_budget_exceeded(
+        &self,
+        decision_id: &str,
+        runtime_ms: u64,
+    ) -> RuntimeHostResult<bool> {
+        let dispatch = self
+            .seen_dispatches
+            .get(decision_id)
+            .ok_or_else(|| fatal("policy_dispatch_unknown", "read_policy_runtime_budget"))?;
+        let admission = dispatch.admission.as_ref().ok_or_else(|| {
+            fatal(
+                "policy_dispatch_admission_missing",
+                "read_policy_runtime_budget",
+            )
+        })?;
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+        crate::policy_control::runtime_budget_exceeded(&intent, admission, runtime_ms)
+    }
+
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()
-            .filter(|(_, dispatch)| {
-                dispatch.lifecycle == DispatchLifecycle::Admitted && dispatch.execution.is_some()
+            .filter(|(decision_id, dispatch)| {
+                dispatch.lifecycle == DispatchLifecycle::Admitted
+                    && dispatch.execution.is_some()
+                    && !self.quarantined_dispatches.contains(*decision_id)
             })
             .map(|(decision_id, _)| decision_id.clone())
             .collect()
@@ -1230,8 +1265,10 @@ impl PolicyHost {
     pub(crate) fn pending_dispatch_outcomes(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()
-            .filter(|(_, dispatch)| {
-                dispatch.lifecycle == DispatchLifecycle::Admitted && dispatch.execution.is_none()
+            .filter(|(decision_id, dispatch)| {
+                dispatch.lifecycle == DispatchLifecycle::Admitted
+                    && dispatch.execution.is_none()
+                    && !self.quarantined_dispatches.contains(*decision_id)
             })
             .map(|(decision_id, _)| decision_id.clone())
             .collect()
@@ -2008,8 +2045,12 @@ impl PolicyHost {
         let mut workloads = BTreeMap::new();
         for dispatch in self
             .seen_dispatches
-            .values()
-            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Admitted)
+            .iter()
+            .filter(|(decision_id, dispatch)| {
+                dispatch.lifecycle == DispatchLifecycle::Admitted
+                    && !self.quarantined_dispatches.contains(*decision_id)
+            })
+            .map(|(_, dispatch)| dispatch)
         {
             let admission = dispatch.admission.as_ref().ok_or_else(|| {
                 fatal(

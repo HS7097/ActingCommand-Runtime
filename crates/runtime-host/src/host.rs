@@ -1612,28 +1612,34 @@ impl RuntimeHost {
                         &shared.events,
                     )
                 })?;
-                timed(&mut startup_recovery.policy_dispatches_ms, || {
-                    // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
-                    // before the reconciliation settles it.
-                    let mut settlement = policy_outcome::StartSettlement {
-                        ended_without_release: shared.recover_unreleased_policy_runs(
+                let unsettled_dispatches =
+                    timed(&mut startup_recovery.policy_dispatches_ms, || {
+                        // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
+                        // before the reconciliation settles it.
+                        let mut settlement = policy_outcome::StartSettlement {
+                            ended_without_release: shared.recover_unreleased_policy_runs(
+                                &policy,
+                                &registered_instances,
+                                &config.scheduled_procedures,
+                            )?,
+                            unsettled: Vec::new(),
+                            #[cfg(test)]
+                            refuse_run_for_test: config.settlement_refusal_for_test,
+                        };
+                        reconcile_policy_dispatches(
+                            &mut policy,
+                            &shared.ledger,
+                            &shared.events,
+                            &mut settlement,
+                        )?;
+                        // #670 final review (Fail Loud): a scheduled dispatch still open here is
+                        // recorded, never left silently.
+                        shared.record_open_scheduled_dispatches(
                             &policy,
-                            &registered_instances,
                             &config.scheduled_procedures,
-                        )?,
-                        #[cfg(test)]
-                        refuse_run_for_test: config.settlement_refusal_for_test,
-                    };
-                    reconcile_policy_dispatches(
-                        &mut policy,
-                        &shared.ledger,
-                        &shared.events,
-                        &mut settlement,
-                    )?;
-                    // #670 final review (Fail Loud): a scheduled dispatch still open here is
-                    // recorded, never left silently.
-                    shared.record_open_scheduled_dispatches(&policy, &config.scheduled_procedures)
-                })?;
+                        )?;
+                        Ok::<_, RuntimeHostError>(settlement.unsettled)
+                    })?;
                 let authoritative_policy_outcomes =
                     timed(&mut startup_recovery.policy_outcomes_ms, || {
                         recover_authoritative_policy_outcomes(&policy, &shared.ledger)
@@ -1663,6 +1669,7 @@ impl RuntimeHost {
                     authoritative_policy_outcomes,
                     policy_dispatch_clocks,
                     agent_dispatcher,
+                    unsettled_dispatches,
                 ))
             })();
             if recovered.is_ok() {
@@ -1682,6 +1689,7 @@ impl RuntimeHost {
                 authoritative_policy_outcomes,
                 policy_dispatch_clocks,
                 mut agent_dispatcher,
+                unsettled_dispatches,
             ) = recovered?;
             if let Some(agent_config) = &config.agent_dispatcher {
                 reconcile_agent_wakes(
@@ -1734,6 +1742,10 @@ impl RuntimeHost {
             shared.restore_install_pauses()?;
             host.scheduling_pause_restore =
                 shared.restore_scheduling_pauses(held_startup, previous_owner_epoch)?;
+            // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
+            // could not settle is recorded and its instance paused, after the persisted pauses
+            // are restored and before any instance is prepared.
+            shared.hold_unsettled_dispatches(&unsettled_dispatches)?;
             // Workflow #369 W-2: the instance workers exist before the daemon-start preparation,
             // so a failed preparation's ladder already has one.
             host_claims::spawn_instance_workers(&shared)?;
