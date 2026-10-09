@@ -69,6 +69,10 @@ pub(crate) struct RuntimeHostFailureContext {
     /// Slice #315-B2c-2: the previous owner probe behind an `owner_resource_unconfirmed`
     /// refusal (`pid <n> alive` or `probe unknown: <reason>`), shown after the code.
     pub(crate) owner_probe: Option<String>,
+    /// Workflow #381 A R3′: the `(code, operation)` of the condition latched in the Runtime's
+    /// fatal state that stopped an install start; shown after the operation as
+    /// `cause=<code> cause_operation=<operation>` until A2 makes it a `caused_by` link.
+    pub(crate) latched_cause: Option<(&'static str, &'static str)>,
     pub(crate) instance_id: Option<InstanceId>,
     pub(crate) resource_quiescence: Option<ResourceQuiescence>,
     pub(crate) policy_rejection: Option<Box<actingcommand_contract::PolicyDispatchRejection>>,
@@ -104,6 +108,7 @@ impl PartialEq for RuntimeHostError {
             && self.lifecycle.incomplete_device_diagnostic_summary
                 == other.lifecycle.incomplete_device_diagnostic_summary
             && self.lifecycle.owner_probe == other.lifecycle.owner_probe
+            && self.lifecycle.latched_cause == other.lifecycle.latched_cause
     }
 }
 impl Eq for RuntimeHostError {}
@@ -498,6 +503,21 @@ impl RuntimeHostError {
         ))
     }
 
+    /// Workflow #381 A R3′: this error with the condition `cause` latched in the fatal state named
+    /// on it, in the developer line and as `key=value` tokens in its native detail (the lifecycle
+    /// failure's detail), until A2 makes it a `caused_by` link.
+    pub(crate) fn with_latched_cause(mut self, cause: &Self) -> Self {
+        self.lifecycle.latched_cause = Some((cause.code, cause.operation));
+        self.with_native_detail(format!(
+            "cause={} cause_operation={}",
+            cause.code, cause.operation
+        ))
+    }
+
+    pub(crate) const fn latched_cause(&self) -> Option<(&'static str, &'static str)> {
+        self.lifecycle.latched_cause
+    }
+
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
         if self.has_ppocr_diagnostics() || other.has_ppocr_diagnostics() {
             return self
@@ -561,6 +581,7 @@ impl fmt::Debug for RuntimeHostError {
                 &self.lifecycle.incomplete_device_diagnostic_summary,
             )
             .field("owner_probe", &self.lifecycle.owner_probe)
+            .field("latched_cause", &self.lifecycle.latched_cause)
             .finish()
     }
 }
@@ -572,6 +593,9 @@ impl fmt::Display for RuntimeHostError {
             "runtime host error {} during {}",
             self.code, self.operation
         )?;
+        if let Some((code, operation)) = self.lifecycle.latched_cause {
+            write!(formatter, " cause={code} cause_operation={operation}")?;
+        }
         if let Some(probe) = &self.lifecycle.owner_probe {
             write!(formatter, ": {probe}")?;
         }

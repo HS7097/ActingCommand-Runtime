@@ -346,38 +346,60 @@ impl HostShared {
         &self,
         status: &InstallTransitionStatus,
     ) -> RuntimeHostResult<Option<EventId>> {
+        self.record_install_status_with_cause(status, None)
+    }
+
+    /// The status fact of a transition. A failed or aborted one also records its
+    /// `failure_code`, and a start that a latched failure stopped records that condition as
+    /// `cause` and `cause_operation` (Workflow #381 A R3′).
+    fn record_install_status_with_cause(
+        &self,
+        status: &InstallTransitionStatus,
+        cause: Option<(&'static str, &'static str)>,
+    ) -> RuntimeHostResult<Option<EventId>> {
         status
             .validate()
             .map_err(|error| install_error(error.code()))?;
-        self.record_install_value(
-            TRANSITION_KEY,
-            vec![BTreeMap::from([
-                (
-                    "owner_epoch".to_owned(),
-                    identity_scalar(&status.ticket.target.owner_epoch)?,
-                ),
-                (
-                    "transition_id".to_owned(),
-                    FactScalar::String(status.ticket.transition_id.clone()),
-                ),
-                (
-                    "request_id".to_owned(),
-                    identity_scalar(&status.ticket.request_id)?,
-                ),
-                (
-                    "phase".to_owned(),
-                    FactScalar::String(status.phase.as_str().to_owned()),
-                ),
-                (
-                    "admission_closed".to_owned(),
-                    FactScalar::Boolean(status.admission_closed),
-                ),
-                (
-                    "timeout_ms".to_owned(),
-                    FactScalar::Integer(status.timeout_ms as i64),
-                ),
-            ])],
-        )
+        let mut row = BTreeMap::from([
+            (
+                "owner_epoch".to_owned(),
+                identity_scalar(&status.ticket.target.owner_epoch)?,
+            ),
+            (
+                "transition_id".to_owned(),
+                FactScalar::String(status.ticket.transition_id.clone()),
+            ),
+            (
+                "request_id".to_owned(),
+                identity_scalar(&status.ticket.request_id)?,
+            ),
+            (
+                "phase".to_owned(),
+                FactScalar::String(status.phase.as_str().to_owned()),
+            ),
+            (
+                "admission_closed".to_owned(),
+                FactScalar::Boolean(status.admission_closed),
+            ),
+            (
+                "timeout_ms".to_owned(),
+                FactScalar::Integer(status.timeout_ms as i64),
+            ),
+        ]);
+        if let Some(failure_code) = &status.failure_code {
+            row.insert(
+                "failure_code".to_owned(),
+                FactScalar::String(failure_code.clone()),
+            );
+        }
+        if let Some((code, operation)) = cause {
+            row.insert("cause".to_owned(), FactScalar::String(code.to_owned()));
+            row.insert(
+                "cause_operation".to_owned(),
+                FactScalar::String(operation.to_owned()),
+            );
+        }
+        self.record_install_value(TRANSITION_KEY, vec![row])
     }
 
     fn install_refusal(
@@ -427,8 +449,11 @@ impl HostShared {
         if target != self.shutdown_target {
             return Err(self.install_refusal(&admission, action, "install_owner_mismatch"));
         }
-        if !lock(&self.governance_connections, "authorize_install_transition")?
-            .contains(&connection)
+        // Workflow #381 A R2: the read-only Query needs no governance identity; while the new
+        // owner prepares and before its deadline it reads Host memory only and appends nothing.
+        if !matches!(action, InstallTransitionAction::Query { .. })
+            && !lock(&self.governance_connections, "authorize_install_transition")?
+                .contains(&connection)
         {
             return Err(self.install_refusal(&admission, action, "install_identity_required"));
         }
@@ -698,13 +723,25 @@ impl HostShared {
         Ok(())
     }
 
+    /// Workflow #381 A R3′: the error that stops an install start, if anything stops it: an
+    /// accepted shutdown (`stopping`, or the shutdown flag) or a latched failure. The start
+    /// keeps its own code, `install_startup_stopped`, and names the latched condition.
+    fn install_start_stopped(&self, stopping: bool) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        let latched = self.fatal.current()?;
+        if !stopping && !self.fatal.is_shutdown_requested() && latched.is_none() {
+            return Ok(None);
+        }
+        let stopped = install_error(HostCode::InstallStartupStopped.as_str());
+        Ok(Some(match latched {
+            Some(cause) => stopped.with_latched_cause(&cause),
+            None => stopped,
+        }))
+    }
+
     pub(super) fn wait_install_release(&self) -> RuntimeHostResult<()> {
         loop {
-            if self.fatal.is_shutdown_requested() {
-                return Err(install_error(HostCode::InstallStartupStopped.as_str()));
-            }
-            if let Some(error) = self.fatal.current()? {
-                return Err(error);
+            if let Some(stopped) = self.install_start_stopped(false)? {
+                return Err(stopped);
             }
             let admission = lock(&self.lifecycle_admission, "wait_install_release")?;
             if admission.held.is_none()
@@ -723,8 +760,8 @@ impl HostShared {
     pub(super) fn check_install_preparation(&self) -> RuntimeHostResult<()> {
         self.tick_install()?;
         let admission = lock(&self.lifecycle_admission, "check_install_preparation")?;
-        if admission.stopping || self.fatal.is_shutdown_requested() {
-            return Err(install_error(HostCode::InstallStartupStopped.as_str()));
+        if let Some(stopped) = self.install_start_stopped(admission.stopping)? {
+            return Err(stopped);
         }
         if admission.held.is_some()
             && admission
@@ -768,8 +805,8 @@ impl HostShared {
     pub(super) fn finish_install_preparation(&self) -> RuntimeHostResult<()> {
         self.tick_install()?;
         let mut admission = lock(&self.lifecycle_admission, "finish_install_preparation")?;
-        if admission.stopping {
-            return Err(install_error(HostCode::InstallStartupStopped.as_str()));
+        if let Some(stopped) = self.install_start_stopped(admission.stopping)? {
+            return Err(stopped);
         }
         if let Some(transition) = &admission.transition {
             if transition.status.phase != Phase::Preparing {
@@ -839,7 +876,10 @@ impl HostShared {
             status
                 .failure_code
                 .get_or_insert_with(|| error.code().to_owned());
-            self.record_install_status(&status)?;
+            let cause = error
+                .latched_cause()
+                .filter(|_| status.failure_code.as_deref() == Some(error.code()));
+            self.record_install_status_with_cause(&status, cause)?;
             transition.status = status;
         }
         Ok(())

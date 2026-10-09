@@ -95,13 +95,25 @@ struct InstallTransitionRun {
     declares_identity: bool,
 }
 
+/// Workflow #381 A R1′ (review M2): one deadline for each run, not one per exchange. Query,
+/// Release, BeginDrain and Abort take at most 60 s in all; CommitShutdown's exchanges take at
+/// most 10 s, so that with the `--wait 60` acsetup adds they stay inside acsetup's 75 s.
+const INSTALL_TRANSITION_RUN_BUDGET: Duration = Duration::from_secs(60);
+const INSTALL_COMMIT_EXCHANGE_BUDGET: Duration = Duration::from_secs(10);
+
 fn install_transition_run(
-    _action: &actingcommand_contract::InstallTransitionAction,
+    action: &actingcommand_contract::InstallTransitionAction,
 ) -> InstallTransitionRun {
+    use actingcommand_contract::InstallTransitionAction;
+    let budget = match action {
+        InstallTransitionAction::CommitShutdown { .. } => INSTALL_COMMIT_EXCHANGE_BUDGET,
+        _ => INSTALL_TRANSITION_RUN_BUDGET,
+    };
     InstallTransitionRun {
-        budget: None,
-        exchange_timeout: Duration::from_secs(5),
-        declares_identity: true,
+        budget: Some(budget),
+        exchange_timeout: budget,
+        // Workflow #381 A R2: the read-only Query declares no identity, so it appends nothing.
+        declares_identity: !matches!(action, InstallTransitionAction::Query { .. }),
     }
 }
 

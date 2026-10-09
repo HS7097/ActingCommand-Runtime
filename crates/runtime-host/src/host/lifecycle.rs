@@ -5,9 +5,12 @@ use super::*;
 impl RuntimeLifecycleFailureStage {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
-            Self::InstallDrain => "drain",
-            Self::InstallHeld => "startup_held",
-            Self::InstallRelease => "release",
+            // Workflow #381 A: a lifecycle failure stage has 2-4 dotted segments; the former
+            // one-word install stages failed that check, so no install failure could be recorded
+            // and every attempt latched the lifecycle append failure.
+            Self::InstallDrain => "runtime.lifecycle.install_drain",
+            Self::InstallHeld => "runtime.lifecycle.install_held",
+            Self::InstallRelease => "runtime.lifecycle.install_release",
             Self::PolicyInitialization => "runtime.lifecycle.policy_initialization",
             Self::PolicyMonitor => "runtime.lifecycle.policy_monitor",
             Self::PolicyForward => "runtime.lifecycle.policy_forward",

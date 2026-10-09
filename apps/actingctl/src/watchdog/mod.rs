@@ -136,6 +136,7 @@ struct Tick {
     journal: Journal,
     live: Option<Result<decide::LiveOwner, String>>,
     fatal: Option<decide::Fatal>,
+    earlier_fatal: Option<decide::Fatal>,
     runtime_info: Option<Value>,
     writer: Option<&'static str>,
     processes: Option<Vec<decide::RuntimeProcess>>,
@@ -158,6 +159,7 @@ impl Tick {
             journal: observed.journal,
             live,
             fatal: observed.fatal,
+            earlier_fatal: observed.earlier_fatal,
             writer: None,
             processes: None,
         })
@@ -169,6 +171,7 @@ impl Tick {
             live: self.live.clone(),
             journal: self.journal.clone(),
             fatal: self.fatal.clone(),
+            earlier_fatal: self.earlier_fatal.clone(),
         }
     }
 

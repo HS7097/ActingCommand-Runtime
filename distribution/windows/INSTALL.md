@@ -152,10 +152,13 @@ an explicit candidate path is preserved. Running processes use `Running` and
 require the configuration selected by their pinned snapshot.
 
 Installation control uses the ordinary Runtime connection, with `(Cli, Cli)` or
-`(User, Ui)` origin, an accepted governance identity and the exact owner target.
-The CLI declares `client: actingctl`; a configured governance allowlist must
-permit that identity. The client method is `RuntimeClient::install_transition`.
-The corresponding CLI entry is:
+`(User, Ui)` origin and the exact owner target. Every action but `query` needs an
+accepted governance identity; the read-only `query` needs none, and while the new
+owner is `preparing` and before its deadline it reads Host memory only and appends
+nothing to the ledger (Workflow #381 A R2). The CLI declares `client: actingctl`
+before every action but `query`; a configured governance allowlist must permit
+that identity. The client method is `RuntimeClient::install_transition`. The
+corresponding CLI entry is:
 
 ```powershell
 actingctl install-transition --state-root <state-root> --action-json '<action-json>'
@@ -163,7 +166,11 @@ actingctl install-transition --state-root <state-root> --action-json '<action-js
 
 The JSON action is `begin_drain` (transition_id and optional timeout_ms), `query`
 (transition_id), `abort` (ticket), `commit_shutdown` (ticket), or `release`
-(ticket and optional timeout_ms). Save the complete returned ticket. A drain
+(ticket and optional timeout_ms). Each run has one deadline for all its exchanges,
+counted from its start (Workflow #381 A R1′): 60 seconds for `begin_drain`,
+`query`, `abort` and `release`, 10 seconds for `commit_shutdown`, whose `--wait`
+follows, so that every run fits an installer's 75-second limit. Save the complete
+returned ticket. A drain
 closes new root admission while admitted calls, leases, queued work and their
 cleanup finish. Wait for `drained`, then submit that ticket's `commit_shutdown`;
 `--wait 60` on this action observes the accepted owner's actual close and process
@@ -190,11 +197,16 @@ Drain, held and release deadlines default to 60 seconds and are bounded at
 600 seconds; supply a shorter duration when the authorized window is shorter.
 A drain timeout removes only this transaction's barrier. A held timeout stays
 closed before Provider assembly; release failure or timeout stays closed and
-preserves native preparation/cleanup failures. A missing client receipt is
-unknown: reconnect, declare identity and query the original transition. The
-client never retries an installation action automatically. Installation status
-and original pauses are the Host-owned ledger facts `host.install_transition`
-and `host.install_transition.pauses`.
+preserves native preparation/cleanup failures. A start that stops before it
+finished preparing, by an accepted shutdown or a Runtime failure latched meanwhile,
+ends as `install_startup_stopped` during `install_transition`; a latched failure is
+named as `cause=<code> cause_operation=<operation>` on the `FATAL actingd:` line,
+in the lifecycle failure's detail and in the failed transition's status fact, which
+also records `failure_code` (Workflow #381 A R3′). A missing client receipt is
+unknown: reconnect and query the original transition. The client never retries an
+installation action automatically. Installation status and original pauses are the
+Host-owned ledger facts `host.install_transition` and
+`host.install_transition.pauses`.
 
 ### Standalone configuration
 
@@ -385,12 +397,14 @@ and nonzero exit result. Do not treat a startup line as proof of device executio
 
 `actingctl watchdog` (`contracts/runtime-watchdog.md`, Workflow #374) starts the
 Runtime of an A/B installation again when it is gone without a formal close (a
-crash, a closed console window, an end in Task Manager, a reboot). It never starts
-a Runtime that was closed formally (`request-shutdown`, an acsetup transition),
-that is alive, while acsetup holds `install\writer.lock`, or whose last
-`actingd-*.log` ends in a `FATAL actingd:` or `FATAL acforward:` line; that last
-case stays down loudly. At most 3 starts in 30 minutes; then it stays down until a
-formal start.
+crash, a closed console window, an end in Task Manager, a reboot), or when its
+held start stopped (`FATAL actingd:` with `install_startup_stopped`, `held_timeout`
+or `release_timeout`, also behind a later formal close that no log covers;
+Workflow #381 A R5′, R5b). It never starts a Runtime that was closed formally
+(`request-shutdown`, an acsetup transition), that is alive, while acsetup holds
+`install\writer.lock`, or whose last `actingd-*.log` ends in any other
+`FATAL actingd:` or a `FATAL acforward:` line; that last case stays down loudly. At
+most 3 starts in 30 minutes; then it stays down until a formal start.
 
 ```powershell
 <root>\runtime\actingctl.exe watchdog install --root <root>
