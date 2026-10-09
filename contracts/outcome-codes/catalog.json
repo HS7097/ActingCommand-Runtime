@@ -3838,7 +3838,6 @@
     "actingctl": "apps/actingctl",
     "actingd": "apps/actingd",
     "actinglab": "apps/actinglab",
-    "device-test": "apps/device-test",
     "actingledger": "apps/ledger-forensics",
     "vision-provider-check": "apps/vision-provider-check",
     "contract": "crates/actingcommand-contract",

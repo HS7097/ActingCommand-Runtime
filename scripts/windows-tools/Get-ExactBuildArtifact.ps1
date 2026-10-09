@@ -484,6 +484,8 @@ try {
     # platform-tools files under the one subdirectory 'platform-tools'; 'platform-tools-v2'
     # (Workflow #360) is the same without the retired vision provider DLL, and
     # 'platform-tools-v3' (Workflow #374) is v2 plus the watchdog launcher actingwatch.exe.
+    # Runtime v0.11.6 retired actingcommand-device-test.exe: v1 and v2 always carry it, and
+    # a v3 artifact carries it only when it was built before the retirement.
     # Without the field a Tools artifact keeps the historical five flat files. Any other
     # layout fails.
     $allowedDirectory = $null
@@ -504,9 +506,20 @@ try {
         $expectedFiles = @(
             'actinglab.exe',
             'actingledger.exe',
-            'actingcommand-vision-provider-check.exe',
-            'actingcommand-device-test.exe'
+            'actingcommand-vision-provider-check.exe'
         )
+        $declaresDeviceTest = (
+            $manifest.PSObject.Properties.Name -contains 'files' -and
+            @(
+                @($manifest.files) | Where-Object { $null -ne $_ } | ForEach-Object {
+                    $path = $_.PSObject.Properties['path']
+                    if ($null -ne $path) { [string]$path.Value }
+                }
+            ) -ccontains 'actingcommand-device-test.exe'
+        )
+        if ($layout.Value -cne 'platform-tools-v3' -or $declaresDeviceTest) {
+            $expectedFiles += 'actingcommand-device-test.exe'
+        }
         if ($layout.Value -ceq 'platform-tools-v1') {
             $expectedFiles += 'ac_fastdeploy_ppocr.dll'
         }

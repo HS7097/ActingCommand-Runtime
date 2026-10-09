@@ -40,12 +40,8 @@ fn ledger_owners(root: &Path) -> Vec<LedgerOwnerModule> {
 
 const GENERIC_NON_CARGO_ROOTS: &[&str] = &["contracts", "tests"];
 
-const GENERIC_AUTHORING_MEMBER_ROOTS: &[&str] = &[
-    "apps/actinglab",
-    "apps/device-test",
-    "crates/lab",
-    "crates/resource-tooling",
-];
+const GENERIC_AUTHORING_MEMBER_ROOTS: &[&str] =
+    &["apps/actinglab", "crates/lab", "crates/resource-tooling"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GenericityDomain {
@@ -1374,10 +1370,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .iter()
         .find(|package| package["name"] == "actingcommand-vision-provider-check")
         .expect("Provider ledger consumer package");
-    let device_test = packages
-        .iter()
-        .find(|package| package["name"] == "actingcommand-device-test")
-        .expect("non-production device ledger consumer package");
 
     let internal_dependencies = |package: &serde_json::Value| {
         let mut names = package["dependencies"]
@@ -1419,25 +1411,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
             "actingcommand-vision-ffi".to_owned(),
         ],
         "Provider checker internal dependency boundary changed"
-    );
-    // DEVICE-TEST-B-READ-v1: the named non-production tool also consumes B.
-    // Its capture factory uses FrameStore and the existing memory source for prime admission.
-    // First red: https://github.com/HS7097/ActingCommand-Runtime/actions/runs/35676181277/attempts/1
-    assert_eq!(
-        internal_dependencies(device_test),
-        vec![
-            "actingcommand-artifact-store".to_owned(),
-            "actingcommand-contract".to_owned(),
-            "actingcommand-device".to_owned(),
-            "actingcommand-execution-kernel".to_owned(),
-            "actingcommand-host-metrics".to_owned(),
-            "actingcommand-ledger-forensics".to_owned(),
-            "actingcommand-page-detector".to_owned(),
-            "actingcommand-recognition".to_owned(),
-            "actingcommand-recognition-pack".to_owned(),
-            "actingcommand-scheduler".to_owned(),
-        ],
-        "device-test internal dependency boundary changed"
     );
 
     let artifact_dependency = leaf["dependencies"]
@@ -1493,11 +1466,7 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .filter(|package| {
             !matches!(
                 package["name"].as_str(),
-                Some(
-                    "actingledger"
-                        | "actingcommand-vision-provider-check"
-                        | "actingcommand-device-test"
-                )
+                Some("actingledger" | "actingcommand-vision-provider-check")
             )
         })
         .filter(|package| {
@@ -1512,7 +1481,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
                             Some(
                                 "actingcommand-ledger-forensics"
                                     | "actingcommand-vision-provider-check"
-                                    | "actingcommand-device-test"
                             )
                         )
                 })
@@ -1699,7 +1667,6 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
                     name,
                     "actingcommand-runtime-host"
                         | "actingcommand-actingd"
-                        | "actingcommand-device-test"
                         | "actingcommand-lab"
                         | "actingcommand-resource-tooling"
                 ),
@@ -2285,16 +2252,6 @@ fn c5_task_planning_is_owned_by_execution_kernel_and_legacy_crate_is_retired() {
             "execution-kernel must own task planning dependency {required}"
         );
     }
-
-    let device_test_dependencies = dependencies("actingcommand-device-test");
-    assert!(
-        device_test_dependencies.contains(&"actingcommand-execution-kernel"),
-        "device-test must consume planning from execution-kernel"
-    );
-    assert!(
-        !device_test_dependencies.contains(&"actingcommand-task-loop"),
-        "device-test must not retain the legacy task-loop dependency"
-    );
 
     let mut planning_sources = Vec::new();
     collect_rust_files(
