@@ -668,11 +668,20 @@ fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_sta
         .store(true, Ordering::Release);
     let ladder_instance = instance_id();
     let startup_instance = instance_id();
+    // The policy's configured identities are the registered aliases (both instances); only A
+    // is available to the policy.
+    let mut facts = policy_facts();
+    let mut startup_identity = facts.instances[0].clone();
+    startup_identity.instance_id = STARTUP_ALIAS.to_owned();
+    startup_identity.available = false;
+    facts.instances.push(startup_identity);
     let host = RuntimeHost::start(
-        host_config.with_startup_packages(BTreeMap::from([
-            (POLICY_INSTANCE_ALIAS.to_owned(), startup.clone()),
-            (STARTUP_ALIAS.to_owned(), startup),
-        ])),
+        host_config
+            .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources()))
+            .with_startup_packages(BTreeMap::from([
+                (POLICY_INSTANCE_ALIAS.to_owned(), startup.clone()),
+                (STARTUP_ALIAS.to_owned(), startup),
+            ])),
         Arc::new(FakeProvider::from_entries([
             (
                 POLICY_INSTANCE_ALIAS.to_owned(),
@@ -691,7 +700,45 @@ fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_sta
         .hold_android_boot
         .store(true, Ordering::Release);
     bind_fake_emulator(&host, POLICY_INSTANCE_ALIAS, ladder_instance, &ladder_state);
-    let context = admit_ladder_run(&host, &request);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate policy dispatch");
+    let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .expect("A's dispatch intent")
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("dispatch reason chain")
+        .clone();
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_scheduled_policy_dispatch(
+            &intent,
+            &reasons,
+            &policy_context(&host, &intent),
+            &request,
+        )
+        .expect("policy admission")
+    else {
+        panic!("expected a policy run context")
+    };
     ladder_state.unknown_capture.store(true, Ordering::Release);
     let error = host
         .run_scheduled_contained_task(&context, &request)
