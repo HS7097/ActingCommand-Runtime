@@ -60,7 +60,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes.",
       "common_causes": "A holder that overran its own step bound; a host that was stopping while a ladder held an instance.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
@@ -75,7 +75,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes.",
       "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
@@ -137,7 +137,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "A stuck-recovery ladder found, at a holding check, that it no longer holds its instance's key. It cancels its continuation, records the current rung failed with this reason and finishes exhausted at warning, without an error point.",
       "common_causes": "In practice only a stopping host; otherwise a step that overran its own bound so the key lapsed.",
       "handling": "Nothing to repair: the instance is handed on, and the next trigger starts a new ladder."
@@ -150,7 +150,7 @@
       "values": {},
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category.",
       "common_causes": "A defect that panics on every payload of one instance.",
       "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."

@@ -839,6 +839,58 @@ fn a_climb_whose_rungs_all_ran_and_failed_stays_at_error_under_a_pause_at_its_en
     run.host.close().expect("close host");
 }
 
+/// Review L6 (verify-666): a pause that cancels rung 3's own package run ends the climb at
+/// Warning, as a pause during rung 1's or rung 2's run does: the run's `contained_task_paused`
+/// is a holding interruption, not the rung's own failure. Rung 3's readiness passes here (the
+/// fake's opens report a passed self-check once Android has booted), so rung 3 runs the startup
+/// package on the key; the pause's drain cancels that run.
+#[test]
+fn a_pause_that_cancels_rung_three_s_package_run_ends_the_climb_at_warning() {
+    let run = emulator_ladder_fixture(0, true);
+    run.fail_scheduled_run();
+    wait_for_rung_three_start(&run.state);
+    // R4 polls an Android that has not booted. Its next attempt sees Android up, passes its
+    // preparation, and rung 3 runs the startup package, each capture taking 3 s.
+    run.state.observed_open.store(true, Ordering::Release);
+    run.state.capture_delay_ms.store(3_000, Ordering::Release);
+    run.state.android_down.store(false, Ordering::Release);
+    wait_for_rung_run(&run.host, POLICY_INSTANCE_ALIAS);
+    let receipt = pause_instance(&run.host, POLICY_INSTANCE_ALIAS, 76);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    wait_for_ladder_end(&run.host, POLICY_INSTANCE_ALIAS);
+    let events = all_events(&run.host);
+    assert!(
+        phases(&events).iter().any(|(_, phase)| matches!(
+            phase,
+            RuntimeLifecyclePhase::RecoveryEnvironmentReady { .. }
+        )),
+        "rung 3's readiness passed"
+    );
+    let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
+    assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    assert_eq!(finished.severity(), EventSeverity::Warning);
+    let rungs = rung_outcomes(&events);
+    assert_eq!(
+        rungs.last(),
+        Some(&(
+            RecoveryRung::EmulatorRestart,
+            RecoveryRungOutcome::Failed,
+            Some("contained_task_paused".to_owned())
+        )),
+        "{rungs:?}"
+    );
+    assert_eq!(
+        ladder_releases(&events, run.context.lease_token().lease_id()).len(),
+        1
+    );
+    assert!(run.host.fatal_error().expect("runtime health").is_none());
+    run.host.close().expect("close host");
+}
+
 /// Workflow #369 §5.2: an install drain during a climb cancels nothing the ladder holds; the
 /// ladder ends at its next holding check (`recovery_ladder_drain_requested`, exhausted at
 /// Warning), releases once, and the install drain completes.

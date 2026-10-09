@@ -62,6 +62,9 @@ pub(super) struct FakeState {
     block_emulator_start: AtomicBool,
     fail_emulator_start: AtomicBool,
     emulator_actions: std::sync::Mutex<Vec<actingcommand_contract::EmulatorInstanceAction>>,
+    // Workflow #369 (verify-666 L6): opens report a passed native open, so a preparation's
+    // self-check passes (`fake_opened_backend`).
+    observed_open: AtomicBool,
 }
 
 struct FakeBackend {
@@ -528,6 +531,48 @@ impl FakeProvider {
         self.resolved_override = Some(resolved);
         self
     }
+
+    /// Whether the instance's opens report a passed native open (`FakeState::observed_open`).
+    fn observed_open(&self, instance_alias: &str) -> bool {
+        self.entries
+            .get(instance_alias)
+            .is_some_and(|entry| entry.state.observed_open.load(Ordering::Acquire))
+    }
+}
+
+/// Workflow #369 (verify-666 L6): an opened fake backend with an unobserved report, or with a
+/// passed native one (capture `adb_screencap` 1280x720; input `adb_shell_input` with its
+/// geometry), so a preparation's self-check passes.
+fn fake_opened_backend<T>(
+    backend: T,
+    entry: actingcommand_contract::BackendOpenEntry,
+    observed: bool,
+) -> actingcommand_device::OpenedBackend<T> {
+    use actingcommand_contract::{BackendObservationStatus, BackendOpenReport, BackendOpenSource};
+    if !observed {
+        return actingcommand_device::OpenedBackend::unobserved(backend, entry);
+    }
+    let mut report = BackendOpenReport::unobserved(entry);
+    report.source = BackendOpenSource::Native;
+    report.status = BackendObservationStatus::Passed;
+    report.connection = BackendObservationStatus::Passed;
+    if entry == actingcommand_contract::BackendOpenEntry::Capture {
+        report.requested = "adb_screencap".to_owned();
+        report.selected = Some("adb_screencap".to_owned());
+        report.capture_check = BackendObservationStatus::Passed;
+        report.frame_width = Some(1280);
+        report.frame_height = Some(720);
+    } else {
+        report.requested = "adb_shell_input".to_owned();
+        report.selected = Some("adb_shell_input".to_owned());
+        report.input_check = BackendObservationStatus::Passed;
+        report.input_geometry = Some(actingcommand_contract::BackendInputGeometryObservation {
+            natural_max_x: 1280,
+            natural_max_y: 720,
+            rotation_degrees: 0,
+        });
+    }
+    actingcommand_device::OpenedBackend::new(backend, report)
 }
 
 impl ExecutionBackendProvider for FakeProvider {
@@ -592,10 +637,12 @@ impl ExecutionBackendProvider for FakeProvider {
             }))
         };
         let result: DeviceResult<Box<dyn InputBackend>> = open();
+        let observed = self.observed_open(instance_alias);
         result.map(|backend| {
-            actingcommand_device::OpenedBackend::unobserved(
+            fake_opened_backend(
                 backend,
                 actingcommand_contract::BackendOpenEntry::Input,
+                observed,
             )
         })
     }
@@ -635,10 +682,12 @@ impl ExecutionBackendProvider for FakeProvider {
             }))
         };
         let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        let observed = self.observed_open(instance_alias);
         result.map(|backend| {
-            actingcommand_device::OpenedBackend::unobserved(
+            fake_opened_backend(
                 backend,
                 actingcommand_contract::BackendOpenEntry::Capture,
+                observed,
             )
         })
     }
