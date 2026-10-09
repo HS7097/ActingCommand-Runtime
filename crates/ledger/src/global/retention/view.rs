@@ -12,13 +12,14 @@ use super::super::projection::EventIndexes;
 use super::{RetentionIndex, material_references, referenced_frames, source};
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::{
-    ArtifactId, ArtifactKind, ArtifactPinReason, CapturePayload, EffectDisposition, EventFamily,
-    EventPayload, EventSeverity, EventType, FactContent, FactPayload, FrameId, InstanceId, LeaseId,
-    LeasePayload, PinnedFrameReason, ProjectedArtifactReference, RESOURCE_READING_DETECTOR_PREFIX,
-    RunId, RuntimePayload, TaskOutcome, TaskPayload, TaskSemanticFact,
-    parse_resource_reading_snapshot_id,
+    ArtifactId, ArtifactKind, ArtifactPinReason, CapturePayload, EffectDisposition, EventAction,
+    EventFamily, EventPayload, EventSeverity, EventType, FactContent, FactPayload, FrameId,
+    InstanceId, LeaseId, LeasePayload, PinnedFrameReason, ProjectedArtifactReference,
+    RESOURCE_READING_DETECTOR_PREFIX, RunId, RuntimePayload, TaskOutcome, TaskPayload,
+    TaskSemanticFact, parse_resource_reading_snapshot_id,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::PoisonError;
 
 /// A frame is in an error window when its capture time lies in `[t - 30 s, t]`.
 const ERROR_WINDOW_MS: u64 = 30_000;
@@ -52,9 +53,9 @@ impl Default for FrameRetentionSwitches {
     }
 }
 
-/// The machine's offset from UTC, in milliseconds east of UTC, at a UTC instant (Unix ms).
-/// Kept folders and file names are named in local time.
-pub type LocalOffsetMs = fn(u64) -> i64;
+/// A UTC instant's local offset in milliseconds east of UTC, `None` when unknown. The view
+/// uses [`crate::local_time::machine_local_offset_ms`]; the tests pass a fixed zone.
+type LocalOffsetMs = fn(u64) -> Option<i64>;
 
 /// A frame's class, in order of precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -166,12 +167,17 @@ struct Start {
 struct RunFacts {
     first_sequence: u64,
     instance: Option<InstanceId>,
-    /// The first `TerminalCommitted`: its sequence and ledger timestamp.
+    /// The first terminal, its sequence and ledger timestamp: a `TerminalCommitted`, or the
+    /// generic `task.completed`, `task.failed` or `task.cancelled` that ends a Lab debug run,
+    /// which commits no `TerminalCommitted`.
     terminal: Option<(u64, u64)>,
     /// The `failure_code` of a failure terminal, with its sequence.
     terminal_failure: Option<(u64, String)>,
     /// The latest capture summary of the run.
     summary: Option<u64>,
+    /// A Lab debug-package run (`task.requested` by `runtime.debug_package`); it never holds
+    /// back the frames of its instance.
+    debug: bool,
 }
 
 struct PointFacts {
@@ -219,14 +225,32 @@ impl FrameFacts {
             if facts.instance.is_none() {
                 facts.instance = links.instance_id().copied();
             }
-            if let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload()
-                && let TaskSemanticFact::TerminalCommitted { outcome, .. } = payload.fact()
-                && facts.terminal.is_none()
+            if let EventPayload::Task(TaskPayload::Requested(payload)) = event.payload()
+                && payload.action() == EventAction::RuntimeDebugPackage
             {
-                facts.terminal = Some((sequence, event.timestamp_unix_ms()));
-                if *outcome == TaskOutcome::Failure {
-                    facts.terminal_failure =
-                        payload_text(event.payload(), "failure_code").map(|code| (sequence, code));
+                facts.debug = true;
+            }
+            if facts.terminal.is_none() {
+                match event.payload() {
+                    EventPayload::Task(TaskPayload::Semantic(payload)) => {
+                        if let TaskSemanticFact::TerminalCommitted { outcome, .. } = payload.fact()
+                        {
+                            facts.terminal = Some((sequence, event.timestamp_unix_ms()));
+                            if *outcome == TaskOutcome::Failure {
+                                facts.terminal_failure =
+                                    payload_text(event.payload(), "failure_code")
+                                        .map(|code| (sequence, code));
+                            }
+                        }
+                    }
+                    EventPayload::Task(
+                        TaskPayload::Completed(_)
+                        | TaskPayload::Failed(_)
+                        | TaskPayload::Cancelled(_),
+                    ) if facts.debug => {
+                        facts.terminal = Some((sequence, event.timestamp_unix_ms()));
+                    }
+                    _ => {}
                 }
             }
             if event.event_type() == EventType::CaptureSummaryCommitted {
@@ -343,9 +367,13 @@ impl FrameFacts {
             .and_then(|facts| facts.terminal_failure.as_ref())
             .filter(|(terminal, _)| *terminal < sequence)
             .map(|(_, code)| code.clone());
+        let own = serde_json::to_value(event.payload()).ok();
         let leaf_name = leaf_name(
-            payload_text(event.payload(), "failure_code"),
-            payload_text(event.payload(), "code"),
+            own.as_ref()
+                .and_then(|value| first_string(value, "failure_code")),
+            own.as_ref().and_then(|value| {
+                nested_string(value, "rejection", "code").or_else(|| first_string(value, "code"))
+            }),
             preceding_failure,
             event.event_type(),
         );
@@ -383,11 +411,12 @@ impl FrameFacts {
         self.ended_by(run).is_none_or(|(end, _)| terminal < end)
     }
 
-    /// No `TerminalCommitted` at all, and its owner epoch has not ended.
-    fn unterminated(&self, run: &RunId) -> bool {
+    /// A run that holds back the frames of its instance: no terminal at all and its owner
+    /// epoch has not ended, so it can still get an epoch-end point. A Lab debug run never does.
+    fn holds_neighbours(&self, run: &RunId) -> bool {
         self.runs
             .get(run)
-            .is_some_and(|facts| facts.terminal.is_none())
+            .is_some_and(|facts| facts.terminal.is_none() && !facts.debug)
             && self.ended_by(run).is_none()
     }
 
@@ -477,16 +506,117 @@ struct RunSpan {
     instance: InstanceId,
 }
 
+/// Workflow #375 R5d: the classes at one head and one setting. Only the clock turns them into
+/// a view, so a cleaner round at an unchanged head classes nothing again.
+pub(super) struct FrameCache {
+    through_sequence: u64,
+    switches: FrameRetentionSwitches,
+    classified: Classified,
+}
+
+/// Every frame classed at one head, independent of the clock.
+struct Classified {
+    frames: Vec<ClassifiedFrame>,
+    error_points: Vec<FrameErrorPoint>,
+}
+
+/// One frame classed at one head. Its class, entry, due time and folder apply once it settles.
+struct ClassifiedFrame {
+    reference: ProjectedArtifactReference,
+    instance: InstanceId,
+    run: Option<RunId>,
+    /// 60 s after the capture, once the entry is closed and no unterminated run on the
+    /// instance holds the frame; `None` until then.
+    settles_at: Option<u64>,
+    entry: Option<u64>,
+    class: FrameRetentionClass,
+    due: Option<u64>,
+    folder: Option<KeptFrameFolder>,
+    windows: Vec<usize>,
+}
+
+impl Classified {
+    /// The view at `now`: a frame not yet settled is `Running`, with no entry, due time or
+    /// folder.
+    fn at(&self, through_sequence: u64, now: u64) -> FrameRetentionView {
+        FrameRetentionView {
+            through_sequence,
+            evaluated_at_unix_ms: now,
+            frames: self
+                .frames
+                .iter()
+                .map(|frame| {
+                    let settled = frame.settles_at.is_some_and(|at| now >= at);
+                    FrameRetentionFrame {
+                        reference: frame.reference.clone(),
+                        instance_id: frame.instance,
+                        run_id: frame.run,
+                        class: if settled {
+                            frame.class
+                        } else {
+                            FrameRetentionClass::Running
+                        },
+                        entry_unix_ms: frame.entry.filter(|_| settled),
+                        due_unix_ms: frame.due.filter(|_| settled),
+                        folder: frame.folder.clone().filter(|_| settled),
+                        windows: frame.windows.clone(),
+                    }
+                })
+                .collect(),
+            error_points: self.error_points.clone(),
+        }
+    }
+}
+
 impl RetentionIndex {
-    /// Workflow #375 R5c: the frame view at this index's head and at `now`.
+    /// Workflow #375 R5c/R5d: the frame view at this index's head and at `now`, named in the
+    /// machine's local time. The classes are cached by head and setting.
     pub(in crate::global) fn frame_view<E: LedgerEventRead>(
         &self,
         events: &[E],
         indexes: &EventIndexes,
         now: u64,
         switches: FrameRetentionSwitches,
-        local: LocalOffsetMs,
     ) -> GlobalLedgerResult<FrameRetentionView> {
+        // A poisoned cache only loses its cached value, which is built again below.
+        let mut cache = self
+            .frame_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(cached) = cache.as_ref().filter(|cached| {
+            cached.through_sequence == self.through_sequence && cached.switches == switches
+        }) {
+            return Ok(cached.classified.at(self.through_sequence, now));
+        }
+        let frames = self.view_frames(events, indexes)?;
+        let classified = classify(
+            &self.frame_facts,
+            &self.frames,
+            &frames,
+            switches,
+            crate::local_time::machine_local_offset_ms,
+        )
+        // A local time the system cannot convert refuses this view; the writer goes on.
+        .ok_or_else(|| {
+            super::super::GlobalLedgerError::request(
+                "artifact_retention_clock_failed",
+                "frame_retention_view",
+            )
+        })?;
+        let view = classified.at(self.through_sequence, now);
+        *cache = Some(FrameCache {
+            through_sequence: self.through_sequence,
+            switches,
+            classified,
+        });
+        Ok(view)
+    }
+
+    fn view_frames<E: LedgerEventRead>(
+        &self,
+        events: &[E],
+        indexes: &EventIndexes,
+    ) -> GlobalLedgerResult<Vec<ViewFrame>> {
         let mut frames = Vec::new();
         for object in self.objects.values() {
             let Some(identity) = object.identity.as_ref() else {
@@ -519,32 +649,19 @@ impl RetentionIndex {
                 summarized: object.summary.is_some(),
             });
         }
-        let (frames, error_points) = build_view(
-            &self.frame_facts,
-            &self.frames,
-            &frames,
-            now,
-            switches,
-            local,
-        );
-        Ok(FrameRetentionView {
-            through_sequence: self.through_sequence,
-            evaluated_at_unix_ms: now,
-            frames,
-            error_points,
-        })
+        Ok(frames)
     }
 }
 
-/// Classes every frame. Pure: every input is a fact of the committed prefix or an argument.
-fn build_view(
+/// Classes every frame at one head. Pure: every input is a fact of the committed prefix or an
+/// argument. `None` when the local offset of a named instant is unknown.
+fn classify(
     facts: &FrameFacts,
     frame_artifacts: &BTreeMap<FrameId, BTreeSet<ArtifactId>>,
     frames: &[ViewFrame],
-    now: u64,
     switches: FrameRetentionSwitches,
     local: LocalOffsetMs,
-) -> (Vec<FrameRetentionFrame>, Vec<FrameErrorPoint>) {
+) -> Option<Classified> {
     let by_frame = frames
         .iter()
         .enumerate()
@@ -573,7 +690,7 @@ fn build_view(
     // epoch-end point dated at its last frame.
     let mut waits = BTreeMap::<InstanceId, u64>::new();
     for (run, span) in &spans {
-        if facts.unterminated(run) {
+        if facts.holds_neighbours(run) {
             let first = waits.entry(span.instance).or_insert(span.first_at);
             *first = (*first).min(span.first_at);
         }
@@ -678,11 +795,11 @@ fn build_view(
         let waiting = waits
             .get(&frame.instance)
             .is_some_and(|first| *first <= frame.at.saturating_add(ERROR_WINDOW_MS));
-        let settled = entry.filter(|_| now >= frame.at.saturating_add(SETTLE_AGE_MS) && !waiting);
+        let entry = entry.filter(|_| !waiting);
         let mut class = FrameRetentionClass::Running;
         let mut due = None;
         let mut folder = None;
-        if let Some(entry_at) = settled {
+        if let Some(entry_at) = entry {
             let id = frame.frame;
             let interior = id.is_some_and(|id| {
                 facts.predecessors.contains_key(&id) && facts.successors.contains_key(&id)
@@ -747,52 +864,61 @@ fn build_view(
             };
             folder = match class {
                 FrameRetentionClass::Lab => Some(KeptFrameFolder {
-                    date: local_date(frame.at, local),
+                    date: local_date(frame.at, local)?,
                     leaf: format!(
                         "lab-{}",
                         facts.alias(&frame.instance, frame.verified_sequence)
                     ),
-                    file_name: file_name(frame, local),
+                    file_name: file_name(frame, local)?,
                 }),
                 // The owner is the lowest-sequence point whose window contains the frame,
                 // whichever window keeps it.
-                FrameRetentionClass::Error => windows
-                    .iter()
-                    .map(|index| &points[*index])
-                    .min_by_key(|point| (point.sequence, point.at))
-                    .map(|owner| KeptFrameFolder {
-                        date: local_date(owner.at, local),
-                        leaf: point_leaf(facts, owner),
-                        file_name: file_name(frame, local),
-                    }),
+                FrameRetentionClass::Error => {
+                    match windows
+                        .iter()
+                        .map(|index| &points[*index])
+                        .min_by_key(|point| (point.sequence, point.at))
+                    {
+                        Some(owner) => Some(KeptFrameFolder {
+                            date: local_date(owner.at, local)?,
+                            leaf: point_leaf(facts, owner),
+                            file_name: file_name(frame, local)?,
+                        }),
+                        None => None,
+                    }
+                }
                 _ => None,
             };
         }
-        out.push(FrameRetentionFrame {
+        out.push(ClassifiedFrame {
             reference: frame.reference.clone(),
-            instance_id: frame.instance,
-            run_id: frame.run,
+            instance: frame.instance,
+            run: frame.run,
+            settles_at: entry.map(|_| frame.at.saturating_add(SETTLE_AGE_MS)),
+            entry,
             class,
-            entry_unix_ms: settled,
-            due_unix_ms: due,
+            due,
             folder,
             windows,
         });
     }
-    let error_points = points
-        .iter()
-        .map(|point| FrameErrorPoint {
+    let mut error_points = Vec::with_capacity(points.len());
+    for point in &points {
+        error_points.push(FrameErrorPoint {
             sequence: point.sequence,
             event_type: point.event_type,
             epoch_end: point.epoch_end,
             instance_id: point.instance,
             run_id: point.run,
             at_unix_ms: point.at,
-            date: local_date(point.at, local),
+            date: local_date(point.at, local)?,
             leaf: point_leaf(facts, point),
-        })
-        .collect();
-    (out, error_points)
+        });
+    }
+    Some(Classified {
+        frames: out,
+        error_points,
+    })
 }
 
 fn neighbour<'f>(
@@ -823,23 +949,24 @@ fn point_leaf(facts: &FrameFacts, point: &ResolvedPoint) -> String {
 }
 
 /// `<HHmmss-fff>_<object file name>`, in local time.
-fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> String {
+fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> Option<String> {
     let object = frame
         .reference
         .object_key
         .as_deref()
         .and_then(|key| key.rsplit('/').next())
         .unwrap_or_default();
-    let time = local_time(frame.at, local);
-    format!(
+    let time = local_time(frame.at, local)?;
+    Some(format!(
         "{:02}{:02}{:02}-{:03}_{object}",
         time.hour, time.minute, time.second, time.milli
-    )
+    ))
 }
 
-/// The `<code>` part of an error leaf: the event's own `failure_code`, else its own `code`,
-/// else the failure code of its run's failure terminal when that terminal precedes it, else
-/// its event type with `.` as `_`; at most 64 characters, outside `[A-Za-z0-9_-]` as `_`.
+/// The `<code>` part of an error leaf: the event's own `failure_code`, else its own code (a
+/// `rejection.code` before any other `code`), else the failure code of its run's failure
+/// terminal when that terminal precedes it, else its event type with `.` as `_`; at most 64
+/// characters, outside `[A-Za-z0-9_-]` as `_`.
 fn leaf_name(
     own_failure: Option<String>,
     own_value: Option<String>,
@@ -865,6 +992,24 @@ fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
             _ => first_string(item, key),
         }),
         serde_json::Value::Array(items) => items.iter().find_map(|item| first_string(item, key)),
+        _ => None,
+    }
+}
+
+/// The string `key` of the first object named `parent`, depth first in field order.
+fn nested_string(value: &serde_json::Value, parent: &str, key: &str) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => map.iter().find_map(|(name, item)| {
+            if name == parent
+                && let Some(serde_json::Value::String(text)) = item.get(key)
+            {
+                return Some(text.clone());
+            }
+            nested_string(item, parent, key)
+        }),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|item| nested_string(item, parent, key)),
         _ => None,
     }
 }
@@ -908,11 +1053,9 @@ struct LocalTime {
     milli: i64,
 }
 
-/// The civil date and time of a UTC instant at the machine's offset (proleptic Gregorian).
-fn local_time(unix_ms: u64, local: LocalOffsetMs) -> LocalTime {
-    let local_ms = i64::try_from(unix_ms)
-        .unwrap_or(i64::MAX)
-        .saturating_add(local(unix_ms));
+/// The civil date and time of a UTC instant at the local offset (proleptic Gregorian).
+fn local_time(unix_ms: u64, local: LocalOffsetMs) -> Option<LocalTime> {
+    let local_ms = i64::try_from(unix_ms).ok()?.checked_add(local(unix_ms)?)?;
     let days = local_ms.div_euclid(DAY_MS_I64);
     let of_day = local_ms.rem_euclid(DAY_MS_I64);
     let shifted = days + 719_468;
@@ -928,7 +1071,7 @@ fn local_time(unix_ms: u64, local: LocalOffsetMs) -> LocalTime {
     } else {
         month_index - 9
     };
-    LocalTime {
+    Some(LocalTime {
         year: year_of_era + era * 400 + i64::from(month <= 2),
         month,
         day,
@@ -936,29 +1079,75 @@ fn local_time(unix_ms: u64, local: LocalOffsetMs) -> LocalTime {
         minute: of_day / 60_000 % 60,
         second: of_day / 1_000 % 60,
         milli: of_day % 1_000,
+    })
+}
+
+fn local_date(unix_ms: u64, local: LocalOffsetMs) -> Option<String> {
+    let time = local_time(unix_ms, local)?;
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        time.year, time.month, time.day
+    ))
+}
+
+impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore<B> {
+    /// Workflow #375 R5d: the frame view at the writer's head.
+    pub(in crate::global) fn frame_retention_view(
+        &self,
+        now_unix_ms: u64,
+        switches: FrameRetentionSwitches,
+    ) -> GlobalLedgerResult<FrameRetentionView> {
+        self.retention
+            .frame_view(&self.events, &self.indexes, now_unix_ms, switches)
     }
 }
 
-fn local_date(unix_ms: u64, local: LocalOffsetMs) -> String {
-    let time = local_time(unix_ms, local);
-    format!("{:04}-{:02}-{:02}", time.year, time.month, time.day)
-}
-
-impl super::super::GlobalLedgerEvidence {
-    /// Workflow #375 R5c: the frame view over this opening's events, rebuilt from them, at
-    /// `now_unix_ms`: every frame's class, due time and kept folder, and the error points.
-    /// Read-only. The cleaner reads the same view from the writer's own index
-    /// (`RetentionIndex::frame_view`).
+impl super::super::GlobalLedger {
+    /// Workflow #375 R5d: the frame view at the writer's head and at `now_unix_ms`, which the
+    /// frame cleaner reads once per sweep. Read-only; the classes are cached by head.
     pub fn frame_retention_view(
         &self,
         now_unix_ms: u64,
         switches: FrameRetentionSwitches,
-        local: LocalOffsetMs,
+    ) -> GlobalLedgerResult<FrameRetentionView> {
+        let (response, receiver) = std::sync::mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| super::invalid("writer_unavailable"))?;
+        super::super::send_command(
+            sender,
+            super::super::WriterCommand::FrameRetentionView {
+                now_unix_ms,
+                switches,
+                response,
+            },
+            "frame_retention_view",
+        )?;
+        super::super::receive_response(receiver, "frame_retention_view")?
+    }
+}
+
+impl super::super::GlobalLedgerEvidence {
+    /// Workflow #375 R5c: the frame view over this opening's events at `now_unix_ms`: every
+    /// frame's class, due time and kept folder, and the error points. Read-only. The retention
+    /// index is built from the events once per opening.
+    pub fn frame_retention_view(
+        &self,
+        now_unix_ms: u64,
+        switches: FrameRetentionSwitches,
     ) -> GlobalLedgerResult<FrameRetentionView> {
         let events = self.events();
-        let (retention, indexes) =
-            RetentionIndex::from_events_with_indexes_checked(events, &mut |_| Ok(()))?;
-        retention.frame_view(events, &indexes, now_unix_ms, switches, local)
+        let (retention, indexes) = match self.frame_index.get() {
+            Some(built) => built,
+            None => {
+                let built =
+                    RetentionIndex::from_events_with_indexes_checked(events, &mut |_| Ok(()))?;
+                // Another caller may have built it meanwhile; both copies are the same.
+                self.frame_index.get_or_init(|| built)
+            }
+        };
+        retention.frame_view(events, indexes, now_unix_ms, switches)
     }
 }
 
@@ -983,12 +1172,16 @@ mod tests {
         T0 + seconds * SECOND
     }
 
-    fn utc(_: u64) -> i64 {
-        0
+    fn utc(_: u64) -> Option<i64> {
+        Some(0)
     }
 
-    fn jst(_: u64) -> i64 {
-        9 * 3_600_000
+    fn jst(_: u64) -> Option<i64> {
+        Some(9 * 3_600_000)
+    }
+
+    fn unknown(_: u64) -> Option<i64> {
+        None
     }
 
     fn text<T: serde::Serialize>(id: &T) -> String {
@@ -1138,14 +1331,16 @@ mod tests {
             now: u64,
             switches: FrameRetentionSwitches,
         ) -> (Vec<FrameRetentionFrame>, Vec<FrameErrorPoint>) {
-            build_view(
+            let view = classify(
                 &self.facts,
                 &self.frame_artifacts,
                 &self.frames,
-                now,
                 switches,
                 jst,
             )
+            .expect("local time")
+            .at(0, now);
+            (view.frames, view.error_points)
         }
 
         fn classes(&self, now: u64, switches: FrameRetentionSwitches) -> Vec<FrameRetentionClass> {
@@ -1376,6 +1571,12 @@ mod tests {
         // A run that has its terminal but no release yet holds nobody.
         fixture.facts.runs.get_mut(&next.0).expect("run").terminal = Some((30, at(21)));
         assert_eq!(fixture.classes(now, ON), [C::Default, C::Running]);
+
+        // A Lab debug-package run without any terminal holds nobody either.
+        fixture.facts.runs.get_mut(&next.0).expect("run").terminal = None;
+        assert_eq!(fixture.classes(now, ON), [C::Running, C::Running]);
+        fixture.facts.runs.get_mut(&next.0).expect("run").debug = true;
+        assert_eq!(fixture.classes(now, ON), [C::Default, C::Running]);
     }
 
     #[test]
@@ -1508,8 +1709,44 @@ mod tests {
             view[early].folder.as_ref().expect("error folder").file_name,
             format!("061502-117_{}.png", text(&fixture.artifact(early)))
         );
-        assert_eq!(local_date(T0, utc), "2026-10-11");
-        assert_eq!(local_date(T0, jst), "2026-10-12");
+        assert_eq!(local_date(T0, utc).as_deref(), Some("2026-10-11"));
+        assert_eq!(local_date(T0, jst).as_deref(), Some("2026-10-12"));
+        // A named instant whose local offset is unknown fails the whole view.
+        assert!(
+            classify(
+                &fixture.facts,
+                &fixture.frame_artifacts,
+                &fixture.frames,
+                ON,
+                unknown
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn cached_classes_follow_the_clock_only() {
+        let mut fixture = Fixture::new();
+        let run = fixture.run(5);
+        fixture.frame(Some(run), at(0));
+        fixture.close(run, 20, at(1));
+        let classified = classify(
+            &fixture.facts,
+            &fixture.frame_artifacts,
+            &fixture.frames,
+            ON,
+            jst,
+        )
+        .expect("local time");
+        // Before it settles the frame runs; after, it is Default and due a day after its entry.
+        let early = classified.at(9, at(30));
+        assert_eq!(early.through_sequence, 9);
+        assert_eq!(early.frames[0].class, C::Running);
+        assert_eq!(early.frames[0].due_unix_ms, None);
+        let late = classified.at(9, at(61));
+        assert_eq!(late.frames[0].class, C::Default);
+        assert_eq!(late.frames[0].due_unix_ms, Some(at(1) + DAY_MS));
+        assert_eq!(late.evaluated_at_unix_ms, at(61));
     }
 
     #[test]
@@ -1567,6 +1804,23 @@ mod tests {
             }
         });
         assert_eq!(first_string(&payload, "code").as_deref(), Some("first"));
+        assert_eq!(nested_string(&payload, "rejection", "code"), None);
+        // A dispatch rejection names its leaf by `rejection.code`, not by an earlier `code`.
+        let rejected = serde_json::json!({
+            "family": "policy",
+            "payload": {
+                "kind": "dispatch_rejected",
+                "data": {
+                    "candidates": [{ "code": "eligible" }],
+                    "rejection": { "code": "instance_busy", "detail": { "code": "inner" } }
+                }
+            }
+        });
+        assert_eq!(first_string(&rejected, "code").as_deref(), Some("eligible"));
+        assert_eq!(
+            nested_string(&rejected, "rejection", "code").as_deref(),
+            Some("instance_busy")
+        );
         assert_eq!(
             first_string(&payload, "failure_code").as_deref(),
             Some("failed")

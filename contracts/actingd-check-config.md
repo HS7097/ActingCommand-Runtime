@@ -103,13 +103,16 @@ one entry per group; the real object carries every key listed below):
 configuration. Omission reports an enabled subsystem with reason `flag absent`
 and a `true` parameter from `default`. Explicit `false` reports a disabled
 subsystem with reason `configured off` and a `false` parameter from `explicit`.
-The first periodic round can process eligible historical frames; rounds do not
-require low disk capacity. Existing verified/success/close, summary/settlement,
-pin, material-use and intent/outcome protections and round budgets apply.
-Explicit `false` disables periodic retention and new periodic evictions; startup
-still completes previously committed pending `EvictionIntent` records. The
-manifest reports effective configuration, not evidence that a round or deletion
-has occurred.
+When enabled, the frame cleaner (Workflow #375 R5d, `contracts/ledger-store.md`,
+"Frame cleaner") removes due frames and moves error and Lab frames into
+`<state root>\kept\` within 2 s of the start: its first sweep covers every
+historical frame that is due, and it does not wait for low disk capacity. It
+records nothing in the ledger, so the first removal or move makes the state root
+one-way: an earlier Runtime refuses to start on it. Explicit `false` runs no
+sweep, and actingd prints `actingd frame_retention disabled` once at start;
+startup still completes previously committed pending `EvictionIntent` records.
+The manifest reports effective configuration, not evidence that a sweep or
+deletion has occurred.
 
 `frame_retention_failed_run_successes` (K, default `3`, range `1..=1024`) and
 `frame_retention_failed_run_days` (T, default `7`, range `1..=36500`) configure
@@ -123,6 +126,8 @@ even when periodic retention is disabled. Days convert to milliseconds within
 Confirmed close, summary/settlement, material binding and permanent evidence
 protections still apply. GlobalLedger seals the effective K/T and original
 terminal with the chosen eligibility basis in the original eviction intent.
+Since Workflow #375 R5d the cleaner admits no eviction intent, so K and T gate
+nothing; both keys are still validated and reported.
 
 `frame_retention_dedup_error` (boolean, default `true`) and
 `frame_retention_dedup_lab` (boolean, default `false`) are the frame classes'
