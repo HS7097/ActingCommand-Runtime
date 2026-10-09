@@ -11,9 +11,11 @@ The recognition pack produces a projection from a scene and a pack through one e
 in-task select step, the online observation and the offline Lab share; the same scene and
 pack give byte-identical output everywhere. A feature that needs a provider the offline Lab
 does not have fails with `candidate_feature_provider_missing`. Implementation status: the
-contract types, the ledger record and the producer for `fixed_slots` layouts exist (section
-Generation); `repeated_anchor` layouts, the observation outputs and the select step arrive with
-later #308 slices.
+contract types, the ledger record, the producer for `fixed_slots` and `repeated_anchor` layouts
+(section Generation), the observation outputs and the single-frame select step exist. This
+document is the only projection of a single-frame select and of every observation. A select
+step that scans a list (Workflow #308, list selector) records a scan-level projection,
+`actingcommand.candidate-projection.v2`, which a later slice defines; nothing produces it yet.
 
 ## Shape
 
@@ -38,7 +40,7 @@ later #308 slices.
 | `frame` | Width and height of the frame the projection was taken on; not its identity. |
 | `candidates[]` | In instance order: `instance_index` equals the position, `0` first. |
 | `rect`, `click` | Frame pixels. `click` is where an input may be sampled. |
-| `actionable` | `false` for an instance that reaches outside the frame; it carries no features and is never evaluated. |
+| `actionable` | `false` for a `repeated_anchor` instance whose `rect` or `click` reaches outside the layout's readable band, the whole frame by default; it carries no features and is never evaluated. A `fixed_slots` candidate is always actionable. |
 | `features` | By declared name, sorted by name; at most one value per name. A feature the layout declares but the candidate lacks is absent. |
 | `candidate_set_sha256` | The sealed hash below. |
 
@@ -100,17 +102,19 @@ is truncated.
 
 | Item | Limit | Constant | Error |
 | --- | --- | --- | --- |
-| Candidates per layout | 64 | `CANDIDATE_PROJECTION_MAX_CANDIDATES` | `candidate_projection_budget_exceeded` (`candidates`) |
+| Candidates per layout; for a `repeated_anchor` layout, its declared `max_instances` (1..=64) | 64 | `CANDIDATE_PROJECTION_MAX_CANDIDATES` | `candidate_projection_budget_exceeded` (`candidates`) |
 | Features per layout | 8 | `CANDIDATE_PROJECTION_MAX_FEATURES` | same (`features`) |
 | Layouts per page | 4 | `CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PAGE` | same |
 | Layouts per package | 64 | `CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PACKAGE` | same |
-| OCR and NN feature evaluations per projection | 16 | `CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS` | same |
+| OCR and NN feature evaluations per projection; for a `repeated_anchor` layout, one instance's evaluations times its actionable instances | 16 | `CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS` | same (`provider_evaluations`) |
 | Compact JSON of one core projection | 32 KiB | `CANDIDATE_PROJECTION_MAX_BYTES` | same (`projection_bytes`) |
 | Compact JSON of every public candidate set of one observation | 32 KiB | `CANDIDATE_SETS_MAX_BYTES` | `candidate_sets_budget_exceeded` (`candidate_sets_bytes`), raised when the observation is built, not when an artifact is written |
 
 The layout counts per page and per package are checked when the recognition pack is admitted
 ([selection-graph.md](selection-graph.md), section Candidate layouts); the producer checks the
-candidate, feature and provider-evaluation budgets again before it evaluates anything.
+candidate, feature and provider-evaluation budgets again before it evaluates any feature. A
+`repeated_anchor` layout's candidate and provider-evaluation counts depend on the frame, so the
+producer checks them after it has enumerated the anchor matches.
 
 The observation total keeps a Lab terminal record within its 256 KiB artifact: the before
 observation holds a 32 KiB page projection, 64 KiB of facts and 32 KiB of candidate sets,
@@ -158,21 +162,44 @@ personal candidates withhold their features.
 scene and the admitted pack, nothing else; the layouts it reads are declared as in
 [selection-graph.md](selection-graph.md), section Candidate layouts.
 
-1. The pack declares a `fixed_slots` layout `layout_id`, or the projection fails with
-   `candidate_layout_unknown`. The frame has the pack's coordinate space, or it fails with
-   `invalid_candidate_projection` (`frame`).
+1. The pack declares a `fixed_slots` or `repeated_anchor` layout `layout_id`, or the projection
+   fails with `candidate_layout_unknown`. The frame has the pack's coordinate space, or it fails
+   with `invalid_candidate_projection` (`frame`).
 2. Before anything is evaluated, the slots, the features and the OCR and NN evaluations the
    layout needs are within their budgets, or it fails with
    `candidate_projection_budget_exceeded` (`candidates`, `features`, `provider_evaluations`).
    The OCR and NN evaluations are one per distinct OCR or NN target the slots read and one per
-   OCR or NN member of each distinct composite they read.
+   OCR or NN member of each distinct composite they read; a target that a feature reads at an
+   offset counts once per slot, or once per instance.
 3. Slot `k` becomes candidate `{layout_id}#{k:02}` with `instance_index` `k`, `actionable`
    `true`, and the slot's `rect` and `click`.
-4. For each declared feature, in declaration order, that the slot maps to a target, the target
-   is evaluated through the frame's scene evaluation, the same one pages use; each distinct
-   target is evaluated once per projection, and a template reuses the frame's template result.
-   The feature takes the target's `passed` verdict as a boolean or its `measure_milli` as an
-   integer, with the target's `confidence`, as the table in selection-graph.md defines.
+
+   A `repeated_anchor` layout enumerates its anchor instead
+   (`SceneEvaluation::evaluate_target_all`). Every position of the anchor template in its
+   region is scored exactly, as the joint template and color search scores it, never through the
+   downsampled pyramid; a position is a match when its score reaches the anchor's threshold and
+   its `template_relative` color check, when it declares one, passes there. The matches are
+   taken greedily by score descending, then `y`, then `x`, and a match is suppressed when
+   `1000 × intersection > suppress_iou_milli × union` with one already taken (integer
+   arithmetic; `0`, the default, suppresses any overlap). The search checks its 5 s limit before
+   each row; when it runs out it fails with `candidate_search_incomplete` (values `stage`
+   `candidate_search_repeated_anchor`, `timeout_ms` 5000 and `count`, the positions found by
+   then) and returns no partial set. More matches than `max_instances` fail with
+   `candidate_projection_budget_exceeded` (`candidates`); nothing is truncated. The matches are
+   numbered by `order`: `top_to_bottom` by (`y`, `x`), `left_to_right` by (`x`, `y`). Match
+   `k` becomes candidate `{layout_id}#{k:02}`, whose `rect` and `click` are the declared
+   `instance_rect` and `click` placed at the match's top-left corner. It is actionable when both
+   lie inside the readable band; otherwise it keeps its rectangles, carries no features and is
+   never evaluated.
+4. For each declared feature of an actionable candidate, in declaration order, that reads a
+   target, the target is evaluated through the frame's scene evaluation, the same one pages
+   use; each distinct target is evaluated once per projection, and a template reuses the
+   frame's template result. A feature that declares its own `target` reads it with its region
+   moved to the instance origin (the slot rectangle's origin, or the anchor match's top-left
+   corner) plus `offset`, keeping the target's own size; a template read this way goes through
+   the template region evaluation of the recognition pack. The feature takes the target's
+   `passed` verdict as a boolean or its `measure_milli` as an integer, with the target's
+   `confidence`, as the table in selection-graph.md defines.
 5. A measure or confidence the backend does not give is absent: a `measure_milli` feature of
    an OCR result without a confidence, or of an NN result without a selected score, is left out
    of the candidate, and a `passed` feature then carries `confidence` `null`. Nothing is

@@ -1,0 +1,33 @@
+{
+  "owner": "recognition-pack",
+  "codes": {
+    "candidate_search_incomplete": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "timeout_ms": "required",
+        "count": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The anchor search of a repeated_anchor candidate layout reached its time limit (timeout_ms, 5000) before it had scored every row of the anchor's search region; count is the number of positions that had passed the threshold and the relative color check by then. No partial candidate set is returned, so the projection, and the select step or observation that asked for it, fails. operation is the caller's location, which the execution kernel adds when slice A2d converts it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  },
+  "locations": {
+    "candidate_search_repeated_anchor": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Enumerating the anchor matches of a repeated_anchor candidate layout (SceneEvaluation::evaluate_target_all)."
+    }
+  }
+}

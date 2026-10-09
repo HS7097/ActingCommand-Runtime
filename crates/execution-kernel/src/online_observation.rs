@@ -490,7 +490,9 @@ impl PreparedPageObservation {
                 let (private, public) = match projected {
                     Ok(projected) => {
                         let (public, _) = projected
-                            .split(&layout.candidate_privacy(metadata))
+                            .split(
+                                &layout.candidate_privacy(metadata, projected.candidates().len()),
+                            )
                             .map_err(fact_error)?;
                         public_sets.push(public.clone());
                         actingcommand_contract::validate_candidate_sets_budget(&public_sets)

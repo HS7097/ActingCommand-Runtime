@@ -117,10 +117,10 @@ A candidate layout declares, for one page, where the candidates of a select step
 feature values each candidate carries. On one frame it yields a candidate projection
 ([candidate-projection.md](candidate-projection.md)), which a selection policy evaluates.
 
-Implementation status: recognition pack schema `0.7` admits `fixed_slots` layouts and the
-recognition pack projects them. The source parser admits the `candidate_layouts` family of
-`task.json` and derives it into `pack.json` (section Source declaration). `repeated_anchor`
-layouts are frozen and admitted by a later #308 slice.
+Implementation status: recognition pack schema `0.7` admits `fixed_slots` and
+`repeated_anchor` layouts and the recognition pack projects them. The source parser admits the
+`candidate_layouts` family of `task.json` and derives it into `pack.json` (section Source
+declaration).
 
 ### Source declaration
 
@@ -137,22 +137,27 @@ field:
 
 | Rule | Pointer | Checked by |
 | --- | --- | --- |
-| Exactly the fields `id`, `page_id`, `kind`, `features` and `slots`, of the right JSON types; unknown fields are refused. | the field | gate |
+| The fields of the layout's kind, of the right JSON types: `id`, `page_id`, `kind` and `features`, with `slots` for `fixed_slots`, or `anchor`, `max_instances`, `order`, `instance_rect`, `click` and the optional `suppress_iou_milli` and `readable_band` for `repeated_anchor`. Unknown fields and fields of the other kind are refused. | the field | gate |
 | The ID matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/candidate_layouts/i/id` | gate |
-| The kind is `fixed_slots`. | `/candidate_layouts/i/kind` | gate |
-| 1 to 8 features `{name, value}`, with distinct names matching `^[a-z][a-z0-9_]{0,31}$` and a value of `passed` or `measure_milli`. | `…/features`, `…/features/j/name`, `…/features/j/value` | gate |
-| 1 to 64 slots `{rect, click, targets}`. | `/candidate_layouts/i/slots` | gate |
+| The kind is `fixed_slots` or `repeated_anchor`. | `/candidate_layouts/i/kind` | gate |
+| 1 to 8 features `{name, value}`, with distinct names matching `^[a-z][a-z0-9_]{0,31}$` and a value of `passed`, `measure_milli`, `identity` or `ocr_integer`. A feature may add its own `target` (a string) and `offset` (`{x, y}` integers), both or neither; every `repeated_anchor` feature declares both. | `…/features`, `…/features/j/name`, `…/features/j/value`, `…/features/j/target`, `…/features/j/offset` | gate |
+| A `fixed_slots` layout has 1 to 64 slots `{rect, click, targets}`. | `/candidate_layouts/i/slots` | gate |
 | `rect` and `click` are integer rectangles with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` (a field's type or sign at `…/x` and so on) | gate |
-| Each `targets` key is a declared feature and each value a string. | `…/slots/k/targets/<name>` | gate |
+| Each `targets` key is a declared feature that reads no target of its own, and each value a string. | `…/slots/k/targets/<name>` | gate |
+| A `repeated_anchor` layout names its `anchor` (a string), `max_instances` 1 to 64, an `order` of `top_to_bottom` or `left_to_right`, and optionally `suppress_iou_milli` 0 to 999. | `/candidate_layouts/i/anchor`, `…/max_instances`, `…/order`, `…/suppress_iou_milli` | gate |
+| Its `instance_rect` and `click` are integer rectangles relative to the anchor match: a signed origin and a positive size. Its optional `readable_band` is an integer rectangle with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `/candidate_layouts/i/instance_rect`, `…/click`, `…/readable_band` (a field's type or value at `…/x` and so on) | gate |
 | The page is a page the declaring task itself declares (its `entry_page`, `target_page`, `error_pages`, `scheduling_outcome` terminal pages, or an operation's `from`, `to` or `expect_after.page_id`). Every build of the task therefore holds it. | `/candidate_layouts/i/page_id` | parser |
 | Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
+| A feature's own `target` is a `template`, `color`, `color_digest` or `ocr` target of the derived pack: an `nn` or `composite` feature cannot be read at an offset. | `…/features/j/target` | parser |
+| A `repeated_anchor` layout's `anchor` is a `template` target of the derived pack. | `/candidate_layouts/i/anchor` | parser |
 | The same layout ID with an identical derived definition, repeated by several tasks, is kept once; any other reuse of the ID is refused at the entry that reuses it. Layout IDs have their own namespace, separate from target IDs. | `/candidate_layouts/i/id` | parser |
 
 The derived layout keeps the source's structure, with two normalizations: `page_id` becomes the
 full page-set ID `<game>/<page>` that the page set declares and the load-site check compares
 exactly (an ID that already holds `/` is kept as written), and the fields of a layout, a
-feature, a slot and a rectangle are written in the order of the example below; a slot's
-`targets` keep their declared order. Layouts are written in the order the tasks declare them,
+feature, a slot and a rectangle are written in the order of the examples below; a slot's
+`targets` keep their declared order. A feature writes `name`, `value`, `target` and `offset`,
+then `identity`, `consensus` and `integer` as declared. Layouts are written in the order the tasks declare them,
 after `targets`. The pack's own rules (layouts per page and per pack, OCR and NN evaluations per
 projection) are checked by the recognition pack when the derived pack is validated or loaded
 (section Rules).
@@ -178,18 +183,45 @@ The derived `pack.json` carries the layouts in its top-level `candidate_layouts`
       "targets": {"open": "state/slot_0_open", "marked": "ui/slot_0_mark", "mark_score": "ui/slot_0_mark"}}]}]
 ```
 
+A `repeated_anchor` layout declares one anchor template instead of slots. Every accepted match
+of the anchor is one instance; `instance_rect`, `click` and each feature's `offset` are
+relative to the match's top-left corner:
+
+```json
+{"id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+ "anchor": "ui/row_marker", "max_instances": 12, "order": "top_to_bottom", "suppress_iou_milli": 0,
+ "instance_rect": {"x": -20, "y": -10, "width": 600, "height": 70},
+ "click": {"x": 400, "y": 5, "width": 120, "height": 40},
+ "readable_band": {"x": 0, "y": 120, "width": 1280, "height": 480},
+ "features": [{"name": "open", "value": "passed", "target": "state/row_open", "offset": {"x": 480, "y": 10}}]}
+```
+
 - Only recognition pack schema `0.7` accepts the key. A pack of any other schema that has it
   is rejected with `UnconsumedField` at `/candidate_layouts`. An absent key means no layouts,
   and a pack without layouts loads and judges exactly as before.
-- Unknown fields and wrong JSON types are rejected with the pointer of the field, and so are a
-  `kind` other than `fixed_slots` and a feature `value` other than `passed` or
-  `measure_milli`.
+- Unknown fields, fields of the other layout kind and wrong JSON types are rejected with the
+  pointer of the field, and so are a `kind` other than `fixed_slots` or `repeated_anchor`, an
+  `order` other than `top_to_bottom` or `left_to_right`, and a feature `value` this runtime
+  does not know.
+- The anchor's `region` is the search region, and its threshold and a `template_relative`
+  `color_check` apply at every position. `order` numbers the matches: `top_to_bottom` by
+  (`y`, `x`), `left_to_right` by (`x`, `y`). Matches above `max_instances` fail the
+  projection, and a search that runs out of its 5 s limit fails with
+  `candidate_search_incomplete` ([candidate-projection.md](candidate-projection.md), section
+  Generation).
+- `readable_band` is an absolute rectangle; absent, it is the whole frame. An instance is
+  actionable, and its features are evaluated, only when its `instance_rect` and its `click`
+  both lie inside the band. Any other instance keeps its anchor position and rectangles in the
+  projection.
 - A slot's `targets` maps a feature name to the ID of one of the pack's own targets, the
   derived target ID, as a check member does. A slot may leave a declared feature out; that
   feature is then absent from the slot's candidate, and the selection policy's `on_unknown`
   decides.
-- Each slot reads existing targets. Evaluating one template over the regions of several slots
-  is not used by `fixed_slots` layouts.
+- Each slot reads existing targets. A feature of either kind may instead declare its own
+  `target` and `offset`: it reads that target with its region moved to the instance origin
+  (the slot rectangle's origin, or the anchor match's top-left corner) plus the offset, keeping
+  the target's own size. A template read this way goes through the recognition pack's template
+  region evaluation, the evaluation of one template over the regions of several instances.
 - A layout declares no privacy. A candidate's privacy derives from the targets its features
   read ([candidate-projection.md](candidate-projection.md)).
 
@@ -203,12 +235,17 @@ Each failure message starts with the pointer of the offending field.
 | The ID matches `^[a-z0-9][a-z0-9_./-]{0,63}$` and is unique in the pack. | `/candidate_layouts/i/id` |
 | The page ID is non-empty, at most 256 bytes and free of control characters; a page has at most 4 layouts. | `/candidate_layouts/i/page_id` |
 | A pack has at most 64 layouts. | `/candidate_layouts` |
-| The kind is `fixed_slots`. | `/candidate_layouts/i/kind` |
+| The kind is `fixed_slots` or `repeated_anchor`, and the layout declares only its own kind's fields; a `fixed_slots` layout declares no `readable_band`. | `/candidate_layouts/i/kind`, the field |
 | 1 to 8 features, with distinct names matching `^[a-z][a-z0-9_]{0,31}$`. | `/candidate_layouts/i/features`, `…/features/j/name` |
-| 1 to 64 slots. | `/candidate_layouts/i/slots` |
+| A `fixed_slots` layout has 1 to 64 slots; a `repeated_anchor` layout has none. | `/candidate_layouts/i/slots` |
+| A `repeated_anchor` anchor is a raw `template` target with a static search region; a `color_check`, when it declares one, is `template_relative`. | `/candidate_layouts/i/anchor` |
+| `max_instances` is 1 to 64, `order` is declared, `suppress_iou_milli` is 0 to 999, `instance_rect` and `click` have a positive size, and `readable_band` has a non-negative origin and a positive size and lies inside `coordinate_space`. | `…/max_instances`, `…/order`, `…/suppress_iou_milli`, `…/instance_rect`, `…/click`, `…/readable_band` |
+| Every `repeated_anchor` feature reads a target at an offset. Its consensus samples one frame only, so its samples may differ in jitter and template metric but never in frame: a scan cannot capture further frames. | `…/features/j`, `…/features/j/consensus` |
+| A feature's `target` and `offset` appear together. The target exists, is raw, and is a `template`, `color`, `color_digest` or `ocr` target with a rectangle region; a template's `color_check` is `template_relative`; an identity or `ocr_integer` feature reads OCR, and an icon identity reads its template pool instead. | `…/features/j`, `…/features/j/target`, `…/features/j/identity` |
+| The region a feature reads at an offset, for each of its samples, lies inside the `instance_rect`, or inside each slot's `rect`; a slot's `targets` never map such a feature. | `…/features/j/offset`, `…/slots/k`, `…/slots/k/targets/<name>` |
 | `rect` and `click` have a non-negative origin and a positive size and lie entirely inside `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` |
 | Each `targets` key is a declared feature; its target exists and is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target, never `click_only`; a `measure_milli` feature never reads a composite. | `…/slots/k/targets/<name>` |
-| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read. | `/candidate_layouts/i/slots` |
+| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read. One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. | `/candidate_layouts/i/slots`, `…/features` |
 
 `coordinate_space` is required for every pack schema, so layouts need no rule of their own for
 it.

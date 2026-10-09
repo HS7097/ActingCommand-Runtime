@@ -1183,11 +1183,17 @@ impl Declaration<'_> {
     }
 
     /// The `candidate_layouts` family (`contracts/selection-graph.md`, section Candidate
-    /// layouts): each layout has an ID, a page, the kind `fixed_slots`, 1..=8 distinct
-    /// features and 1..=64 slots. A slot's `rect` and `click` lie inside the coordinate space
-    /// and each of its `targets` keys is a declared feature. Whether the page is one the task
-    /// declares, and whether each target exists in the derived pack, is checked while the pack
-    /// is derived.
+    /// layouts): each layout has an ID, a page, the kind `fixed_slots` or `repeated_anchor`, and
+    /// 1..=8 distinct features; a feature may read its own `target` at an `offset` (both or
+    /// neither). A `fixed_slots` layout has 1..=64 slots, whose `rect` and `click` lie inside
+    /// the coordinate space and whose `targets` keys are declared features that read no target
+    /// of their own. A `repeated_anchor` layout names its anchor, 1..=64 `max_instances`, an
+    /// `order`, an optional `suppress_iou_milli` of 0..=999, an `instance_rect` and a `click`
+    /// relative to the anchor match (a signed origin and a positive size), and an optional
+    /// `readable_band` inside the coordinate space; each of its features reads a target at an
+    /// offset. A field of the other kind is unknown. Whether the page is one the task declares,
+    /// and whether each target exists in the derived pack with a kind the feature can read, is
+    /// checked while the pack is derived.
     fn candidate_layouts(&self, value: &Value, pointer: &str, frame: [u64; 2]) -> CliOutcome<()> {
         for (index, layout) in self.array(value, pointer)?.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
@@ -1198,6 +1204,13 @@ impl Declaration<'_> {
                     "id",
                     "page_id",
                     "kind",
+                    "anchor",
+                    "max_instances",
+                    "order",
+                    "suppress_iou_milli",
+                    "instance_rect",
+                    "click",
+                    "readable_band",
                     "features",
                     "slots",
                     "unknown_identity",
@@ -1217,8 +1230,31 @@ impl Declaration<'_> {
             let kind_pointer = child(&pointer, "kind");
             let kind = self.required(object, &pointer, "kind")?;
             self.string(kind, &kind_pointer)?;
-            if kind.as_str() != Some("fixed_slots") {
-                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+            let anchored = match kind.as_str() {
+                Some("fixed_slots") => false,
+                Some("repeated_anchor") => true,
+                _ => {
+                    return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+            };
+            let other_kind: &[&str] = if anchored {
+                &["slots"]
+            } else {
+                &[
+                    "anchor",
+                    "max_instances",
+                    "order",
+                    "suppress_iou_milli",
+                    "instance_rect",
+                    "click",
+                    "readable_band",
+                ]
+            };
+            if let Some(field) = other_kind.iter().find(|field| object.contains_key(**field)) {
+                return Err(self.error(
+                    &child(&pointer, field),
+                    ResourceDeclarationReason::UnknownField,
+                ));
             }
             let features_pointer = child(&pointer, "features");
             let features = self.array(
@@ -1229,12 +1265,21 @@ impl Declaration<'_> {
                 return Err(self.error(&features_pointer, ResourceDeclarationReason::InvalidValue));
             }
             let mut names = BTreeSet::new();
+            let mut placed = BTreeSet::new();
             for (feature_index, feature) in features.iter().enumerate() {
                 let feature_pointer = child(&features_pointer, &feature_index.to_string());
                 let feature = self.object(
                     feature,
                     &feature_pointer,
-                    &["name", "value", "identity", "consensus", "integer"],
+                    &[
+                        "name",
+                        "value",
+                        "identity",
+                        "consensus",
+                        "integer",
+                        "target",
+                        "offset",
+                    ],
                 )?;
                 let name_pointer = child(&feature_pointer, "name");
                 let name = self.required(feature, &feature_pointer, "name")?;
@@ -1252,10 +1297,63 @@ impl Declaration<'_> {
                 ) {
                     return Err(self.error(&value_pointer, ResourceDeclarationReason::InvalidValue));
                 }
+                if anchored || feature.contains_key("target") || feature.contains_key("offset") {
+                    self.string(
+                        self.required(feature, &feature_pointer, "target")?,
+                        &child(&feature_pointer, "target"),
+                    )?;
+                    self.offset_point(
+                        self.required(feature, &feature_pointer, "offset")?,
+                        &child(&feature_pointer, "offset"),
+                    )?;
+                    placed.insert(name);
+                }
+            }
+            if anchored {
+                self.string(
+                    self.required(object, &pointer, "anchor")?,
+                    &child(&pointer, "anchor"),
+                )?;
+                let max_pointer = child(&pointer, "max_instances");
+                let max = self.required(object, &pointer, "max_instances")?;
+                self.unsigned(max, &max_pointer)?;
+                if !max.as_u64().is_some_and(|max| {
+                    (1..=CANDIDATE_PROJECTION_MAX_CANDIDATES as u64).contains(&max)
+                }) {
+                    return Err(self.error(&max_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+                let order_pointer = child(&pointer, "order");
+                let order = self.required(object, &pointer, "order")?;
+                self.string(order, &order_pointer)?;
+                if !matches!(order.as_str(), Some("top_to_bottom" | "left_to_right")) {
+                    return Err(self.error(&order_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+                if let Some(suppress) = object.get("suppress_iou_milli") {
+                    let suppress_pointer = child(&pointer, "suppress_iou_milli");
+                    self.unsigned(suppress, &suppress_pointer)?;
+                    if suppress.as_u64().is_none_or(|milli| milli > 999) {
+                        return Err(
+                            self.error(&suppress_pointer, ResourceDeclarationReason::InvalidValue)
+                        );
+                    }
+                }
+                for field in ["instance_rect", "click"] {
+                    self.relative_rect(
+                        self.required(object, &pointer, field)?,
+                        &child(&pointer, field),
+                    )?;
+                }
+                if let Some(band) = object.get("readable_band") {
+                    self.frame_rect(band, &child(&pointer, "readable_band"), frame)?;
+                }
             }
             let slots_pointer = child(&pointer, "slots");
-            let slots = self.array(self.required(object, &pointer, "slots")?, &slots_pointer)?;
-            if !(1..=CANDIDATE_PROJECTION_MAX_CANDIDATES).contains(&slots.len()) {
+            let slots: &[Value] = if anchored {
+                &[]
+            } else {
+                self.array(self.required(object, &pointer, "slots")?, &slots_pointer)?
+            };
+            if !anchored && !(1..=CANDIDATE_PROJECTION_MAX_CANDIDATES).contains(&slots.len()) {
                 return Err(self.error(&slots_pointer, ResourceDeclarationReason::InvalidValue));
             }
             for (slot_index, slot) in slots.iter().enumerate() {
@@ -1281,7 +1379,7 @@ impl Declaration<'_> {
                     })?;
                 for (name, target) in targets {
                     let target_pointer = child(&targets_pointer, name);
-                    if !names.contains(name.as_str()) {
+                    if !names.contains(name.as_str()) || placed.contains(name.as_str()) {
                         return Err(
                             self.error(&target_pointer, ResourceDeclarationReason::InvalidValue)
                         );
@@ -1333,6 +1431,47 @@ impl Declaration<'_> {
                         self.refuse(&pointer, ResourceDeclarationReason::InvalidValue, &error)
                     })?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// A rectangle relative to an anchor match: integers within the range of a recognition
+    /// pack rectangle, a signed origin and a positive size.
+    fn relative_rect(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["x", "y", "width", "height"])?;
+        for field in ["x", "y", "width", "height"] {
+            let field_pointer = child(pointer, field);
+            let value = self
+                .required(object, pointer, field)?
+                .as_i64()
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+            if i32::try_from(value)
+                .ok()
+                .filter(|value| *value > 0 || matches!(field, "x" | "y"))
+                .is_none()
+            {
+                return Err(self.error(&field_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+        }
+        Ok(())
+    }
+
+    /// An offset `{x, y}` of integers within the range of a recognition pack coordinate.
+    fn offset_point(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["x", "y"])?;
+        for field in ["x", "y"] {
+            let field_pointer = child(pointer, field);
+            let value = self
+                .required(object, pointer, field)?
+                .as_i64()
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+            if i32::try_from(value).is_err() {
+                return Err(self.error(&field_pointer, ResourceDeclarationReason::InvalidValue));
             }
         }
         Ok(())

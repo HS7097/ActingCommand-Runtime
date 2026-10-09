@@ -135,7 +135,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
             let projected = evaluator.scene_context(&loaded_scene.scene).project_candidates(&layout.id)
                 .map_err(|error| CliError::package_invalid(format!("{}: layout={} offline observe provides 1 frame, requires {}; aggregation not completed: {}", error.code(), layout.id, layout.required_frames(), error.detail())))?;
             let (public, _) = projected
-                .split(&layout.candidate_privacy(&view.metadata))
+                .split(&layout.candidate_privacy(&view.metadata, projected.candidates().len()))
                 .map_err(|error| CliError::package_invalid(error.to_string()))?;
             sets.push(public);
             evidence.push(projected);
