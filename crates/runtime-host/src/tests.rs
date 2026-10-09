@@ -104,6 +104,7 @@ mod forward_projection;
 mod home_entry;
 mod input;
 mod input_failure;
+mod instance_workers;
 mod lease_fencing;
 mod lease_queue;
 mod lifecycle;

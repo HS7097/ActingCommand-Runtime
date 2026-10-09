@@ -155,6 +155,13 @@ pub(super) struct HostClaim<'a> {
 pub(super) enum HostClaimAdmission {
     Granted(LeaseToken),
     Queued {
+        #[cfg_attr(
+            not(test),
+            allow(
+                dead_code,
+                reason = "the #369 S5 operator waits name the queue position in their refusal"
+            )
+        )]
         status: QueuedLease,
         grant: Arc<ClaimGrantSlot>,
     },
