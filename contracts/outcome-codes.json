@@ -3821,6 +3821,12 @@
     "strategic_evidence_": [
       "runtime-host"
     ],
+    "frame_retention_": [
+      "runtime-host"
+    ],
+    "artifact_kept_": [
+      "artifact-store"
+    ],
     "panic_": [
       "contract"
     ],
@@ -3835,6 +3841,22 @@
     ]
   },
   "codes": {
+    "artifact_kept_walk_failed": {
+      "category": "error",
+      "owner": "artifact-store",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "io_kind": "required",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A read found no file at a frame's object key and could not list the kept folders below the state root's kept folder to look for the frame there. The read fails; the lookup of the previous walk stays.",
+      "common_causes": "Access to the state root's kept folder, or to a date folder or leaf in it, denied; kept made a file.",
+      "handling": "Restore read access to the kept folder, or move away the file that replaces it, then read again."
+    },
     "dispatch_instance_contended": {
       "category": "info",
       "owner": "runtime-host",
@@ -4065,6 +4087,41 @@
       "description": "The ONNX or OCR vision provider failed; raw_text keeps its message.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "frame_retention_move_failed": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "entry": "optional",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "The frame cleaner could not move an error or Lab frame into its kept folder (entry, relative to the state root) for another reason than a held or absent file, and the frame stays at its object key; or the frame moved and the move counter kept/.moves could not be written, so other processes may find the frame only after their next walk of the kept folders, within 60 s.",
+      "common_causes": "A file where the kept date folder or leaf should be; access to the state root's kept folder denied; a full disk.",
+      "handling": "Remove whatever blocks the kept folder named by entry, then restart actingd so that the cleaner tries again."
+    },
+    "frame_retention_remove_failed": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "The frame cleaner could not delete a due frame at its object key for another reason than a held or absent file. The frame stays, is not tried again by this process, and is tried again after a restart.",
+      "common_causes": "Access to the state root's artifacts folder denied by the file system or by security software.",
+      "handling": "Check the file's permissions and any program that blocks it, then restart actingd so that the cleaner tries again."
     },
     "ledger_selection_query_unsupported": {
       "category": "error",
