@@ -1624,17 +1624,18 @@ impl HostShared {
     }
 }
 
-/// The skip a rung package's entry refusal stands for: a known unavailable capture or input
-/// channel, or an ADB baseline that does not answer.
 /// Review L6 (#666): whether a rung's failure reason ended the rung rather than being its own
-/// failure: a reason `ladder_hold_interrupted` gives, or a renewal refusal of the key
-/// (`lease_expired`, `lease_missing`), which its next holding check reports as the key lost.
+/// failure: a reason `ladder_hold_interrupted` gives; a renewal refusal of the key
+/// (`lease_expired`, `lease_missing`), which its next holding check reports as the key lost; or
+/// a rung run that a scheduling pause's drain cancelled (`contained_task_paused`, which only the
+/// pause drain sets).
 fn is_hold_interruption(reason: &str) -> bool {
     matches!(
         reason,
         "recovery_ladder_shutdown_requested"
             | "recovery_ladder_drain_requested"
             | "recovery_admission_denied"
+            | "contained_task_paused"
     ) || [
         HostCode::RecoveryLadderKeyLost,
         HostCode::LeaseExpired,
@@ -1644,6 +1645,8 @@ fn is_hold_interruption(reason: &str) -> bool {
     .any(|code| code.as_str() == reason)
 }
 
+/// The skip a rung package's entry refusal stands for: a known unavailable capture or input
+/// channel, or an ADB baseline that does not answer.
 fn recovery_entry_skip(code: &str) -> Option<RecoveryRungSkipReason> {
     match code {
         "recovery_capture_unavailable" => Some(RecoveryRungSkipReason::CaptureUnavailable),

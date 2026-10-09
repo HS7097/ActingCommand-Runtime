@@ -1,0 +1,22 @@
+{
+  "owner": "artifact-store",
+  "codes": {
+    "artifact_kept_walk_failed": {
+      "category": "error",
+      "owner": "artifact-store",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "entry": "optional",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A read found no file at a frame's object key and could not list the kept folders below the state root's kept folder to look for the frame there: a listing failed (io_kind, os_error), or kept itself (entry) is a reparse point such as a junction to another drive, which is never followed. The read fails; the lookup of the previous walk stays.",
+      "common_causes": "The kept folder replaced by a junction or symbolic link; access to the kept folder, or to a date folder or leaf in it, denied; kept made a file.",
+      "handling": "Keep kept a plain folder on the state root's volume: move the frames back and remove the link, or restore read access, then read again."
+    }
+  }
+}

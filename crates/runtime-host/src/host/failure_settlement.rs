@@ -322,22 +322,11 @@ impl HostShared {
         let (Some(previous), Some(current)) = (previous, current) else {
             return Ok((FrameComparison::Unavailable("frame_missing"), previous_run));
         };
-        let read = |artifact: &LedgerArtifactReference| {
-            read_projected_verified(self.artifacts.root(), &artifact.project(true))
-        };
-        let (Ok(previous), Ok(current)) = (read(&previous), read(current)) else {
-            return Ok((
-                FrameComparison::Unavailable("artifact_unreadable"),
-                previous_run,
-            ));
-        };
-        let comparison = match compare_failure_frames(&previous, &current) {
-            Ok(compared) if compared.verdict == FailureFrameVerdict::Similar => {
-                FrameComparison::Similar
-            }
-            Ok(_) => FrameComparison::Different,
-            Err(error) => FrameComparison::Unavailable(error.reason()),
-        };
+        let comparison = compare_frame_files(
+            self.artifacts.root(),
+            &previous.project(true),
+            &current.project(true),
+        );
         Ok((comparison, previous_run))
     }
 
@@ -378,6 +367,28 @@ impl HostShared {
     }
 }
 
+/// Reads both error frames, a frame the cleaner moved into `kept\` included (Workflow #375 R5d),
+/// and compares them.
+fn compare_frame_files(
+    root: &std::path::Path,
+    previous: &actingcommand_contract::ProjectedArtifactReference,
+    current: &actingcommand_contract::ProjectedArtifactReference,
+) -> FrameComparison {
+    let (Ok(previous), Ok(current)) = (
+        read_projected_verified(root, previous),
+        read_projected_verified(root, current),
+    ) else {
+        return FrameComparison::Unavailable("artifact_unreadable");
+    };
+    match compare_failure_frames(&previous, &current) {
+        Ok(compared) if compared.verdict == FailureFrameVerdict::Similar => {
+            FrameComparison::Similar
+        }
+        Ok(_) => FrameComparison::Different,
+        Err(error) => FrameComparison::Unavailable(error.reason()),
+    }
+}
+
 /// §12.6 point 4: the recorded execution's own input, after its base segment is checked against
 /// the terminal's code; any other record is left to the replay, which refuses it.
 fn recorded_failure_input(
@@ -412,4 +423,83 @@ fn recorded_failure_input(
         error_code: failure.error_code,
         class: failure.original_class,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::{
+        ArtifactKind, ArtifactProducer, ArtifactRedactionState, IdentifierIssuer,
+        ProjectedArtifactReference, RetentionClass,
+    };
+    use sha2::{Digest, Sha256};
+    use std::path::Path;
+
+    /// A capture frame published at its object key, as the store writes one.
+    fn frame(root: &Path, png: &[u8]) -> ProjectedArtifactReference {
+        let ids = IdentifierIssuer::new().expect("issuer");
+        let artifact_id = *ids.mint_artifact_id().expect("artifact").transport();
+        let sha256 = format!("sha256:{:x}", Sha256::digest(png));
+        let object_key = format!(
+            "artifacts/{}/{}.png",
+            &sha256[7..9],
+            identifier_text(&artifact_id)
+        );
+        let path = root.join(object_key.as_str());
+        std::fs::create_dir_all(path.parent().expect("shard")).expect("shard folder");
+        std::fs::write(path, png).expect("frame file");
+        let reference = ProjectedArtifactReference {
+            artifact_id,
+            kind: ArtifactKind::CaptureFrame,
+            run_id: None,
+            frame_id: Some(*ids.mint_frame_id().expect("frame").transport()),
+            correlation_id: None,
+            object_key: Some(object_key),
+            media_type: ArtifactKind::CaptureFrame.media_type(),
+            byte_count: png.len() as u64,
+            sha256,
+            created_at_unix_ms: 1_791_753_302_117,
+            producer: ArtifactProducer::CaptureStore,
+            retention_class: RetentionClass::Adaptive,
+            redaction_state: ArtifactRedactionState::NotRequired,
+        };
+        reference.validate().expect("valid reference");
+        reference
+    }
+
+    /// Workflow #375 R5d: the previous failure's error frame, moved by the cleaner into its
+    /// kept folder, is still read and compared, not counted as unreadable.
+    #[test]
+    fn a_moved_previous_error_frame_is_compared() {
+        let temp = tempfile::tempdir().expect("root");
+        let root = temp.path().canonicalize().expect("canonical root");
+        let pixels = vec![40_u8; 64 * 36 * 3];
+        let png = actingcommand_device::encode_png_fast(
+            64,
+            36,
+            &pixels,
+            actingcommand_device::PixelFormat::Rgb8,
+        )
+        .expect("frame PNG");
+        let previous = frame(&root, &png);
+        let current = frame(&root, &png);
+        let source = root.join(previous.object_key().expect("object key"));
+        let leaf = root
+            .join("kept")
+            .join("2026-10-12")
+            .join("node_a-151234-contained_task_page_unknown");
+        std::fs::create_dir_all(&leaf).expect("kept leaf");
+        std::fs::rename(
+            &source,
+            leaf.join(format!(
+                "061502-117_{}.png",
+                identifier_text(&previous.artifact_id)
+            )),
+        )
+        .expect("move the frame as the cleaner does");
+        assert!(matches!(
+            compare_frame_files(&root, &previous, &current),
+            FrameComparison::Similar
+        ));
+    }
 }

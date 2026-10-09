@@ -185,8 +185,10 @@ fn resource_reading_fact_record(
         }),
         confidence_milli: reading.confidence_milli,
         source_detector: format!(
-            "resource_reading:{}/{}",
-            readings.task_label, declaration.id
+            "{}{}/{}",
+            actingcommand_contract::RESOURCE_READING_DETECTOR_PREFIX,
+            readings.task_label,
+            declaration.id
         ),
         source_snapshot_id: actingcommand_contract::resource_reading_snapshot_id(
             run_text,

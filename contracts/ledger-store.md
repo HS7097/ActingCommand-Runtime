@@ -613,9 +613,14 @@ these actions. No S0 file retention or verifier behavior changes.
 The frame retention view classes every frame for the cleaner and the listing. It is
 read-only and writes nothing: it is derived from the committed prefix and evaluated at
 the ledger head and the caller's clock (`GlobalLedgerEvidence::frame_retention_view`
-for a reader; the writer's own retention index for the cleaner). It never consults the
-unlinked-warning latch, the Warning ring or the K/T policy, and it adds no persisted
-structure.
+for a reader, which builds the retention index once per opening;
+`GlobalLedger::frame_retention_view`, the writer's own index, for the cleaner). The
+classes are cached by head and switches (R5d): at an unchanged head a call only applies
+its clock. Kept folders and file names use the machine's local time, through the one
+local-offset function of the ledger crate (`local_time::machine_local_offset_ms`); an
+instant the system cannot convert refuses the view as a request error. It never
+consults the unlinked-warning latch, the Warning ring or the K/T policy, and it adds no
+persisted structure.
 
 - **Frame.** A `capture.frame` artifact with its `PinRecorded` identity (instance,
   request, correlation, run, lease) and no eviction proof. Its time is the reference's
@@ -645,7 +650,10 @@ structure.
   (`ERROR_WINDOW_MS`), and the frames the point's event names.
 - **Settled.** The frame's entry is closed, the frame is at least 60 s old, and no run
   on its instance whose first frame is at most 30 s after it is still without a
-  terminal while its epoch goes on. A run closes by its terminal, its capture summary
+  terminal while its epoch goes on. A Lab debug-package run (`task.requested` with the
+  action `runtime.debug_package`) commits no `TerminalCommitted`: its `task.completed`,
+  `task.failed` or `task.cancelled` is its terminal, and it never holds back the frames of
+  its instance. A run closes by its terminal, its capture summary
   and a later `Performed` release of its lease (its own, or a run-less one), or by the
   end of its owner epoch; a run-less frame closes when its capture completes. The entry
   time is the terminal's timestamp, the ending start event's timestamp when that comes
@@ -672,11 +680,108 @@ structure.
   lowest-sequence point whose window contains it; its leaf is
   `<instance alias>-<sequence>-<code>`, dated at that point's t, where the alias is the
   one bound at the point (for an epoch-end point, at the run's last frame) and the code
-  is the point's own `failure_code`, else its own `code`, else the failure code of its
+  is the point's own `failure_code`, else its own code (a `rejection.code`, as in a
+  `policy.dispatch_rejected`, before any other `code`), else the failure code of its
   run's failure terminal when that terminal precedes it, else its event type with `.` as
   `_` (an epoch-end point: `runtime_takeover` or `runtime_started`); characters outside
   `[A-Za-z0-9_-]` become `_`, and the code keeps at most 64 of them. A Lab frame's leaf
   is `lab-<instance alias>`, dated at its capture.
+
+### Frame cleaner (Workflow #375 R5d)
+
+The cleaner runs in actingd while `frame_retention_enabled` is on. It writes nothing to
+the ledger: no eviction intent or outcome, no proof. It no longer calls eviction
+admission, so the K/T policy, the unlinked-warning latch and the seals gate nothing;
+replay of eviction records already in a ledger, and startup recovery of an intent left
+without its outcome, stay.
+
+- **Rounds and sweeps** (model v4.3 note). Each round of the performance-monitor loop
+  (every 2 s) acts on at most 16 frames within 1 s. A sweep starts at most every
+  10 minutes (the first at the first round after the start) from the frame view at the
+  Runtime's clock, and lists the settled frames that are due: duplicates, default frames
+  1 day and resource frames 7 days after their entry time are removed; error and Lab
+  frames are moved into their kept folder. The sweep visits them in entry-time order over
+  as many rounds as it needs. Running frames and frames not yet due are untouched.
+- **Never a stale class.** While a sweep still has queued frames, each round reads the
+  view again (cached by head, so at an unchanged head this only applies the clock) and
+  derives every queued action again before acting: a frame whose class changed during
+  the sweep is acted on by its current class, so a frame that became Lab-protected is
+  moved, never removed, and a frame no longer due stays where it is.
+- **Only the object key.** A removal or a move acts on `<state root>\<object key>` and
+  nowhere else; the cleaner never looks in `kept\`. Nothing there means the frame is
+  absent: deleted by hand, or already removed or moved. So a frame in a kept folder is
+  never removed or moved again, whatever its class becomes after a switch change or a
+  Lab pin release.
+- **File handling.** The cleaner first stats the path; an absent frame costs no action
+  and takes no lock. It then takes the frame's use lock
+  (`artifact-use-locks\<name>.lock`) try-only and opens the file for deletion only,
+  shared for deletion only, without reading or hashing it. A held lock, or os error 32
+  or 33 on the open, the unlink or the rename, is **busy**: the frame is retried by the
+  next sweep. Any other error is **failed**: one Warning (below), and the frame stays
+  until a restart.
+- **Moves.** The cleaner creates the kept folder if needed, puts the frame into its own
+  kept map, renames the file, and then overwrites `kept\.moves` with its process start
+  time and its move count (16 bytes). A failed rename takes the map entry out again. A
+  rename that finds no folder (a leaf deleted by hand right after its creation) while
+  the frame is still there creates the folder again and renames once more.
+- **Done set.** The process remembers the frames it removed, moved or found absent, and
+  never visits them again. After a restart, the first sweep finds the frames removed or
+  moved before it absent, and counts them `rescanned_absent`.
+- **Lock.** A round takes the cleaner's lock try-only and skips while `clear-kept` holds
+  it.
+- **Fail Loud.** One stdout line per completed sweep that visited frames, and always for
+  the first sweep: `actingd frame_retention pass frames=<n> deleted=<n>
+  deleted_bytes=<b> moved=<n> moved_bytes=<b> absent=<n> rescanned_absent=<n> busy=<n>
+  failed=<n> kept_error=<n> kept_lab=<n> running=<n> rounds=<n> pass_ms=<ms>`. `frames`
+  counts the due frames the sweep visited; `kept_error`, `kept_lab` and `running` count
+  the settled error and Lab frames and the unsettled frames of its view. With the
+  cleaner off, actingd prints `actingd frame_retention disabled` once at start and runs
+  no sweep. A failed removal or move appends one Warning `runtime.failed` with system
+  links, once per object per process, whose detail carries `host_code=`
+  `frame_retention_remove_failed` (`artifact_id`, `io_kind`, `os_error`) or
+  `frame_retention_move_failed` (adds `entry`, the kept folder relative to the state
+  root). A move whose counter `kept\.moves` could not be written counts as moved and is
+  reported once per process by its own code, `frame_retention_counter_failed` (`entry`,
+  `io_kind`, `os_error`). Only a ledger error, including a failed append of such a
+  Warning, is fatal; a held file never is.
+
+### Moved-frame reads (Workflow #375 R5d)
+
+Every material read goes through `open_projected_stream` (Runtime material reads,
+failure comparison, evidence export, planning, signatures, `actingledger`, `actinglab
+resource restore`, `ledger-maintenance restore`). When nothing is at the object key, it
+looks the artifact id up in a per-process map of the kept folders, so every process
+resolves alike.
+
+- **Ids.** A kept file is `<HHmmss-fff>_artifact_<hex>.png`; its artifact id is the text
+  after the first `_`, without `.png`. Only `artifact_<hex>.png` objects are looked up.
+- **The map** is keyed by the canonical state root. A cached path that is gone (a leaf
+  deleted, renamed or copied by hand) is dropped and the read counts as a miss; a frame
+  in no kept folder is `artifact_read_failed` with `NotFound`, which readers report as
+  missing (R5b).
+- **When a miss walks.** The first miss in a process walks `kept\`. Later misses walk
+  again when `kept\.moves` differs from the value read just before the last walk (an
+  absent file reads as empty), or at most once per 60 s for changes by hand. actingd,
+  the only mover, puts its own moves into its map before each rename, so it never misses
+  them; misses of deleted frames with no move cause no walk.
+- **The walk** lists the date folders and their leaves below `kept\`, and the files in
+  each leaf, reading no file contents and never following a reparse point. `kept\`
+  absent is an empty map. An entry that vanishes or is delete-pending (os error 303)
+  during the walk, and a file where a folder is expected (`.moves`, `desktop.ini`), are
+  skipped; a name that does not end in `_artifact_<hex>.png` is ignored. A `kept\` that
+  is itself a reparse point (a junction to another drive, say), and any other listing
+  error, fail the read with `artifact_kept_walk_failed` (`entry`, `io_kind`, `os_error`;
+  model v4.3 note), and the previous map stays: `kept\` must stay a plain folder on the
+  state root's volume. Each walk replaces the map whole, and one root has one walk at a
+  time: a reader that misses meanwhile waits and uses that walk's map, unless
+  `kept\.moves` changed since that walk began, when it walks again.
+- **A read during a move.** The cleaner holds the frame for a moment; a reader then gets
+  os error 32 or 33, or a held use lock, not `NotFound`. The whole open, the object key
+  and then the lookup, is retried up to 3 times 20 ms apart.
+- **Restore.** `ArtifactReader::resolved_relative_path()` names the file a reader
+  opened. `restore_recovery_reference` writes a frame found in the source's `kept\` at
+  the same `kept\` path in the target, verifies it there with the published file's
+  bytes, and puts it into the target's map.
 
 ## S1–S5 ownership and acceptance map
 

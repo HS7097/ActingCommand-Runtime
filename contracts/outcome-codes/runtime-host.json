@@ -60,7 +60,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes.",
       "common_causes": "A holder that overran its own step bound; a host that was stopping while a ladder held an instance.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
@@ -75,7 +75,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes.",
       "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
@@ -152,7 +152,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "A stuck-recovery ladder found, at a holding check, that it no longer holds its instance's key. It cancels its continuation, records the current rung failed with this reason and finishes exhausted at warning, without an error point.",
       "common_causes": "In practice only a stopping host; otherwise a step that overran its own bound so the key lapsed.",
       "handling": "Nothing to repair: the instance is handed on, and the next trigger starts a new ladder."
@@ -165,7 +165,7 @@
       "values": {},
       "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "0.11.6",
       "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category.",
       "common_causes": "A defect that panics on every payload of one instance.",
       "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
@@ -184,6 +184,58 @@
       "description": "A strategic report request was refused because one of its verified evidence artifacts could not be read back.",
       "common_causes": "An evidence frame or file was deleted by hand or damaged after it was recorded.",
       "handling": "Cite evidence whose files still exist, then submit the report again."
+    },
+    "frame_retention_remove_failed": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "The frame cleaner could not delete a due frame at its object key for another reason than a held or absent file. The frame stays, is not tried again by this process, and is tried again after a restart.",
+      "common_causes": "Access to the state root's artifacts folder denied by the file system or by security software.",
+      "handling": "Check the file's permissions and any program that blocks it, then restart actingd so that the cleaner tries again."
+    },
+    "frame_retention_move_failed": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "entry": "optional",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "The frame cleaner could not move an error or Lab frame into its kept folder (entry, relative to the state root) for another reason than a held or absent file; the frame stays at its object key, is not tried again by this process, and is tried again after a restart.",
+      "common_causes": "A file where the kept date folder or leaf should be; access to the state root's kept folder denied; a full disk.",
+      "handling": "Remove whatever blocks the kept folder named by entry, then restart actingd so that the cleaner tries again."
+    },
+    "frame_retention_counter_failed": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "entry": "optional",
+        "io_kind": "optional",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A frame moved into its kept folder, but the move counter kept/.moves (entry) could not be written, so other processes may find moved frames only at their next walk of the kept folders, within 60 s. Reported once per process.",
+      "common_causes": "A folder or a read-only file where kept/.moves should be; access to the kept folder denied.",
+      "handling": "Remove whatever occupies kept/.moves so that a file can be written there; the next move writes the counter again."
     }
   }
 }

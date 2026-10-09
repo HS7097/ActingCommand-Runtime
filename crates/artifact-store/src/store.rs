@@ -474,16 +474,28 @@ impl ArtifactStore {
                 "artifact writer lock is poisoned",
             )
         })?;
-        let path = safe_object_path(
-            &self.root,
-            reference.object_key().ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "artifact_object_key_missing",
-                    "restore_recovery_artifact",
-                    "object key missing",
-                )
-            })?,
-        )?;
+        let object_key = reference.object_key().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "artifact_object_key_missing",
+                "restore_recovery_artifact",
+                "object key missing",
+            )
+        })?;
+        // Workflow #375 R5d: a frame found in the source's `kept\` lands at the same `kept\`
+        // path in the target, which is verified there and put into the target's kept map.
+        let relative = source.resolved_relative_path().to_path_buf();
+        let kept = relative != Path::new(object_key);
+        let path = safe_object_path(&self.root, relative.as_path())?;
+        let finish_kept = |verified: VerifiedArtifactReference| -> ArtifactStoreResult<_> {
+            verify_file(&path, verified.reference())?;
+            if let Some(object_file) = Path::new(object_key)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+            {
+                crate::kept::remember(&self.root, object_file, path.clone());
+            }
+            Ok(verified)
+        };
         if path.exists() {
             let mut buffer = [0; 65_536];
             loop {
@@ -498,7 +510,10 @@ impl ArtifactStore {
                     break;
                 }
             }
-            source.finish()?;
+            let verified = source.finish()?;
+            if kept {
+                return finish_kept(verified);
+            }
             return self.verify_recovery_reference(reference);
         }
         let parent = path.parent().ok_or_else(|| {
@@ -560,6 +575,9 @@ impl ArtifactStore {
             drop(destination);
             verify_file(&temporary, verified.reference())?;
             publish_temp(&temporary, &path)?;
+            if kept {
+                return finish_kept(verified);
+            }
             self.verify_recovery_reference(reference)
         })();
         result.map_err(|error| cleanup_temp(&temporary, error))
@@ -1059,12 +1077,20 @@ pub struct ArtifactReader {
     file: File,
     _use_guard: ArtifactUseGuard,
     reference: ProjectedArtifactReference,
+    /// The opened file below the store root: the object key, or its `kept\` path.
+    relative: PathBuf,
     material: ArtifactMaterialAccumulator,
     verified: Option<VerifiedArtifactReference>,
     failure: Option<ArtifactStoreError>,
 }
 
 impl ArtifactReader {
+    /// Workflow #375 R5d: the file this reader opened, relative to the store root: the object
+    /// key, or the `kept\<date>\<leaf>\<file>` path of a frame the cleaner moved.
+    pub fn resolved_relative_path(&self) -> &Path {
+        &self.relative
+    }
+
     pub fn read_chunk(&mut self, buffer: &mut [u8]) -> ArtifactStoreResult<usize> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
@@ -1350,19 +1376,86 @@ pub fn open_projected_stream(
         .with_io_error(&error)
     })?;
     let path = safe_object_path(&root, object_key)?;
-    let file = File::open(path).map_err(|error| {
+    // Workflow #375 R5d: the cleaner holds a frame for a moment while it removes or moves it,
+    // so a busy open (os error 32 or 33, or a held lock) is retried, the original path and
+    // then the kept lookup, up to 3 times 20 ms apart.
+    let mut retries = 0;
+    loop {
+        match open_material(&root, reference, object_key, &path) {
+            Err(error) if error.is_busy() && retries < READ_BUSY_RETRIES => {
+                retries += 1;
+                std::thread::sleep(READ_BUSY_PAUSE);
+            }
+            opened => return opened,
+        }
+    }
+}
+
+const READ_BUSY_RETRIES: u32 = 3;
+const READ_BUSY_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// The object at its key, or else (Workflow #375 R5d) the frame the cleaner moved into
+/// `kept\`, found by its artifact id. A frame in neither place is `artifact_read_failed`
+/// with `NotFound`, which readers report as missing.
+fn open_material(
+    root: &Path,
+    reference: &ProjectedArtifactReference,
+    object_key: &str,
+    path: &Path,
+) -> ArtifactStoreResult<ArtifactReader> {
+    let read_failed = |error: std::io::Error| {
         ArtifactStoreError::fatal(
             "artifact_read_failed",
             "read_projected_artifact",
             error.to_string(),
         )
         .with_io_error(&error)
-    })?;
-    let use_guard = crate::usage::reader_guard(&root, reference, &file)?;
+    };
+    let (file, relative) = match File::open(path) {
+        Ok(file) => (file, PathBuf::from(object_key)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let object_file = Path::new(object_key)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str);
+            let kept = match object_file {
+                Some(object_file) => crate::kept::find(root, object_file)?,
+                None => None,
+            };
+            let Some(kept) = kept else {
+                return Err(read_failed(error));
+            };
+            match File::open(&kept) {
+                Ok(file) => {
+                    let relative = kept
+                        .strip_prefix(root)
+                        .map_err(|_| {
+                            ArtifactStoreError::fatal(
+                                "artifact_path_invalid",
+                                "read_projected_artifact",
+                                "kept frame outside the store root",
+                            )
+                        })?
+                        .to_path_buf();
+                    (file, relative)
+                }
+                // Gone since the lookup: the frame is missing.
+                Err(kept_error) if kept_error.kind() == std::io::ErrorKind::NotFound => {
+                    if let Some(object_file) = object_file {
+                        crate::kept::forget(root, object_file);
+                    }
+                    return Err(read_failed(error));
+                }
+                Err(kept_error) => return Err(read_failed(kept_error)),
+            }
+        }
+        Err(error) => return Err(read_failed(error)),
+    };
+    let use_guard = crate::usage::reader_guard(root, reference, &file)?;
     Ok(ArtifactReader {
         file,
         _use_guard: use_guard,
         reference: reference.clone(),
+        relative,
         material: ArtifactMaterialAccumulator::default(),
         verified: None,
         failure: None,
@@ -1394,8 +1487,11 @@ pub fn verify_projected_read_only(
     open_projected_stream(root, reference)?.finish()
 }
 
-pub(crate) fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreResult<PathBuf> {
-    let relative = Path::new(object_key);
+pub(crate) fn safe_object_path(
+    root: &Path,
+    object_key: impl AsRef<Path>,
+) -> ArtifactStoreResult<PathBuf> {
+    let relative = object_key.as_ref();
     if relative.is_absolute()
         || relative.components().any(|component| {
             !matches!(component, Component::Normal(_)) && !matches!(component, Component::CurDir)
