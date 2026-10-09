@@ -2340,6 +2340,41 @@ impl RuntimeHost {
     where
         F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
     {
+        self.install_contained_task_checkpoint_for_test(
+            Some(request_id),
+            instance_id,
+            lease_id,
+            action,
+        )
+    }
+
+    /// Workflow #369 E3 (#670 final review M-1): `run_at_contained_task_checkpoint_for_test`
+    /// for the run on `lease_id`, whatever its request (a scheduled run mints its own task
+    /// request).
+    #[cfg(test)]
+    pub(crate) fn run_at_leased_contained_task_checkpoint_for_test<F>(
+        &self,
+        instance_id: InstanceId,
+        lease_id: LeaseId,
+        action: F,
+    ) -> RuntimeHostResult<ContainedTaskCheckpointTestControl>
+    where
+        F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
+    {
+        self.install_contained_task_checkpoint_for_test(None, instance_id, Some(lease_id), action)
+    }
+
+    #[cfg(test)]
+    fn install_contained_task_checkpoint_for_test<F>(
+        &self,
+        request_id: Option<RequestId>,
+        instance_id: InstanceId,
+        lease_id: Option<LeaseId>,
+        action: F,
+    ) -> RuntimeHostResult<ContainedTaskCheckpointTestControl>
+    where
+        F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
+    {
         let shared = self.shared_ref("install_contained_task_checkpoint_test_hook")?;
         let consumed = Arc::new(AtomicU64::new(0));
         let observed = Arc::new(Mutex::new(None));

@@ -89,7 +89,8 @@ impl ContainedTaskCheckpointIdentity {
 
 #[cfg(test)]
 pub(super) struct ContainedTaskCheckpointTestHook {
-    pub(super) request_id: RequestId,
+    /// `None`: the run on the hook's lease, whatever its request.
+    pub(super) request_id: Option<RequestId>,
     pub(super) instance_id: InstanceId,
     pub(super) lease_id: Option<LeaseId>,
     pub(super) execution_thread: std::thread::ThreadId,
@@ -4465,7 +4466,9 @@ impl HostShared {
             )?;
             let should_consume = match slot.as_mut() {
                 Some(hook)
-                    if hook.request_id == identity.request_id
+                    if hook
+                        .request_id
+                        .is_none_or(|request_id| request_id == identity.request_id)
                         && hook.instance_id == identity.instance_id
                         && hook.execution_thread == thread::current().id() =>
                 {
