@@ -4791,10 +4791,10 @@ impl HostShared {
     /// the run carries the causation id of its scheduling event, and everything after
     /// admission is the ordinary contained-task path with its own lease and `task.*` chain.
     /// Admission refusals are typed `startup_package_missing` /
-    /// `startup_package_admission_failed` before any lease is requested.
-    /// A host package run with its own lease: it is prepared before any lease, takes the lease
-    /// that today's immediate try gives it (`lease_busy` while the instance is held), and runs
-    /// under it (Workflow #369 S3a; `run_prepared_package` runs one under a held token).
+    /// `startup_package_admission_failed` before any lease is requested. Workflow #369 S3a:
+    /// the run is prepared (`prepare_package_run`), takes the lease that today's immediate try
+    /// gives it (`lease_busy` while the instance is held) and runs under it
+    /// (`run_prepared_package`, which also runs a package under a token its caller holds).
     pub(super) fn run_startup_package(
         &self,
         pending: &startup_package::PendingStartupPackage,
