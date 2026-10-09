@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #381 A, test plan H-1 (R2, R3′): installation control of a held start while it
-//! prepares, through the held-start checkpoints (HOST-I3). Every wait returns as soon as its
-//! message arrives; `GATE_WAIT` only bounds a broken run.
+//! Workflow #381 A, test plan H-1 (R2, R3′) and the coordinator's #672 ruling on the two
+//! timeouts (R5′): installation control of a held start while it prepares, through the
+//! held-start checkpoints (HOST-I3). Every wait returns as soon as its message arrives;
+//! `GATE_WAIT` only bounds a broken run.
 
 use super::*;
 use actingcommand_contract::{
@@ -15,6 +16,10 @@ const GATE_WAIT: Duration = Duration::from_secs(120);
 const SALT: &[u8] = b"runtime-host-test-salt";
 const TRANSITION_ID: &str = "held-381a";
 const RELEASE_TIMEOUT_MS: u64 = 60_000;
+const HELD_TIMEOUT_MS: u64 = 60_000;
+/// The shortest deadline the contract allows (`validate_install_timeout`): it has passed by the
+/// time any later step of the start looks at it.
+const EXPIRED_TIMEOUT_MS: u64 = 1;
 
 enum AtPreparing {
     ReportHead,
@@ -29,11 +34,11 @@ struct HeldStart {
     checkpoints: mpsc::Receiver<PreparationCheckpoint>,
     commands: mpsc::Sender<AtPreparing>,
     heads: mpsc::Receiver<u64>,
-    start: thread::JoinHandle<RuntimeHostResult<RuntimeHost>>,
+    results: mpsc::Receiver<RuntimeHostResult<RuntimeHost>>,
 }
 
 impl HeldStart {
-    fn spawn(root: &Path) -> Self {
+    fn spawn(root: &Path, held_timeout_ms: u64) -> Self {
         let (checkpoint_sender, checkpoints) = mpsc::channel();
         let (commands, command_receiver) = mpsc::channel::<AtPreparing>();
         let (head_sender, heads) = mpsc::channel();
@@ -70,18 +75,20 @@ impl HeldStart {
         let held = InstallHeldStartup {
             transition_id: TRANSITION_ID.to_owned(),
             request_id: *issuer.mint_request_id().expect("request id").transport(),
-            timeout_ms: RELEASE_TIMEOUT_MS,
+            timeout_ms: held_timeout_ms,
             previous: None,
         };
         let start_root = root.to_path_buf();
         let start_held = held.clone();
-        let start = thread::spawn(move || {
-            RuntimeHost::start(
+        let (result_sender, results) = mpsc::channel();
+        thread::spawn(move || {
+            // The test may have stopped waiting; then the result has no reader.
+            let _ = result_sender.send(RuntimeHost::start(
                 RuntimeHostConfig::new(start_root, SALT)
                     .with_install_held(start_held)
                     .with_preparation_test_hook(hook),
                 Arc::new(FakeProvider::from_entries(Vec::new())),
-            )
+            ));
         });
         Self {
             root: root.to_path_buf(),
@@ -89,7 +96,7 @@ impl HeldStart {
             checkpoints,
             commands,
             heads,
-            start,
+            results,
         }
     }
 
@@ -116,14 +123,14 @@ impl HeldStart {
     }
 
     /// The installer's release, on a connection that declared its governance identity.
-    fn release(&self) -> TestClient {
+    fn release(&self, timeout_ms: u64) -> TestClient {
         let mut installer = TestClient::connect_state_root(&self.root);
         installer.declare_governance_identity();
         let release = installer.request(RuntimeOperation::InstallTransition {
             target: self.info().shutdown_target(),
             action: InstallTransitionAction::Release {
                 ticket: self.ticket(),
-                timeout_ms: RELEASE_TIMEOUT_MS,
+                timeout_ms,
             },
         });
         let receipt = installer.send(&release);
@@ -152,7 +159,12 @@ impl HeldStart {
     }
 
     fn finish(self) -> RuntimeHostResult<RuntimeHost> {
-        self.start.join().expect("held start thread")
+        self.ended().expect("the held start ends")
+    }
+
+    /// The start's result, or `None` while it has not ended within `GATE_WAIT`.
+    fn ended(&self) -> Option<RuntimeHostResult<RuntimeHost>> {
+        self.results.recv_timeout(GATE_WAIT).ok()
     }
 }
 
@@ -169,9 +181,9 @@ fn host_failure_code(receipt: &RuntimeReceipt) -> Option<String> {
 #[test]
 fn gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head() {
     let root = TempDir::new().expect("tempdir");
-    let start = HeldStart::spawn(root.path());
+    let start = HeldStart::spawn(root.path(), HELD_TIMEOUT_MS);
     start.reached(PreparationCheckpoint::Held);
-    let installer = start.release();
+    let installer = start.release(RELEASE_TIMEOUT_MS);
     start.reached(PreparationCheckpoint::Preparing);
 
     let head_before = start.head();
@@ -257,9 +269,9 @@ fn gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head() 
 fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_the_cause() {
     const CAUSE: &str = "cause=ledger_failure cause_operation=append_runtime_event";
     let root = TempDir::new().expect("tempdir");
-    let start = HeldStart::spawn(root.path());
+    let start = HeldStart::spawn(root.path(), HELD_TIMEOUT_MS);
     start.reached(PreparationCheckpoint::Held);
-    let installer = start.release();
+    let installer = start.release(RELEASE_TIMEOUT_MS);
     start.reached(PreparationCheckpoint::Preparing);
     start.go_on(AtPreparing::Latch("append_runtime_event"));
     let stopped = start.finish().err().expect("the held start stops");
@@ -354,5 +366,84 @@ fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_
         ),
         "the failed transition's status fact: {:?}",
         failed_status[0]
+    );
+}
+
+/// The #672 ruling (a), R5′: a release whose deadline passes while the start prepares ends the
+/// start under `release_timeout` (operation `install_transition`), a top code the watchdog
+/// restarts, never under `install_preparation_not_authorized`. The installer's polls tick the
+/// deadline while the start waits at `Preparing`, so the timeout precedes the start's next check.
+#[test]
+fn gate_a_release_that_times_out_ends_the_start_under_release_timeout() {
+    const POLL_LIMIT: usize = 100_000;
+    let root = TempDir::new().expect("tempdir");
+    let start = HeldStart::spawn(root.path(), HELD_TIMEOUT_MS);
+    start.reached(PreparationCheckpoint::Held);
+    let mut installer = start.release(EXPIRED_TIMEOUT_MS);
+    start.reached(PreparationCheckpoint::Preparing);
+    let target = start.info().shutdown_target();
+    let mut failed = None;
+    for _ in 0..POLL_LIMIT {
+        let query = installer.request(RuntimeOperation::InstallTransition {
+            target,
+            action: InstallTransitionAction::Query {
+                transition_id: TRANSITION_ID.to_owned(),
+            },
+        });
+        if let Some(RuntimeResult::InstallTransition { status }) = installer.send(&query).result()
+            && status.phase == InstallTransitionPhase::Failed
+        {
+            failed = Some(status.clone());
+            break;
+        }
+    }
+    start.go_on(AtPreparing::Continue);
+    let ended = start.finish();
+    drop(installer);
+
+    let failed = failed.expect("the release deadline passes while the start prepares");
+    assert_eq!(failed.failure_code.as_deref(), Some("release_timeout"));
+    let stopped = ended.err().expect("the timed-out start ends with an error");
+    assert_eq!(
+        (stopped.code(), stopped.operation()),
+        ("release_timeout", "install_transition"),
+        "FATAL line: {}",
+        stopped.complete_message()
+    );
+    assert!(
+        stopped
+            .complete_message()
+            .starts_with("runtime host error release_timeout during install_transition"),
+        "FATAL line: {}",
+        stopped.complete_message()
+    );
+}
+
+/// The #672 ruling (b), R5′: a held start whose held deadline passes while the installer never
+/// releases, aborts or polls it ends under `held_timeout` (operation `install_transition`), a top
+/// code the watchdog restarts, instead of staying held until something shuts it down.
+#[test]
+fn gate_a_held_start_whose_deadline_passes_ends_under_held_timeout() {
+    let root = TempDir::new().expect("tempdir");
+    let start = HeldStart::spawn(root.path(), EXPIRED_TIMEOUT_MS);
+    start.reached(PreparationCheckpoint::Held);
+    let Some(ended) = start.ended() else {
+        panic!("the held start stayed held past its held deadline");
+    };
+    let stopped = ended
+        .err()
+        .expect("the timed-out held start ends with an error");
+    assert_eq!(
+        (stopped.code(), stopped.operation()),
+        ("held_timeout", "install_transition"),
+        "FATAL line: {}",
+        stopped.complete_message()
+    );
+    assert!(
+        stopped
+            .complete_message()
+            .starts_with("runtime host error held_timeout during install_transition"),
+        "FATAL line: {}",
+        stopped.complete_message()
     );
 }
