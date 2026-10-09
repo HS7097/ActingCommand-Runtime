@@ -71,7 +71,7 @@ impl fmt::Display for StartupRecoveryTiming {
             .map_or_else(|| "-".to_owned(), |(command, _)| format!("{command:?}"));
         write!(
             formatter,
-            "fact_store_ms={} monitor_registry_ms={} policy_host_ms={} policy_dispatches_ms={} policy_outcomes_ms={} approvals_ms={} runtime_state_ms={} agent_dispatcher_ms={} recovery_ms={} writer_commands={} writer_longest_ms={} writer_longest_command={} writer_largest_read_events={}",
+            "fact_store_ms={} monitor_registry_ms={} policy_host_ms={} policy_dispatches_ms={} policy_outcomes_ms={} approvals_ms={} runtime_state_ms={} agent_dispatcher_ms={} recovery_ms={} writer_commands={} writer_longest_ms={} writer_longest_command={} writer_largest_read_events={} writer_whole_ledger_queries={}",
             Millis(self.fact_store_ms),
             Millis(self.monitor_registry_ms),
             Millis(self.policy_host_ms),
@@ -85,6 +85,7 @@ impl fmt::Display for StartupRecoveryTiming {
             Millis(longest_ms),
             longest_command,
             self.writer.largest_read_events,
+            self.writer.whole_ledger_queries,
         )
     }
 }

@@ -181,6 +181,31 @@ pub struct LedgerWriterPeak {
     pub longest: Option<(LedgerWriterCommandKind, Duration)>,
     /// The most events one `Query` or `QueryPage` command returned in the window.
     pub largest_read_events: u64,
+    /// `Query` commands of the window that scan the whole Ledger: no index-backed filter and
+    /// no lower sequence bound (`EventQuery::default()` and the like).
+    pub whole_ledger_queries: u64,
+}
+
+impl LedgerWriterPeak {
+    /// Whether an unpaged `Query` reads the whole Ledger: no lower sequence bound and none of
+    /// the index-backed filters (event type, origin module, diagnostic code, instance, links).
+    fn scans_whole_ledger(query: &EventQuery) -> bool {
+        query.from_sequence.is_none()
+            && query.event_type.is_none()
+            && query.origin_module.is_none()
+            && query.diagnostic_code.is_none()
+            && query.instance_id.is_none()
+            && query.instance_ids.is_empty()
+            && query.request_id.is_none()
+            && query.correlation_id.is_none()
+            && query.causation_id.is_none()
+            && query.task_id.is_none()
+            && query.run_id.is_none()
+            && query.lease_id.is_none()
+            && query.frame_id.is_none()
+            && query.action_id.is_none()
+            && query.recognition_id.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -988,6 +1013,7 @@ impl CommitStatistics {
         command: LedgerWriterCommandKind,
         elapsed: Duration,
         read_events: usize,
+        whole_ledger_query: bool,
     ) {
         let mut peak = self
             .writer_peak
@@ -1000,6 +1026,9 @@ impl CommitStatistics {
         peak.largest_read_events = peak
             .largest_read_events
             .max(u64::try_from(read_events).unwrap_or(u64::MAX));
+        if whole_ledger_query {
+            peak.whole_ledger_queries = peak.whole_ledger_queries.saturating_add(1);
+        }
     }
 
     fn take_writer_peak(&self) -> LedgerWriterPeak {
@@ -1872,6 +1901,7 @@ fn writer_loop<S: LedgerStore>(
     while let Ok(command) = receiver.recv() {
         let started = Instant::now();
         let mut read_events = 0;
+        let mut whole_ledger_query = false;
         let kind = match &command {
             WriterCommand::ResolveArtifact { .. } => LedgerWriterCommandKind::ResolveArtifact,
             WriterCommand::RetentionCandidates { .. } => {
@@ -2141,6 +2171,7 @@ fn writer_loop<S: LedgerStore>(
                 }
             }
             WriterCommand::Query { query, response } => {
+                whole_ledger_query = LedgerWriterPeak::scans_whole_ledger(&query);
                 let events = store.query(&query);
                 read_events = events.len();
                 command_observation.replied(response.send(Ok(events)).is_ok());
@@ -2392,6 +2423,7 @@ fn writer_loop<S: LedgerStore>(
             kind,
             finished.saturating_duration_since(started),
             read_events,
+            whole_ledger_query,
         );
         previous_writer_work = command_observation;
     }

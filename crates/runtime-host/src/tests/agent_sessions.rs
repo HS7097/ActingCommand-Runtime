@@ -1047,11 +1047,12 @@ fn agent_dispatcher_paged_recovery_matches_the_whole_ledger_fold() {
     host.close().expect("close runtime");
 }
 
-// Workflow #381 R4a / R6: on a Ledger with more unrelated events than two recovery pages, no
-// read from the fact store recovery to the end of the Agent Dispatcher recovery returns more
-// than one page, so no recovery read is an unfiltered whole-Ledger query.
+// Workflow #381 R4a / R6 gate (a read count, not a wall clock): on a Ledger with more unrelated
+// events than two recovery pages, the writer commands from the fact store recovery to the end
+// of the Agent Dispatcher recovery include no whole-Ledger query, and none returns more than
+// one recovery page of events.
 #[test]
-fn startup_recovery_reads_never_exceed_one_page() {
+fn startup_recovery_reads_bounded_pages_and_no_whole_ledger_query() {
     let page_events = u64::try_from(crate::recovery_read::RECOVERY_PAGE_EVENTS).expect("page size");
     let root = TempDir::new().expect("tempdir");
     let runtime_instance_id = instance_id();
@@ -1105,6 +1106,10 @@ fn startup_recovery_reads_never_exceed_one_page() {
         recovery.writer.largest_read_events <= page_events,
         "one recovery read returned {} events",
         recovery.writer.largest_read_events
+    );
+    assert_eq!(
+        recovery.writer.whole_ledger_queries, 0,
+        "a recovery read queried the whole Ledger"
     );
     reopened.close().expect("close reopened runtime");
 }
