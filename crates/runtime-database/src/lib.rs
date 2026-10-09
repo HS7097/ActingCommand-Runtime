@@ -285,6 +285,34 @@ impl RuntimeDatabase {
         Duration::from_nanos(self.connection_wait_peak_ns.swap(0, Ordering::Relaxed))
     }
 
+    /// Workflow #381 R4b: a second connection to the same file, read-only, for one long read
+    /// that must not hold the shared connection's lock (the Ledger writer takes that lock for
+    /// every append). The caller runs its whole read inside one transaction on it, which in WAL
+    /// mode reads one snapshot while commits on the shared connection go on. There is no
+    /// `quick_check`: the shared connection's open already checked the file. Every failure is
+    /// returned (`database_maintenance_sql_failed`, `state_database_journal_invalid`); the
+    /// caller never falls back to the shared connection.
+    pub fn read_snapshot_connection(
+        &self,
+        operation: &'static str,
+    ) -> RuntimeDatabaseResult<Connection> {
+        let connection = Connection::open_with_flags(
+            &self.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        connection
+            .busy_timeout(BUSY_TIMEOUT)
+            .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        let journal: String = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        if journal != "wal" {
+            return Err(failure("state_database_journal_invalid", operation));
+        }
+        Ok(connection)
+    }
+
     /// Error readback must not wait behind another owner of the connection.
     pub fn try_connection(
         &self,

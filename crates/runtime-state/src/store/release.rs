@@ -9,6 +9,14 @@ use actingcommand_runtime_database::RuntimeTransaction;
 use serde::{Deserialize, Serialize};
 
 pub use actingcommand_ledger::RELEASE_BASELINE_STATE_KEY;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs inside the release baseline check's read transaction, after the whole-chain check
+    /// and before that transaction ends (Workflow #381 R4b gate test).
+    pub(crate) static BASELINE_SNAPSHOT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
 const MEMBERS: &str = "release.legacy.members.v1";
 const SOURCES: &str = "release.sources.v1";
 const FROM_SCHEMA: &str = "release.state.v1";
@@ -328,13 +336,14 @@ impl RuntimeStateStore {
         self: &Arc<Self>,
         fact: Option<&PersistedEvent>,
     ) -> RuntimeStateResult<Option<PreparedReleaseState>> {
+        // Workflow #381 R4b: the whole-chain check runs first, on its own read snapshot, so the
+        // shared connection (and with it every Ledger append) is never held for its length.
+        let boundary = self.read_release_baseline_snapshot()?;
         let mut connection = self.connection("prepare_release_boundary")?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|_| release_error("state_transaction_begin_failed"))?;
         let scope = self.database.borrow_transaction(&transaction);
-        let boundary = actingcommand_ledger::read_release_baseline_source(&self.database, &scope)
-            .map_err(release_source_error)?;
         if self.read_release_baseline(&scope)?.is_some() {
             let fact = fact.ok_or_else(|| release_error("release_boundary_source_missing"))?;
             let boundary =
@@ -455,6 +464,36 @@ impl RuntimeStateStore {
             before,
             applied_sequence: AtomicU64::new(0),
         })
+    }
+
+    /// The release baseline source, from the complete row and hash-chain check of the Ledger
+    /// rows `1..=H`, where `H` is the head recorded in the snapshot that one read transaction on
+    /// a separate read-only connection sees (Workflow #381 R4b). Rows the writer commits during
+    /// the check are not in that snapshot. The baseline fact is written only by this start's
+    /// reconciliation, after this read, so a baseline that exists is always inside `1..=H`.
+    /// A failure to open or read the snapshot is returned; nothing falls back to the shared
+    /// connection.
+    fn read_release_baseline_snapshot(
+        &self,
+    ) -> RuntimeStateResult<Option<actingcommand_ledger::VerifiedReleaseLedgerSource>> {
+        let mut connection = self
+            .database
+            .read_snapshot_connection("read_release_baseline_snapshot")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+        let source = actingcommand_ledger::read_release_baseline_source(
+            &self.database,
+            &self.database.borrow_transaction(&transaction),
+        )
+        .map_err(release_source_error)?;
+        #[cfg(test)]
+        {
+            if let Some(hook) = BASELINE_SNAPSHOT_HOOK.with(|hook| hook.borrow_mut().take()) {
+                hook();
+            }
+        }
+        Ok(source)
     }
 
     pub fn release_baseline_members(&self) -> RuntimeStateResult<Vec<ReleaseBaselineMember>> {
