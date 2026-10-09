@@ -1902,7 +1902,6 @@ fn a_crash_mid_rung_settles_cleanly_and_retention_closes_the_run_at_the_epoch_en
             dedup_error: true,
             dedup_lab: false,
         },
-        |_| 0,
     )
     .expect("the frame retention view");
     let frames = view
