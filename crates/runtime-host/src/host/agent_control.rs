@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 
 impl HostShared {
     pub(super) fn expire_agent_sessions(&self) -> RuntimeHostResult<()> {
@@ -225,16 +224,10 @@ pub(super) fn reconcile_agent_wakes(
     instances: &BTreeMap<InstanceId, RegisteredInstance>,
     config: &AgentDispatcherConfig,
 ) -> RuntimeHostResult<()> {
-    // Workflow #381 R4a: the planning signals through one position, in bounded pages.
     let sources = ledger
-        .latest_sequence()
-        .and_then(|through| {
-            read_event_types(
-                ledger,
-                &[EventType::PolicyPlanningSignalObserved],
-                through,
-                RECOVERY_PAGE_EVENTS,
-            )
+        .query(EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
         })
         .map_err(|_| ledger_error("query_agent_wake_sources"))?;
     for source in sources {
