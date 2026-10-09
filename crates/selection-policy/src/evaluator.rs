@@ -915,6 +915,64 @@ mod tests {
         );
     }
 
+    /// The instance snapshot of the input identity golden: the fixture's scalar fact and one
+    /// record list that the fixture document does not declare.
+    fn snapshot_with_an_undeclared_list() -> actingcommand_contract::InstanceFactSnapshot {
+        use actingcommand_contract::{
+            FactContent, FactRecord, FactScalar, FactScope, FactValue, InstanceFactContext,
+        };
+        let record = |key: &str, value: FactValue, expires_at_unix_ms: Option<u64>| FactRecord {
+            scope: FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            key: key.to_owned(),
+            content: FactContent::Inline { value },
+            observed_at_unix_ms: 1_000_000,
+            expires_at_unix_ms,
+            ttl_policy: None,
+            confidence_milli: 900,
+            source_detector: "detector-a".to_owned(),
+            source_snapshot_id: "snapshot-a".to_owned(),
+            schema_version: "v1".to_owned(),
+            resource_bundle_hash: "0".repeat(64),
+            invalidate_on: Vec::new(),
+        };
+        actingcommand_contract::InstanceFactSnapshot {
+            snapshot_id: "snapshot-a".to_owned(),
+            ledger_position: 7,
+            context: InstanceFactContext {
+                instance_id: "instance-a".to_owned(),
+                server_id: "server-a".to_owned(),
+                game_id: "game-a".to_owned(),
+            },
+            records: vec![
+                record(FACT_KEY, FactValue::Integer(3), Some(4_600_000)),
+                record(
+                    "session.example.list.targets",
+                    FactValue::RecordList(vec![BTreeMap::from([
+                        ("id".to_owned(), FactScalar::String("member-a".to_owned())),
+                        ("rank".to_owned(), FactScalar::Integer(2)),
+                    ])]),
+                    None,
+                ),
+            ],
+        }
+    }
+
+    /// The `input_sha256` of a document that reads no record list, over an instance snapshot
+    /// that holds one: the undeclared list stays `fact_not_scalar`, so the hashed input keeps
+    /// its bytes.
+    const INPUT_IDENTITY_GOLDEN: &str =
+        "sha256:77ee97e6e9440f13da5be07eefb2e900f5f1c59944e35e4e43a4ad0efc6a73f0";
+
+    #[test]
+    fn a_document_without_keyed_fact_keeps_its_input_identity() {
+        let facts =
+            SelectionFactSnapshot::from_instance_snapshot(&snapshot_with_an_undeclared_list(), NOW);
+        let decision = evaluate(&policy(), &candidates(), &facts, NOW).expect("decision");
+        assert_eq!(decision.input_sha256, INPUT_IDENTITY_GOLDEN);
+    }
+
     #[test]
     fn reordering_the_candidate_set_keeps_the_same_selection() {
         let mut reordered = candidates();
