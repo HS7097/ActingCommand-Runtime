@@ -116,9 +116,10 @@ but the command verified nothing and does not count as a pass. A test listed as 
 skipped and does not count as a pass either. A failure prints `FAILED` and cargo exits non-zero.
 None of these tests is behind a Cargo feature.
 
-The whole-workspace run is the `Test` and `Test observation` steps of `.github/workflows/ci.yml`:
-the workspace tests exclude `actingcommand-actingd` and `actingcommand-runtime-client`,
-`actingcommand-runtime-client` then runs single-threaded (`-- --test-threads=1`), and the
-`test-observation` feature runs exactly `tests::runtime_input_proxy_renews_before_short_lease_expiry`
-and `tests::long_input_extends_only_its_response_wait` of `actingcommand-runtime-client`. The
-workflow file lists the remaining steps.
+The whole-workspace run is the module test jobs of `.github/workflows/ci.yml`, summarized by the
+`rust` check: every workspace member runs in exactly one job, `actingcommand-runtime-client` runs
+single-threaded (`-- --test-threads=1`), and its `test-observation` run selects the recorder
+tests, `tests::runtime_input_proxy_renews_before_short_lease_expiry` and
+`tests::long_input_extends_only_its_response_wait`. The registered flaky tests of
+`ci/flaky-tests.toml` are skipped in those jobs and run, once in each of those configurations, in
+the non-gating `flaky` job. The workflow file lists the remaining steps.

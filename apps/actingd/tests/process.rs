@@ -983,7 +983,7 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
 fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
     let expected_package_sha256 = format!("{:x}", Sha256::digest(neutral_contained_task_package()));
     let expected_package_digest = format!("sha256:{expected_package_sha256}");
-    let (_actinglab_target, actinglab_binary) = build_candidate_actinglab();
+    let actinglab_binary = prebuilt_actinglab();
     for (case, frames, max_inputs, expected_effects) in [
         (
             "effecting",
@@ -1009,7 +1009,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         // v0.11.4 flaky tests (review H1): every client of this test keeps the production I/O
         // budget, so one slow reply behind the single ledger writer does not latch its
         // connection; nothing reconnects or abandons a connection.
-        let client = wait_for_agent_client_default_io(&mut child.0, root.path());
+        let client = wait_for_agent_client(&mut child.0, root.path());
         let started = Instant::now();
         let events = loop {
             let query_started = Instant::now();
@@ -1436,7 +1436,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             )
             .expect("query fixture captures")
             .len();
-        let device_client = connect_default_io(root.path());
+        let device_client = connect(root.path());
         let denied = device_client
             .observe_readonly(INSTANCE_ALIAS)
             .expect_err("fixture provider must be isolated from normal device operations");
@@ -1460,7 +1460,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         assert!(child.0.try_wait().expect("process state").is_none());
 
         drop(client);
-        let maintenance = connect_default_io(root.path());
+        let maintenance = connect(root.path());
         let started = Instant::now();
         let accepted = loop {
             match maintenance.request_shutdown() {
@@ -3238,17 +3238,10 @@ fn check_config_previews_the_catalog_plan_read_only() {
     assert_eq!(before, after, "check-config must not write the state root");
 }
 
+/// Every client of these process tests keeps the production I/O budget (5 s, the
+/// `RuntimeClientConfig` default; test plan §4 #11 retired the 500 ms test clients): a reply
+/// delayed behind the single ledger writer does not latch the client.
 fn connect(state_root: &Path) -> RuntimeClient {
-    RuntimeClient::connect(
-        RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(500)),
-    )
-    .expect("connect runtime")
-}
-
-/// The production I/O budget (5 s, `RuntimeClientConfig` default), as in G-flake4 and the
-/// pagination test: a reply delayed behind the single ledger writer does not latch the client.
-fn connect_default_io(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(RuntimeClientConfig::new(
         state_root,
         EventActor::Cli,
@@ -3258,10 +3251,11 @@ fn connect_default_io(state_root: &Path) -> RuntimeClient {
 }
 
 fn connect_agent(state_root: &Path) -> RuntimeClient {
-    RuntimeClient::connect(
-        RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter)
-            .with_io_timeout(Duration::from_millis(500)),
-    )
+    RuntimeClient::connect(RuntimeClientConfig::new(
+        state_root,
+        EventActor::Agent,
+        EventSource::Adapter,
+    ))
     .expect("connect agent runtime")
 }
 
@@ -3278,33 +3272,11 @@ fn wait_for_first_receipt(state_root: &Path) {
     drop(probe);
 }
 
+/// Waits for policy readiness with production-budget clients (see `connect`).
 fn wait_for_agent_client(child: &mut Child, state_root: &Path) -> RuntimeClient {
-    wait_for_agent_client_with(
-        child,
-        state_root,
-        Some(Duration::from_millis(500)),
-        Duration::from_secs(5),
-    )
-}
-
-/// The same wait with the production I/O budget (see `connect_default_io`).
-fn wait_for_agent_client_default_io(child: &mut Child, state_root: &Path) -> RuntimeClient {
-    wait_for_agent_client_with(child, state_root, None, Duration::from_secs(20))
-}
-
-fn wait_for_agent_client_with(
-    child: &mut Child,
-    state_root: &Path,
-    io_timeout: Option<Duration>,
-    budget: Duration,
-) -> RuntimeClient {
     let started = Instant::now();
     loop {
         let config = RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter);
-        let config = match io_timeout {
-            Some(io_timeout) => config.with_io_timeout(io_timeout),
-            None => config,
-        };
         match RuntimeClient::connect(config) {
             Ok(client) => return client,
             Err(error) => {
@@ -3317,7 +3289,7 @@ fn wait_for_agent_client_with(
                     panic!("actingd exited before policy readiness with {status}: {stderr}");
                 }
                 assert!(
-                    started.elapsed() < budget,
+                    started.elapsed() < Duration::from_secs(20),
                     "actingd policy connection timed out after {error}"
                 );
                 thread::sleep(Duration::from_millis(20));
@@ -3844,48 +3816,15 @@ fn run_actinglab_summary(
     (output.status, envelope)
 }
 
-fn build_candidate_actinglab() -> (TempDir, PathBuf) {
-    let target = TempDir::new().expect("fresh actinglab target");
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root");
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .current_dir(workspace_root)
-        .args([
-            "build",
-            "--locked",
-            "-p",
-            "actingcommand-actinglab",
-            "--bin",
-            "actinglab",
-            "--target-dir",
-        ])
-        .arg(target.path())
-        .output()
-        .expect("build exact actinglab candidate");
-    assert!(
-        output.status.success(),
-        "build exact actinglab candidate: stdout={}; stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let binary = target.path().join("debug").join(if cfg!(windows) {
-        "actinglab.exe"
-    } else {
-        "actinglab"
-    });
-    let binary = binary
+/// Test plan §4 #3 (APPS-X1): CI's `apps` job builds actinglab once with its production
+/// features (`cargo build --locked -p actingcommand-actinglab --bin actinglab`) and exports it
+/// here, so the test no longer runs a `cargo build` of its own.
+fn prebuilt_actinglab() -> PathBuf {
+    let binary = std::env::var_os("ACTINGCOMMAND_TEST_ACTINGLAB_EXE")
+        .expect("ACTINGCOMMAND_TEST_ACTINGLAB_EXE names the actinglab executable (CI exports it)");
+    PathBuf::from(binary)
         .canonicalize()
-        .expect("exact actinglab candidate binary");
-    let target_root = target.path().canonicalize().expect("actinglab target root");
-    assert!(
-        binary.starts_with(&target_root),
-        "actinglab candidate escaped its fresh target: {}",
-        binary.display()
-    );
-    (target, binary)
+        .expect("prebuilt actinglab executable")
 }
 
 fn seed_agent_wake(state_root: &Path, instance_id: InstanceId) {
