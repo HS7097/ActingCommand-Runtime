@@ -478,6 +478,27 @@ struct ActiveContainedRun<'a> {
     control: Arc<ContainedRunControl>,
 }
 
+/// Workflow #369 S3a: the lease a host package run executes under, which its caller holds.
+pub(super) struct HeldPackageLease {
+    pub(super) token: LeaseToken,
+    pub(super) connection_id: ConnectionId,
+}
+
+/// Workflow #369 S3a: a host package run prepared before its lease (`prepare_package_run`).
+pub(super) struct PreparedPackageRun<'a> {
+    instance_alias: String,
+    task_request: ContainedTaskRequest,
+    task_request_message: RuntimeRequest,
+    prepared: PreparedContainedTask,
+    prerequisites: Vec<PreparedContainedTask>,
+    task_id: IssuedTaskId,
+    run_id: IssuedRunId,
+    run_links: RuntimeRunLinks,
+    execution_provenance: ExecutionBackendProvenance,
+    active_run: ActiveContainedRun<'a>,
+    control_request_id: RequestId,
+}
+
 impl ActiveContainedRun<'_> {
     fn control(&self) -> Arc<ContainedRunControl> {
         Arc::clone(&self.control)
@@ -4040,6 +4061,14 @@ fn contained_task_package_failure(code: &'static str) -> RequestFailure {
 /// is `startup_package_missing`, every other refusal `startup_package_admission_failed`; the
 /// underlying admission code stays attached as the related failure. The resource declaration
 /// rejection, when there is one, travels with it.
+fn startup_package_request_invalid() -> RequestFailure {
+    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+        "startup_package_request_invalid",
+        "run_startup_package",
+        RuntimeErrorCode::RuntimeFatal,
+    ))
+}
+
 fn startup_package_admission_failure(mut failure: RequestFailure) -> RequestFailure {
     if failure.poison_runtime || failure.error.is_fatal() {
         return failure;
@@ -4764,11 +4793,69 @@ impl HostShared {
     /// the run carries the causation id of its scheduling event, and everything after
     /// admission is the ordinary contained-task path with its own lease and `task.*` chain.
     /// Admission refusals are typed `startup_package_missing` /
-    /// `startup_package_admission_failed` before any lease is requested.
+    /// `startup_package_admission_failed` before any lease is requested. Workflow #369 S3a:
+    /// the run is prepared (`prepare_package_run`), takes the lease that today's immediate try
+    /// gives it (`lease_busy` while the instance is held) and runs under it
+    /// (`run_prepared_package`, which also runs a package under a token its caller holds).
     pub(super) fn run_startup_package(
         &self,
         pending: &startup_package::PendingStartupPackage,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let holder_id = *self
+            .events
+            .issuer()
+            .mint_holder_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?
+            .transport();
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    "build_startup_package_connection",
+                    &error,
+                ))
+            })?;
+        let run = self.prepare_package_run(pending, holder_id)?;
+        let validated = run
+            .task_request_message
+            .validate()
+            .map_err(|_| startup_package_request_invalid())?;
+        let lease_ttl_ms = self.contained_task_lease_ttl(&run.task_request)?;
+        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
+            request: &validated,
+            request_id: run.task_request_message.request_id(),
+            instance_alias: &run.instance_alias,
+            holder_id,
+            connection_id,
+            run_links: Some(run.run_links),
+            lease_ttl_ms: Some(lease_ttl_ms),
+            kind: ClaimKind::StartupPackage,
+        })?;
+        let RuntimeResult::LeaseGranted { token } = acquired.result else {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "startup_package_lease_result_invalid",
+                    "run_startup_package",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        };
+        self.run_prepared_package(
+            run,
+            HeldPackageLease {
+                token,
+                connection_id,
+            },
+        )
+    }
+
+    /// Workflow #369 S3a: everything a host package run does before its lease: identity,
+    /// capacity, admission, prerequisite chain, entry checks and its command lifecycle. The run
+    /// will hold `holder_id`'s lease; a refusal here takes no lease.
+    pub(super) fn prepare_package_run(
+        &self,
+        pending: &startup_package::PendingStartupPackage,
+        holder_id: actingcommand_contract::HolderId,
+    ) -> Result<PreparedPackageRun<'_>, RequestFailure> {
         let instance_alias = pending.instance_alias.as_str();
         let task_request = &pending.request;
         let resolved = self.resolve_instance(instance_alias)?;
@@ -4787,19 +4874,8 @@ impl HostShared {
         let identifier = || RequestFailure::poison_without_terminal(runtime_identifier_error());
         let request_id = issuer.mint_request_id().map_err(|_| identifier())?;
         let correlation_id = issuer.mint_correlation_id().map_err(|_| identifier())?;
-        let holder_id = *issuer
-            .mint_holder_id()
-            .map_err(|_| identifier())?
-            .transport();
         let task_id = issuer.mint_task_id().map_err(|_| identifier())?;
         let run_id = issuer.mint_run_id().map_err(|_| identifier())?;
-        let invalid_request = || {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "startup_package_request_invalid",
-                "run_startup_package",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        };
         let task_request_message = RuntimeRequest::new(
             request_id,
             correlation_id,
@@ -4813,17 +4889,10 @@ impl HostShared {
                 request: task_request.clone(),
             },
         )
-        .map_err(|_| invalid_request())?;
+        .map_err(|_| startup_package_request_invalid())?;
         let validated = task_request_message
             .validate()
-            .map_err(|_| invalid_request())?;
-        let connection_id =
-            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "build_startup_package_connection",
-                    &error,
-                ))
-            })?;
+            .map_err(|_| startup_package_request_invalid())?;
         self.require_business_capacity(self.events.request_links(
             &validated,
             Some(resolved.instance_id()),
@@ -4943,27 +5012,51 @@ impl HostShared {
             run_links,
             execution_provenance,
         )?;
-        let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
-        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
-            request: &validated,
-            request_id: task_request_message.request_id(),
+        Ok(PreparedPackageRun {
+            instance_alias: instance_alias.to_owned(),
+            task_request: task_request.clone(),
+            task_request_message,
+            prepared,
+            prerequisites,
+            task_id,
+            run_id,
+            run_links,
+            execution_provenance,
+            active_run,
+            control_request_id: pending.control_request_id,
+        })
+    }
+
+    /// Workflow #369 S3a: runs a prepared host package under `held`, a lease its caller
+    /// holds (from S2+S3b the ladder's own token, so a rung run takes no lease of its own).
+    /// The run releases that lease once, under its own run links (C9), as every contained run
+    /// does; a failure before the run takes it over leaves the release to the caller.
+    pub(super) fn run_prepared_package(
+        &self,
+        run: PreparedPackageRun<'_>,
+        held: HeldPackageLease,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let PreparedPackageRun {
             instance_alias,
-            holder_id,
+            task_request,
+            task_request_message,
+            prepared,
+            prerequisites,
+            task_id,
+            run_id,
+            run_links,
+            execution_provenance,
+            active_run,
+            control_request_id,
+        } = run;
+        let HeldPackageLease {
+            token,
             connection_id,
-            run_links: Some(run_links),
-            lease_ttl_ms: Some(lease_ttl_ms),
-            kind: ClaimKind::StartupPackage,
-        })?;
-        let RuntimeResult::LeaseGranted { token } = acquired.result else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "startup_package_lease_result_invalid",
-                    "run_startup_package",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        };
-        let deadline_monotonic_ms = match self.contained_task_deadline(task_request, &token) {
+        } = held;
+        let validated = task_request_message
+            .validate()
+            .map_err(|_| startup_package_request_invalid())?;
+        let deadline_monotonic_ms = match self.contained_task_deadline(&task_request, &token) {
             Ok(deadline) => deadline,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure_with_run_links(
@@ -4982,18 +5075,18 @@ impl HostShared {
         self.execute_contained_task_with_lease(
             &task_request_message,
             &validated,
-            instance_alias,
+            &instance_alias,
             connection_id,
             prepared,
             prerequisites,
-            task_request,
+            &task_request,
             token,
             task_id,
             run_id,
             execution_provenance,
             Some(run_links),
             active_run.control(),
-            Some(pending.control_request_id),
+            Some(control_request_id),
         )
     }
 

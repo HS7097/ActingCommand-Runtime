@@ -4168,7 +4168,7 @@ fn b2_an_absent_admission_handle_refuses_with_a_distinct_code() {
 const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
     "crates/runtime-host/src/host/contained_task.rs::HostShared::run_contained_task -> require_business_capacity",
     "crates/runtime-host/src/host/contained_task.rs::HostShared::run_scheduled_contained_task -> require_business_capacity",
-    "crates/runtime-host/src/host/contained_task.rs::HostShared::run_startup_package -> require_business_capacity",
+    "crates/runtime-host/src/host/contained_task.rs::HostShared::prepare_package_run -> require_business_capacity",
     "crates/runtime-host/src/host/lease.rs::HostShared::grant_prepared_lease_with_links -> require_business_capacity",
     // Workflow #369 Q-4: the pump reads capacity silently and leaves a business claim queued.
     "crates/runtime-host/src/host/lease.rs::HostShared::pump -> admit_capacity",
