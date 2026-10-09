@@ -1219,16 +1219,29 @@ fn stopped_instance_claims_skip_the_endpoint_and_capacity_checks_other_kinds_kee
 
     host.replace_instance_endpoint_for_test("node.a", bound)
         .expect("start node.a");
-    let refused = host
-        .request_host_claim_for_test("node.a", ClaimKind::DirectTaskRun)
-        .expect_err("a direct run keeps business capacity");
-    assert_eq!(refused.code(), "capacity_admission_refused");
     let selfcheck = host
         .request_host_claim_for_test("node.a", ClaimKind::SelfCheck)
         .expect("a self-check takes drain capacity");
     let selfcheck_token = selfcheck.granted.clone().expect("granted at once");
     host.release_host_claim_for_test(&selfcheck, &selfcheck_token)
         .expect("release the self-check");
+    // Review L5 (#369 S2+S3b): a direct run keeps business capacity; refused now, it is queued
+    // and written nothing more, and the pump grants it only once capacity recovers.
+    let direct = host
+        .request_host_claim_for_test("node.a", ClaimKind::DirectTaskRun)
+        .expect("a direct run under capacity pressure is queued");
+    assert!(
+        direct.granted.is_none() && direct.queued.is_some(),
+        "{direct:?}"
+    );
+    host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        direct
+            .wait_for_grant(Duration::from_millis(50))
+            .expect("grant slot"),
+        None,
+        "no grant while capacity refuses"
+    );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }

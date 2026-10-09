@@ -614,12 +614,7 @@ fn a_shutdown_during_a_climb_ends_the_ladder_without_a_leak_or_a_fatal_error() {
         ..
     } = run;
     host.close().expect("close host during the climb");
-    let ledger = GlobalLedger::open_evidence(
-        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
-        |_| None,
-    )
-    .expect("read the closed ledger");
-    let events = ledger.query(&EventQuery::default());
+    let events = closed_ledger_events(root.path());
     let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
     assert_eq!(finished.severity(), EventSeverity::Warning);
@@ -636,7 +631,6 @@ fn a_shutdown_during_a_climb_ends_the_ladder_without_a_leak_or_a_fatal_error() {
             .all(|event| event.severity() != EventSeverity::Fatal),
         "no fatal record"
     );
-    drop(ledger);
     state.unknown_capture.store(false, Ordering::Release);
     state.capture_delay_ms.store(0, Ordering::Release);
     let reopened = RuntimeHost::start(
@@ -1036,12 +1030,14 @@ fn spawn_ladder_crash_child(root: &Path, point: &str) -> (std::process::Child, P
     (child, marker)
 }
 
+/// The events of a closed or crashed host's ledger, its artifacts verified.
 fn closed_ledger_events(root: &Path) -> Vec<PersistedEvent> {
+    let artifacts = ArtifactStore::open(root).expect("open the artifact store");
     GlobalLedger::open_evidence(
         actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root),
-        |_| None,
+        |reference| artifacts.verify_recovery_reference(reference).ok(),
     )
-    .expect("read the crashed ledger")
+    .expect("read the closed ledger")
     .query(&EventQuery::default())
 }
 

@@ -28,6 +28,9 @@ use std::sync::mpsc;
 /// How often a granted claim retries a lifecycle admission that is still closed (a daemon
 /// start that is still preparing, an install hold) before its payload runs.
 const HOST_CLAIM_ADMISSION_POLL: Duration = Duration::from_millis(100);
+/// Workflow #369 Q-5: a key within this much of a step's bound is not renewed, so a claim
+/// granted a moment ago (its TTL already that bound) does not renew at once.
+const RENEWAL_SLACK_MS: u64 = 1_000;
 
 /// What a granted host claim runs on its instance's worker.
 pub(super) enum HostClaimWork {
@@ -346,7 +349,13 @@ impl HostShared {
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
-        if key.token.expires_at_monotonic_ms().saturating_sub(now) >= lease_ttl_ms {
+        if key
+            .token
+            .expires_at_monotonic_ms()
+            .saturating_sub(now)
+            .saturating_add(RENEWAL_SLACK_MS)
+            >= lease_ttl_ms
+        {
             return Ok(());
         }
         let validated = key.request.validate().map_err(|_| {
