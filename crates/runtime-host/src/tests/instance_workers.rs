@@ -201,7 +201,8 @@ fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequest) {
         .with_startup_packages(BTreeMap::from([(
             POLICY_INSTANCE_ALIAS.to_owned(),
             startup,
-        )]));
+        )]))
+        .with_scheduled_procedures(["procedure.observe".to_owned()]);
     let request =
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .and_then(|request| {
@@ -1483,6 +1484,17 @@ fn ladder_hand_off_crash_child_process() {
             .expect("run identity bytes"),
     )
     .expect("run identity file");
+    // The #670 rulings' test (c): the dispatch is admitted and its lease granted; the process
+    // ends before the run's first task event.
+    if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+        == Ok("after_admission_before_run")
+    {
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        fs::write(marker, b"after_admission_before_run").expect("crash marker");
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
     if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
         == Ok("after_lease_release_before_policy_execution")
     {
@@ -1831,6 +1843,96 @@ fn a_crash_inside_the_hand_off_is_settled_as_interrupted_and_a_new_dispatch_proc
     )
     .expect("the evaluation after the new dispatch");
     assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}
+
+/// After a restart: a new dispatch on the instance is admitted, and the evaluation after it is
+/// not fatal (an open dispatch left beside it would make it `policy_instance_dispatch_conflict`).
+fn assert_a_new_dispatch_proceeds(host: &RuntimeHost, root: &Path, cut_run: &RunId) {
+    let (_, request) = ladder_setup(root);
+    let context = admit_ladder_run_at(host, &request, evaluation_now());
+    assert_ne!(context.run_id(), *cut_run);
+    let at = evaluation_now();
+    host.evaluate_policy_cycle_with_test_inputs(
+        &policy_facts(),
+        &policy_resources(),
+        EvaluationTime {
+            unix_ms: at,
+            monotonic_ms: at,
+        },
+        11,
+        PolicyTrigger::FactsChanged,
+    )
+    .expect("the evaluation after the new dispatch");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+}
+
+/// Coordinator ruling on #670 (decision 1), test (c): a scheduled dispatch killed after its lease
+/// grant and before its run's first task event. The restart closes it as it closes a cut run:
+/// the missing run-linked release (effect `not_performed`), `policy_settlement_release_recovered`
+/// once, the run settled once as interrupted; a new dispatch on the same instance then
+/// proceeds. (A client run's dispatch keeps waiting for its late outcome:
+/// `crash_recovery::policy_dispatch_accepts_one_late_outcome_after_process_crash`.)
+#[test]
+fn a_scheduled_dispatch_killed_before_its_first_task_event_is_settled_and_a_new_dispatch_proceeds()
+{
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "after_admission_before_run");
+    kill_at_marker(child, &marker);
+    let (run_id, _) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseGranted), 1);
+    assert!(
+        !prefix.iter().any(|event| {
+            event.links().run_id() == Some(&run_id)
+                && matches!(
+                    event.payload(),
+                    EventPayload::Task(TaskPayload::Semantic(_))
+                )
+        }),
+        "the run has no task event"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    assert_settled_once_as_interrupted(&all_events(&host), &run_id);
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on #670 (decision 2), test (d): E3's second crash point on the other side
+/// of the transfer, after the hand-off's `lease.transferred` and before the run's
+/// `lease.released`. The new holder owns the lease, so the restart writes no release for the
+/// run, but settles it once as interrupted; a new dispatch on the instance then proceeds.
+#[test]
+fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() {
+    let (root, registered) = crash_root();
+    let (child, marker) =
+        spawn_ladder_crash_child(root.path(), "after_lease_transfer_before_release");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::TaskFailed), 1);
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseReleased), 0);
+    assert!(prefix.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Lease(LeasePayload::Transferred(transfer))
+            if transfer.from_lease_id() == lease_id
+    )));
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        0,
+        "no release is written for a lease the transfer handed on"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_settlement_interrupted")
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
     host.close().expect("close the restarted host");
 }
 

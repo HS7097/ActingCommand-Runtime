@@ -467,6 +467,11 @@ pub struct RuntimeHostConfig {
     clock: Arc<dyn RuntimeClock>,
     policy_inputs: Option<PolicyInputSnapshot>,
     procedure_manifest: Option<ProcedureManifest>,
+    /// Workflow #369 E3 (#670 rulings): the procedures the policy driver runs as contained
+    /// scheduled runs (`admit_scheduled_policy_dispatch`); the others' dispatches are client
+    /// runs whose outcome is reported later.
+    #[allow(dead_code)] // read by the start's recovery with the fix that follows the tests
+    scheduled_procedures: BTreeSet<String>,
     config_manifest: Option<RuntimeConfigManifest>,
     /// Per instance alias: the contained task the host schedules by itself after a successful
     /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
@@ -514,6 +519,7 @@ impl RuntimeHostConfig {
             clock: Arc::new(SystemRuntimeClock::new()),
             policy_inputs: None,
             procedure_manifest: None,
+            scheduled_procedures: BTreeSet::new(),
             config_manifest: None,
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
@@ -647,6 +653,17 @@ impl RuntimeHostConfig {
     /// Installs the Runtime-owned manifest that binds procedure aliases to package content.
     pub fn with_procedure_manifest(mut self, procedure_manifest: ProcedureManifest) -> Self {
         self.procedure_manifest = Some(procedure_manifest);
+        self
+    }
+
+    /// Workflow #369 E3 (#670 rulings): the procedure refs whose dispatches the policy driver
+    /// admits as contained scheduled runs. A restart closes such a dispatch whose run was cut
+    /// before its first task event; a client run's dispatch keeps waiting for its outcome.
+    pub fn with_scheduled_procedures(
+        mut self,
+        procedure_refs: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.scheduled_procedures = procedure_refs.into_iter().collect();
         self
     }
 

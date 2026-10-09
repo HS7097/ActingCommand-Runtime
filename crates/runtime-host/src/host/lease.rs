@@ -2436,6 +2436,8 @@ impl HostShared {
         .map_err(|failure| *failure.error)?;
         self.perform_transfer(prepared)
             .map_err(|failure| *failure.error)?;
+        #[cfg(test)]
+        policy_crash_test_barrier("after_lease_transfer_before_release");
         self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,
