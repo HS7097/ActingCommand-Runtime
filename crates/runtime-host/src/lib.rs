@@ -38,6 +38,8 @@ mod project_interface;
 mod proposal;
 mod provider;
 mod provider_startup;
+mod recovery_read;
+mod recovery_timing;
 mod strategy;
 mod suspension_report;
 mod time;
