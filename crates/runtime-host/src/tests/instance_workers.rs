@@ -572,10 +572,7 @@ fn pause_instance(host: &RuntimeHost, instance_alias: &str, connection: u64) -> 
 
 /// The ladder claim's own release records (request links only), found through the hand-off
 /// that took the failed run's lease.
-fn ladder_releases<'a>(
-    events: &'a [PersistedEvent],
-    run_lease: LeaseId,
-) -> Vec<&'a PersistedEvent> {
+fn ladder_releases(events: &[PersistedEvent], run_lease: LeaseId) -> Vec<&PersistedEvent> {
     let ladder_request = events
         .iter()
         .find_map(|event| match event.payload() {
