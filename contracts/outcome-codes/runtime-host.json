@@ -111,6 +111,21 @@
       "common_causes": "A frame deleted by hand from the state root's artifacts folder.",
       "handling": "Nothing to repair in the Runtime; the frame is gone. Read another frame, or restore the file from a copy if it is still needed."
     },
+    "policy_settlement_skipped_no_release": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.5",
+      "description": "A restart found a scheduled run with its task terminal but no lease.released under its run links, and skipped the run's settlement (a scheduled run ends with exactly one release; with none, settlement skips the run). The run keeps its terminal and records no policy execution; the skip is recorded once per restart.",
+      "common_causes": "The Runtime ended between the run's task terminal and its lease end, for example inside a failed run's hand-off to its stuck-recovery ladder.",
+      "handling": "Nothing to repair for the Runtime, which starts normally. The skipped run stays unsettled in the ledger."
+    },
     "proposal_report_unavailable": {
       "category": "error",
       "owner": "runtime-host",

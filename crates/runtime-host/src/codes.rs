@@ -51,5 +51,9 @@ actingcommand_contract::outcome_codes! {
         /// Error. An instance worker panicked again before it finished one payload after its
         /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
         RuntimeRestartRequired => "runtime_restart_required": error,
+        /// Warning. A restart found a scheduled run with its task terminal but no
+        /// `lease.released` under its run links (cut between the two) and skipped the run's
+        /// settlement (model C1); recorded once per restart (keys `instance_id`).
+        PolicySettlementSkippedNoRelease => "policy_settlement_skipped_no_release": warning,
     }
 }
