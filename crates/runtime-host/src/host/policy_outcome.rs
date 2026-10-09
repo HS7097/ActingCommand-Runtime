@@ -1710,7 +1710,13 @@ fn reconcile_scheduled_policy_outcomes_for(
         }
         let completion = ledger
             .reconcile_scheduled_policy_settlement(data.clone())
-            .map_err(|_| ledger_error("reconcile_policy_outcomes"))?;
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    "reconcile_policy_outcomes_diagnostic",
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            })?;
         policy
             .commit_execution(&data)
             .map_err(RuntimeHostError::into_fatal)?;
