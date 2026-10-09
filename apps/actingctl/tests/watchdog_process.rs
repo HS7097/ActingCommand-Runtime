@@ -2,9 +2,9 @@
 
 //! Workflow #374: `actingctl watchdog` on an A/B fixture root. A live owner (the sealed C4
 //! Runtime child), a held acsetup writer lock, start attempts through a stand-in fixed entry
-//! and the budget, a FATAL hold, a formal start and close; the real start path with the
-//! actingd that CI exports as `ACTINGCOMMAND_TEST_ACTINGD_EXE`; and the task's registration
-//! and removal. Without a registered task `status` adds attention 14.
+//! and the budget, a FATAL hold, a formal start and close; and the task's registration and
+//! removal. Without a registered task `status` adds attention 14. The real start path with a
+//! real actingd is the exact-SHA build's "Watchdog smoke", a required check (test plan §4 #8).
 
 #![cfg(windows)]
 
@@ -36,7 +36,6 @@ struct Fixture {
     base: PathBuf,
     root: PathBuf,
     state: PathBuf,
-    config: PathBuf,
     runs: Cell<u32>,
 }
 
@@ -93,7 +92,6 @@ impl Fixture {
             base,
             root,
             state,
-            config,
             runs: Cell::new(0),
         }
     }
@@ -257,95 +255,6 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
         attention(&report),
         ["formal_close_unlogged", "task_missing"]
     );
-}
-
-/// Ends a Runtime the test could not stop formally.
-struct RuntimeCleanup(PathBuf);
-
-impl Drop for RuntimeCleanup {
-    fn drop(&mut self) {
-        let Ok(bytes) = fs::read(self.0.join("runtime-info.json")) else {
-            return;
-        };
-        if let Some(pid) = serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|info| info["pid"].as_u64())
-        {
-            let ended = Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .output();
-            eprintln!("cleanup taskkill {pid}: {ended:?}");
-        }
-    }
-}
-
-#[test]
-fn watchdog_restarts_a_killed_runtime_through_the_fixed_entry() {
-    let actingd = std::env::var_os("ACTINGCOMMAND_TEST_ACTINGD_EXE")
-        .expect("ACTINGCOMMAND_TEST_ACTINGD_EXE names the actingd executable (CI exports it)");
-    let fixture = Fixture::new();
-    let entry = fixture.root.join("runtime").join(ENTRY);
-    fs::copy(&actingd, &entry).expect("place the fixed entry");
-    let _cleanup = RuntimeCleanup(fixture.state.clone());
-
-    // A formal start with a log, as the logon script or acsetup does it.
-    let log = File::create(fixture.root.join("actingd-formal.log")).expect("formal log");
-    let mut formal = Command::new(&entry)
-        .arg("--config")
-        .arg(&fixture.config)
-        .current_dir(&fixture.root)
-        .stdin(Stdio::null())
-        .stdout(log.try_clone().expect("formal log handle"))
-        .stderr(log)
-        .spawn()
-        .expect("start actingd formally");
-    fixture.wait_alive();
-
-    // An unexpected end, as in Task Manager: one task tick starts it again.
-    formal.kill().expect("end actingd");
-    formal.wait().expect("wait for actingd");
-    let report = assert_decision(fixture.watchdog(&["run-once", "--from-task"]), 0, "started");
-    let method = report["detail"]["method"]
-        .as_str()
-        .expect("start method")
-        .to_owned();
-    assert!(matches!(method.as_str(), "breakaway" | "wmi"), "{report}");
-    let line = fixture
-        .log()
-        .lines()
-        .find(|line| line.contains(" WARN watchdog_started_runtime "))
-        .map(str::to_owned)
-        .expect("start line");
-    assert!(
-        line.contains(&format!(" method={method} ")) && line.contains(" generation=1 "),
-        "{line}"
-    );
-    let report = assert_decision(fixture.watchdog(&["status"]), 14, "alive");
-    assert_eq!(report["detail"]["started_by_watchdog"], true);
-    assert_eq!(attention(&report), ["task_missing"]);
-
-    // A formal close: the watchdog stays down, and its own log covers the closed epoch.
-    let shutdown = Command::new(env!("CARGO_BIN_EXE_actingctl"))
-        .arg("request-shutdown")
-        .arg("--state-root")
-        .arg(&fixture.state)
-        .args(["--wait", "60"])
-        .output()
-        .expect("request shutdown");
-    assert!(
-        shutdown.status.success(),
-        "request-shutdown failed: {}",
-        String::from_utf8_lossy(&shutdown.stderr)
-    );
-    assert_decision(
-        fixture.watchdog(&["run-once", "--from-task"]),
-        0,
-        "formal_close",
-    );
-    let report = assert_decision(fixture.watchdog(&["status"]), 14, "formal_close");
-    assert_eq!(report["close_evidence"], "logged");
-    assert_eq!(attention(&report), ["task_missing"]);
-    assert_eq!(fixture.start_logs(), 1);
 }
 
 /// Deletes the test's task whatever the test did.
