@@ -1093,8 +1093,12 @@ fn a_start_queues_its_startup_claim_under_the_guard_and_runs_it_on_the_claims_ke
             .expect("schedule startup package"),
         StartupPackageDisposition::Scheduled
     );
-    wait_until("the startup run", || {
-        completed_runs(&all_events(&host)).len() == 1
+    // The key leaves the scheduler before its `lease.released` is recorded, so the wait also
+    // waits for that record.
+    wait_until("the startup run and its release", || {
+        let events = all_events(&host);
+        completed_runs(&events).len() == 1
+            && count(&events, EventType::LeaseReleased) == 1
             && host
                 .instance_claims_for_test(STARTUP_ALIAS)
                 .expect("claims")
