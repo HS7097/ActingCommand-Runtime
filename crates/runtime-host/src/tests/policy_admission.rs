@@ -1416,6 +1416,187 @@ fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
 
 // Workflow #369 S4: policy waits (model-369-queue.md v3.1 W-1).
 
+/// Where test (l) and test (m) refuse A's settlement at the restart.
+#[derive(Clone, Copy)]
+enum StartSettlementRefusal {
+    /// The host's own recovery check refuses it (injected under `cfg(test)`).
+    Host,
+    /// The ledger refuses it (its settlement refusal hook).
+    Ledger,
+}
+
+/// Coordinator ruling on #670 (safety net), test (l): one scheduled dispatch on instance A
+/// whose settlement the host's recovery refuses at the restart (injected). The Runtime still
+/// starts: it records `policy_settlement_dispatch_unsettled` (Error) naming the run and the
+/// refusal, holds a scheduling pause of A with that reason, leaves the dispatch out of the
+/// active workloads, and instance B dispatches normally.
+#[test]
+fn a_dispatch_the_start_cannot_settle_pauses_its_instance_and_the_other_dispatches() {
+    a_start_that_cannot_settle_one_dispatch(
+        StartSettlementRefusal::Host,
+        "policy_execution_recovery_outcome_conflict",
+    );
+}
+
+/// #670 verification N-1, test (m): as test (l), but the ledger itself refuses A's settlement
+/// at the restart. The refusal is not terminal: the Runtime starts, records the Error and the
+/// pause, and the ledger's writer is still there for the next appends (B's admission).
+#[test]
+fn a_settlement_the_ledger_refuses_at_start_leaves_the_writer_running() {
+    a_start_that_cannot_settle_one_dispatch(
+        StartSettlementRefusal::Ledger,
+        "scheduled_execution_recovery_refused_for_test",
+    );
+}
+
+fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, cause: &str) {
+    use actingcommand_policy::SchedulingDecisionState;
+
+    let root = TempDir::new().expect("tempdir");
+    let (instance_a, instance_b) = (instance_id(), instance_id());
+    let provider = || {
+        Arc::new(FakeProvider::from_entries([
+            (
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                instance_a,
+                Arc::new(FakeState::default()),
+            ),
+            (
+                POLICY_INSTANCE_ALIAS_B.to_owned(),
+                instance_b,
+                Arc::new(FakeState::default()),
+            ),
+        ]))
+    };
+    let scheduled = || {
+        config(&root).with_scheduled_procedures([
+            "procedure.observe".to_owned(),
+            "procedure.observe-b".to_owned(),
+        ])
+    };
+    let host = RuntimeHost::start(scheduled(), provider()).expect("first start");
+    host.activate_policy_catalog(&pending_policy_sources(1))
+        .expect("two-instance catalog activation");
+    let cycle = evaluate_pending_policy(&host, PolicyTrigger::FactsChanged);
+    let evaluation = cycle.evaluation.as_ref().expect("evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .unwrap_or_else(|| panic!("A's dispatch intent: {evaluation:#?}"))
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("A's reason chain")
+        .clone();
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("A's admission")
+    else {
+        panic!("expected A's dispatch to be granted");
+    };
+    let run_id = context.run_id();
+    // The host's close ends A's lease (a release without run links); A's dispatch stays open.
+    host.close().expect("close with A's dispatch open");
+
+    let restart = match refusal {
+        StartSettlementRefusal::Host => scheduled().with_policy_settlement_refusal_for_test(run_id),
+        StartSettlementRefusal::Ledger => {
+            actingcommand_ledger::refuse_scheduled_settlement_for_test(&intent.decision_id);
+            scheduled()
+        }
+    };
+    let host = RuntimeHost::start(restart, provider())
+        .expect("a start that cannot settle one run still starts");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let records = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(run_id),
+            event_type: Some(EventType::RuntimeFailed),
+            ..EventQuery::default()
+        })
+        .expect("the run's runtime failures")
+        .into_iter()
+        .filter(|event| {
+            let message = match event.payload() {
+                EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record)) => {
+                    record.detail().map(|detail| detail.message())
+                }
+                _ => None,
+            };
+            event.severity() == EventSeverity::Error
+                && message.is_some_and(|message| {
+                    message.contains("code=policy_settlement_dispatch_unsettled")
+                        && message.contains(&format!("failure_code={cause}"))
+                })
+        })
+        .count();
+    assert_eq!(records, 1, "one Error naming the run and the refusal");
+    let (_, paused) = host
+        .scheduling_pauses_for_test()
+        .expect("scheduling pauses");
+    let pause = paused
+        .get(POLICY_INSTANCE_ALIAS)
+        .expect("A's instance is paused");
+    assert_eq!(pause.reason_code, "policy_settlement_dispatch_unsettled");
+    assert!(!paused.contains_key(POLICY_INSTANCE_ALIAS_B));
+
+    // The restart's own records (the pause, the Error) are later than the fixture's time, so
+    // the evaluation after it runs at the wall clock.
+    let now = unix_ms_now().expect("wall clock");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms: now,
+                monotonic_ms: now,
+            },
+            9,
+            PolicyTrigger::Recovery,
+        )
+        .expect("the evaluation after the start");
+    assert_eq!(
+        cycle
+            .pending_dispatch_intents
+            .iter()
+            .map(|intent| intent.instance_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![POLICY_INSTANCE_ALIAS_B],
+        "B dispatches; A is paused"
+    );
+    let evaluation = cycle.evaluation.as_ref().expect("evaluation");
+    let deferred = evaluation
+        .decisions
+        .iter()
+        .find(|decision| decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS))
+        .expect("A's decision");
+    assert_eq!(deferred.state, SchedulingDecisionState::Deferred);
+    let intent_b = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS_B)
+        .expect("B's dispatch intent")
+        .clone();
+    let reasons_b = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent_b.reason_chain_id)
+        .expect("B's reason chain")
+        .clone();
+    record_policy_approval(&host, &intent_b);
+    assert!(matches!(
+        host.admit_policy_dispatch(&intent_b, &reasons_b, &policy_context(&host, &intent_b))
+            .expect("B's admission"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
 fn two_instance_pending_policy_host(root: &TempDir) -> RuntimeHost {
     let host = RuntimeHost::start(
         config(root),

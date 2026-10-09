@@ -2635,6 +2635,31 @@ pub struct PolicyBudgetReceipt {
     pub activity_runtime_limit_ms: u64,
 }
 
+impl PolicyBudgetReceipt {
+    /// Whether a run of `runtime_ms` exceeds this admission's runtime budget: the reserved task
+    /// (or activity) runtime less the dispatch's expected duration, plus the run's runtime,
+    /// above the task (or activity) limit. `None` when the receipt reserves less than the
+    /// expected duration or a total overflows. The policy's classification, the host's recovery
+    /// check and the ledger's settlement check use this one rule (Workflow #369 E3); the
+    /// ledger, which does not record the expected duration, passes 0 and so checks the bound
+    /// every rewrite meets.
+    pub fn runtime_exceeded(&self, expected_duration_ms: u64, runtime_ms: u64) -> Option<bool> {
+        let task = self
+            .task_runtime_reserved_ms
+            .checked_sub(expected_duration_ms)?
+            .checked_add(runtime_ms)?;
+        let activity = self
+            .activity_runtime_reserved_ms
+            .checked_sub(expected_duration_ms)?
+            .checked_add(runtime_ms)?;
+        Some(task > self.task_runtime_limit_ms || activity > self.activity_runtime_limit_ms)
+    }
+}
+
+/// The failure code the policy records, in place of a run's own outcome, for a run that
+/// exceeded its runtime budget (class Severe; `reported_success` when the run succeeded).
+pub const POLICY_RUNTIME_BUDGET_EXCEEDED: &str = "policy_runtime_budget_exceeded";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyAdmissionRecord {
@@ -2661,6 +2686,16 @@ pub struct PolicyFailureRecord {
     pub sensitive: bool,
     #[serde(default = "legacy_performance_context")]
     pub perf_context: Box<PerformanceContext>,
+}
+
+impl PolicyFailureRecord {
+    /// Whether this failure is the policy's runtime-budget rewrite of a run that succeeded
+    /// (`reported_success`) or failed: [`POLICY_RUNTIME_BUDGET_EXCEEDED`], class Severe.
+    pub fn is_runtime_budget_rewrite(&self, reported_success: bool) -> bool {
+        self.error_code == POLICY_RUNTIME_BUDGET_EXCEEDED
+            && self.original_class == PolicyFailureClass::Severe
+            && self.reported_success == reported_success
+    }
 }
 
 fn legacy_performance_context() -> Box<PerformanceContext> {
@@ -6378,7 +6413,7 @@ fn validate_policy_execution_data(
             || failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition != PolicyFailureDisposition::PausedTask
             || failure.reported_success
-                && (failure.error_code != "policy_runtime_budget_exceeded"
+                && (failure.error_code != POLICY_RUNTIME_BUDGET_EXCEEDED
                     || failure.original_class != PolicyFailureClass::Severe
                     || failure.effective_class != PolicyFailureClass::Severe)
             || failure.sensitive

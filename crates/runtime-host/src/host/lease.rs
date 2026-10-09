@@ -1924,6 +1924,21 @@ impl HostShared {
         let Some(resolved) = self.cleanup_instance(token)? else {
             return Ok(());
         };
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            super::contained_task::ContainedTaskCheckpointPoint::FailedRunLeaseEnd,
+            super::contained_task::ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )?;
+        // The #670 tests (f) and (k) crash point: after a failed run's terminal, before its
+        // lease end.
+        #[cfg(test)]
+        policy_crash_test_barrier("terminal_after_expiry");
+        #[cfg(test)]
+        policy_crash_test_barrier("run_over_budget");
         let instance_guard = self
             .instance_guard(token.instance_id())
             .map_err(|failure| *failure.error)?;
@@ -2033,6 +2048,8 @@ impl HostShared {
             .map_err(|failure| *failure.error)?;
         self.append_scheduler_queued_hand_off(&validated_claim, resolved)
             .map_err(|failure| *failure.error)?;
+        #[cfg(test)]
+        policy_crash_test_barrier("after_ladder_claim_queued_before_hand_off");
         let claim_request_id = validated_claim.request_id();
         self.register_queued_context(QueuedRequestContext {
             request: claim_request.clone(),
@@ -2434,6 +2451,8 @@ impl HostShared {
         .map_err(|failure| *failure.error)?;
         self.perform_transfer(prepared)
             .map_err(|failure| *failure.error)?;
+        #[cfg(test)]
+        policy_crash_test_barrier("after_lease_transfer_before_release");
         self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,

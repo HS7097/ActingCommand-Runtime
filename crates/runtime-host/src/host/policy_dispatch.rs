@@ -364,6 +364,41 @@ impl SchedulingPauseTable {
         self.origins.insert(Some(instance_alias.to_owned()), origin);
     }
 
+    /// Workflow #369 E3 (#670 safety net): holds an instance pause set at start, at the scope's
+    /// next revision, with stage `released` (nothing runs on the instance yet and its device is
+    /// left as it is), unless one is held already. Returns whether it set one.
+    pub(super) fn hold_instance_at_start(
+        &mut self,
+        instance_alias: &str,
+        reason_code: &str,
+        since_unix_ms: u64,
+        origin: PauseOrigin,
+    ) -> RuntimeHostResult<bool> {
+        if self.instances.contains_key(instance_alias) {
+            return Ok(false);
+        }
+        let revision = next_scheduling_pause_revision(
+            self.instance_revisions
+                .entry(instance_alias.to_owned())
+                .or_default(),
+        )?;
+        let state = InstancePauseState {
+            revision,
+            reason_code: reason_code.to_owned(),
+            since_unix_ms,
+            stage: InstancePauseStage::Released,
+        };
+        state.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                "scheduling_pause_state_invalid",
+                "hold_start_instance_pause",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        self.set_instance(instance_alias, state, origin);
+        Ok(true)
+    }
+
     pub(super) fn validate_install_scopes(
         &self,
         registered: &BTreeMap<InstanceId, RegisteredInstance>,

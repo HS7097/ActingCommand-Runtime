@@ -150,6 +150,58 @@
       "common_causes": "A frame deleted by hand from the state root's artifacts folder.",
       "handling": "Nothing to repair in the Runtime; the frame is gone. Read another frame, or restore the file from a copy if it is still needed."
     },
+    "policy_settlement_dispatch_unsettled": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "failure_code": "required",
+        "instance_id": "required",
+        "lease_id": "optional",
+        "task_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A start could not settle a scheduled run: the host's recovery or the ledger refused its settlement (failure_code is the refusal's code). The start carries on: the run's dispatch stays open, out of the active workloads, and the run's instance is paused with this code as the pause reason, so no new dispatch meets the open one. Recorded once per start, under the run's links, which carry the run id; lease_id is present when the dispatch has one lease grant.",
+      "common_causes": "A run whose recorded facts do not fit any settlement the Runtime knows, for example a ledger written by a defect in an earlier version.",
+      "handling": "Report it with the run id and failure_code: the open dispatch needs a fix in the Runtime. After looking, lift the instance's scheduling pause (resume scheduling for the instance) to let other tasks dispatch there again; the open dispatch itself stays open until a version that can settle it starts."
+    },
+    "policy_settlement_release_recovered": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "lease_id": "required",
+        "task_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A start found a scheduled run whose dispatch has no outcome and whose lease has no lease.released under its run links, wrote the missing release (effect not_performed) and settles the run once: from its terminal when it has one, otherwise as interrupted (policy_settlement_interrupted), so the dispatch is closed; the first such interruption of its pair in a row is lifted by the same start. Recorded once, under the run's links, which carry the run id.",
+      "common_causes": "The Runtime ended between a run's task terminal and its lease end (for example inside a failed run's hand-off to its stuck-recovery ladder), in the middle of a run (a reboot or a killed process), or after a scheduled dispatch's lease grant and before its run's first task event.",
+      "handling": "Nothing to repair: the run counts as its terminal says, or as interrupted when it has none. A second interruption of the same pair in a row keeps the pair paused until its package changes, as for any interrupted settlement."
+    },
+    "policy_settlement_dispatch_left_open": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "lease_id": "optional",
+        "task_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "After a start's reconciliation, a scheduled dispatch (its task's procedure is one the policy driver runs as a scheduled run) still has no outcome. The start settles every scheduled dispatch it can; this one stays open, and a later dispatch on its instance may be refused as a conflict. Recorded once per start, under the run's links, which carry the run id; lease_id is present when the dispatch has one lease grant.",
+      "common_causes": "The run's instance is no longer in the configuration, or the run's lease ended in more than one way (for example two transfers).",
+      "handling": "Report it with the run id: the open dispatch needs a fix in the Runtime. When the instance was removed from the configuration, adding it back lets the next start settle the run."
+    },
     "proposal_report_unavailable": {
       "category": "error",
       "owner": "runtime-host",

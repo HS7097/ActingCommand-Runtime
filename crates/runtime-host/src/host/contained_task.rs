@@ -74,6 +74,18 @@ pub(crate) struct ContainedTaskCheckpointIdentity {
 
 #[cfg(test)]
 impl ContainedTaskCheckpointIdentity {
+    pub(super) const fn new(
+        request_id: RequestId,
+        instance_id: InstanceId,
+        lease_id: LeaseId,
+    ) -> Self {
+        Self {
+            request_id,
+            instance_id,
+            lease_id,
+        }
+    }
+
     pub(crate) const fn request_id(&self) -> RequestId {
         self.request_id
     }
@@ -87,9 +99,25 @@ impl ContainedTaskCheckpointIdentity {
     }
 }
 
+/// Where a contained-task checkpoint hook runs.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContainedTaskCheckpointPoint {
+    /// Before the run's `PackageAdmitted` fact.
+    PackageAdmitted,
+    /// Workflow #369 E3 (#670 final review): a run's terminal, after the check that its lease
+    /// is current and before the terminal is appended.
+    BeforeTerminalAppend,
+    /// Workflow #369 E3 (#670 final review M-1): a failed scheduled run's lease end, after its
+    /// terminal and before the admission guard is taken.
+    FailedRunLeaseEnd,
+}
+
 #[cfg(test)]
 pub(super) struct ContainedTaskCheckpointTestHook {
-    pub(super) request_id: RequestId,
+    pub(super) point: ContainedTaskCheckpointPoint,
+    /// `None`: the run on the hook's lease, whatever its request.
+    pub(super) request_id: Option<RequestId>,
     pub(super) instance_id: InstanceId,
     pub(super) lease_id: Option<LeaseId>,
     pub(super) execution_thread: std::thread::ThreadId,
@@ -508,6 +536,53 @@ struct ActiveContainedRun<'a> {
     active: &'a Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
     request_id: RequestId,
     control: Arc<ContainedRunControl>,
+}
+
+/// The original request's identity, as a resubmission of it would arrive: only its request,
+/// correlation and causation reach the recovery links of what a restart writes for it (Workflow
+/// #338 R3; #369 E3). `None` when the identity does not form a request.
+pub(super) fn recovery_request_identity(
+    request_id: RequestId,
+    correlation_id: CorrelationId,
+    causation_id: Option<&actingcommand_contract::CausationId>,
+    submitted_at_unix_ms: u64,
+) -> Option<RuntimeRequest> {
+    let mut identity = serde_json::Map::new();
+    identity.insert(
+        "schema_version".to_owned(),
+        serde_json::Value::from(actingcommand_contract::RUNTIME_REQUEST_SCHEMA_VERSION),
+    );
+    identity.insert(
+        "request_id".to_owned(),
+        serde_json::to_value(request_id).ok()?,
+    );
+    identity.insert(
+        "correlation_id".to_owned(),
+        serde_json::to_value(correlation_id).ok()?,
+    );
+    if let Some(causation_id) = causation_id {
+        identity.insert(
+            "causation_id".to_owned(),
+            serde_json::to_value(causation_id).ok()?,
+        );
+    }
+    identity.insert(
+        "actor".to_owned(),
+        serde_json::to_value(EventActor::Cli).ok()?,
+    );
+    identity.insert(
+        "source".to_owned(),
+        serde_json::to_value(EventSource::Cli).ok()?,
+    );
+    identity.insert(
+        "submitted_at_unix_ms".to_owned(),
+        serde_json::Value::from(submitted_at_unix_ms),
+    );
+    identity.insert(
+        "operation".to_owned(),
+        serde_json::to_value(RuntimeOperation::Health).ok()?,
+    );
+    serde_json::from_value::<RuntimeRequest>(serde_json::Value::Object(identity)).ok()
 }
 
 /// Workflow #369 S3a: the lease a host package run executes under, which its caller holds.
@@ -3310,11 +3385,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } => {
                 #[cfg(test)]
                 self.host
-                    .consume_contained_task_checkpoint_for_test(ContainedTaskCheckpointIdentity {
-                        request_id: self.control.request_id,
-                        instance_id: self.control.instance_id,
-                        lease_id: self.token.lease_id(),
-                    })
+                    .consume_contained_task_checkpoint_for_test(
+                        ContainedTaskCheckpointPoint::PackageAdmitted,
+                        ContainedTaskCheckpointIdentity {
+                            request_id: self.control.request_id,
+                            instance_id: self.control.instance_id,
+                            lease_id: self.token.lease_id(),
+                        },
+                    )
                     .map_err(RequestFailure::poison_without_terminal)?;
                 self.append_task(
                     EventSeverity::Info,
@@ -4407,8 +4485,9 @@ pub(crate) fn require_contained_task_sampling_run_seed(
 
 impl HostShared {
     #[cfg(test)]
-    fn consume_contained_task_checkpoint_for_test(
+    pub(super) fn consume_contained_task_checkpoint_for_test(
         &self,
+        point: ContainedTaskCheckpointPoint,
         identity: ContainedTaskCheckpointIdentity,
     ) -> RuntimeHostResult<()> {
         let hook = {
@@ -4418,7 +4497,10 @@ impl HostShared {
             )?;
             let should_consume = match slot.as_mut() {
                 Some(hook)
-                    if hook.request_id == identity.request_id
+                    if hook.point == point
+                        && hook
+                            .request_id
+                            .is_none_or(|request_id| request_id == identity.request_id)
                         && hook.instance_id == identity.instance_id
                         && hook.execution_thread == thread::current().id() =>
                 {
@@ -6837,50 +6919,17 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         };
-        let encode =
-            |value: serde_json::Result<serde_json::Value>| value.map_err(|_| identity_invalid());
         let submitted_at_unix_ms = self
             .runtime_clock_sample()
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
-        let mut identity = serde_json::Map::new();
-        identity.insert(
-            "schema_version".to_owned(),
-            serde_json::Value::from(actingcommand_contract::RUNTIME_REQUEST_SCHEMA_VERSION),
-        );
-        identity.insert(
-            "request_id".to_owned(),
-            encode(serde_json::to_value(request_id))?,
-        );
-        identity.insert(
-            "correlation_id".to_owned(),
-            encode(serde_json::to_value(correlation_id))?,
-        );
-        if let Some(causation_id) = links.causation_id() {
-            identity.insert(
-                "causation_id".to_owned(),
-                encode(serde_json::to_value(causation_id))?,
-            );
-        }
-        identity.insert(
-            "actor".to_owned(),
-            encode(serde_json::to_value(EventActor::Cli))?,
-        );
-        identity.insert(
-            "source".to_owned(),
-            encode(serde_json::to_value(EventSource::Cli))?,
-        );
-        identity.insert(
-            "submitted_at_unix_ms".to_owned(),
-            serde_json::Value::from(submitted_at_unix_ms),
-        );
-        identity.insert(
-            "operation".to_owned(),
-            encode(serde_json::to_value(RuntimeOperation::Health))?,
-        );
-        let original =
-            serde_json::from_value::<RuntimeRequest>(serde_json::Value::Object(identity))
-                .map_err(|_| identity_invalid())?;
+        let original = recovery_request_identity(
+            request_id,
+            correlation_id,
+            links.causation_id(),
+            submitted_at_unix_ms,
+        )
+        .ok_or_else(identity_invalid)?;
         let validated = original.validate().map_err(|_| identity_invalid())?;
         self.append_recovered_contained_task_terminal(
             &validated,
@@ -7098,6 +7147,16 @@ impl HostShared {
                         &error,
                     ))
                 })?;
+            #[cfg(test)]
+            self.consume_contained_task_checkpoint_for_test(
+                ContainedTaskCheckpointPoint::BeforeTerminalAppend,
+                ContainedTaskCheckpointIdentity::new(
+                    request.request_id(),
+                    token.instance_id(),
+                    token.lease_id(),
+                ),
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
             // Workflow #335 S5b: a successful terminal that took resource readings first runs the
             // live pool check, the terminal checks and the publication (stages 0-2); then this
             // original flow runs again in full (stage 3). Every other terminal runs it alone.

@@ -8,6 +8,7 @@
 //! (`schedule_startup_package_for_test`).
 
 use super::*;
+use crate::host::ContainedTaskCheckpointPoint as LapsePoint;
 use actingcommand_contract::{
     InstallTransitionAction, InstallTransitionPhase, LeasePayload, RecoveryLadderOutcome,
     RecoveryRung, RecoveryRungOutcome, RuntimeLifecyclePhase, RuntimePayload, SchedulerPayload,
@@ -201,7 +202,8 @@ fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequest) {
         .with_startup_packages(BTreeMap::from([(
             POLICY_INSTANCE_ALIAS.to_owned(),
             startup,
-        )]));
+        )]))
+        .with_scheduled_procedures(["procedure.observe".to_owned()]);
     let request =
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .and_then(|request| {
@@ -1092,8 +1094,12 @@ fn a_start_queues_its_startup_claim_under_the_guard_and_runs_it_on_the_claims_ke
             .expect("schedule startup package"),
         StartupPackageDisposition::Scheduled
     );
-    wait_until("the startup run", || {
-        completed_runs(&all_events(&host)).len() == 1
+    // The key leaves the scheduler before its `lease.released` is recorded, so the wait also
+    // waits for that record.
+    wait_until("the startup run and its release", || {
+        let events = all_events(&host);
+        completed_runs(&events).len() == 1
+            && count(&events, EventType::LeaseReleased) == 1
             && host
                 .instance_claims_for_test(STARTUP_ALIAS)
                 .expect("claims")
@@ -1445,4 +1451,1521 @@ fn closed_ledger_events(root: &Path) -> Vec<PersistedEvent> {
     )
     .expect("read the closed ledger")
     .query(&EventQuery::default())
+}
+
+/// Workflow #369 E3: the child process of the crash points around a hand-off. It starts the
+/// ladder fixture's host on `ACTINGCOMMAND_LADDER_CRASH_ROOT`, admits the scheduled run, notes
+/// its identity, arms the crash point and runs it; the crash point ends the process.
+#[test]
+fn ladder_hand_off_crash_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_LADDER_CRASH_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let registered: InstanceId =
+        serde_json::from_slice(&fs::read(root.join("instance.json")).expect("instance bytes"))
+            .expect("instance identifier");
+    let (host_config, request) = ladder_setup(&root);
+    let point = std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").unwrap_or_default();
+    // The #670 test (e), the final review's M-1 and M-2 tests and tests (f) and (g): the
+    // child's clock is driven by hand, so the run's lease can expire.
+    let lapse_point = match point.as_str() {
+        "lease_lapsed_mid_run" => Some(LapsePoint::FailedRunLeaseEnd),
+        "terminal_after_expiry" => Some(LapsePoint::BeforeTerminalAppend),
+        "lease_lapsed_before_package" => Some(LapsePoint::PackageAdmitted),
+        _ => None,
+    };
+    let expiry_clock = (lapse_point.is_some()
+        || matches!(
+            point.as_str(),
+            "lease_expired_before_run" | "lease_expired_with_claim_queued" | "run_over_budget"
+        ))
+    .then(|| Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)));
+    let host_config = match &expiry_clock {
+        Some(clock) => host_config.with_runtime_clock(clock.clone()),
+        None => host_config,
+    };
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config,
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("child runtime host");
+    // A later crash on the same root admits at its own evaluation time; the catalog is
+    // already active there.
+    let context = match std::env::var("ACTINGCOMMAND_LADDER_CRASH_EVAL_MS") {
+        Ok(at) => admit_ladder_run_at(&host, &request, at.parse().expect("evaluation time")),
+        // Test (k): the task's runtime budget is 30 s, so a run inside its 60 s lease can
+        // exceed it.
+        Err(_) if point == "run_over_budget" => {
+            host.activate_policy_catalog(&over_budget_policy_sources())
+                .expect("activate the over-budget catalog");
+            admit_ladder_run_at(&host, &request, POLICY_NOW_UNIX_MS)
+        }
+        Err(_) => admit_ladder_run(&host, &request),
+    };
+    fs::write(
+        root.join("crash-run.json"),
+        serde_json::to_vec(&(context.run_id(), context.lease_token().lease_id()))
+            .expect("run identity bytes"),
+    )
+    .expect("run identity file");
+    // The #670 test (e): the dispatch's lease expires (the sweep writes `lease.expired`), then
+    // the process ends. The final review's M-2 test: an operator's emulator-control claim
+    // waits at the expiry, so the sweep hands the key on to it (`lease.transferred`) and also
+    // records the lease's `lease.expired`.
+    if let Some(clock) = &expiry_clock
+        && matches!(
+            point.as_str(),
+            "lease_expired_before_run" | "lease_expired_with_claim_queued"
+        )
+    {
+        let _waiting_claim = (point == "lease_expired_with_claim_queued").then(|| {
+            let claim = host
+                .request_host_claim_for_test(POLICY_INSTANCE_ALIAS, ClaimKind::EmulatorControl)
+                .expect("queue a host claim");
+            assert!(
+                claim.queued.is_some(),
+                "the claim waits behind the run's lease"
+            );
+            claim
+        });
+        clock.advance(3_600_000);
+        let lease = context.lease_token().lease_id();
+        wait_until("the run's lease expiry", || {
+            all_events(&host).iter().any(|event| {
+                event.event_type() == EventType::LeaseExpired
+                    && event.links().lease_id() == Some(&lease)
+            })
+        });
+        if point == "lease_expired_with_claim_queued" {
+            wait_until("the hand-on of the run's lease", || {
+                all_events(&host).iter().any(|event| {
+                    matches!(
+                        event.payload(),
+                        EventPayload::Lease(LeasePayload::Transferred(transfer))
+                            if transfer.from_lease_id() == lease
+                    )
+                })
+            });
+        }
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        fs::write(marker, point.as_bytes()).expect("crash marker");
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+    // The #670 rulings' test (c): the dispatch is admitted and its lease granted; the process
+    // ends before the run's first task event.
+    if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+        == Ok("after_admission_before_run")
+    {
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        fs::write(marker, b"after_admission_before_run").expect("crash marker");
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+    // Test (h): the dispatch is admitted and its lease granted, and the host closes before the
+    // run starts; the close releases the held lease without run links.
+    if point == "host_close_before_run" {
+        host.close()
+            .expect("close the host with the dispatch's lease held");
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        fs::write(marker, b"host_close_before_run").expect("crash marker");
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+    if matches!(
+        point.as_str(),
+        "after_lease_release_before_policy_execution"
+            | "lease_lapsed_mid_run"
+            | "lease_lapsed_before_package"
+    ) {
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        host.exit_at_scheduled_policy_checkpoint_for_test(&context, PathBuf::from(marker))
+            .expect("arm the checkpoint");
+    }
+    // At the lapse point the clock passes the run's lease expiry and the run waits until the
+    // sweep has recorded `lease.expired`. The final review's M-1 test: at the failed run's
+    // lease end (after its `task.failed`, before the admission guard), so the run's own cleanup
+    // finds the lease gone and releases it `not_performed` under the run's task request. Test
+    // (f): after the check that the lease is current and before the run's terminal is
+    // appended, so the terminal follows the expiry; the run then ends at its lease end
+    // (`terminal_after_expiry`). Test (g): before the run's package admission, so the run fails
+    // with no terminal and its settlement releases the lease.
+    let lapsed = Arc::new(AtomicBool::new(false));
+    if let Some(lapse_point) = lapse_point {
+        let clock = Arc::clone(expiry_clock.as_ref().expect("the manual clock"));
+        let lapsed = Arc::clone(&lapsed);
+        host.run_at_leased_checkpoint_for_test(
+            lapse_point,
+            registered,
+            context.lease_token().lease_id(),
+            move |_| {
+                // Past the lease's expiry (its TTL is the run's 60 s response deadline plus
+                // the heartbeat reserve), inside the task's 300 s runtime budget.
+                clock.advance(120_000);
+                let deadline = Instant::now() + WAIT;
+                while !lapsed.load(Ordering::Acquire) {
+                    assert!(Instant::now() < deadline, "the run's lease did not lapse");
+                    thread::sleep(Duration::from_millis(10));
+                }
+            },
+        )
+        .expect("arm the lapse");
+    }
+    // Test (k): before the run's terminal is appended the clock passes 45 s, over the task's
+    // 30 s runtime budget and inside the run's 60 s lease; the run then ends at its lease end
+    // (`run_over_budget`).
+    if point == "run_over_budget" {
+        let clock = Arc::clone(expiry_clock.as_ref().expect("the manual clock"));
+        host.run_at_leased_checkpoint_for_test(
+            LapsePoint::BeforeTerminalAppend,
+            registered,
+            context.lease_token().lease_id(),
+            move |_| clock.advance(45_000),
+        )
+        .expect("arm the runtime");
+    }
+    if std::env::var_os("ACTINGCOMMAND_LADDER_CRASH_SUCCEED").is_some() {
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+    } else {
+        state.unknown_capture.store(true, Ordering::Release);
+    }
+    let outcome = thread::scope(|scope| {
+        if lapse_point.is_some() {
+            let (host, lapsed) = (&host, &lapsed);
+            let lease = context.lease_token().lease_id();
+            scope.spawn(move || {
+                wait_until("the lapse of the run's lease", || {
+                    all_events(host).iter().any(|event| {
+                        event.event_type() == EventType::LeaseExpired
+                            && event.links().lease_id() == Some(&lease)
+                    })
+                });
+                lapsed.store(true, Ordering::Release);
+            });
+        }
+        host.run_scheduled_contained_task(&context, &request)
+    });
+    // A completed run's outcome is recorded by its caller, as the policy driver does; the
+    // checkpoint ends the process there.
+    if let Ok(receipt) = &outcome {
+        let completed = host.complete_scheduled_policy_run(&context, receipt);
+        panic!(
+            "the crash point did not stop the child: {:?}",
+            completed.err()
+        );
+    }
+    if point == "mid_rung_run" {
+        // E6 (#670 final review M-3): the run failed and handed its key to the ladder. From the
+        // next capture on, captures are held: the rung run in flight persists a frame and then
+        // stays in flight (one held before its first frame is let through once more). Once a
+        // rung run in flight has a persisted frame, the marker is written and the parent kills
+        // the process.
+        state.capture_hold_after.store(
+            state.capture_count.load(Ordering::Acquire) + 1,
+            Ordering::Release,
+        );
+        let scheduled = context.run_id();
+        loop {
+            let events = all_events(&host);
+            let in_flight = events
+                .iter()
+                .filter(|event| event.event_type() == EventType::TaskStarted)
+                .filter_map(|event| event.links().run_id().copied())
+                .filter(|run| *run != scheduled && !run_ended(&events, run))
+                .collect::<Vec<_>>();
+            if in_flight
+                .iter()
+                .any(|run| run_has_persisted_frame(&events, run))
+            {
+                break;
+            }
+            let done = state.capture_count.load(Ordering::Acquire);
+            if !in_flight.is_empty() && done >= state.capture_hold_after.load(Ordering::Acquire) {
+                state.capture_hold_after.store(done + 1, Ordering::Release);
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("marker path");
+        fs::write(marker, b"mid_rung_run").expect("crash marker");
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+    panic!(
+        "the crash point did not stop the child: {:?}",
+        outcome.err()
+    );
+}
+
+/// Test (k): the ladder's catalog with a task runtime budget of 30 s and an expected duration
+/// of 10 s.
+fn over_budget_policy_sources() -> CatalogSources {
+    let mut sources = policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("task fixture");
+    tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(10_000);
+    tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = serde_json::json!(30_000);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("task bytes");
+    sources
+}
+
+/// Whether `run` has a persisted capture frame (an `artifact.verified` of a frame) among
+/// `events`.
+fn run_has_persisted_frame(events: &[PersistedEvent], run: &RunId) -> bool {
+    events.iter().any(|event| {
+        event.event_type() == EventType::ArtifactVerified
+            && event.links().run_id() == Some(run)
+            && event.links().frame_id().is_some()
+    })
+}
+
+/// Whether `run` has a task terminal among `events`.
+fn run_ended(events: &[PersistedEvent], run: &RunId) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event.event_type(),
+            EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+        ) && event.links().run_id() == Some(run)
+    })
+}
+
+/// `admit_ladder_run` on a root whose catalog is already active, evaluated at `unix_ms`.
+fn admit_ladder_run_at(
+    host: &RuntimeHost,
+    request: &ContainedTaskRequest,
+    unix_ms: u64,
+) -> Box<PolicyRunContext> {
+    let (_, intent, reasons) =
+        evaluated_policy_dispatch_at(host, PolicyTrigger::FactsChanged, unix_ms, 8);
+    record_policy_approval(host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_scheduled_policy_dispatch(&intent, &reasons, &policy_context(host, &intent), request)
+        .expect("policy admission")
+    else {
+        panic!("expected a policy run context")
+    };
+    context
+}
+
+/// Starts the crash child at `point` on `root`, with its marker path.
+fn spawn_ladder_crash_child(root: &Path, point: &str) -> (std::process::Child, PathBuf) {
+    spawn_ladder_crash_child_with(root, point, &[])
+}
+
+/// `spawn_ladder_crash_child` with extra environment for the child.
+fn spawn_ladder_crash_child_with(
+    root: &Path,
+    point: &str,
+    environment: &[(&str, String)],
+) -> (std::process::Child, PathBuf) {
+    // A fresh marker for every child: a root can see more than one crash.
+    static CHILDREN: AtomicUsize = AtomicUsize::new(0);
+    let marker = root.join(format!(
+        "ladder-crash-marker-{}",
+        CHILDREN.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut command = Command::new(std::env::current_exe().expect("test executable"));
+    command
+        .args([
+            "--exact",
+            "tests::instance_workers::ladder_hand_off_crash_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_LADDER_CRASH_ROOT", root)
+        .env("ACTINGCOMMAND_POLICY_CRASH_POINT", point)
+        .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    (command.spawn().expect("spawn the crash child"), marker)
+}
+
+/// Waits for the crash child's marker (its barrier was reached), then kills it.
+fn kill_at_marker(mut child: std::process::Child, marker: &Path) {
+    let deadline = Instant::now() + WAIT;
+    while !marker.is_file() {
+        assert!(
+            child.try_wait().expect("poll the crash child").is_none(),
+            "the crash child exited before its crash point"
+        );
+        assert!(Instant::now() < deadline, "the crash barrier timed out");
+        thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().expect("kill the crash child");
+    let _ = child.wait();
+}
+
+fn crash_run_identity(root: &Path) -> (RunId, LeaseId) {
+    serde_json::from_slice(&fs::read(root.join("crash-run.json")).expect("run identity bytes"))
+        .expect("run identity")
+}
+
+fn restart_ladder_host(root: &Path, registered: InstanceId) -> RuntimeHost {
+    let (host_config, _) = ladder_setup(root);
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    RuntimeHost::start(
+        host_config,
+        Arc::new(FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state)),
+    )
+    .expect("restart after the crash")
+}
+
+fn run_count(events: &[PersistedEvent], run_id: &RunId, event_type: EventType) -> usize {
+    events
+        .iter()
+        .filter(|event| event.event_type() == event_type && event.links().run_id() == Some(run_id))
+        .count()
+}
+
+fn crash_root() -> (TempDir, InstanceId) {
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&registered).expect("instance bytes"),
+    )
+    .expect("instance file");
+    (root, registered)
+}
+
+/// Workflow #369 E3, first crash point: after the hand-off's `lease.released` and before
+/// `policy.execution_recorded`. The restart settles the failed run exactly once.
+#[test]
+fn a_crash_after_the_hand_off_release_settles_the_run_exactly_once() {
+    let (root, registered) = crash_root();
+    let (mut child, marker) =
+        spawn_ladder_crash_child(root.path(), "after_lease_release_before_policy_execution");
+    let deadline = Instant::now() + WAIT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the crash child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill the timed-out child");
+            let _ = child.wait();
+            panic!("the crash child timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(status.code(), Some(87), "the checkpoint ended the child");
+    assert!(marker.is_file());
+    let (run_id, lease_id): (RunId, LeaseId) = serde_json::from_slice(
+        &fs::read(root.path().join("crash-run.json")).expect("run identity bytes"),
+    )
+    .expect("run identity");
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseReleased), 1);
+    assert_eq!(
+        run_count(&prefix, &run_id, EventType::PolicyExecutionRecorded),
+        0
+    );
+    assert!(
+        prefix.iter().any(|event| matches!(
+            event.payload(),
+            EventPayload::Lease(LeasePayload::Transferred(transfer))
+                if transfer.from_lease_id() == lease_id
+        )),
+        "the run's lease end was a hand-off"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    for event_type in [
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            run_count(&events, &run_id, event_type),
+            1,
+            "settled once: {event_type:?}"
+        );
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}
+
+/// The policy evaluation time of a dispatch after a restart: the wall clock. A restart's
+/// interrupted settlement is observed at the wall clock, and an evaluation may not precede
+/// what it reads.
+fn evaluation_now() -> u64 {
+    unix_ms_now().expect("wall clock")
+}
+
+/// A crash at E3's second crash point (between the ladder claim's `scheduler.queued` and the
+/// run's `lease.released`) on `root`, admitted at `eval_ms` when given: the run has its
+/// `task.failed` and no release, and the hand-off's transfer was not written.
+fn crash_inside_the_hand_off(root: &Path, eval_ms: Option<u64>) -> (RunId, LeaseId) {
+    let environment = eval_ms
+        .map(|at| vec![("ACTINGCOMMAND_LADDER_CRASH_EVAL_MS", at.to_string())])
+        .unwrap_or_default();
+    let (child, marker) = spawn_ladder_crash_child_with(
+        root,
+        "after_ladder_claim_queued_before_hand_off",
+        &environment,
+    );
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root);
+    let prefix = closed_ledger_events(root);
+    assert_eq!(run_count(&prefix, &run_id, EventType::TaskFailed), 1);
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseReleased), 0);
+    assert!(!prefix.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Lease(LeasePayload::Transferred(transfer))
+            if transfer.from_lease_id() == lease_id
+    )));
+    (run_id, lease_id)
+}
+
+/// The failure code of the run's one `policy.execution_recorded`; `None` when it succeeded.
+fn recorded_failure_code(events: &[PersistedEvent], run_id: &RunId) -> Option<String> {
+    let executions = events
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::PolicyExecutionRecorded
+                && event.links().run_id() == Some(run_id)
+        })
+        .collect::<Vec<_>>();
+    let [execution] = executions.as_slice() else {
+        panic!("one execution of the run: {}", executions.len());
+    };
+    match execution.payload() {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+            match payload.outcome() {
+                PolicyExecutionOutcome::Failed { failure } => Some(failure.error_code.clone()),
+                PolicyExecutionOutcome::Succeeded { .. } => None,
+            }
+        }
+        _ => panic!("execution payload"),
+    }
+}
+
+/// Coordinator ruling on #670 (review H-1): the restart recovered the run's missing release (one
+/// run-linked `lease.released`, effect `not_performed`), recorded
+/// `policy_settlement_release_recovered` once under the run's links, at Info, and settled the
+/// run once as interrupted.
+fn assert_settled_once_as_interrupted(events: &[PersistedEvent], run_id: &RunId) {
+    let releases = events
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased && event.links().run_id() == Some(run_id)
+        })
+        .collect::<Vec<_>>();
+    let [release] = releases.as_slice() else {
+        panic!("one recovered release: {}", releases.len());
+    };
+    assert_eq!(
+        release.payload().effect_disposition(),
+        Some(EffectDisposition::NotPerformed)
+    );
+    assert_eq!(
+        recorded_failure_code(events, run_id).as_deref(),
+        Some("policy_settlement_interrupted")
+    );
+    assert_eq!(
+        run_count(events, run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    let records = events
+        .iter()
+        .filter(|event| {
+            event.links().run_id() == Some(run_id)
+                && failure_message(event).is_some_and(|message| {
+                    message.contains("code=policy_settlement_release_recovered")
+                })
+        })
+        .collect::<Vec<_>>();
+    let [record] = records.as_slice() else {
+        panic!("one recovery record: {}", records.len());
+    };
+    assert_eq!(record.severity(), EventSeverity::Info);
+}
+
+/// Waits until the retry backoff of the run's recorded failure, if it has one, has passed on
+/// the wall clock: a run settled from its failed terminal starts its pair's retry backoff
+/// (P2), and the next dispatch of the pair is due only after it.
+fn wait_out_retry_backoff(events: &[PersistedEvent], run_id: &RunId) {
+    let retry_at = events.iter().find_map(|event| match event.payload() {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+            if event.links().run_id() == Some(run_id) =>
+        {
+            match payload.outcome() {
+                PolicyExecutionOutcome::Failed { failure } => failure.retry_at_unix_ms,
+                PolicyExecutionOutcome::Succeeded { .. } => None,
+            }
+        }
+        _ => None,
+    });
+    if let Some(retry_at) = retry_at {
+        assert!(
+            retry_at <= evaluation_now() + 120_000,
+            "a retry backoff of at most two minutes"
+        );
+        while evaluation_now() <= retry_at {
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// The run's one task terminal among `events` and its failure code (`None` for a success).
+fn run_terminal<'a>(
+    events: &'a [PersistedEvent],
+    run_id: &RunId,
+) -> (&'a PersistedEvent, Option<String>) {
+    let terminals = events
+        .iter()
+        .filter(|event| {
+            event.links().run_id() == Some(run_id)
+                && matches!(
+                    event.event_type(),
+                    EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+                )
+        })
+        .collect::<Vec<_>>();
+    let [terminal] = terminals.as_slice() else {
+        panic!("one terminal of the run: {}", terminals.len());
+    };
+    let code = match terminal.payload() {
+        EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+            TaskSemanticFact::TerminalCommitted { failure_code, .. } => failure_code.clone(),
+            _ => panic!("the terminal's fact"),
+        },
+        _ => panic!("the terminal's payload"),
+    };
+    (terminal, code)
+}
+
+/// Coordinator ruling on the open case of #670 (a run that has a terminal is settled from it):
+/// the restart recovered the run's missing release (one run-linked `lease.released`, effect
+/// `not_performed`, after the run's terminal), recorded
+/// `policy_settlement_release_recovered` once under the run's links, at Info, and settled the
+/// run once from its terminal.
+fn assert_settled_once_from_its_terminal(events: &[PersistedEvent], run_id: &RunId) {
+    let (terminal, code) = run_terminal(events, run_id);
+    let releases = events
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased && event.links().run_id() == Some(run_id)
+        })
+        .collect::<Vec<_>>();
+    let [release] = releases.as_slice() else {
+        panic!("one recovered release: {}", releases.len());
+    };
+    assert_eq!(
+        release.payload().effect_disposition(),
+        Some(EffectDisposition::NotPerformed)
+    );
+    assert!(release.sequence() > terminal.sequence());
+    assert_eq!(
+        recorded_failure_code(events, run_id),
+        code,
+        "from the terminal"
+    );
+    assert_eq!(
+        run_count(events, run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    let records = events
+        .iter()
+        .filter(|event| {
+            event.links().run_id() == Some(run_id)
+                && failure_message(event).is_some_and(|message| {
+                    message.contains("code=policy_settlement_release_recovered")
+                })
+        })
+        .collect::<Vec<_>>();
+    let [record] = records.as_slice() else {
+        panic!("one recovery record: {}", records.len());
+    };
+    assert_eq!(record.severity(), EventSeverity::Info);
+}
+
+/// Workflow #369 E3, second crash point (model C1; coordinator ruling on #670 review H-1 and on
+/// the open case). The failed run has its `task.failed` and no release. The restart writes the
+/// missing run-linked release, records `policy_settlement_release_recovered` and settles the
+/// run once from its terminal (a run that has a terminal is settled from it), so its dispatch
+/// is closed: (a) a new dispatch on the same instance proceeds, and the evaluation after it is
+/// not fatal.
+#[test]
+fn a_crash_inside_the_hand_off_is_settled_from_its_terminal_and_a_new_dispatch_proceeds() {
+    let (root, registered) = crash_root();
+    let (run_id, _) = crash_inside_the_hand_off(root.path(), None);
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_settled_once_from_its_terminal(&events, &run_id);
+    wait_out_retry_backoff(&events, &run_id);
+    let (_, request) = ladder_setup(root.path());
+    let context = admit_ladder_run_at(&host, &request, evaluation_now());
+    assert_ne!(context.run_id(), run_id);
+    let at = evaluation_now();
+    host.evaluate_policy_cycle_with_test_inputs(
+        &policy_facts(),
+        &policy_resources(),
+        EvaluationTime {
+            unix_ms: at,
+            monotonic_ms: at,
+        },
+        9,
+        PolicyTrigger::FactsChanged,
+    )
+    .expect("the evaluation after the new dispatch");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}
+
+/// After a restart: a new dispatch on the instance is admitted, and the evaluation after it is
+/// not fatal (an open dispatch left beside it would make it `policy_instance_dispatch_conflict`).
+fn assert_a_new_dispatch_proceeds(host: &RuntimeHost, root: &Path, cut_run: &RunId) {
+    let (_, request) = ladder_setup(root);
+    let context = admit_ladder_run_at(host, &request, evaluation_now());
+    assert_ne!(context.run_id(), *cut_run);
+    let at = evaluation_now();
+    host.evaluate_policy_cycle_with_test_inputs(
+        &policy_facts(),
+        &policy_resources(),
+        EvaluationTime {
+            unix_ms: at,
+            monotonic_ms: at,
+        },
+        11,
+        PolicyTrigger::FactsChanged,
+    )
+    .expect("the evaluation after the new dispatch");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+}
+
+/// Coordinator ruling on #670 (decision 1), test (c): a scheduled dispatch killed after its lease
+/// grant and before its run's first task event. The restart closes it as it closes a cut run:
+/// the missing run-linked release (effect `not_performed`), `policy_settlement_release_recovered`
+/// once, the run settled once as interrupted; a new dispatch on the same instance then
+/// proceeds. (A client run's dispatch keeps waiting for its late outcome:
+/// `crash_recovery::policy_dispatch_accepts_one_late_outcome_after_process_crash`.)
+#[test]
+fn a_scheduled_dispatch_killed_before_its_first_task_event_is_settled_and_a_new_dispatch_proceeds()
+{
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "after_admission_before_run");
+    kill_at_marker(child, &marker);
+    let (run_id, _) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseGranted), 1);
+    assert!(
+        !prefix.iter().any(|event| {
+            event.links().run_id() == Some(&run_id)
+                && matches!(
+                    event.payload(),
+                    EventPayload::Task(TaskPayload::Semantic(_))
+                )
+        }),
+        "the run has no task event"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    assert_settled_once_as_interrupted(&all_events(&host), &run_id);
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on #670 (decision 2, and on the open case), test (d): E3's second crash
+/// point on the other side of the transfer, after the hand-off's `lease.transferred` and before
+/// the run's `lease.released`. The new holder owns the lease, so the restart writes no release
+/// for the run, but settles it once from its terminal; a new dispatch on the instance then
+/// proceeds.
+#[test]
+fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() {
+    let (root, registered) = crash_root();
+    let (child, marker) =
+        spawn_ladder_crash_child(root.path(), "after_lease_transfer_before_release");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::TaskFailed), 1);
+    assert_eq!(run_count(&prefix, &run_id, EventType::LeaseReleased), 0);
+    assert!(prefix.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Lease(LeasePayload::Transferred(transfer))
+            if transfer.from_lease_id() == lease_id
+    )));
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        0,
+        "no release is written for a lease the transfer handed on"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id),
+        run_terminal(&events, &run_id).1,
+        "settled from the run's terminal"
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    wait_out_retry_backoff(&events, &run_id);
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on #670 (the expired lease), test (e): a scheduled dispatch whose lease
+/// expired (`lease.expired`, no release), then a crash and a restart. No release is written (the
+/// lease already ended); the run is settled once as interrupted; a new dispatch on the same
+/// instance proceeds.
+#[test]
+fn a_scheduled_dispatch_whose_lease_expired_is_settled_once_and_a_new_dispatch_proceeds() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "lease_expired_before_run");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    assert!(prefix.iter().any(|event| {
+        event.event_type() == EventType::LeaseExpired && event.links().lease_id() == Some(&lease_id)
+    }));
+    assert!(!prefix.iter().any(|event| {
+        event.event_type() == EventType::LeaseReleased
+            && event.links().lease_id() == Some(&lease_id)
+    }));
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert!(
+        !events.iter().any(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().lease_id() == Some(&lease_id)
+        }),
+        "no release is written for a lease that expired"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_settlement_interrupted")
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// The events of `run` or of its lease `lease` (sequence, type, effect, severity, message), one
+/// line each, for a failure message.
+fn run_shape(events: &[PersistedEvent], run: &RunId, lease: &LeaseId) -> String {
+    events
+        .iter()
+        .filter(|event| {
+            event.links().run_id() == Some(run)
+                || event.links().lease_id() == Some(lease)
+                || matches!(
+                    event.payload(),
+                    EventPayload::Lease(LeasePayload::Transferred(transfer))
+                        if transfer.from_lease_id() == *lease
+                )
+        })
+        .map(|event| {
+            format!(
+                "{} {:?} {:?} {:?} {}",
+                event.sequence(),
+                event.event_type(),
+                event.payload().effect_disposition(),
+                event.severity(),
+                failure_message(event).unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// #670 final review M-2: a scheduled dispatch whose lease expired while an operator's
+/// emulator-control claim waited on the instance. The sweep handed the key on
+/// (`lease.transferred`) and recorded the lease's
+/// `lease.expired`, which together are one lease end; then a crash and a restart. No release is
+/// written; the run is settled once as interrupted, timed at the earlier of the two; a new
+/// dispatch on the same instance proceeds.
+#[test]
+fn an_expiry_handed_on_to_a_waiting_claim_is_one_lease_end_and_settles_the_run_once() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "lease_expired_with_claim_queued");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let shape = run_shape(&prefix, &run_id, &lease_id);
+    let expiry = prefix
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::LeaseExpired
+                && event.links().lease_id() == Some(&lease_id)
+        })
+        .unwrap_or_else(|| panic!("the lease's expiry:\n{shape}"));
+    let transfer = prefix
+        .iter()
+        .find(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Lease(LeasePayload::Transferred(transfer))
+                    if transfer.from_lease_id() == lease_id
+            )
+        })
+        .unwrap_or_else(|| panic!("the lease's hand-on:\n{shape}"));
+    assert!(
+        !prefix.iter().any(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().lease_id() == Some(&lease_id)
+        }),
+        "{shape}"
+    );
+    let ended_at = if transfer.sequence() < expiry.sequence() {
+        transfer.timestamp_unix_ms()
+    } else {
+        expiry.timestamp_unix_ms()
+    };
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert!(
+        !events.iter().any(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().lease_id() == Some(&lease_id)
+        }),
+        "no release is written for a lease that already ended"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_settlement_interrupted")
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    let observed = events
+        .iter()
+        .find_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                if event.links().run_id() == Some(&run_id) =>
+            {
+                Some(payload.observed_at_unix_ms())
+            }
+            _ => None,
+        })
+        .expect("the run's execution");
+    assert_eq!(observed, ended_at, "settled at the earlier of the two ends");
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// #670 final review M-1: a scheduled run fails (`task.failed`), its lease lapses before its
+/// lease end (the sweep's `lease.expired`), its own cleanup releases the lease with effect
+/// `not_performed` under the run's task request, and the daemon ends after that release and
+/// before `policy.execution_recorded`. The restart writes no recovered release and settles the
+/// run once from its own facts (here its terminal); a new dispatch on the same instance
+/// proceeds.
+#[test]
+fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
+    let (root, registered) = crash_root();
+    let (mut child, marker) = spawn_ladder_crash_child(root.path(), "lease_lapsed_mid_run");
+    let deadline = Instant::now() + WAIT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the crash child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill the timed-out child");
+            let _ = child.wait();
+            panic!("the crash child timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let shape = run_shape(&prefix, &run_id, &lease_id);
+    assert_eq!(
+        status.code(),
+        Some(87),
+        "the checkpoint ended the child:\n{shape}"
+    );
+    assert!(marker.is_file());
+    assert!(
+        prefix.iter().any(|event| {
+            event.event_type() == EventType::LeaseExpired
+                && event.links().lease_id() == Some(&lease_id)
+        }),
+        "the run's lease lapsed:\n{shape}"
+    );
+    let releases = prefix
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().run_id() == Some(&run_id)
+        })
+        .collect::<Vec<_>>();
+    let [own] = releases.as_slice() else {
+        panic!("the run's own release:\n{shape}");
+    };
+    assert_eq!(
+        own.payload().effect_disposition(),
+        Some(EffectDisposition::NotPerformed),
+        "{shape}"
+    );
+    let grant = prefix
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::LeaseGranted
+                && event.links().lease_id() == Some(&lease_id)
+        })
+        .expect("the run's grant");
+    assert_ne!(
+        own.links().request_id(),
+        grant.links().request_id(),
+        "the run's own release is under its task request:\n{shape}"
+    );
+    let expiry = prefix
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::LeaseExpired
+                && event.links().lease_id() == Some(&lease_id)
+        })
+        .expect("the expiry");
+    assert!(
+        expiry.sequence() < own.sequence(),
+        "the lease lapsed before the run's release:\n{shape}"
+    );
+    let terminal_code = prefix.iter().find_map(|event| match event.payload() {
+        EventPayload::Task(TaskPayload::Semantic(payload))
+            if event.links().run_id() == Some(&run_id)
+                && event.event_type() == EventType::TaskFailed =>
+        {
+            match payload.fact() {
+                TaskSemanticFact::TerminalCommitted {
+                    failure_code: Some(code),
+                    ..
+                } => Some(code.clone()),
+                _ => None,
+            }
+        }
+        _ => None,
+    });
+    assert!(terminal_code.is_some(), "the run's terminal:\n{shape}");
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        1,
+        "no recovered release"
+    );
+    assert!(!events.iter().any(|event| {
+        event.links().run_id() == Some(&run_id)
+            && failure_message(event)
+                .is_some_and(|message| message.contains("code=policy_settlement_release_recovered"))
+    }));
+    assert_eq!(
+        recorded_failure_code(&events, &run_id),
+        terminal_code,
+        "settled from the run's terminal:\n{shape}"
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on the open case of #670, test (f): the run's lease expires (the sweep's
+/// `lease.expired`) after the check that it is current and before the run's `task.failed` is
+/// appended, so the terminal follows the expiry; the daemon ends before the run's lease end.
+/// The restart writes no release (the lease already ended) and settles the run once from its
+/// terminal; a new dispatch on the same instance proceeds.
+#[test]
+fn a_terminal_written_after_the_lease_expired_is_settled_from_the_terminal() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "terminal_after_expiry");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let shape = run_shape(&prefix, &run_id, &lease_id);
+    let expiry = prefix
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::LeaseExpired
+                && event.links().lease_id() == Some(&lease_id)
+        })
+        .unwrap_or_else(|| panic!("the lease's expiry:\n{shape}"));
+    let (terminal, code) = run_terminal(&prefix, &run_id);
+    assert!(
+        expiry.sequence() < terminal.sequence(),
+        "the terminal follows the expiry:\n{shape}"
+    );
+    assert!(
+        !prefix.iter().any(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().lease_id() == Some(&lease_id)
+        }),
+        "{shape}"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        0,
+        "no release is written for a lease that already ended"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id),
+        code,
+        "settled from the run's terminal"
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    wait_out_retry_backoff(&events, &run_id);
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on #670 (runtime budget rewrite), test (k): a scheduled run runs 45 s,
+/// over its task's 30 s runtime budget, fails (`task.failed`) and is cut before its release.
+/// The restart recovers its release and settles it from its terminal with the policy's own
+/// rewrite, `policy_runtime_budget_exceeded`; the next start settles nothing again, and the next
+/// evaluation proceeds without a fatal error (the rewrite is Severe, so the policy holds the
+/// pair, `policy_task_paused`, as for any Severe failure).
+#[test]
+fn a_run_over_its_runtime_budget_is_settled_with_the_policy_rewrite() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "run_over_budget");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let shape = run_shape(&prefix, &run_id, &lease_id);
+    assert_eq!(
+        run_count(&prefix, &run_id, EventType::TaskFailed),
+        1,
+        "the run's terminal:\n{shape}"
+    );
+    assert_eq!(
+        run_count(&prefix, &run_id, EventType::LeaseReleased),
+        0,
+        "{shape}"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_runtime_budget_exceeded"),
+        "{shape}"
+    );
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close after the settlement");
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyExecutionRecorded),
+        1,
+        "the next start settles nothing again"
+    );
+    let at = evaluation_now();
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: at,
+                monotonic_ms: at,
+            },
+            12,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("the next evaluation");
+    let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+    assert!(
+        evaluation.decisions.iter().any(|decision| decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "policy_task_paused")),
+        "{evaluation:#?}"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the next start");
+}
+
+/// #670 final review, test (g): a run with no terminal and its run-linked release. The run's
+/// lease lapses before its package admission; its next fact under the lease fails
+/// (`lease_mismatch`), so the run ends with no terminal, and its settlement releases the lease
+/// (effect `not_performed`); the daemon ends before `policy.execution_recorded`. The restart
+/// writes no further release and settles the run once as interrupted, from that release; a new
+/// dispatch on the same instance proceeds.
+#[test]
+fn a_run_with_no_terminal_is_settled_as_interrupted_from_its_run_linked_release() {
+    let (root, registered) = crash_root();
+    let (mut child, marker) = spawn_ladder_crash_child(root.path(), "lease_lapsed_before_package");
+    let deadline = Instant::now() + WAIT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the crash child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill the timed-out child");
+            let _ = child.wait();
+            panic!("the crash child timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let shape = run_shape(&prefix, &run_id, &lease_id);
+    assert_eq!(
+        status.code(),
+        Some(87),
+        "the checkpoint ended the child:\n{shape}"
+    );
+    assert!(marker.is_file());
+    assert!(
+        !run_ended(&prefix, &run_id),
+        "the run has no terminal:\n{shape}"
+    );
+    let releases = prefix
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().run_id() == Some(&run_id)
+        })
+        .collect::<Vec<_>>();
+    let [release] = releases.as_slice() else {
+        panic!("the run's release:\n{shape}");
+    };
+    let released_at = release.timestamp_unix_ms();
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        1,
+        "no further release"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_settlement_interrupted")
+    );
+    assert_eq!(recorded_observed_at(&events, &run_id), released_at);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// The observed time of the run's one `policy.execution_recorded`.
+fn recorded_observed_at(events: &[PersistedEvent], run_id: &RunId) -> u64 {
+    events
+        .iter()
+        .find_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                if event.links().run_id() == Some(run_id) =>
+            {
+                Some(payload.observed_at_unix_ms())
+            }
+            _ => None,
+        })
+        .expect("the run's execution")
+}
+
+/// #670 final review, test (h): a scheduled dispatch is admitted and its lease granted, and the
+/// host closes before the run starts; the close releases the held lease without run links. The
+/// restart counts that release as the lease's end: it writes no release for the run and settles
+/// it once as interrupted, timed at the close's release; a new dispatch on the same instance
+/// proceeds.
+#[test]
+fn a_release_without_run_links_is_the_lease_end_of_a_scheduled_dispatch() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "host_close_before_run");
+    kill_at_marker(child, &marker);
+    let (run_id, lease_id) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let shape = run_shape(&prefix, &run_id, &lease_id);
+    let releases = prefix
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().lease_id() == Some(&lease_id)
+        })
+        .collect::<Vec<_>>();
+    let [close_release] = releases.as_slice() else {
+        panic!("the close's release:\n{shape}");
+    };
+    assert!(close_release.links().run_id().is_none(), "{shape}");
+    let closed_at = close_release.timestamp_unix_ms();
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::LeaseReleased),
+        0,
+        "no release is written for a lease that already ended"
+    );
+    assert_eq!(
+        recorded_failure_code(&events, &run_id).as_deref(),
+        Some("policy_settlement_interrupted")
+    );
+    assert_eq!(recorded_observed_at(&events, &run_id), closed_at);
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
+        1
+    );
+    assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
+    host.close().expect("close the restarted host");
+}
+
+/// #670 final review, test (i): a scheduled dispatch killed before its run's first task event,
+/// then a package rebind (the scheduled procedure's package, and so its binding digest,
+/// changes) before the restart. The restart still finds the dispatch scheduled (by its task's
+/// procedure ref in its pinned catalog) and closes it as test (c) does; nothing is left open.
+#[test]
+fn a_scheduled_dispatch_is_closed_after_a_package_rebind_before_the_restart() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "after_admission_before_run");
+    kill_at_marker(child, &marker);
+    let (run_id, _) = crash_run_identity(root.path());
+    let (host_config, _) = ladder_setup(root.path());
+    let rebound = neutral_non_home_start_contained_task_package(true);
+    let host_config = host_config.with_procedure_manifest(procedure_manifest_with_primary(
+        &rebound,
+        vec!["after_observation".to_owned()],
+    ));
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config,
+        Arc::new(FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state)),
+    )
+    .expect("restart after the rebind");
+    let events = all_events(&host);
+    assert_settled_once_as_interrupted(&events, &run_id);
+    assert!(!events.iter().any(|event| {
+        failure_message(event)
+            .is_some_and(|message| message.contains("code=policy_settlement_dispatch_left_open"))
+    }));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}
+
+/// #670 final review, test (j): a scheduled dispatch killed before its run's first task event,
+/// then a restart whose configuration no longer registers the dispatch's instance. The start
+/// cannot close the dispatch (its run's instance is gone), so it records
+/// `policy_settlement_dispatch_left_open` once, at Warning, under the run's links.
+#[test]
+fn a_scheduled_dispatch_the_start_leaves_open_is_recorded_once() {
+    let (root, _) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "after_admission_before_run");
+    kill_at_marker(child, &marker);
+    let (run_id, _) = crash_run_identity(root.path());
+    let (host_config, _) = ladder_setup(root.path());
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config.with_startup_packages(BTreeMap::new()),
+        Arc::new(FakeProvider::one("other.instance", instance_id(), state)),
+    )
+    .expect("restart without the dispatch's instance");
+    let events = all_events(&host);
+    let records = events
+        .iter()
+        .filter(|event| {
+            failure_message(event).is_some_and(|message| {
+                message.contains("code=policy_settlement_dispatch_left_open")
+            })
+        })
+        .collect::<Vec<_>>();
+    let [record] = records.as_slice() else {
+        panic!("one record of the open dispatch: {}", records.len());
+    };
+    assert_eq!(record.severity(), EventSeverity::Warning);
+    assert_eq!(record.links().run_id(), Some(&run_id));
+    assert_eq!(
+        run_count(&events, &run_id, EventType::PolicyExecutionRecorded),
+        0
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+}
+
+/// Coordinator ruling on #670 (review H-1, and on the open case), test (b): two runs on the
+/// same instance cut inside their hand-offs, each followed by a restart. Each run is settled
+/// once from its terminal, and the start after the second crash evaluates the policy without a
+/// fatal error.
+#[test]
+fn two_cut_hand_offs_on_one_instance_are_each_settled_and_the_next_start_evaluates() {
+    let (root, registered) = crash_root();
+    let (first, _) = crash_inside_the_hand_off(root.path(), None);
+    let host = restart_ladder_host(root.path(), registered);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    wait_out_retry_backoff(&all_events(&host), &first);
+    host.close().expect("close after the first crash");
+    let (second, _) = crash_inside_the_hand_off(root.path(), Some(evaluation_now()));
+    assert_ne!(first, second);
+    let host = restart_ladder_host(root.path(), registered);
+    let at = evaluation_now();
+    host.evaluate_policy_cycle_with_test_inputs(
+        &policy_facts(),
+        &policy_resources(),
+        EvaluationTime {
+            unix_ms: at,
+            monotonic_ms: at,
+        },
+        10,
+        PolicyTrigger::Recovery,
+    )
+    .expect("the start's evaluation");
+    let events = all_events(&host);
+    assert_settled_once_from_its_terminal(&events, &first);
+    assert_settled_once_from_its_terminal(&events, &second);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close after the second crash");
+}
+
+/// §7 row 4, E6 (review-670 M-1; #670 final review M-3): a crash while a rung run that has
+/// persisted a frame is in flight. The next start settles cleanly: the failed policy run,
+/// released by its hand-off, is settled once; the cut rung run gets its recovered terminal and
+/// no recovered release; and retention closes the cut run at the epoch end (its frames exist,
+/// none of them is still running once settled, and the run has its epoch-end point).
+#[test]
+fn a_crash_mid_rung_settles_cleanly_and_retention_closes_the_run_at_the_epoch_end() {
+    let (root, registered) = crash_root();
+    let (child, marker) = spawn_ladder_crash_child(root.path(), "mid_rung_run");
+    kill_at_marker(child, &marker);
+    let (run_id, _) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    let cut = prefix
+        .iter()
+        .filter(|event| event.event_type() == EventType::TaskStarted)
+        .filter_map(|event| event.links().run_id().copied())
+        .filter(|run| *run != run_id && !run_ended(&prefix, run))
+        .collect::<Vec<_>>();
+    let [cut] = cut.as_slice() else {
+        panic!("one rung run in flight at the crash: {cut:?}");
+    };
+    assert!(
+        run_has_persisted_frame(&prefix, cut),
+        "the cut rung run persisted a frame"
+    );
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    for event_type in [
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            run_count(&events, &run_id, event_type),
+            1,
+            "the failed run is settled once: {event_type:?}"
+        );
+    }
+    assert!(run_ended(&events, cut), "the cut rung run has its terminal");
+    assert_eq!(
+        run_count(&events, cut, EventType::LeaseReleased),
+        0,
+        "the cut rung run gets no recovered release"
+    );
+    assert!(!events.iter().any(|event| {
+        event.links().run_id() == Some(cut)
+            && failure_message(event)
+                .is_some_and(|message| message.contains("code=policy_settlement_release_recovered"))
+    }));
+    host.close().expect("close the restarted host");
+    let artifacts = ArtifactStore::open(root.path()).expect("open the artifact store");
+    let view = GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
+        |reference| artifacts.verify_recovery_reference(reference).ok(),
+    )
+    .expect("read the closed ledger")
+    // Read ten minutes on, past every frame's settle age (60 s after its capture).
+    .frame_retention_view(
+        unix_ms_now().expect("wall clock") + 600_000,
+        actingcommand_ledger::FrameRetentionSwitches {
+            dedup_error: true,
+            dedup_lab: false,
+        },
+    )
+    .expect("the frame retention view");
+    let frames = view
+        .frames
+        .iter()
+        .filter(|frame| frame.run_id.as_ref() == Some(cut))
+        .collect::<Vec<_>>();
+    assert!(!frames.is_empty(), "the cut rung run's frames");
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame.class != actingcommand_ledger::FrameRetentionClass::Running),
+        "{frames:?}"
+    );
+    assert!(
+        view.error_points
+            .iter()
+            .any(|point| point.epoch_end && point.run_id.as_ref() == Some(cut)),
+        "the cut run's epoch-end point: {:?}",
+        view.error_points
+    );
+}
+
+/// Review-670 L-3: the physical success branch. A physical scheduled run completes, and the
+/// daemon ends after its release and before `policy.execution_recorded`; the restart measures
+/// it from its scheduler `command.received` and settles it once as succeeded.
+#[test]
+fn a_physical_run_cut_after_its_success_is_settled_once_as_succeeded() {
+    let (root, registered) = crash_root();
+    let (mut child, marker) = spawn_ladder_crash_child_with(
+        root.path(),
+        "after_lease_release_before_policy_execution",
+        &[("ACTINGCOMMAND_LADDER_CRASH_SUCCEED", "1".to_owned())],
+    );
+    let deadline = Instant::now() + WAIT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the crash child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill the timed-out child");
+            let _ = child.wait();
+            panic!("the crash child timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(status.code(), Some(87), "the checkpoint ended the child");
+    assert!(marker.is_file());
+    let (run_id, _) = crash_run_identity(root.path());
+    let prefix = closed_ledger_events(root.path());
+    assert_eq!(run_count(&prefix, &run_id, EventType::TaskCompleted), 1);
+    assert_eq!(run_count(&prefix, &run_id, EventType::LabRequest), 0);
+    let host = restart_ladder_host(root.path(), registered);
+    let events = all_events(&host);
+    for event_type in [
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            run_count(&events, &run_id, event_type),
+            1,
+            "settled once: {event_type:?}"
+        );
+    }
+    assert_eq!(recorded_failure_code(&events, &run_id), None, "succeeded");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
 }

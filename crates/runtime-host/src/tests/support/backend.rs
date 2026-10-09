@@ -27,6 +27,9 @@ pub(super) struct FakeState {
     capture_open_error: std::sync::Mutex<Option<DeviceError>>,
     capture_count: AtomicUsize,
     capture_delay_ms: AtomicU64,
+    // Workflow #369 E6 (#670 final review M-3): when not 0, a capture waits while at least this
+    // many captures are done (raising it lets more through).
+    capture_hold_after: AtomicUsize,
     capture_close_count: AtomicUsize,
     require_fenced_capture_close: AtomicBool,
     unfenced_capture_close_count: AtomicUsize,
@@ -216,6 +219,13 @@ impl InputBackend for FakeBackend {
 
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
+        loop {
+            let hold_after = self.state.capture_hold_after.load(Ordering::Acquire);
+            if hold_after == 0 || self.state.capture_count.load(Ordering::Acquire) < hold_after {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
         let capture_delay_ms = self.state.capture_delay_ms.load(Ordering::Acquire);
         if capture_delay_ms != 0 {
             thread::sleep(Duration::from_millis(capture_delay_ms));

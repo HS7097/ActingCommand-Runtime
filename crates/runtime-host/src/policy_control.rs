@@ -434,13 +434,10 @@ impl PolicyControlState {
             runtime_ms,
         } = timing;
         let (task, _) = task_and_profile(catalog, intent)?;
-        let (task_runtime_used_ms, activity_runtime_used_ms) =
-            actual_runtime_totals(intent, admission, runtime_ms)?;
-        let runtime_exceeded = task_runtime_used_ms > admission.budget.task_runtime_limit_ms
-            || activity_runtime_used_ms > admission.budget.activity_runtime_limit_ms;
+        let runtime_exceeded = runtime_budget_exceeded(intent, admission, runtime_ms)?;
         let effective_input = if runtime_exceeded {
             PolicyExecutionInput::Failed {
-                error_code: "policy_runtime_budget_exceeded".to_owned(),
+                error_code: actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED.to_owned(),
                 class: PolicyFailureClass::Severe,
             }
         } else {
@@ -886,6 +883,20 @@ fn next_runtime(
         return Err(budget_exhausted(dimension, current, reservation, limit));
     }
     Ok(next)
+}
+
+/// Workflow #369 E3: whether a run of `runtime_ms` exceeded the admitted runtime budget, by
+/// the one rule the host's recovery check and the ledger also use
+/// (`PolicyBudgetReceipt::runtime_exceeded`).
+pub(crate) fn runtime_budget_exceeded(
+    intent: &DispatchIntent,
+    admission: &PolicyAdmissionRecord,
+    runtime_ms: u64,
+) -> RuntimeHostResult<bool> {
+    admission
+        .budget
+        .runtime_exceeded(intent.expected_duration_ms, runtime_ms)
+        .ok_or_else(|| fatal("policy_budget_receipt_invalid", "classify_policy_outcome"))
 }
 
 fn actual_runtime_totals(

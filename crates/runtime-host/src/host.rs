@@ -208,8 +208,8 @@ use contained_task::{
 };
 #[cfg(test)]
 pub(crate) use contained_task::{
-    ContainedTaskCheckpointIdentity, ContainedTaskCheckpointTestControl,
-    require_contained_task_sampling_run_seed,
+    ContainedTaskCheckpointIdentity, ContainedTaskCheckpointPoint,
+    ContainedTaskCheckpointTestControl, require_contained_task_sampling_run_seed,
 };
 #[cfg(test)]
 use contained_task::{ContainedTaskCheckpointTestHook, ContainedTaskTerminalDraft};
@@ -467,6 +467,10 @@ pub struct RuntimeHostConfig {
     clock: Arc<dyn RuntimeClock>,
     policy_inputs: Option<PolicyInputSnapshot>,
     procedure_manifest: Option<ProcedureManifest>,
+    /// Workflow #369 E3 (#670 rulings): the procedures the policy driver runs as contained
+    /// scheduled runs (`admit_scheduled_policy_dispatch`); the others' dispatches are client
+    /// runs whose outcome is reported later.
+    scheduled_procedures: BTreeSet<String>,
     config_manifest: Option<RuntimeConfigManifest>,
     /// Per instance alias: the contained task the host schedules by itself after a successful
     /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
@@ -488,6 +492,10 @@ pub struct RuntimeHostConfig {
     return_home_packages: BTreeMap<(String, String), String>,
     #[cfg(any(test, feature = "test-hooks"))]
     preparation_test_hook: Option<PreparationTestHook>,
+    /// Workflow #369 E3 (#670 safety net), test only: the run whose settlement the start
+    /// refuses as the ledger would.
+    #[cfg(test)]
+    settlement_refusal_for_test: Option<actingcommand_contract::RunId>,
 }
 
 impl RuntimeHostConfig {
@@ -514,6 +522,7 @@ impl RuntimeHostConfig {
             clock: Arc::new(SystemRuntimeClock::new()),
             policy_inputs: None,
             procedure_manifest: None,
+            scheduled_procedures: BTreeSet::new(),
             config_manifest: None,
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
@@ -522,7 +531,20 @@ impl RuntimeHostConfig {
             return_home_packages: BTreeMap::new(),
             #[cfg(any(test, feature = "test-hooks"))]
             preparation_test_hook: None,
+            #[cfg(test)]
+            settlement_refusal_for_test: None,
         }
+    }
+
+    /// Workflow #369 E3 (#670 safety net), test only: the start refuses `run_id`'s settlement
+    /// as the ledger would.
+    #[cfg(test)]
+    pub(crate) fn with_policy_settlement_refusal_for_test(
+        mut self,
+        run_id: actingcommand_contract::RunId,
+    ) -> Self {
+        self.settlement_refusal_for_test = Some(run_id);
+        self
     }
 
     /// Workflow #381 A (HOST-I3): a hook a held start calls at each `PreparationCheckpoint`.
@@ -647,6 +669,19 @@ impl RuntimeHostConfig {
     /// Installs the Runtime-owned manifest that binds procedure aliases to package content.
     pub fn with_procedure_manifest(mut self, procedure_manifest: ProcedureManifest) -> Self {
         self.procedure_manifest = Some(procedure_manifest);
+        self
+    }
+
+    /// Workflow #369 E3 (#670 rulings): the procedure refs whose dispatches the policy driver
+    /// admits as contained scheduled runs. A restart closes such a dispatch whose run was cut
+    /// before its first task event; a client run's dispatch keeps waiting for its outcome. A
+    /// dispatch is matched by its task's procedure ref in its pinned catalog, which a package
+    /// rebind does not change.
+    pub fn with_scheduled_procedures(
+        mut self,
+        procedure_refs: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.scheduled_procedures = procedure_refs.into_iter().collect();
         self
     }
 
@@ -1577,9 +1612,34 @@ impl RuntimeHost {
                         &shared.events,
                     )
                 })?;
-                timed(&mut startup_recovery.policy_dispatches_ms, || {
-                    reconcile_policy_dispatches(&mut policy, &shared.ledger, &shared.events)
-                })?;
+                let unsettled_dispatches =
+                    timed(&mut startup_recovery.policy_dispatches_ms, || {
+                        // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
+                        // before the reconciliation settles it.
+                        let mut settlement = policy_outcome::StartSettlement {
+                            ended_without_release: shared.recover_unreleased_policy_runs(
+                                &policy,
+                                &registered_instances,
+                                &config.scheduled_procedures,
+                            )?,
+                            unsettled: Vec::new(),
+                            #[cfg(test)]
+                            refuse_run_for_test: config.settlement_refusal_for_test,
+                        };
+                        reconcile_policy_dispatches(
+                            &mut policy,
+                            &shared.ledger,
+                            &shared.events,
+                            &mut settlement,
+                        )?;
+                        // #670 final review (Fail Loud): a scheduled dispatch still open here is
+                        // recorded, never left silently.
+                        shared.record_open_scheduled_dispatches(
+                            &policy,
+                            &config.scheduled_procedures,
+                        )?;
+                        Ok::<_, RuntimeHostError>(settlement.unsettled)
+                    })?;
                 let authoritative_policy_outcomes =
                     timed(&mut startup_recovery.policy_outcomes_ms, || {
                         recover_authoritative_policy_outcomes(&policy, &shared.ledger)
@@ -1609,6 +1669,7 @@ impl RuntimeHost {
                     authoritative_policy_outcomes,
                     policy_dispatch_clocks,
                     agent_dispatcher,
+                    unsettled_dispatches,
                 ))
             })();
             if recovered.is_ok() {
@@ -1628,6 +1689,7 @@ impl RuntimeHost {
                 authoritative_policy_outcomes,
                 policy_dispatch_clocks,
                 mut agent_dispatcher,
+                unsettled_dispatches,
             ) = recovered?;
             if let Some(agent_config) = &config.agent_dispatcher {
                 reconcile_agent_wakes(
@@ -1680,6 +1742,10 @@ impl RuntimeHost {
             shared.restore_install_pauses()?;
             host.scheduling_pause_restore =
                 shared.restore_scheduling_pauses(held_startup, previous_owner_epoch)?;
+            // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
+            // could not settle is recorded and its instance paused, after the persisted pauses
+            // are restored and before any instance is prepared.
+            shared.hold_unsettled_dispatches(&unsettled_dispatches)?;
             // Workflow #369 W-2: the instance workers exist before the daemon-start preparation,
             // so a failed preparation's ladder already has one.
             host_claims::spawn_instance_workers(&shared)?;
@@ -2298,6 +2364,49 @@ impl RuntimeHost {
     where
         F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
     {
+        self.install_contained_task_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::PackageAdmitted,
+            Some(request_id),
+            instance_id,
+            lease_id,
+            action,
+        )
+    }
+
+    /// Workflow #369 E3 (#670 final review): runs `action` at `point` of the run on `lease_id`,
+    /// whatever its request (a scheduled run mints its own task request).
+    #[cfg(test)]
+    pub(crate) fn run_at_leased_checkpoint_for_test<F>(
+        &self,
+        point: ContainedTaskCheckpointPoint,
+        instance_id: InstanceId,
+        lease_id: LeaseId,
+        action: F,
+    ) -> RuntimeHostResult<ContainedTaskCheckpointTestControl>
+    where
+        F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
+    {
+        self.install_contained_task_checkpoint_for_test(
+            point,
+            None,
+            instance_id,
+            Some(lease_id),
+            action,
+        )
+    }
+
+    #[cfg(test)]
+    fn install_contained_task_checkpoint_for_test<F>(
+        &self,
+        point: ContainedTaskCheckpointPoint,
+        request_id: Option<RequestId>,
+        instance_id: InstanceId,
+        lease_id: Option<LeaseId>,
+        action: F,
+    ) -> RuntimeHostResult<ContainedTaskCheckpointTestControl>
+    where
+        F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
+    {
         let shared = self.shared_ref("install_contained_task_checkpoint_test_hook")?;
         let consumed = Arc::new(AtomicU64::new(0));
         let observed = Arc::new(Mutex::new(None));
@@ -2313,6 +2422,7 @@ impl RuntimeHost {
             ));
         }
         *slot = Some(ContainedTaskCheckpointTestHook {
+            point,
             request_id,
             instance_id,
             lease_id,
