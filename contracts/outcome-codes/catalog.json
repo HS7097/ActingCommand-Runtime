@@ -3827,6 +3827,9 @@
     "ledger_": [
       "ledger"
     ],
+    "candidate_search_": [
+      "recognition-pack"
+    ],
     "setup_": [
       "ui"
     ],

@@ -1115,3 +1115,169 @@ pub fn dry_run_select(
         policy_override: policy_override.is_some(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::CandidateRect;
+    use actingcommand_recognition_pack::{AssetResolver, RecognitionPackResult};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct MarkerAssets(Vec<u8>);
+
+    impl AssetResolver for MarkerAssets {
+        fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>> {
+            assert_eq!(path, "assets/marker.png");
+            Ok(self.0.clone())
+        }
+    }
+
+    /// Deterministic pixel noise: a shifted copy of it correlates with it near zero.
+    fn noise(x: u32, y: u32) -> [u8; 3] {
+        let mut state = u64::from(y * 64 + x).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x2545_f491;
+        let mut next = || {
+            state ^= state >> 33;
+            state = state.wrapping_mul(0xff51_afd7_ed55_8ccd);
+            state ^= state >> 33;
+            (state & 0xff) as u8
+        };
+        [next(), next(), next()]
+    }
+
+    fn frame(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Frame {
+        let pixel = &pixel;
+        Frame::from_pixels(
+            width,
+            height,
+            (0..height)
+                .flat_map(|y| (0..width).flat_map(move |x| pixel(x, y)))
+                .collect(),
+            actingcommand_device::PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .expect("fixture frame")
+    }
+
+    /// Workflow #308 list selector slice L1: a single-frame select step's existing path (policy
+    /// admission, projection, decision) over the rows of a `repeated_anchor` layout.
+    #[test]
+    fn a_single_frame_select_decides_over_the_actionable_rows_of_a_repeated_anchor_layout() {
+        let pack = actingcommand_recognition_pack::load_pack_from_json_str(
+            &json!({
+                "schema_version": "0.7",
+                "coordinate_space": {"width": 96, "height": 72},
+                "defaults": {"match_metric": "ccoeff_normed"},
+                "targets": [
+                    {"type": "template", "id": "ui/row_marker", "template_path": "assets/marker.png",
+                     "region": "full_frame", "threshold": 0.95},
+                    {"type": "color", "id": "state/row_open",
+                     "region": {"x": 0, "y": 0, "width": 4, "height": 4}, "expected": [0, 200, 0]}
+                ],
+                "candidate_layouts": [{
+                    "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+                    "anchor": "ui/row_marker", "max_instances": 8, "order": "top_to_bottom",
+                    "instance_rect": {"x": -2, "y": -2, "width": 40, "height": 12},
+                    "click": {"x": 10, "y": 0, "width": 20, "height": 6},
+                    "features": [{"name": "open", "value": "passed", "target": "state/row_open",
+                                  "offset": {"x": 30, "y": 1}}]
+                }]
+            })
+            .to_string(),
+        )
+        .expect("pack");
+        let marker = frame(8, 6, noise).png_for_artifact().expect("marker PNG");
+        let evaluator =
+            RecognitionEvaluator::with_asset_resolver(pack, Arc::new(MarkerAssets(marker)))
+                .expect("evaluator");
+        // The first row is cut by the frame's top edge although its open square is drawn; the
+        // second row is closed and the third is open.
+        let markers = [(4_u32, 1_u32), (4, 30), (50, 30)];
+        let open_squares = [(34_u32, 2_u32), (80, 31)];
+        let rows = frame(96, 72, |x, y| {
+            for (left, top) in markers {
+                if (left..left + 8).contains(&x) && (top..top + 6).contains(&y) {
+                    return noise(x - left, y - top);
+                }
+            }
+            if open_squares
+                .iter()
+                .any(|(left, top)| (*left..left + 4).contains(&x) && (*top..top + 4).contains(&y))
+            {
+                return [0, 200, 0];
+            }
+            [30, 31, 32]
+        });
+        let scene = scene_from_frame(&rows).expect("scene");
+        let policy: SelectionPolicy = serde_json::from_value(json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "rows-open",
+            "applies_to": {
+                "candidate_layout_id": "layout/rows",
+                "outcome_keys": {"selected": "row_selected", "empty": "row_empty",
+                                 "insufficient": "row_insufficient",
+                                 "ambiguous": "row_ambiguous", "unknown": "row_unknown"}
+            },
+            "fields": [{"name": "open", "value_type": {"type": "boolean"}}],
+            "facts": [],
+            "gates": [{"gate_id": "open",
+                       "predicate": {"kind": "boolean_equals",
+                                     "value": {"source": "field", "field": "open"},
+                                     "expected": true},
+                       "on_unknown": {"kind": "drop_candidate"}}],
+            "scoring": [],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("policy");
+        policy.validate().expect("valid policy");
+        let layout = evaluator
+            .candidate_layout("layout/rows")
+            .expect("declared layout");
+        check_policy(&policy, layout).expect("the policy applies to the rows");
+
+        let projection = project(&evaluator, &scene, "layout/rows").expect("projection");
+        assert_eq!(
+            projection
+                .candidates()
+                .iter()
+                .map(|candidate| candidate.actionable)
+                .collect::<Vec<_>>(),
+            [false, true, true]
+        );
+        let facts = SelectionFactSnapshot {
+            snapshot_id: "empty".into(),
+            snapshot_at_unix_ms: 0,
+            facts: BTreeMap::new(),
+        };
+        let decision = decide(&policy, layout, &projection, &facts, 0).expect("decision");
+        // Only actionable rows are evaluated: the cut first row, which would read open and win
+        // the lowest-ID tie-break, is neither a verdict nor the choice.
+        assert_eq!(
+            decision
+                .candidates
+                .iter()
+                .map(|verdict| verdict.candidate_id.as_str())
+                .collect::<Vec<_>>(),
+            ["layout/rows#01", "layout/rows#02"]
+        );
+        assert_eq!(
+            chosen(&decision).expect("one choice"),
+            Some("layout/rows#02")
+        );
+        assert_eq!(
+            projection
+                .candidate("layout/rows#02")
+                .expect("chosen row")
+                .click,
+            CandidateRect {
+                x: 60,
+                y: 30,
+                width: 20,
+                height: 6
+            }
+        );
+    }
+}

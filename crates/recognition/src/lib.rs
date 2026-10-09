@@ -119,6 +119,17 @@ pub struct TemplateMatchSelection {
     pub accepted: Option<TemplateMatch>,
 }
 
+/// The result of [`Scene::match_template_all`] (Workflow #308, `repeated_anchor` layouts).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemplateSearch {
+    /// Every accepted match after overlap suppression, in acceptance order: score descending,
+    /// then `y` ascending, then `x` ascending.
+    Complete(Vec<TemplateMatch>),
+    /// The search reached its time limit before it had scored its last row. Nothing partial is
+    /// returned; `found` counts the positions that had passed the threshold and the predicate.
+    Incomplete { found: usize, limit: Duration },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchMetric {
     CrossCorrelationNormalized,
@@ -326,6 +337,109 @@ impl Scene {
         })
     }
 
+    /// Every position of the template in `region` whose score reaches `threshold` and that
+    /// `accept` admits, after overlap suppression.
+    ///
+    /// Each position is scored exactly as the exact path of
+    /// [`Scene::match_template_with_filter`] scores it, never through the downsampled pyramid.
+    /// The candidates are taken greedily by score descending, then `y`, then `x`; a candidate is
+    /// suppressed when `1000 * intersection > suppress_iou_milli * union` with a match already
+    /// taken, in integer arithmetic, so `0` suppresses any overlap. The search checks its 5 s
+    /// limit before every row and after the last one, and reports a search that ran out of time
+    /// as [`TemplateSearch::Incomplete`].
+    pub fn match_template_all(
+        &self,
+        template_png: &[u8],
+        region: Option<Rect>,
+        metric: MatchMetric,
+        threshold: f32,
+        suppress_iou_milli: u16,
+        accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
+    ) -> RecognitionResult<TemplateSearch> {
+        self.match_template_all_with_clock(
+            template_png,
+            region,
+            metric,
+            threshold,
+            suppress_iou_milli,
+            accept,
+            Instant::now,
+        )
+    }
+
+    /// [`Scene::match_template_all`] reading its time limit from `now`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn match_template_all_with_clock(
+        &self,
+        template_png: &[u8],
+        region: Option<Rect>,
+        metric: MatchMetric,
+        threshold: f32,
+        suppress_iou_milli: u16,
+        mut accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
+        mut now: impl FnMut() -> Instant,
+    ) -> RecognitionResult<TemplateSearch> {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            return Err(RecognitionError::fatal(
+                "template threshold must be in 0..=1",
+            ));
+        }
+        if suppress_iou_milli > 999 {
+            return Err(RecognitionError::fatal(
+                "template overlap suppression must be in 0..=999 milli",
+            ));
+        }
+        let (search, template, offset_x, offset_y) =
+            self.prepare_template_match(template_png, region)?;
+        let stats = TemplateStats::new(&template, metric)?;
+        let integrals = IntegralImages::new(&search);
+        let window = SearchWindow::full(&search, &template);
+        let started = now();
+        let mut found = Vec::new();
+        for y in window.min_y..=window.max_y {
+            if now().saturating_duration_since(started) > TEMPLATE_MATCH_TIMEOUT {
+                return Ok(TemplateSearch::Incomplete {
+                    found: found.len(),
+                    limit: TEMPLATE_MATCH_TIMEOUT,
+                });
+            }
+            for x in window.min_x..=window.max_x {
+                let raw_score = score_window(&search, &stats, &integrals, metric, x, y);
+                let candidate = template_match_from_candidate(
+                    MatchCandidate { x, y, raw_score },
+                    &template,
+                    offset_x,
+                    offset_y,
+                )?;
+                if candidate.score >= threshold && accept(candidate)? {
+                    found.push(candidate);
+                }
+            }
+        }
+        if now().saturating_duration_since(started) > TEMPLATE_MATCH_TIMEOUT {
+            return Ok(TemplateSearch::Incomplete {
+                found: found.len(),
+                limit: TEMPLATE_MATCH_TIMEOUT,
+            });
+        }
+        found.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then(a.y.cmp(&b.y))
+                .then(a.x.cmp(&b.x))
+        });
+        let mut accepted: Vec<TemplateMatch> = Vec::new();
+        for candidate in found {
+            if !accepted
+                .iter()
+                .any(|taken| overlap_suppresses(taken, &candidate, suppress_iou_milli))
+            {
+                accepted.push(candidate);
+            }
+        }
+        Ok(TemplateSearch::Complete(accepted))
+    }
+
     fn prepare_template_match(
         &self,
         template_png: &[u8],
@@ -498,6 +612,25 @@ fn full_frame_pyramid_match_with_deadline(
             RecognitionError::fatal("full-frame template match produced no candidates")
         })?;
     template_match_from_candidate(candidate, template, offset_x, offset_y)
+}
+
+/// Whether `taken` suppresses `candidate`: `1000 * intersection > suppress_iou_milli * union`,
+/// with areas in integer pixels.
+fn overlap_suppresses(
+    taken: &TemplateMatch,
+    candidate: &TemplateMatch,
+    suppress_iou_milli: u16,
+) -> bool {
+    let area = |rect: &TemplateMatch| i64::from(rect.width) * i64::from(rect.height);
+    let width = (i64::from(taken.x) + i64::from(taken.width))
+        .min(i64::from(candidate.x) + i64::from(candidate.width))
+        - i64::from(taken.x).max(i64::from(candidate.x));
+    let height = (i64::from(taken.y) + i64::from(taken.height))
+        .min(i64::from(candidate.y) + i64::from(candidate.height))
+        - i64::from(taken.y).max(i64::from(candidate.y));
+    let intersection = width.max(0) * height.max(0);
+    let union = area(taken) + area(candidate) - intersection;
+    1000 * intersection > i64::from(suppress_iou_milli) * union
 }
 
 fn refinement_candidate_limit(template: &GrayImage, factor: u32) -> usize {
@@ -1413,8 +1546,89 @@ mod tests {
         assert!(blue.distance > 300.0, "distance was {}", blue.distance);
     }
 
+    #[test]
+    fn template_search_takes_every_instance_by_score_then_position() {
+        let template = noise_image(16, 12);
+        let mut frame = blank_image(160, 120, [30, 31, 32]);
+        for (x, y) in [(100, 20), (60, 80), (20, 20)] {
+            imageops::replace(&mut frame, &template, x, y);
+        }
+        let scene = Scene::from_png(&encode_png(&frame)).expect("scene");
+        let png = encode_png(&template);
+        let search = |accept: fn(TemplateMatch) -> RecognitionResult<bool>| match scene
+            .match_template_all(
+                &png,
+                None,
+                MatchMetric::CorrelationCoefficientNormalized,
+                0.9,
+                0,
+                accept,
+            )
+            .expect("search")
+        {
+            TemplateSearch::Complete(matches) => matches
+                .iter()
+                .map(|matched| (matched.x, matched.y, matched.width, matched.height))
+                .collect::<Vec<_>>(),
+            TemplateSearch::Incomplete { .. } => panic!("a small search finishes in time"),
+        };
+
+        // Equal scores are taken by y, then x.
+        assert_eq!(
+            search(|_| Ok(true)),
+            [(20, 20, 16, 12), (100, 20, 16, 12), (60, 80, 16, 12)]
+        );
+        // The predicate decides per position, as the relative color check does.
+        assert_eq!(
+            search(|matched| Ok(matched.x != 100)),
+            [(20, 20, 16, 12), (60, 80, 16, 12)]
+        );
+    }
+
+    #[test]
+    fn template_overlap_suppression_is_integer_iou_above_the_declared_milli() {
+        let at = |x: i32, y: i32| TemplateMatch {
+            x,
+            y,
+            width: 10,
+            height: 10,
+            raw_score: 1.0,
+            score: 1.0,
+        };
+        // Offset by 5 px: intersection 50, union 150, IoU 333.3 milli.
+        for (suppress_iou_milli, suppressed) in [(0, true), (333, true), (334, false), (999, false)]
+        {
+            assert_eq!(
+                overlap_suppresses(&at(0, 0), &at(5, 0), suppress_iou_milli),
+                suppressed,
+                "{suppress_iou_milli}"
+            );
+        }
+        // Touching rectangles do not overlap, so even 0 keeps both.
+        assert!(!overlap_suppresses(&at(0, 0), &at(10, 0), 0));
+        assert!(!overlap_suppresses(&at(0, 0), &at(0, 10), 0));
+        // One pixel of overlap suppresses at 0.
+        assert!(overlap_suppresses(&at(0, 0), &at(9, 9), 0));
+    }
+
     fn blank_image(width: u32, height: u32, color: [u8; 3]) -> RgbImage {
         ImageBuffer::from_pixel(width, height, Rgb(color))
+    }
+
+    /// Deterministic pixel noise: a shifted copy of it correlates with it near zero.
+    fn noise_image(width: u32, height: u32) -> RgbImage {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut image = RgbImage::new(width, height);
+        for pixel in image.pixels_mut() {
+            let mut channel = || {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (state >> 56) as u8
+            };
+            *pixel = Rgb([channel(), channel(), channel()]);
+        }
+        image
     }
 
     fn template_image() -> RgbImage {
