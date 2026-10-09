@@ -4,6 +4,7 @@
 //! keys are durable; admission, deadlines and tickets remain in this Host's memory.
 
 use super::*;
+use crate::codes::HostCode;
 use actingcommand_contract::{
     InstallHeldStartup, InstallTransitionAction, InstallTransitionPhase as Phase,
     InstallTransitionStatus, InstallTransitionTicket, RuntimeShutdownDecision,
@@ -608,12 +609,12 @@ impl HostShared {
                 ),
                 Phase::Held => (
                     RuntimeLifecycleFailureStage::InstallHeld,
-                    "held_timeout",
+                    HostCode::HeldTimeout.as_str(),
                     false,
                 ),
                 _ => (
                     RuntimeLifecycleFailureStage::InstallRelease,
-                    "release_timeout",
+                    HostCode::ReleaseTimeout.as_str(),
                     false,
                 ),
             };
@@ -700,7 +701,7 @@ impl HostShared {
     pub(super) fn wait_install_release(&self) -> RuntimeHostResult<()> {
         loop {
             if self.fatal.is_shutdown_requested() {
-                return Err(install_error("install_startup_stopped"));
+                return Err(install_error(HostCode::InstallStartupStopped.as_str()));
             }
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
@@ -723,7 +724,7 @@ impl HostShared {
         self.tick_install()?;
         let admission = lock(&self.lifecycle_admission, "check_install_preparation")?;
         if admission.stopping || self.fatal.is_shutdown_requested() {
-            return Err(install_error("install_startup_stopped"));
+            return Err(install_error(HostCode::InstallStartupStopped.as_str()));
         }
         if admission.held.is_some()
             && admission
@@ -768,7 +769,7 @@ impl HostShared {
         self.tick_install()?;
         let mut admission = lock(&self.lifecycle_admission, "finish_install_preparation")?;
         if admission.stopping {
-            return Err(install_error("install_startup_stopped"));
+            return Err(install_error(HostCode::InstallStartupStopped.as_str()));
         }
         if let Some(transition) = &admission.transition {
             if transition.status.phase != Phase::Preparing {

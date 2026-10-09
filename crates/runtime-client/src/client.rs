@@ -109,6 +109,7 @@ pub struct RuntimeClientConfig {
     io_timeout: Duration,
     backend_open_timeout: Duration,
     maximum_frame_bytes: usize,
+    deadline: Option<Instant>,
 }
 
 impl RuntimeClientConfig {
@@ -120,7 +121,16 @@ impl RuntimeClientConfig {
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             backend_open_timeout: DEFAULT_BACKEND_OPEN_TIMEOUT,
             maximum_frame_bytes: DEFAULT_RUNTIME_MAX_FRAME_BYTES,
+            deadline: None,
         }
+    }
+
+    /// Workflow #381 A R1′: one deadline for the whole session. The connect and every later
+    /// exchange wait at most until `deadline` (and never longer than their own timeout); an
+    /// exchange that starts at or after it waits 1 ms, so it fails with its ordinary timeout.
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
 
     pub fn with_io_timeout(mut self, io_timeout: Duration) -> Self {
@@ -170,6 +180,7 @@ impl fmt::Debug for RuntimeClientConfig {
             .field("io_timeout", &self.io_timeout)
             .field("backend_open_timeout", &self.backend_open_timeout)
             .field("maximum_frame_bytes", &self.maximum_frame_bytes)
+            .field("deadline", &self.deadline)
             .finish()
     }
 }
@@ -182,6 +193,7 @@ struct RuntimeConnection {
     io_timeout: Duration,
     backend_open_timeout: Duration,
     maximum_frame_bytes: usize,
+    deadline: Option<Instant>,
     terminal_error: Option<RuntimeClientError>,
 }
 
@@ -802,7 +814,11 @@ impl RuntimeClient {
         let address = info
             .socket_addr()
             .map_err(|_| RuntimeClientError::fatal("runtime_info_invalid", "connect_runtime"))?;
-        let stream = connect_runtime_stream(address, config.io_timeout, "connect_runtime")?;
+        let stream = connect_runtime_stream(
+            address,
+            within_deadline(config.io_timeout, config.deadline),
+            "connect_runtime",
+        )?;
         let client = Self {
             shared: Arc::new(RuntimeClientShared {
                 info,
@@ -820,6 +836,7 @@ impl RuntimeClient {
                     io_timeout: config.io_timeout,
                     backend_open_timeout: config.backend_open_timeout,
                     maximum_frame_bytes: config.maximum_frame_bytes,
+                    deadline: config.deadline,
                     terminal_error: None,
                 }),
             }),
@@ -2995,14 +3012,17 @@ impl RuntimeClient {
             if let Some(error) = &connection.terminal_error {
                 return Err(error.clone());
             }
-            let response_timeout = match response_timeout {
-                Some(timeout) => timeout,
-                None => receipt_response_timeout(
-                    &operation,
-                    connection.io_timeout,
-                    connection.backend_open_timeout,
-                )?,
-            };
+            let response_timeout = within_deadline(
+                match response_timeout {
+                    Some(timeout) => timeout,
+                    None => receipt_response_timeout(
+                        &operation,
+                        connection.io_timeout,
+                        connection.backend_open_timeout,
+                    )?,
+                },
+                connection.deadline,
+            );
             let maximum_frame_bytes = connection.maximum_frame_bytes;
             let receipt_deadline = match &operation {
                 RuntimeOperation::RunContainedTask { request, .. } => {
@@ -5642,6 +5662,17 @@ fn unix_ms_now() -> RuntimeClientResult<u64> {
         .as_millis();
     u64::try_from(millis)
         .map_err(|_| RuntimeClientError::fatal("runtime_clock_overflow", "create_request"))
+}
+
+/// Workflow #381 A R1′: `timeout`, cut to what remains before the session's deadline; at least
+/// 1 ms, because a zero socket timeout is not a timeout.
+fn within_deadline(timeout: Duration, deadline: Option<Instant>) -> Duration {
+    match deadline {
+        Some(deadline) => timeout
+            .min(deadline.saturating_duration_since(Instant::now()))
+            .max(Duration::from_millis(1)),
+        None => timeout,
+    }
 }
 
 fn connect_runtime_stream(

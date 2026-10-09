@@ -4,6 +4,9 @@
 
 #![forbid(unsafe_code)]
 
+// Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
+#[cfg(test)]
+mod gate_381a;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod process_probe;
@@ -25,7 +28,7 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Upper bound for `request-shutdown --wait <seconds>`.
 const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
@@ -81,7 +84,29 @@ fn main() -> ExitCode {
     }
 }
 
+/// Workflow #381 A R1′, R2: how one `install-transition` run talks to the Runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InstallTransitionRun {
+    /// The deadline of the whole run, counted from its start; no exchange waits past it.
+    budget: Option<Duration>,
+    /// The I/O timeout of one exchange.
+    exchange_timeout: Duration,
+    /// Whether the run declares its governance identity before the action.
+    declares_identity: bool,
+}
+
+fn install_transition_run(
+    _action: &actingcommand_contract::InstallTransitionAction,
+) -> InstallTransitionRun {
+    InstallTransitionRun {
+        budget: None,
+        exchange_timeout: Duration::from_secs(5),
+        declares_identity: true,
+    }
+}
+
 fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
+    let started = Instant::now();
     let Invocation {
         state_root,
         instance,
@@ -126,8 +151,18 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         None
     };
     let (actor, source) = command.origin();
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
-        .map_err(ActingctlError::runtime)?;
+    let install_run = match &command {
+        Command::InstallTransition { action } => Some(install_transition_run(action)),
+        _ => None,
+    };
+    let mut client_config = RuntimeClientConfig::new(&state_root, actor, source);
+    if let Some(install_run) = install_run {
+        client_config = client_config.with_io_timeout(install_run.exchange_timeout);
+        if let Some(budget) = install_run.budget {
+            client_config = client_config.with_deadline(started + budget);
+        }
+    }
+    let client = RuntimeClient::connect(client_config).map_err(ActingctlError::runtime)?;
     let optional_instance = instance.clone();
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
     let output = match command {
@@ -224,9 +259,11 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
             }
         },
         Command::InstallTransition { action } => {
-            client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
-                client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
-            }).map_err(ActingctlError::runtime)?;
+            if install_run.is_some_and(|install_run| install_run.declares_identity) {
+                client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
+                    client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
+                }).map_err(ActingctlError::runtime)?;
+            }
             let receipt = client.install_transition(action).map_err(ActingctlError::runtime)?;
             match shutdown_wait {
                 Some(wait) => {

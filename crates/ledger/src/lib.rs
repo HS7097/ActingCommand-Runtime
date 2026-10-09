@@ -20,8 +20,12 @@ mod fact;
 pub mod global;
 pub mod owner_journal;
 pub mod signatures;
+#[cfg(any(test, feature = "test-hooks"))]
+mod writer_stall;
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use writer_stall::WriterStallGate;
 
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";
 const LEDGER_HEADER_SCHEMA_VERSION: &str = "actingcommand.ledger.session.v0.1";

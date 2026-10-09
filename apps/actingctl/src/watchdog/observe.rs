@@ -6,7 +6,7 @@
 //! locked.
 
 use super::Failure;
-use super::decide::{Fatal, Journal, LiveOwner, OwnerLock, OwnerRecord, RuntimeProcess};
+use super::decide::{Fatal, Journal, LiveOwner, Observed, OwnerLock, OwnerRecord, RuntimeProcess};
 use super::powershell;
 use actingcommand_contract::{
     EventActor, EventSource, InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE,
@@ -257,6 +257,34 @@ fn epoch_text(value: &Value) -> Option<String> {
         Value::Null => None,
         other => Some(other.to_string()),
     }
+}
+
+/// L, J and F of one state root, the owner observation the decision rows read; `live` is left to
+/// the caller. F is searched only for an unlocked journal with a record, among the logs in
+/// `log_directories` (Workflow #381 A: a state root a test wrote is read the same way, I7).
+pub(crate) fn observe_owner(
+    state_root: &Path,
+    log_directories: &[PathBuf],
+) -> Result<Observed, Failure> {
+    let (lock, journal) = owner_journal(state_root)?;
+    let fatal = match (&lock, &journal) {
+        (
+            OwnerLock::Unlocked,
+            Journal::Record {
+                modified_unix_ms, ..
+            },
+        ) => fatal_after(
+            log_directories,
+            modified_unix_ms.saturating_sub(super::decide::CLOCK_SLACK_MS),
+        )?,
+        _ => None,
+    };
+    Ok(Observed {
+        lock,
+        live: None,
+        journal,
+        fatal,
+    })
 }
 
 /// I, parsed tolerantly for reporting; `None` when absent or unreadable.

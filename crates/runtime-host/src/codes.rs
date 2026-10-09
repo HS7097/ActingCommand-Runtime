@@ -37,5 +37,18 @@ actingcommand_contract::outcome_codes! {
         /// previous owner; it is deferred with a wake at the cooldown's end (keys
         /// `instance_id`, `next_eligible_unix_ms`).
         DispatchInstanceCooldown => "dispatch_instance_cooldown": info,
+        /// Error. A held or released start stopped before it finished preparing: an accepted
+        /// shutdown, or a latched Runtime failure. Operation `install_transition`. Until A2
+        /// makes it a `caused_by` link, a latched failure travels as the tokens
+        /// `cause=<code> cause_operation=<operation>` (Workflow #381 A R3′). A restart may
+        /// succeed: the watchdog considers a start (R5′).
+        InstallStartupStopped => "install_startup_stopped": error,
+        /// Error. A held start received no release before its deadline; the transition fails
+        /// with admission closed (Workflow #352). Operation `install_transition`.
+        HeldTimeout => "held_timeout": error,
+        /// Error. A released start did not finish preparing before its deadline; the
+        /// transition fails with admission closed (Workflow #352). Operation
+        /// `install_transition`.
+        ReleaseTimeout => "release_timeout": error,
     }
 }
