@@ -1599,7 +1599,9 @@ fn ladder_hand_off_crash_child_process() {
             registered,
             context.lease_token().lease_id(),
             move |_| {
-                clock.advance(3_600_000);
+                // Past the lease's expiry (its TTL is the run's 60 s response deadline plus
+                // the heartbeat reserve), inside the task's 300 s runtime budget.
+                clock.advance(120_000);
                 let deadline = Instant::now() + WAIT;
                 while !lapsed.load(Ordering::Acquire) {
                     assert!(Instant::now() < deadline, "the run's lease did not lapse");
@@ -1959,6 +1961,32 @@ fn assert_settled_once_as_interrupted(events: &[PersistedEvent], run_id: &RunId)
     assert_eq!(record.severity(), EventSeverity::Info);
 }
 
+/// Waits until the retry backoff of the run's recorded failure, if it has one, has passed on
+/// the wall clock: a run settled from its failed terminal starts its pair's retry backoff
+/// (P2), and the next dispatch of the pair is due only after it.
+fn wait_out_retry_backoff(events: &[PersistedEvent], run_id: &RunId) {
+    let retry_at = events.iter().find_map(|event| match event.payload() {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+            if event.links().run_id() == Some(run_id) =>
+        {
+            match payload.outcome() {
+                PolicyExecutionOutcome::Failed { failure } => failure.retry_at_unix_ms,
+                PolicyExecutionOutcome::Succeeded { .. } => None,
+            }
+        }
+        _ => None,
+    });
+    if let Some(retry_at) = retry_at {
+        assert!(
+            retry_at <= evaluation_now() + 120_000,
+            "a retry backoff of at most two minutes"
+        );
+        while evaluation_now() <= retry_at {
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
 /// The run's one task terminal among `events` and its failure code (`None` for a success).
 fn run_terminal<'a>(
     events: &'a [PersistedEvent],
@@ -2043,7 +2071,9 @@ fn a_crash_inside_the_hand_off_is_settled_from_its_terminal_and_a_new_dispatch_p
     let (root, registered) = crash_root();
     let (run_id, _) = crash_inside_the_hand_off(root.path(), None);
     let host = restart_ladder_host(root.path(), registered);
-    assert_settled_once_from_its_terminal(&all_events(&host), &run_id);
+    let events = all_events(&host);
+    assert_settled_once_from_its_terminal(&events, &run_id);
+    wait_out_retry_backoff(&events, &run_id);
     let (_, request) = ladder_setup(root.path());
     let context = admit_ladder_run_at(&host, &request, evaluation_now());
     assert_ne!(context.run_id(), run_id);
@@ -2151,6 +2181,7 @@ fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() 
         run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
         1
     );
+    wait_out_retry_backoff(&events, &run_id);
     assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
     host.close().expect("close the restarted host");
 }
@@ -2463,6 +2494,7 @@ fn a_terminal_written_after_the_lease_expired_is_settled_from_the_terminal() {
         run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
         1
     );
+    wait_out_retry_backoff(&events, &run_id);
     assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
     host.close().expect("close the restarted host");
 }
@@ -2676,6 +2708,7 @@ fn two_cut_hand_offs_on_one_instance_are_each_settled_and_the_next_start_evaluat
     let (first, _) = crash_inside_the_hand_off(root.path(), None);
     let host = restart_ladder_host(root.path(), registered);
     assert!(host.fatal_error().expect("runtime health").is_none());
+    wait_out_retry_backoff(&all_events(&host), &first);
     host.close().expect("close after the first crash");
     let (second, _) = crash_inside_the_hand_off(root.path(), Some(evaluation_now()));
     assert_ne!(first, second);
