@@ -2033,8 +2033,6 @@ impl HostShared {
             .map_err(|failure| *failure.error)?;
         self.append_scheduler_queued_hand_off(&validated_claim, resolved)
             .map_err(|failure| *failure.error)?;
-        #[cfg(test)]
-        policy_crash_test_barrier("after_ladder_claim_queued_before_hand_off");
         let claim_request_id = validated_claim.request_id();
         self.register_queued_context(QueuedRequestContext {
             request: claim_request.clone(),

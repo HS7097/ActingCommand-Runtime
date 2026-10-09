@@ -1702,24 +1702,39 @@ fn same_task_run_chain(actual: &EventLinks, scheduled: &EventLinks) -> bool {
         && actual.recognition_id().is_none()
 }
 
+/// The request a recovered scheduled run is measured from: a fixture-simulated run's client
+/// intent (`lab.request`), or, for a physical run, which records none, its scheduler
+/// `command.received` (`runtime.task_run`) under the run's links.
 fn matching_scheduled_task_requests<'a>(
     events: &'a [PersistedEvent],
     terminal: &PersistedEvent,
     scheduled: &EventLinks,
 ) -> Vec<&'a PersistedEvent> {
+    let same_request = |event: &PersistedEvent| {
+        event.links().instance_id() == scheduled.instance_id()
+            && event.links().correlation_id() == scheduled.correlation_id()
+            && event.links().causation_id() == scheduled.causation_id()
+            && event.links().task_id() == scheduled.task_id()
+            && event.links().run_id() == scheduled.run_id()
+            && event.links().lease_id().is_none()
+            && event.links().frame_id().is_none()
+            && event.links().recognition_id().is_none()
+            && event.links().request_id() == terminal.links().request_id()
+    };
+    let client_intents = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::LabRequest && same_request(event))
+        .collect::<Vec<_>>();
+    if !client_intents.is_empty() {
+        return client_intents;
+    }
     events
         .iter()
         .filter(|event| {
-            event.event_type() == EventType::LabRequest
-                && event.links().instance_id() == scheduled.instance_id()
-                && event.links().correlation_id() == scheduled.correlation_id()
-                && event.links().causation_id() == scheduled.causation_id()
-                && event.links().task_id() == scheduled.task_id()
-                && event.links().run_id() == scheduled.run_id()
-                && event.links().lease_id().is_none()
-                && event.links().frame_id().is_none()
-                && event.links().recognition_id().is_none()
-                && event.links().request_id() == terminal.links().request_id()
+            event.event_type() == EventType::CommandReceived
+                && event.origin().source() == EventSource::Scheduler
+                && event.payload().action() == EventAction::RuntimeTaskRun
+                && same_request(event)
         })
         .collect()
 }
