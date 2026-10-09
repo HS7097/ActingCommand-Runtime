@@ -199,6 +199,7 @@ mod state_control;
 mod task_diagnostic;
 mod task_timing;
 
+use crate::recovery_timing::{StartupRecoveryTiming, duration_ms, elapsed_ms, timed};
 use agent_control::reconcile_agent_wakes;
 use contained_task::{
     ContainedRunControl, RuntimeArtifactEventSink, RuntimeContainedTask, task_outcome_event_type,
@@ -870,6 +871,9 @@ pub struct RuntimeHost {
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     startup_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    /// Workflow #381 R6: the timing this start printed as `actingd startup_recovery`.
+    #[cfg(test)]
+    startup_recovery: StartupRecoveryTiming,
 }
 
 impl RuntimeHost {
@@ -1191,8 +1195,15 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
+        // Workflow #381 R6: the recovery timing, the writer's peak window and the shared
+        // connection's wait window start here.
+        let mut startup_recovery = StartupRecoveryTiming::default();
+        ledger.take_writer_peak();
+        database.take_connection_wait_peak();
         let prepared = (|| {
-            let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
+            let facts = timed(&mut startup_recovery.fact_store_ms, || {
+                InstanceFactStore::recover(&ledger, Arc::clone(&state))
+            })?;
             let performance_interval = performance.sample_interval().or_else(|| {
                 config
                     .frame_retention_enabled
@@ -1228,6 +1239,10 @@ impl RuntimeHost {
             match prepared {
                 Ok(prepared) => prepared,
                 Err(original) => {
+                    startup_recovery.writer = ledger.take_writer_peak();
+                    startup_recovery.connection_longest_wait_ms =
+                        Some(duration_ms(database.take_connection_wait_peak()));
+                    println!("actingd startup_recovery {startup_recovery}");
                     // The aborted start is this summary's boundary: confirm it here so a
                     // failed commit reaches the caller instead of the ledger's own drop.
                     if let Err(error) = device_diagnostic::append_device_diagnostic_record(
@@ -1376,6 +1391,8 @@ impl RuntimeHost {
             monitor_thread: None,
             startup_thread: None,
             performance_thread: None,
+            #[cfg(test)]
+            startup_recovery: StartupRecoveryTiming::default(),
         };
         let prepared = (|| {
             shared.synchronize_fact_store()?;
@@ -1434,43 +1451,86 @@ impl RuntimeHost {
                 &config.stuck_recovery,
                 &registered_instances,
             )?;
-            let monitor_registry = MonitorRegistry::open(
-                &config.state_root,
-                registered_instances
-                    .values()
-                    .map(|instance| instance.instance_alias.clone()),
-                owner_epoch,
-                &shared.ledger,
-                &shared.events,
-            )?;
-            let mut policy = PolicyHost::open(
-                &config.state_root,
-                Arc::clone(&shared.state),
-                &shared.ledger,
-                config.policy_cadence.clone(),
-                &shared.events,
-            )?;
-            reconcile_policy_dispatches(&mut policy, &shared.ledger, &shared.events)?;
-            let authoritative_policy_outcomes =
-                recover_authoritative_policy_outcomes(&policy, &shared.ledger)?;
-            let policy_dispatch_clocks = policy
-                .recovered_dispatch_clocks()?
-                .into_iter()
-                .map(|(decision_id, admitted_at_unix_ms)| {
-                    (
-                        decision_id,
-                        PolicyDispatchClock::recovered(admitted_at_unix_ms),
-                    )
-                })
-                .collect();
-            ApprovalProjection::recover(&shared.ledger, Arc::clone(&shared.state))?;
-            reconcile_runtime_state(&shared.state, &shared.ledger, &shared.events)?;
             let agent_instance_ids = registered_instances
                 .values()
                 .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
                 .collect::<BTreeMap<_, _>>();
-            let mut agent_dispatcher =
-                AgentDispatcherState::recover(&shared.ledger, &agent_instance_ids)?;
+            // Workflow #381 R6: each recovery step is timed, and the line is printed whether
+            // the recovery succeeds or fails.
+            let recovery_started = Instant::now();
+            let recovered = (|| {
+                let monitor_registry = timed(&mut startup_recovery.monitor_registry_ms, || {
+                    MonitorRegistry::open(
+                        &config.state_root,
+                        registered_instances
+                            .values()
+                            .map(|instance| instance.instance_alias.clone()),
+                        owner_epoch,
+                        &shared.ledger,
+                        &shared.events,
+                    )
+                })?;
+                let mut policy = timed(&mut startup_recovery.policy_host_ms, || {
+                    PolicyHost::open(
+                        &config.state_root,
+                        Arc::clone(&shared.state),
+                        &shared.ledger,
+                        config.policy_cadence.clone(),
+                        &shared.events,
+                    )
+                })?;
+                timed(&mut startup_recovery.policy_dispatches_ms, || {
+                    reconcile_policy_dispatches(&mut policy, &shared.ledger, &shared.events)
+                })?;
+                let authoritative_policy_outcomes =
+                    timed(&mut startup_recovery.policy_outcomes_ms, || {
+                        recover_authoritative_policy_outcomes(&policy, &shared.ledger)
+                    })?;
+                let policy_dispatch_clocks = policy
+                    .recovered_dispatch_clocks()?
+                    .into_iter()
+                    .map(|(decision_id, admitted_at_unix_ms)| {
+                        (
+                            decision_id,
+                            PolicyDispatchClock::recovered(admitted_at_unix_ms),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                timed(&mut startup_recovery.approvals_ms, || {
+                    ApprovalProjection::recover(&shared.ledger, Arc::clone(&shared.state))
+                })?;
+                timed(&mut startup_recovery.runtime_state_ms, || {
+                    reconcile_runtime_state(&shared.state, &shared.ledger, &shared.events)
+                })?;
+                let agent_dispatcher = timed(&mut startup_recovery.agent_dispatcher_ms, || {
+                    AgentDispatcherState::recover(&shared.ledger, &agent_instance_ids)
+                })?;
+                Ok::<_, RuntimeHostError>((
+                    monitor_registry,
+                    policy,
+                    authoritative_policy_outcomes,
+                    policy_dispatch_clocks,
+                    agent_dispatcher,
+                ))
+            })();
+            if recovered.is_ok() {
+                startup_recovery.recovery_ms = Some(elapsed_ms(recovery_started));
+            }
+            startup_recovery.writer = shared.ledger.take_writer_peak();
+            startup_recovery.connection_longest_wait_ms =
+                Some(duration_ms(database.take_connection_wait_peak()));
+            println!("actingd startup_recovery {startup_recovery}");
+            #[cfg(test)]
+            {
+                host.startup_recovery = startup_recovery;
+            }
+            let (
+                monitor_registry,
+                policy,
+                authoritative_policy_outcomes,
+                policy_dispatch_clocks,
+                mut agent_dispatcher,
+            ) = recovered?;
             if let Some(agent_config) = &config.agent_dispatcher {
                 reconcile_agent_wakes(
                     &mut agent_dispatcher,
@@ -1610,6 +1670,37 @@ impl RuntimeHost {
     /// The previous owner this start released because its process had exited, if any.
     pub const fn owner_released_by_exit(&self) -> Option<crate::PriorOwnerReleasedByExit> {
         self.owner_released_by_exit
+    }
+
+    /// Workflow #381 R6: the recovery timing this start printed.
+    #[cfg(test)]
+    pub(crate) const fn startup_recovery_for_test(&self) -> StartupRecoveryTiming {
+        self.startup_recovery
+    }
+
+    /// Workflow #381 R4a: the Agent Dispatcher state rebuilt from the current Ledger, from
+    /// pages of `page_events` events, or from one whole-ledger read when `None`.
+    #[cfg(test)]
+    pub(crate) fn recover_agent_dispatcher_for_test(
+        &self,
+        page_events: Option<usize>,
+    ) -> RuntimeHostResult<AgentDispatcherState> {
+        let shared = self.shared_ref("recover_agent_dispatcher_for_test")?;
+        let instance_ids = lock(
+            &shared.registered_instances,
+            "recover_agent_dispatcher_for_test",
+        )?
+        .values()
+        .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+        .collect::<BTreeMap<_, _>>();
+        match page_events {
+            Some(page_events) => {
+                AgentDispatcherState::recover_paged(&shared.ledger, &instance_ids, page_events)
+            }
+            None => {
+                AgentDispatcherState::recover_whole_ledger_for_test(&shared.ledger, &instance_ids)
+            }
+        }
     }
 
     /// Workflow #361 B1: one line per scheduling pause this start restored

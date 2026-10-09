@@ -2,6 +2,7 @@
 
 //! Ledger-rebuilt fact projection shared by policy and execution boundaries.
 
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     EventActor, EventId, EventPayload, EventQuery, EventType, FactContent,
@@ -509,8 +510,17 @@ impl InstanceFactStore {
             last_sequence: 0,
             state,
         };
+        // Workflow #381 R4a: the whole Ledger through one position, in bounded pages.
         let events = ledger
-            .query(Default::default())
+            .latest_sequence()
+            .and_then(|through| {
+                read_pages(
+                    ledger,
+                    &EventQuery::default(),
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+            })
             .map_err(|_| fact_fatal("fact_store_recovery_failed", "recover_fact_store"))?;
         let mut history = HistoricalFactProjection::default();
         for event in &events {

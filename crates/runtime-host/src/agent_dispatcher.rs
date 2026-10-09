@@ -2,6 +2,7 @@
 
 //! Runtime-owned durable session state for a detachable Agent Dispatcher sidecar.
 
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     AgentAttentionState, AgentCapabilityContract, AgentPayload, AgentResponseDisposition,
@@ -10,8 +11,19 @@ use actingcommand_contract::{
     EventPayload, EventQuery, EventType, InstanceId, PolicyPayload, PolicyPlanningSignalKind,
     ProjectedEvent, ProjectionProfile, RequestId, RuntimeErrorCode, TerminalEvent,
 };
-use actingcommand_ledger::{GlobalLedger, PersistedEvent};
+use actingcommand_ledger::{GlobalLedger, GlobalLedgerResult, PersistedEvent};
 use std::collections::BTreeMap;
+
+/// The event types an `EventPayload::Agent` record can have; the Ledger checks every record's
+/// type against its payload, so these types select exactly the Agent records.
+const AGENT_EVENT_TYPES: [EventType; 6] = [
+    EventType::AgentWakeRequested,
+    EventType::AgentSessionStarted,
+    EventType::AgentSessionResumed,
+    EventType::AgentResponseRecorded,
+    EventType::AgentSessionCompleted,
+    EventType::AgentSessionEscalated,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentDispatcherConfig {
@@ -53,7 +65,7 @@ impl AgentDispatcherConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentWakeRecord {
     data: AgentWakeData,
     event_sequence: u64,
@@ -93,7 +105,7 @@ pub(crate) enum AgentResponsePreparation {
     Replay(AgentSessionStatus),
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct AgentDispatcherState {
     wakes: BTreeMap<AgentWakeId, AgentWakeRecord>,
     wakes_by_trigger: BTreeMap<actingcommand_contract::EventId, AgentWakeId>,
@@ -104,7 +116,7 @@ pub(crate) struct AgentDispatcherState {
     response_requests: BTreeMap<RequestId, AgentSessionEventData>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct AgentResumeRecord {
     session_id: AgentSessionId,
     correlation_id: CorrelationId,
@@ -117,10 +129,43 @@ impl AgentDispatcherState {
         ledger: &GlobalLedger,
         instance_ids_by_alias: &BTreeMap<String, InstanceId>,
     ) -> RuntimeHostResult<Self> {
+        Self::recover_paged(ledger, instance_ids_by_alias, RECOVERY_PAGE_EVENTS)
+    }
+
+    /// Workflow #381 R4a: reads only the planning signals and the Agent records, each type in
+    /// pages of at most `page_events` events pinned to one ledger position, and folds them as
+    /// the whole-ledger read did.
+    pub(crate) fn recover_paged(
+        ledger: &GlobalLedger,
+        instance_ids_by_alias: &BTreeMap<String, InstanceId>,
+        page_events: usize,
+    ) -> RuntimeHostResult<Self> {
+        let (signals, agent_events) = read_recovery_events(ledger, page_events)
+            .map_err(|_| ledger_error("recover_agent_dispatcher"))?;
+        Self::fold(&signals, &agent_events, instance_ids_by_alias)
+    }
+
+    /// The fold before Workflow #381 R4a, over one whole-ledger read; the reference the paged
+    /// recovery is checked against.
+    #[cfg(test)]
+    pub(crate) fn recover_whole_ledger_for_test(
+        ledger: &GlobalLedger,
+        instance_ids_by_alias: &BTreeMap<String, InstanceId>,
+    ) -> RuntimeHostResult<Self> {
         let events = ledger
             .query(EventQuery::default())
             .map_err(|_| ledger_error("recover_agent_dispatcher"))?;
-        let source_events = events
+        Self::fold(&events, &events, instance_ids_by_alias)
+    }
+
+    /// Folds the Agent records of `agent_events` in ledger order, checking each wake against
+    /// the planning signals of `signal_events`.
+    fn fold(
+        signal_events: &[PersistedEvent],
+        agent_events: &[PersistedEvent],
+        instance_ids_by_alias: &BTreeMap<String, InstanceId>,
+    ) -> RuntimeHostResult<Self> {
+        let source_events = signal_events
             .iter()
             .filter_map(|event| {
                 let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(signal)) =
@@ -154,7 +199,7 @@ impl AgentDispatcherState {
             })
             .collect::<BTreeMap<_, _>>();
         let mut state = Self::default();
-        for event in &events {
+        for event in agent_events {
             if matches!(event.payload(), EventPayload::Agent(_)) {
                 state.apply_event(event, Some(&source_events))?;
             }
@@ -561,6 +606,22 @@ impl AgentDispatcherState {
         }
         Ok(())
     }
+}
+
+/// The planning signals and the Agent records through one ledger position, each in ledger order.
+fn read_recovery_events(
+    ledger: &GlobalLedger,
+    page_events: usize,
+) -> GlobalLedgerResult<(Vec<PersistedEvent>, Vec<PersistedEvent>)> {
+    let through = ledger.latest_sequence()?;
+    let signals = read_event_types(
+        ledger,
+        &[EventType::PolicyPlanningSignalObserved],
+        through,
+        page_events,
+    )?;
+    let agent_events = read_event_types(ledger, &AGENT_EVENT_TYPES, through, page_events)?;
+    Ok((signals, agent_events))
 }
 
 fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {

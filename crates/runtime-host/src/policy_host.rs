@@ -19,6 +19,7 @@ use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
     is_availability_denial,
 };
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use crate::{
     InstanceArbitrationRank, PerformanceControlWorkload, ProcedureManifest, RuntimeHostError,
     RuntimeHostResult,
@@ -2369,24 +2370,24 @@ impl PolicyHost {
     }
 
     fn recover_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
-        let mut events = Vec::new();
-        for event_type in [
-            EventType::PolicyDispatchIntent,
-            EventType::PolicyDispatchAdmitted,
-            EventType::PolicyDispatchRejected,
-            EventType::PolicyDispatchCompleted,
-            EventType::PolicyExecutionRecorded,
-        ] {
-            events.extend(
-                ledger
-                    .query(EventQuery {
-                        event_type: Some(event_type),
-                        ..EventQuery::default()
-                    })
-                    .map_err(|_| fatal("policy_recovery_failed", "recover_policy_dispatches"))?,
-            );
-        }
-        events.sort_by_key(|event| event.sequence());
+        // Workflow #381 R4a: each dispatch type through one position, in bounded pages.
+        let events = ledger
+            .latest_sequence()
+            .and_then(|through| {
+                read_event_types(
+                    ledger,
+                    &[
+                        EventType::PolicyDispatchIntent,
+                        EventType::PolicyDispatchAdmitted,
+                        EventType::PolicyDispatchRejected,
+                        EventType::PolicyDispatchCompleted,
+                        EventType::PolicyExecutionRecorded,
+                    ],
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+            })
+            .map_err(|_| fatal("policy_recovery_failed", "recover_policy_dispatches"))?;
         let mut seen_dispatches = BTreeMap::new();
         let mut dispatch_order = BTreeMap::new();
         let mut control = PolicyControlState::default();

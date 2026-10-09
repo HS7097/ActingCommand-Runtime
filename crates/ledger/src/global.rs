@@ -55,7 +55,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, MutexGuard, TryLockError, Weak,
+    Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak,
     mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
 };
 use std::thread::{self, JoinHandle};
@@ -169,6 +169,43 @@ pub struct LedgerWriterWorkObservation {
     pub reply_result: Option<LedgerAppendStageResult>,
     /// Same-command SQLite view details; absent for other commands/backends.
     pub project_view: Option<LedgerProjectViewObservation>,
+}
+
+/// The writer's busiest work in one window (Workflow #381 R6): the window opens at
+/// `GlobalLedger::take_writer_peak` and closes at the next one. Process-local, never persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerWriterPeak {
+    /// Writer commands finished in the window.
+    pub commands: u64,
+    /// The longest command of the window: its kind and its handling time in the writer.
+    pub longest: Option<(LedgerWriterCommandKind, Duration)>,
+    /// The most events one `Query` or `QueryPage` command returned in the window.
+    pub largest_read_events: u64,
+    /// `Query` commands of the window that scan the whole Ledger: no index-backed filter and
+    /// no lower sequence bound (`EventQuery::default()` and the like).
+    pub whole_ledger_queries: u64,
+}
+
+impl LedgerWriterPeak {
+    /// Whether an unpaged `Query` reads the whole Ledger: no lower sequence bound and none of
+    /// the index-backed filters (event type, origin module, diagnostic code, instance, links).
+    fn scans_whole_ledger(query: &EventQuery) -> bool {
+        query.from_sequence.is_none()
+            && query.event_type.is_none()
+            && query.origin_module.is_none()
+            && query.diagnostic_code.is_none()
+            && query.instance_id.is_none()
+            && query.instance_ids.is_empty()
+            && query.request_id.is_none()
+            && query.correlation_id.is_none()
+            && query.causation_id.is_none()
+            && query.task_id.is_none()
+            && query.run_id.is_none()
+            && query.lease_id.is_none()
+            && query.frame_id.is_none()
+            && query.action_id.is_none()
+            && query.recognition_id.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -944,6 +981,7 @@ struct CommitStatistics {
     writer_id: CorrelationId,
     started: Instant,
     totals: Mutex<Option<CommitTotals>>,
+    writer_peak: Mutex<LedgerWriterPeak>,
 }
 
 impl CommitStatistics {
@@ -972,7 +1010,42 @@ impl CommitStatistics {
                 write_sync_total_ns: 0,
                 write_sync_max_ns: 0,
             })),
+            writer_peak: Mutex::new(LedgerWriterPeak::default()),
         })
+    }
+
+    /// Records one finished writer command in the open peak window. The guard only assigns
+    /// plain fields, so a poisoned lock still holds a whole value and is used as is.
+    fn record_writer_command(
+        &self,
+        command: LedgerWriterCommandKind,
+        elapsed: Duration,
+        read_events: usize,
+        whole_ledger_query: bool,
+    ) {
+        let mut peak = self
+            .writer_peak
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        peak.commands = peak.commands.saturating_add(1);
+        if peak.longest.is_none_or(|(_, longest)| elapsed > longest) {
+            peak.longest = Some((command, elapsed));
+        }
+        peak.largest_read_events = peak
+            .largest_read_events
+            .max(u64::try_from(read_events).unwrap_or(u64::MAX));
+        if whole_ledger_query {
+            peak.whole_ledger_queries = peak.whole_ledger_queries.saturating_add(1);
+        }
+    }
+
+    fn take_writer_peak(&self) -> LedgerWriterPeak {
+        std::mem::take(
+            &mut *self
+                .writer_peak
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// The statistics lock is acquired only after file I/O has completed.
@@ -1215,6 +1288,12 @@ impl GlobalLedger {
         let sample = self.commit_statistics.sample()?;
         self.check_writer_health()?;
         Ok(sample)
+    }
+
+    /// Workflow #381 R6: the writer's busiest work since the previous call, which opens a new
+    /// window. Does not enqueue a writer command.
+    pub fn take_writer_peak(&self) -> LedgerWriterPeak {
+        self.commit_statistics.take_writer_peak()
     }
 
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
@@ -1826,8 +1905,11 @@ fn writer_loop<S: LedgerStore>(
 ) -> GlobalLedgerResult<()> {
     let mut subscribers = Vec::new();
     let mut previous_writer_work = LedgerWriterWorkObservation::default();
+    let statistics = store.commit_statistics();
     while let Ok(command) = receiver.recv() {
         let started = Instant::now();
+        let mut read_events = 0;
+        let mut whole_ledger_query = false;
         let kind = match &command {
             WriterCommand::ResolveArtifact { .. } => LedgerWriterCommandKind::ResolveArtifact,
             WriterCommand::RetentionCandidates { .. }
@@ -2115,7 +2197,10 @@ fn writer_loop<S: LedgerStore>(
                 }
             }
             WriterCommand::Query { query, response } => {
-                command_observation.replied(response.send(Ok(store.query(&query))).is_ok());
+                whole_ledger_query = LedgerWriterPeak::scans_whole_ledger(&query);
+                let events = store.query(&query);
+                read_events = events.len();
+                command_observation.replied(response.send(Ok(events)).is_ok());
                 command_succeeded = true;
             }
             WriterCommand::QueryPage {
@@ -2135,6 +2220,7 @@ fn writer_loop<S: LedgerStore>(
                         "query_event_page",
                     ))
                 };
+                read_events = result.as_ref().map_or(0, Vec::len);
                 command_succeeded = result.is_ok();
                 command_observation.replied(response.send(result).is_ok());
             }
@@ -2359,6 +2445,12 @@ fn writer_loop<S: LedgerStore>(
         if command_observation.after_reply.started_at.is_some() {
             command_observation.after_reply.finish(finished, true);
         }
+        statistics.record_writer_command(
+            kind,
+            finished.saturating_duration_since(started),
+            read_events,
+            whole_ledger_query,
+        );
         previous_writer_work = command_observation;
     }
     let result = store.close();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use actingcommand_contract::{StatePayload, StatePayloadDraft};
 use actingcommand_ledger::{
     GlobalLedgerError, LedgerTransactionWork, TransactionStateObservation, TransactionWorkError,
@@ -229,10 +230,16 @@ pub(super) fn reconcile_runtime_state(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
+    // Workflow #381 R4a: the recorded migrations through one position, in bounded pages.
     let migrated = ledger
-        .query(EventQuery {
-            event_type: Some(EventType::StateMigrated),
-            ..EventQuery::default()
+        .latest_sequence()
+        .and_then(|through| {
+            read_event_types(
+                ledger,
+                &[EventType::StateMigrated],
+                through,
+                RECOVERY_PAGE_EVENTS,
+            )
         })
         .map_err(|_| ledger_error("query_state_migrations"))?
         .into_iter()
