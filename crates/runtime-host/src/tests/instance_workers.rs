@@ -1520,7 +1520,10 @@ fn ladder_hand_off_crash_child_process() {
     // waits at the expiry, so the sweep hands the key on to it (`lease.transferred`) and also
     // records the lease's `lease.expired`.
     if let Some(clock) = &expiry_clock
-        && lapse_point.is_none()
+        && matches!(
+            point.as_str(),
+            "lease_expired_before_run" | "lease_expired_with_claim_queued"
+        )
     {
         let _waiting_claim = (point == "lease_expired_with_claim_queued").then(|| {
             let claim = host
