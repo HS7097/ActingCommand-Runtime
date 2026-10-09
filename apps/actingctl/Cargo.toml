@@ -34,7 +34,8 @@ actingcommand-ledger = { workspace = true }
 actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
-actingcommand-runtime-host = { workspace = true }
+# Workflow #381 A: the held-start preparation checkpoints and the writer stall gate.
+actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }
 actingcommand-scheduler = { workspace = true }
 tempfile = "3"
 zip = { workspace = true }

@@ -1010,6 +1010,10 @@ impl SqliteStorage {
             }
             return JointCommit::RolledBack(original);
         }
+        // Workflow #381 A (LED-I3): a test gate may hold the writer here, inside the write
+        // transaction, as a slow commit would.
+        #[cfg(any(test, feature = "test-hooks"))]
+        crate::writer_stall::before_durable_commit(self.database.root());
         match transaction.commit() {
             Ok(()) => JointCommit::Committed,
             Err(error) => JointCommit::CommitFailed(sql_error(error, "commit_sqlite_event")),

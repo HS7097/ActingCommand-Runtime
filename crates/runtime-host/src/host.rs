@@ -367,6 +367,73 @@ fn fail_policy_execution_append_for_test() -> RuntimeHostResult<()> {
     Err(ledger_error("append_policy_execution"))
 }
 
+/// Workflow #381 A (HOST-I3): the checkpoints of a held start that a test hook sees, in the
+/// order the start passes them. Test builds and the `test-hooks` feature only.
+#[cfg(any(test, feature = "test-hooks"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparationCheckpoint {
+    /// The held owner published its runtime info and answers installation control.
+    Held,
+    /// The release was accepted (`preparing`); provider assembly has not begun.
+    Preparing,
+}
+
+/// What a test hook asks of the held start when it returns from a checkpoint.
+#[cfg(any(test, feature = "test-hooks"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparationTestAction {
+    Continue,
+    /// Latches the Runtime's fatal state with `ledger_failure` during `operation`, as a request
+    /// whose ledger write failed would, then continues.
+    LatchLedgerFailure {
+        operation: &'static str,
+    },
+}
+
+/// Read-only views a test hook may take while the start waits in it.
+#[cfg(any(test, feature = "test-hooks"))]
+pub struct PreparationProbe<'a> {
+    ledger: &'a GlobalLedger,
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+impl PreparationProbe<'_> {
+    /// The sequence of the ledger's last committed event.
+    pub fn ledger_head(&self) -> RuntimeHostResult<u64> {
+        self.ledger
+            .latest_sequence()
+            .map_err(|_| ledger_error("read_test_ledger_head"))
+    }
+}
+
+/// Called on the starting thread at each checkpoint of a held start; it may block there.
+#[cfg(any(test, feature = "test-hooks"))]
+pub type PreparationTestHook = Arc<
+    dyn Fn(PreparationCheckpoint, &PreparationProbe<'_>) -> PreparationTestAction + Send + Sync,
+>;
+
+#[cfg(any(test, feature = "test-hooks"))]
+fn run_preparation_test_hook(
+    shared: &HostShared,
+    hook: Option<&PreparationTestHook>,
+    checkpoint: PreparationCheckpoint,
+) -> RuntimeHostResult<()> {
+    let Some(hook) = hook else {
+        return Ok(());
+    };
+    match hook(
+        checkpoint,
+        &PreparationProbe {
+            ledger: &shared.ledger,
+        },
+    ) {
+        PreparationTestAction::Continue => Ok(()),
+        PreparationTestAction::LatchLedgerFailure { operation } => {
+            shared.fatal.mark(ledger_error(operation))
+        }
+    }
+}
+
 /// Workflow #318 cfg4: which governance identity cards the host accepts. `None` accepts any
 /// well-formed card; a set accepts only a card whose `client` it contains. Nothing here is a
 /// secret: a card is a declaration the host verifies and records, not a credential.
@@ -419,6 +486,8 @@ pub struct RuntimeHostConfig {
     /// of the return-home package a `linear_steps` package without a declared prerequisite
     /// package falls back to; not a configuration fact.
     return_home_packages: BTreeMap<(String, String), String>,
+    #[cfg(any(test, feature = "test-hooks"))]
+    preparation_test_hook: Option<PreparationTestHook>,
 }
 
 impl RuntimeHostConfig {
@@ -451,7 +520,16 @@ impl RuntimeHostConfig {
             stuck_recovery: BTreeMap::new(),
             prerequisite_packages: BTreeMap::new(),
             return_home_packages: BTreeMap::new(),
+            #[cfg(any(test, feature = "test-hooks"))]
+            preparation_test_hook: None,
         }
+    }
+
+    /// Workflow #381 A (HOST-I3): a hook a held start calls at each `PreparationCheckpoint`.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn with_preparation_test_hook(mut self, hook: PreparationTestHook) -> Self {
+        self.preparation_test_hook = Some(hook);
+        self
     }
 
     pub fn with_bind_address(mut self, bind_address: SocketAddr) -> Self {
@@ -919,6 +997,8 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<Self> {
         config.validate()?;
         let held_startup = config.install_held.is_some();
+        #[cfg(any(test, feature = "test-hooks"))]
+        let preparation_test_hook = config.preparation_test_hook.clone();
         let lifecycle_admission =
             installation::LifecycleAdmission::new(config.install_held.clone())?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
@@ -1428,7 +1508,23 @@ impl RuntimeHost {
                         )
                     })?,
             );
+            #[cfg(any(test, feature = "test-hooks"))]
+            if held_startup {
+                run_preparation_test_hook(
+                    &shared,
+                    preparation_test_hook.as_ref(),
+                    PreparationCheckpoint::Held,
+                )?;
+            }
             shared.wait_install_release()?;
+            #[cfg(any(test, feature = "test-hooks"))]
+            if held_startup {
+                run_preparation_test_hook(
+                    &shared,
+                    preparation_test_hook.as_ref(),
+                    PreparationCheckpoint::Preparing,
+                )?;
+            }
             shared.check_install_preparation()?;
             let preparation_boundary = || shared.check_install_preparation();
             let provider = assemble(&mut crate::ProviderStartup {

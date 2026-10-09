@@ -14,6 +14,9 @@ default = []
 # `fixture_backend` configuration and Lab simulation; absent from every other consumer.
 fixture-backends = []
 test-observation = []
+# Workflow #381 A (HOST-I3, LED-I3): the held-start preparation checkpoints and the ledger's
+# writer stall gate, for tests in other crates.
+test-hooks = ["actingcommand-ledger/test-hooks"]
 
 [dependencies]
 actingcommand-artifact-store = { workspace = true }

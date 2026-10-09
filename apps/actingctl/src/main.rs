@@ -4,6 +4,9 @@
 
 #![forbid(unsafe_code)]
 
+// Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
+#[cfg(test)]
+mod gate_381a;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod process_probe;
@@ -23,9 +26,9 @@ use std::env;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Upper bound for `request-shutdown --wait <seconds>`.
 const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
@@ -81,7 +84,57 @@ fn main() -> ExitCode {
     }
 }
 
+/// Workflow #381 A R1′, R2: how one `install-transition` run talks to the Runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InstallTransitionRun {
+    /// The deadline of the whole run, counted from its start; no exchange waits past it.
+    budget: Option<Duration>,
+    /// The I/O timeout of one exchange.
+    exchange_timeout: Duration,
+    /// Whether the run declares its governance identity before the action.
+    declares_identity: bool,
+}
+
+/// Workflow #381 A R1′ (review M2): one deadline for each run, not one per exchange. Query,
+/// Release, BeginDrain and Abort take at most 60 s in all; CommitShutdown's exchanges take at
+/// most 10 s, so that with the `--wait 60` acsetup adds they stay inside acsetup's 75 s.
+const INSTALL_TRANSITION_RUN_BUDGET: Duration = Duration::from_secs(60);
+const INSTALL_COMMIT_EXCHANGE_BUDGET: Duration = Duration::from_secs(10);
+
+fn install_transition_run(
+    action: &actingcommand_contract::InstallTransitionAction,
+) -> InstallTransitionRun {
+    use actingcommand_contract::InstallTransitionAction;
+    let budget = match action {
+        InstallTransitionAction::CommitShutdown { .. } => INSTALL_COMMIT_EXCHANGE_BUDGET,
+        _ => INSTALL_TRANSITION_RUN_BUDGET,
+    };
+    InstallTransitionRun {
+        budget: Some(budget),
+        exchange_timeout: budget,
+        // Workflow #381 A R2: the read-only Query declares no identity, so it appends nothing.
+        declares_identity: !matches!(action, InstallTransitionAction::Query { .. }),
+    }
+}
+
+/// Workflow #381 A R1′: the client configuration of one run. An install-transition run gets its
+/// budget as the exchange timeout and as one deadline counted from `started`.
+fn client_config(state_root: &Path, command: &Command, started: Instant) -> RuntimeClientConfig {
+    let (actor, source) = command.origin();
+    let config = RuntimeClientConfig::new(state_root, actor, source);
+    let Command::InstallTransition { action } = command else {
+        return config;
+    };
+    let run = install_transition_run(action);
+    let config = config.with_io_timeout(run.exchange_timeout);
+    match run.budget {
+        Some(budget) => config.with_deadline(started + budget),
+        None => config,
+    }
+}
+
 fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
+    let started = Instant::now();
     let Invocation {
         state_root,
         instance,
@@ -125,8 +178,11 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     } else {
         None
     };
-    let (actor, source) = command.origin();
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
+    let install_run = match &command {
+        Command::InstallTransition { action } => Some(install_transition_run(action)),
+        _ => None,
+    };
+    let client = RuntimeClient::connect(client_config(&state_root, &command, started))
         .map_err(ActingctlError::runtime)?;
     let optional_instance = instance.clone();
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
@@ -224,9 +280,11 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
             }
         },
         Command::InstallTransition { action } => {
-            client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
-                client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
-            }).map_err(ActingctlError::runtime)?;
+            if install_run.is_some_and(|install_run| install_run.declares_identity) {
+                client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
+                    client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
+                }).map_err(ActingctlError::runtime)?;
+            }
             let receipt = client.install_transition(action).map_err(ActingctlError::runtime)?;
             match shutdown_wait {
                 Some(wait) => {

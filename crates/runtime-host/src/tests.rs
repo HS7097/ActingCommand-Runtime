@@ -101,6 +101,7 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+mod gate_381a;
 mod home_entry;
 mod input;
 mod input_failure;
