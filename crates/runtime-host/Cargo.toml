@@ -37,6 +37,8 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+# Workflow #369 E3 (#670 safety net): the ledger's settlement refusal hook in host tests.
+actingcommand-ledger = { workspace = true, features = ["test-hooks"] }
 actingcommand-runtime-client = { workspace = true }
 tempfile = "3"
 zip = { workspace = true }

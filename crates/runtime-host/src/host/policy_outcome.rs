@@ -2031,10 +2031,9 @@ fn reconcile_scheduled_policy_outcomes_for(
                 .as_ref()
                 .is_some_and(|start| start.refuse_run_for_test.as_ref() == Some(run_id))
             {
-                return Err(RuntimeHostError::fatal(
-                    "scheduled_execution_recovery_refused_for_test",
+                return Err(policy_admission_fatal(
+                    "policy_execution_recovery_outcome_conflict",
                     "reconcile_policy_outcomes",
-                    RuntimeErrorCode::LedgerFailure,
                 ));
             }
             let completion = ledger

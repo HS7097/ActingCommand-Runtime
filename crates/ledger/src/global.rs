@@ -473,6 +473,30 @@ pub trait LedgerTransactionWork: Send + 'static {
     ) -> Result<TransactionStateObservation, TransactionWorkError>;
 }
 
+/// Workflow #369 E3 (#670 safety net), test hook: the next scheduled settlement of each listed
+/// decision is refused, once, as a settlement validation would refuse it
+/// (`scheduled_execution_recovery_refused_for_test`).
+#[cfg(any(test, feature = "test-hooks"))]
+static SETTLEMENT_REFUSALS_FOR_TEST: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// Test hook: refuses the next scheduled settlement of `decision_id` once.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn refuse_scheduled_settlement_for_test(decision_id: &str) {
+    SETTLEMENT_REFUSALS_FOR_TEST
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(decision_id.to_owned());
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) fn take_settlement_refusal_for_test(decision_id: &str) -> bool {
+    SETTLEMENT_REFUSALS_FOR_TEST
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(decision_id)
+}
+
 impl GlobalLedgerError {
     pub fn rolled_back_work(&self) -> Option<&TransactionWorkError> {
         self.rolled_back_work.as_deref()

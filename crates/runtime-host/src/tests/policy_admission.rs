@@ -1416,13 +1416,40 @@ fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
 
 // Workflow #369 S4: policy waits (model-369-queue.md v3.1 W-1).
 
+/// Where test (l) and test (m) refuse A's settlement at the restart.
+#[derive(Clone, Copy)]
+enum StartSettlementRefusal {
+    /// The host's own recovery check refuses it (injected under `cfg(test)`).
+    Host,
+    /// The ledger refuses it (its settlement refusal hook).
+    Ledger,
+}
+
 /// Coordinator ruling on #670 (safety net), test (l): one scheduled dispatch on instance A
-/// whose settlement the start refuses (injected, as the ledger would refuse it). The Runtime
-/// still starts: it records `policy_settlement_dispatch_unsettled` (Error) naming the run and
-/// the refusal, holds a scheduling pause of A with that reason, leaves the dispatch out of the
+/// whose settlement the host's recovery refuses at the restart (injected). The Runtime still
+/// starts: it records `policy_settlement_dispatch_unsettled` (Error) naming the run and the
+/// refusal, holds a scheduling pause of A with that reason, leaves the dispatch out of the
 /// active workloads, and instance B dispatches normally.
 #[test]
 fn a_dispatch_the_start_cannot_settle_pauses_its_instance_and_the_other_dispatches() {
+    a_start_that_cannot_settle_one_dispatch(
+        StartSettlementRefusal::Host,
+        "policy_execution_recovery_outcome_conflict",
+    );
+}
+
+/// #670 verification N-1, test (m): as test (l), but the ledger itself refuses A's settlement
+/// at the restart. The refusal is not terminal: the Runtime starts, records the Error and the
+/// pause, and the ledger's writer is still there for the next appends (B's admission).
+#[test]
+fn a_settlement_the_ledger_refuses_at_start_leaves_the_writer_running() {
+    a_start_that_cannot_settle_one_dispatch(
+        StartSettlementRefusal::Ledger,
+        "scheduled_execution_recovery_refused_for_test",
+    );
+}
+
+fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, cause: &str) {
     use actingcommand_policy::SchedulingDecisionState;
 
     let root = TempDir::new().expect("tempdir");
@@ -1475,11 +1502,15 @@ fn a_dispatch_the_start_cannot_settle_pauses_its_instance_and_the_other_dispatch
     // The host's close ends A's lease (a release without run links); A's dispatch stays open.
     host.close().expect("close with A's dispatch open");
 
-    let host = RuntimeHost::start(
-        scheduled().with_policy_settlement_refusal_for_test(run_id),
-        provider(),
-    )
-    .expect("a start that cannot settle one run still starts");
+    let restart = match refusal {
+        StartSettlementRefusal::Host => scheduled().with_policy_settlement_refusal_for_test(run_id),
+        StartSettlementRefusal::Ledger => {
+            actingcommand_ledger::refuse_scheduled_settlement_for_test(&intent.decision_id);
+            scheduled()
+        }
+    };
+    let host = RuntimeHost::start(restart, provider())
+        .expect("a start that cannot settle one run still starts");
     assert!(host.fatal_error().expect("runtime health").is_none());
     let records = host
         .query_persisted_events_for_test(EventQuery {
@@ -1499,8 +1530,7 @@ fn a_dispatch_the_start_cannot_settle_pauses_its_instance_and_the_other_dispatch
             event.severity() == EventSeverity::Error
                 && message.is_some_and(|message| {
                     message.contains("code=policy_settlement_dispatch_unsettled")
-                        && message
-                            .contains("failure_code=scheduled_execution_recovery_refused_for_test")
+                        && message.contains(&format!("failure_code={cause}"))
                 })
         })
         .count();

@@ -443,6 +443,13 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         execution: PolicyExecutionEventData,
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)> {
+        #[cfg(any(test, feature = "test-hooks"))]
+        if super::take_settlement_refusal_for_test(&execution.decision_id) {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_execution_recovery_refused_for_test",
+                "reconcile_scheduled_policy_settlement",
+            ));
+        }
         let first_new_sequence = self.next_sequence;
         let execution_draft = scheduled_policy_execution_recovery_draft(&execution)?;
         self.append_recovered_policy_execution(execution_draft)?;
