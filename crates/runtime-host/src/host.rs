@@ -659,7 +659,9 @@ impl RuntimeHostConfig {
 
     /// Workflow #369 E3 (#670 rulings): the procedure refs whose dispatches the policy driver
     /// admits as contained scheduled runs. A restart closes such a dispatch whose run was cut
-    /// before its first task event; a client run's dispatch keeps waiting for its outcome.
+    /// before its first task event; a client run's dispatch keeps waiting for its outcome. A
+    /// dispatch is matched by its task's procedure ref in its pinned catalog, which a package
+    /// rebind does not change.
     pub fn with_scheduled_procedures(
         mut self,
         procedure_refs: impl IntoIterator<Item = String>,
@@ -1378,20 +1380,6 @@ impl RuntimeHost {
         if !config.frame_retention_enabled {
             println!("actingd frame_retention disabled");
         }
-        // Workflow #369 E3 (#670 ruling 1): the binding digests of the procedures the policy
-        // driver runs as contained scheduled runs; a dispatch intent names its binding digest.
-        let scheduled_policy_bindings = config
-            .procedure_manifest
-            .as_ref()
-            .map(|manifest| {
-                config
-                    .scheduled_procedures
-                    .iter()
-                    .filter_map(|procedure_ref| manifest.binding(procedure_ref))
-                    .map(|binding| binding.binding_digest().to_owned())
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
         let fatal = FatalState::default();
         let shared = Arc::new(HostShared {
             owner_epoch,
@@ -1615,14 +1603,17 @@ impl RuntimeHost {
                     let ended_without_release = shared.recover_unreleased_policy_runs(
                         &policy,
                         &registered_instances,
-                        &scheduled_policy_bindings,
+                        &config.scheduled_procedures,
                     )?;
                     reconcile_policy_dispatches(
                         &mut policy,
                         &shared.ledger,
                         &shared.events,
                         &ended_without_release,
-                    )
+                    )?;
+                    // #670 final review (Fail Loud): a scheduled dispatch still open here is
+                    // recorded, never left silently.
+                    shared.record_open_scheduled_dispatches(&policy, &config.scheduled_procedures)
                 })?;
                 let authoritative_policy_outcomes =
                     timed(&mut startup_recovery.policy_outcomes_ms, || {

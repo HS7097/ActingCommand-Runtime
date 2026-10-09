@@ -95,26 +95,29 @@ impl HostShared {
     }
 
     /// Workflow #369 E3 (coordinator ruling on #670 review H-1, model C1): at start, a scheduled
-    /// run whose dispatch has no outcome and whose granted lease ended in no `lease.released`,
-    /// `lease.expired` or transfer gets its missing release, when the run started (it has a task
-    /// fact) or its dispatch is a scheduled one (#670 ruling 1). That covers a run cut between its
-    /// task terminal and its release, one cut mid-run (a reboot or a killed process), and a
-    /// scheduled dispatch cut before its run's first task event. A lease a transfer handed on
-    /// (its new holder owns it, #670 ruling 2) or that expired (#670 ruling 3) gets no release;
-    /// such a run is returned with the time its lease ended, and the reconciliation settles it
-    /// once as interrupted from that time. The
-    /// release is run-linked, under the grant's request, correlation and causation, with effect
-    /// `not_performed` (a run's own release records `performed`), and
-    /// `policy_settlement_release_recovered` is recorded once under the same links at Info.
+    /// run whose dispatch has no outcome and whose granted lease has no run-linked
+    /// `lease.released` and did not otherwise end gets its missing release, when the run started
+    /// (it has a task fact) or its dispatch is a scheduled one (#670 ruling 1). That covers a run
+    /// cut between its task terminal and its release, one cut mid-run (a reboot or a killed
+    /// process), and a scheduled dispatch cut before its run's first task event. A lease that
+    /// already ended gets no release: one a transfer handed on (its new holder owns it, #670
+    /// ruling 2), one that expired (#670 ruling 3), one an expiry handed on to a waiting claim
+    /// (the transfer and the expiry are one end, at the earlier; final review M-2), and one
+    /// released without run links (the host's close; final review). Such a run is returned with
+    /// the time its lease ended, and the reconciliation settles it once as interrupted from that
+    /// time. The recovered release is run-linked, under the grant's request, correlation and
+    /// causation, with effect `not_performed` (a run's own release is under its task request),
+    /// and `policy_settlement_release_recovered` is recorded once under the same links at Info.
     /// `reconcile_policy_dispatches` then settles the run once as interrupted, which closes the
     /// dispatch; a later start finds the release and writes nothing more. `registered` is the
-    /// start's instance set (a run of an instance no longer registered is left as it is);
-    /// `scheduled_bindings` the binding digests of the scheduled procedures.
+    /// start's instance set (a run of an instance no longer registered is left as it is, and
+    /// `record_open_scheduled_dispatches` records it); `scheduled_procedures` the procedure refs
+    /// of the scheduled procedures, matched by the dispatch's task in its pinned catalog.
     pub(super) fn recover_unreleased_policy_runs(
         &self,
         policy: &PolicyHost,
         registered: &BTreeMap<InstanceId, RegisteredInstance>,
-        scheduled_bindings: &BTreeSet<String>,
+        scheduled_procedures: &BTreeSet<String>,
     ) -> RuntimeHostResult<BTreeMap<String, u64>> {
         const OPERATION: &str = "recover_unreleased_policy_runs";
         let mut ended_without_release = BTreeMap::new();
@@ -184,20 +187,31 @@ impl HostShared {
                     ..EventQuery::default()
                 })
                 .map_err(|_| ledger_error(OPERATION))?;
+            // Only a run-linked release is the run's (#670 final review).
             if lease_events.iter().any(|event| {
-                event.event_type() == EventType::LeaseReleased
-                    && event.links().lease_id() == Some(lease_id)
+                run_lease_release_matches(
+                    event,
+                    instance_id,
+                    correlation_id,
+                    task_id,
+                    run_id,
+                    lease_id,
+                )
             }) {
                 continue;
             }
-            // How the lease ended without a release, if it did: its expiry, or (a transfer is
-            // not linked to the lease it hands on, #670 ruling 2) a transfer found on the
-            // instance by its `from_lease_id`.
+            // How the lease ended without a run-linked release, if it did: its expiry, a release
+            // without run links (the host's close), or (a transfer is not linked to the lease
+            // it hands on, #670 ruling 2) a transfer found on the instance by its
+            // `from_lease_id`.
             let mut lease_ends = lease_events
                 .into_iter()
                 .filter(|event| {
-                    event.event_type() == EventType::LeaseExpired
-                        && event.links().lease_id() == Some(lease_id)
+                    event.links().lease_id() == Some(lease_id)
+                        && (event.event_type() == EventType::LeaseExpired
+                            || (event.event_type() == EventType::LeaseReleased
+                                && event.links().instance_id() == Some(instance_id)
+                                && event.links().run_id().is_none()))
                 })
                 .collect::<Vec<_>>();
             lease_ends.extend(lease_transfers_from(
@@ -208,13 +222,11 @@ impl HostShared {
                 2,
             )?);
             // #670 ruling 1: a run that never started (no task fact under its run id) is closed
-            // only when its dispatch is a scheduled one (its binding is a scheduled procedure's);
-            // a client run's dispatch keeps waiting for its late outcome.
-            let scheduled = matches!(
-                intent.payload(),
-                EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
-                    if scheduled_bindings.contains(payload.procedure_binding_digest())
-            );
+            // only when its dispatch is a scheduled one (its task's procedure ref in its pinned
+            // catalog is a scheduled procedure's, which a package rebind does not change; final
+            // review); a client run's dispatch keeps waiting for its late outcome.
+            let scheduled =
+                scheduled_procedures.contains(&policy.dispatch_procedure_ref(&decision_id)?);
             let run_started = self
                 .ledger
                 .query(EventQuery {
@@ -233,16 +245,14 @@ impl HostShared {
             if !(run_started || scheduled) {
                 continue;
             }
-            // #670 rulings 2 and 3: a lease a transfer handed on, or that expired, gets no
-            // release (it already ended); the reconciliation settles the run once as
-            // interrupted, timed from that end.
-            match lease_ends.as_slice() {
-                [] => {}
-                [end] => {
+            // #670 rulings 2 and 3 and final review M-2: a lease that already ended gets no
+            // release; the reconciliation settles the run once as interrupted, timed from that
+            // end. A lease that ended in more than one way is left as it is (and recorded).
+            if !lease_ends.is_empty() {
+                if let Some(end) = single_lease_end(&lease_ends) {
                     ended_without_release.insert(decision_id.clone(), end.timestamp_unix_ms());
-                    continue;
                 }
-                _ => continue,
+                continue;
             }
             // The start's own instances: the host's registry is filled after the reconciliation.
             let Some(audit) = registered
@@ -317,6 +327,132 @@ impl HostShared {
             )?;
         }
         Ok(ended_without_release)
+    }
+
+    /// Workflow #369 E3 (#670 final review, Fail Loud): after the start's reconciliation, every
+    /// scheduled dispatch (its task's procedure ref in its pinned catalog is a scheduled
+    /// procedure's) still without an outcome is recorded once at Warning,
+    /// `policy_settlement_dispatch_left_open`, under its run's links. None is expected: the start
+    /// settles every scheduled dispatch it can, and one it cannot (a run of an instance no longer
+    /// registered, a lease that ended in more than one way) is recorded, never left silently.
+    pub(super) fn record_open_scheduled_dispatches(
+        &self,
+        policy: &PolicyHost,
+        scheduled_procedures: &BTreeSet<String>,
+    ) -> RuntimeHostResult<()> {
+        const OPERATION: &str = "record_open_scheduled_dispatches";
+        let pending = policy.pending_dispatch_outcomes();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let through = self
+            .ledger
+            .latest_sequence()
+            .map_err(|_| ledger_error(OPERATION))?;
+        for decision_id in pending {
+            if !scheduled_procedures.contains(&policy.dispatch_procedure_ref(&decision_id)?) {
+                continue;
+            }
+            let intent = policy_dispatch_intent(&self.ledger, &decision_id, through, OPERATION)?;
+            let links = intent.links();
+            let (
+                Some(instance_id),
+                Some(request_id),
+                Some(correlation_id),
+                Some(task_id),
+                Some(run_id),
+            ) = (
+                links.instance_id(),
+                links.request_id(),
+                links.correlation_id(),
+                links.task_id(),
+                links.run_id(),
+            )
+            else {
+                return Err(policy_admission_fatal(
+                    "policy_run_identity_missing",
+                    OPERATION,
+                ));
+            };
+            let grants = linked_policy_run_events(
+                &self.ledger,
+                EventQuery {
+                    to_sequence: Some(through),
+                    event_type: Some(EventType::LeaseGranted),
+                    instance_id: Some(*instance_id),
+                    request_id: Some(*request_id),
+                    correlation_id: Some(*correlation_id),
+                    task_id: Some(*task_id),
+                    run_id: Some(*run_id),
+                    ..EventQuery::default()
+                },
+                through,
+                2,
+                OPERATION,
+                |event| {
+                    event.event_type() == EventType::LeaseGranted
+                        && event.links().instance_id() == Some(instance_id)
+                        && event.links().request_id() == Some(request_id)
+                        && event.links().correlation_id() == Some(correlation_id)
+                        && event.links().task_id() == Some(task_id)
+                        && event.links().run_id() == Some(run_id)
+                },
+            )?;
+            let lease_id = match grants.as_slice() {
+                [grant] => grant.links().lease_id().copied(),
+                _ => None,
+            };
+            let request = super::contained_task::recovery_request_identity(
+                *request_id,
+                *correlation_id,
+                links.causation_id(),
+                self.runtime_clock_sample()?.unix_ms,
+            )
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "policy_run_recovery_identity_invalid",
+                    OPERATION,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            let validated = request.validate().map_err(|_| {
+                RuntimeHostError::fatal(
+                    "policy_run_recovery_identity_invalid",
+                    OPERATION,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            self.append_event_raw(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                validated.contained_task_recovery_event_links(
+                    *instance_id,
+                    lease_id,
+                    *task_id,
+                    *run_id,
+                    Some(self.events.action_id()?),
+                ),
+                RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    DiagnosticDetailDraft::new(
+                        "policy_settlement",
+                        RuntimeLifecycleFailureStage::PolicyInitialization.as_str(),
+                        "runtime_host",
+                        OPERATION,
+                        format!(
+                            "code={}",
+                            HostCode::PolicySettlementDispatchLeftOpen.as_str()
+                        ),
+                        Sensitivity::Internal,
+                    ),
+                    AuditInput::new(),
+                ),
+            )?;
+        }
+        Ok(())
     }
 
     // policy_outcome_gate excludes a context committing its outcome while these
@@ -1614,15 +1750,19 @@ fn reconcile_scheduled_policy_outcomes_for(
             )?);
         }
         // Workflow #369 E3 (coordinator ruling on #670 review H-1): a run whose release the
-        // start recovered (`recover_unreleased_policy_runs`: the only run-linked release written
-        // with effect `not_performed`) is settled once as interrupted, from that release,
-        // whatever terminal it has.
+        // start recovered (`recover_unreleased_policy_runs`: run-linked, under the grant's
+        // request, with effect `not_performed`) is settled once as interrupted, from that
+        // release, whatever terminal it has. A run's own release is under its task request; it
+        // records `not_performed` too when the lease had already lapsed or was preempted, and
+        // such a run is settled from its terminal, or with none from that release (final
+        // review M-1).
         let recovered_at = linked_policy_run_events(
             ledger,
             EventQuery {
                 to_sequence: Some(through),
                 event_type: Some(EventType::LeaseReleased),
                 instance_id: Some(*instance_id),
+                request_id: Some(*request_id),
                 correlation_id: Some(*correlation_id),
                 task_id: Some(*task_id),
                 run_id: Some(*run_id),
@@ -1630,23 +1770,14 @@ fn reconcile_scheduled_policy_outcomes_for(
                 ..EventQuery::default()
             },
             through,
-            2,
+            1,
             "reconcile_policy_outcomes",
             |event| {
-                run_lease_release_matches(
-                    event,
-                    instance_id,
-                    correlation_id,
-                    task_id,
-                    run_id,
-                    lease_id,
-                )
+                scheduled_admission_release_matches(event, intent, lease_id)
+                    && event.payload().effect_disposition() == Some(EffectDisposition::NotPerformed)
             },
         )?
-        .iter()
-        .find(|release| {
-            release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed)
-        })
+        .first()
         .map(PersistedEvent::timestamp_unix_ms);
         // #670 rulings 2 and 3: a run with no release whose lease a transfer handed on, or that
         // expired, is settled once as interrupted from that end (`recover_unreleased_policy_runs`).
@@ -1708,13 +1839,14 @@ fn reconcile_scheduled_policy_outcomes_for(
                 )
             }
             [] => {
+                // A run with no terminal is settled as interrupted from its one run-linked
+                // release, under the grant's request or its own task request (final review M-1).
                 let releases = linked_policy_run_events(
                     ledger,
                     EventQuery {
                         to_sequence: Some(through),
                         event_type: Some(EventType::LeaseReleased),
                         instance_id: Some(*instance_id),
-                        request_id: Some(*request_id),
                         correlation_id: Some(*correlation_id),
                         task_id: Some(*task_id),
                         run_id: Some(*run_id),
@@ -1724,7 +1856,16 @@ fn reconcile_scheduled_policy_outcomes_for(
                     through,
                     2,
                     "reconcile_policy_outcomes",
-                    |event| scheduled_admission_release_matches(event, intent, lease_id),
+                    |event| {
+                        run_lease_release_matches(
+                            event,
+                            instance_id,
+                            correlation_id,
+                            task_id,
+                            run_id,
+                            lease_id,
+                        )
+                    },
                 )?;
                 let release = match releases.as_slice() {
                     [] => continue,
@@ -2269,6 +2410,28 @@ fn lease_transfers_from(
             )
         },
     )
+}
+
+/// Workflow #369 E3 (#670 final review M-2): the one end of a lease that has no run-linked
+/// release, among its expiries, its releases without run links and the transfers that handed it
+/// on: exactly one of them, or a transfer and an expiry together (an expiry handed on to a
+/// waiting claim writes both), which are one end at the earlier. Anything else is no one end.
+/// The ledger's `unique_lease_end` takes the same end.
+fn single_lease_end(ends: &[PersistedEvent]) -> Option<&PersistedEvent> {
+    match ends {
+        [end] => Some(end),
+        [first, second] => {
+            let types = [first.event_type(), second.event_type()];
+            (types.contains(&EventType::LeaseTransferred)
+                && types.contains(&EventType::LeaseExpired))
+            .then_some(if first.sequence() < second.sequence() {
+                first
+            } else {
+                second
+            })
+        }
+        _ => None,
+    }
 }
 
 /// A run-linked `lease.released` of `lease_id` under the run's instance, correlation, task and

@@ -84,11 +84,17 @@ actingcommand_contract::outcome_codes! {
         ReleaseTimeout => "release_timeout": error,
         /// Info. A start found a scheduled run whose dispatch has no outcome and whose lease
         /// has no run-linked `lease.released` (cut between its task terminal and its release,
-        /// mid-run, or before its first task event, its lease neither transferred nor
-        /// expired), wrote the missing release (effect
+        /// mid-run, or before its first task event; its lease not transferred, expired or
+        /// released without run links), wrote the missing release (effect
         /// `not_performed`) and settles the run once as interrupted
         /// (`policy_settlement_interrupted`); recorded once, under the run's links (keys
         /// `instance_id`, `lease_id`, `task_id`; the run id is on the record's links).
         PolicySettlementReleaseRecovered => "policy_settlement_release_recovered": info,
+        /// Warning. After a start's reconciliation, a scheduled dispatch is still without an
+        /// outcome (its run's instance is no longer registered, or its lease ended in more than
+        /// one way); recorded once per start, under the run's links (keys `instance_id`,
+        /// `task_id`, and `lease_id` when the dispatch has one grant; the run id is on the
+        /// record's links).
+        PolicySettlementDispatchLeftOpen => "policy_settlement_dispatch_left_open": warning,
     }
 }

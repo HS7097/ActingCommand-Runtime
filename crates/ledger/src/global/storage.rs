@@ -715,8 +715,9 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), lease_granted.links())
             })
             .collect::<Vec<_>>();
-        // Workflow #369 E3 (#670 rulings 2 and 3): an interrupted run whose lease a transfer
-        // handed on, or that expired, has no release; that transfer or expiry ends its lease.
+        // Workflow #369 E3 (#670 rulings 2 and 3, final review): an interrupted run whose lease
+        // a transfer handed on, that expired (or both, one end), or that was released without
+        // run links has no run-linked release; that end ends its lease (`unique_lease_end`).
         let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
             unique_lease_end(&self.events, lease_granted.links())
         } else {
@@ -925,9 +926,10 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), recovered_links)
             })
             .collect::<Vec<_>>();
-        // Workflow #369 E3 (#670 rulings 2 and 3): a run whose lease a transfer handed on, or
-        // that expired, before any release is settled once as interrupted from that end; no
-        // release is written for a lease that already ended.
+        // Workflow #369 E3 (#670 rulings 2 and 3, final review): a run whose lease a transfer
+        // handed on, that expired (or both, one end), or that was released without run links,
+        // before any run-linked release, is settled once as interrupted from that end
+        // (`unique_lease_end`); no release is written for a lease that already ended.
         let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
             unique_lease_end(&self.events, recovered_links)
         } else {
@@ -981,8 +983,11 @@ impl<B: DurableStorage> EventStore<B> {
         // Workflow #369 E3 (coordinator ruling on #670 review H-1): a run whose release the
         // restart recovered (the run had none: cut between its task terminal and its release, or
         // cut mid-run) is settled once as interrupted, from that release, whatever terminal or
-        // effects it has. The recovered release is the only run-linked release written with
-        // effect `not_performed`; a run's own release records `performed`.
+        // effects it has. The recovered release is the run-linked release under the grant's
+        // request with effect `not_performed`. A run's own release is under its task request and
+        // records `not_performed` too when its lease had lapsed or was preempted: with a terminal
+        // the run settles from that terminal; with none it is settled as interrupted from that
+        // release, which `releases` took through `same_task_run_chain` (final review M-1).
         let recovered_interruption = (handed_on.is_some()
             || release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed))
             && is_interrupted_settlement(execution.outcome());
@@ -998,7 +1003,9 @@ impl<B: DurableStorage> EventStore<B> {
             }
         };
         let recovered_topology_valid = recovered_interruption
-            && (handed_on.is_some() || same_scheduled_chain(release.links(), recovered_links))
+            && (handed_on.is_some()
+                || same_scheduled_chain(release.links(), recovered_links)
+                || terminals.is_empty())
             && terminals
                 .iter()
                 .all(|terminal| terminal.sequence() < release.sequence());
@@ -1028,7 +1035,7 @@ impl<B: DurableStorage> EventStore<B> {
                         && release.sequence() > source_fact.sequence()
                 }
                 EventType::LeaseReleased => {
-                    same_scheduled_chain(source_fact.links(), recovered_links)
+                    same_task_run_chain(source_fact.links(), recovered_links)
                         && terminals.is_empty()
                         && !self.events.iter().any(|event| {
                             event.links().task_id() == recovered_links.task_id()
@@ -1210,7 +1217,7 @@ impl<B: DurableStorage> EventStore<B> {
             }
             EventType::LeaseReleased => {
                 if source_fact != release
-                    || !same_scheduled_chain(source_fact.links(), recovered_links)
+                    || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminals.is_empty()
                     || source_fact.timestamp_unix_ms() != execution.observed_at_unix_ms()
                     || self.events.iter().any(|event| {
@@ -1755,27 +1762,42 @@ fn same_task_run_chain(actual: &EventLinks, scheduled: &EventLinks) -> bool {
         && actual.recognition_id().is_none()
 }
 
-/// The one event that ended the lease of `granted` without a release, on its instance: a
-/// `lease.transferred` that handed it on, or its `lease.expired`.
+/// The one event that ended the lease of `granted` without a run-linked release, on its
+/// instance: a `lease.transferred` that handed it on, its `lease.expired`, or a `lease.released`
+/// without run links (the host's close). An expiry handed on to a waiting claim writes a
+/// transfer and the lease's expiry; the two are one end, at the earlier (#670 final review
+/// M-2). Any other set of ends is no one end. The host's `single_lease_end` takes the same end.
 fn unique_lease_end<'a>(
     events: &'a [PersistedEvent],
     granted: &EventLinks,
 ) -> Option<&'a PersistedEvent> {
-    let transfers = events
+    let lease_id = granted.lease_id()?;
+    let ends = events
         .iter()
         .filter(|event| {
             event.links().instance_id() == granted.instance_id()
                 && (matches!(
                     event.payload(),
                     EventPayload::Lease(LeasePayload::Transferred(transfer))
-                        if granted.lease_id() == Some(&transfer.from_lease_id())
-                ) || (event.event_type() == EventType::LeaseExpired
-                    && granted.lease_id().is_some()
-                    && event.links().lease_id() == granted.lease_id()))
+                        if *lease_id == transfer.from_lease_id()
+                ) || (event.links().lease_id() == Some(lease_id)
+                    && (event.event_type() == EventType::LeaseExpired
+                        || (event.event_type() == EventType::LeaseReleased
+                            && event.links().run_id().is_none()))))
         })
         .collect::<Vec<_>>();
-    match transfers.as_slice() {
-        [transfer] => Some(*transfer),
+    match ends.as_slice() {
+        [end] => Some(*end),
+        [first, second] => {
+            let types = [first.event_type(), second.event_type()];
+            (types.contains(&EventType::LeaseTransferred)
+                && types.contains(&EventType::LeaseExpired))
+            .then_some(if first.sequence() < second.sequence() {
+                *first
+            } else {
+                *second
+            })
+        }
         _ => None,
     }
 }

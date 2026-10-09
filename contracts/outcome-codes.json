@@ -3859,6 +3859,9 @@
     ],
     "policy_settlement_release_": [
       "runtime-host"
+    ],
+    "policy_settlement_dispatch_": [
+      "runtime-host"
     ]
   },
   "codes": {
@@ -4294,6 +4297,23 @@
       "description": "A panic boundary caught a panic; raw_text keeps the panic payload. It is a link under the interrupted operation's own failure code.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "policy_settlement_dispatch_left_open": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "lease_id": "optional",
+        "task_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "After a start's reconciliation, a scheduled dispatch (its task's procedure is one the policy driver runs as a scheduled run) still has no outcome. The start settles every scheduled dispatch it can; this one stays open, and a later dispatch on its instance may be refused as a conflict. Recorded once per start, under the run's links, which carry the run id; lease_id is present when the dispatch has one lease grant.",
+      "common_causes": "The run's instance is no longer in the configuration, or the run's lease ended in more than one way (for example two transfers).",
+      "handling": "Report it with the run id: the open dispatch needs a fix in the Runtime. When the instance was removed from the configuration, adding it back lets the next start settle the run."
     },
     "policy_settlement_release_recovered": {
       "category": "info",

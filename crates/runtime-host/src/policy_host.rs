@@ -1208,6 +1208,25 @@ impl PolicyHost {
             .collect()
     }
 
+    /// Workflow #369 E3 (#670 final review): the procedure ref of a dispatch's task in the
+    /// catalog generation the dispatch pinned, which a package rebind does not change.
+    pub(crate) fn dispatch_procedure_ref(&self, decision_id: &str) -> RuntimeHostResult<String> {
+        let dispatch = self
+            .seen_dispatches
+            .get(decision_id)
+            .ok_or_else(|| fatal("policy_dispatch_unknown", "read_dispatch_procedure_ref"))?;
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        catalog
+            .compiled
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .find(|task| task.id == dispatch.data.task_id)
+            .map(|task| task.procedure_ref.clone())
+            .ok_or_else(|| fatal("policy_task_missing", "read_dispatch_procedure_ref"))
+    }
+
     pub(crate) fn pending_dispatch_outcomes(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()
