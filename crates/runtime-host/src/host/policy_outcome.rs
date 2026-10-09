@@ -94,20 +94,25 @@ impl HostShared {
     }
 
     /// Workflow #369 E3 (coordinator ruling on #670 review H-1, model C1): at start, a scheduled
-    /// run that started (it has a task fact), whose dispatch has no outcome and whose granted
-    /// lease ended in no `lease.released`, `lease.expired` or transfer gets its missing release.
-    /// That covers a run cut between its task terminal and its release, and one cut mid-run (a
-    /// reboot or a killed process). The
+    /// run whose dispatch has no outcome and whose granted lease ended in no `lease.released`,
+    /// `lease.expired` or transfer gets its missing release, when the run started (it has a task
+    /// fact) or its dispatch is a scheduled one (#670 ruling 1). That covers a run cut between its
+    /// task terminal and its release, one cut mid-run (a reboot or a killed process), and a
+    /// scheduled dispatch cut before its run's first task event. A lease a transfer handed on gets
+    /// no release (its new holder owns it); the reconciliation settles that run once as
+    /// interrupted from the transfer (#670 ruling 2). The
     /// release is run-linked, under the grant's request, correlation and causation, with effect
     /// `not_performed` (a run's own release records `performed`), and
     /// `policy_settlement_release_recovered` is recorded once under the same links at Info.
     /// `reconcile_policy_dispatches` then settles the run once as interrupted, which closes the
     /// dispatch; a later start finds the release and writes nothing more. `registered` is the
-    /// start's instance set (a run of an instance no longer registered is left as it is).
+    /// start's instance set (a run of an instance no longer registered is left as it is);
+    /// `scheduled_bindings` the binding digests of the scheduled procedures.
     pub(super) fn recover_unreleased_policy_runs(
         &self,
         policy: &PolicyHost,
         registered: &BTreeMap<InstanceId, RegisteredInstance>,
+        scheduled_bindings: &BTreeSet<String>,
     ) -> RuntimeHostResult<()> {
         const OPERATION: &str = "recover_unreleased_policy_runs";
         let pending = policy.pending_dispatch_outcomes();
@@ -178,19 +183,23 @@ impl HostShared {
                 .map_err(|_| ledger_error(OPERATION))?
                 .iter()
                 .any(|event| {
-                    (matches!(
+                    matches!(
                         event.event_type(),
                         EventType::LeaseReleased | EventType::LeaseExpired
-                    ) && event.links().lease_id() == Some(lease_id))
-                        || matches!(
-                            event.payload(),
-                            EventPayload::Lease(actingcommand_contract::LeasePayload::Transferred(
-                                transfer
-                            )) if transfer.from_lease_id() == *lease_id
-                        )
-                });
-            // A run that never started (no task fact under its run id) is left as it is: its
-            // outcome may still arrive (a client-run dispatch's late outcome).
+                    ) && event.links().lease_id() == Some(lease_id)
+                })
+                // A transfer is not linked to the lease it hands on (#670 ruling 2): it is found
+                // on the instance, by its `from_lease_id`.
+                || !lease_transfers_from(&self.ledger, through, instance_id, lease_id, 1)?
+                    .is_empty();
+            // #670 ruling 1: a run that never started (no task fact under its run id) is closed
+            // only when its dispatch is a scheduled one (its binding is a scheduled procedure's);
+            // a client run's dispatch keeps waiting for its late outcome.
+            let scheduled = matches!(
+                intent.payload(),
+                EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                    if scheduled_bindings.contains(payload.procedure_binding_digest())
+            );
             let run_started = self
                 .ledger
                 .query(EventQuery {
@@ -206,7 +215,7 @@ impl HostShared {
                         EventPayload::Task(TaskPayload::Semantic(_))
                     )
                 });
-            if lease_ended || !run_started {
+            if lease_ended || !(run_started || scheduled) {
                 continue;
             }
             // The start's own instances: the host's registry is filled after the reconciliation.
@@ -1608,6 +1617,12 @@ fn reconcile_scheduled_policy_outcomes_for(
             release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed)
         })
         .map(PersistedEvent::timestamp_unix_ms);
+        // #670 ruling 2: a run with no release whose lease a transfer handed on is settled once
+        // as interrupted from that transfer.
+        let recovered_at = match recovered_at {
+            Some(at) => Some(at),
+            None => handed_on_at(ledger, through, instance_id, lease_id)?,
+        };
         let (observed_at_unix_ms, input, runtime_ms) = match terminals.as_slice() {
             _ if recovered_at.is_some() => (
                 recovered_at.unwrap_or_default(),
@@ -2196,6 +2211,62 @@ fn policy_recovery_outcome_matches(
         }
         _ => false,
     }
+}
+
+/// When the run has no run-linked `lease.released`, the time of the one `lease.transferred`
+/// that handed `lease_id` on (#670 ruling 2); `None` otherwise.
+fn handed_on_at(
+    ledger: &GlobalLedger,
+    through: u64,
+    instance_id: &InstanceId,
+    lease_id: &LeaseId,
+) -> RuntimeHostResult<Option<u64>> {
+    let released = !ledger
+        .query(EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(EventType::LeaseReleased),
+            lease_id: Some(*lease_id),
+            ..EventQuery::default()
+        })
+        .map_err(|_| ledger_error("reconcile_policy_outcomes"))?
+        .is_empty();
+    if released {
+        return Ok(None);
+    }
+    let transfers = lease_transfers_from(ledger, through, instance_id, lease_id, 2)?;
+    Ok(match transfers.as_slice() {
+        [transfer] => Some(transfer.timestamp_unix_ms()),
+        _ => None,
+    })
+}
+
+/// The `lease.transferred` events that handed `lease_id` on, on its instance, at most `cap`.
+fn lease_transfers_from(
+    ledger: &GlobalLedger,
+    through: u64,
+    instance_id: &InstanceId,
+    lease_id: &LeaseId,
+    cap: usize,
+) -> RuntimeHostResult<Vec<PersistedEvent>> {
+    linked_policy_run_events(
+        ledger,
+        EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(EventType::LeaseTransferred),
+            instance_id: Some(*instance_id),
+            ..EventQuery::default()
+        },
+        through,
+        cap,
+        "reconcile_policy_outcomes",
+        |event| {
+            matches!(
+                event.payload(),
+                EventPayload::Lease(actingcommand_contract::LeasePayload::Transferred(transfer))
+                    if transfer.from_lease_id() == *lease_id
+            )
+        },
+    )
 }
 
 /// A run-linked `lease.released` of `lease_id` under the run's instance, correlation, task and

@@ -715,11 +715,22 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), lease_granted.links())
             })
             .collect::<Vec<_>>();
-        let [release] = releases.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_release_not_unique",
-                "recover_policy_completion",
-            ));
+        // Workflow #369 E3 (#670 ruling 2): an interrupted run whose lease a transfer handed on
+        // has no release; the transfer ends its lease.
+        let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
+            unique_transfer_from(&self.events, lease_granted.links())
+        } else {
+            None
+        };
+        let release = match (releases.as_slice(), handed_on) {
+            ([release], _) => *release,
+            ([], Some(transfer)) => transfer,
+            _ => {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_recovery_release_not_unique",
+                    "recover_policy_completion",
+                ));
+            }
         };
         if release.sequence() <= admission_fact.sequence()
             || release.sequence() >= execution_fact.sequence()
@@ -914,22 +925,35 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), recovered_links)
             })
             .collect::<Vec<_>>();
-        let [release] = releases.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_release_not_unique",
-                "recover_policy_execution",
-            ));
+        // Workflow #369 E3 (#670 ruling 2): a run whose lease a transfer handed on before its
+        // release is settled once as interrupted from that transfer; no release is written for a
+        // lease its new holder owns.
+        let handed_on = if releases.is_empty() && is_interrupted_settlement(execution.outcome()) {
+            unique_transfer_from(&self.events, recovered_links)
+        } else {
+            None
         };
-        if release.severity() != EventSeverity::Info
-            || release.payload().action() != EventAction::LeaseRelease
-            || !matches!(
-                release.payload(),
-                EventPayload::Lease(LeasePayload::Released(_))
-            )
-            || !matches!(
-                release.payload().effect_disposition(),
-                Some(EffectDisposition::Performed | EffectDisposition::NotPerformed)
-            )
+        let release = match (releases.as_slice(), handed_on) {
+            ([release], _) => *release,
+            ([], Some(transfer)) => transfer,
+            _ => {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_execution_recovery_release_not_unique",
+                    "recover_policy_execution",
+                ));
+            }
+        };
+        if handed_on.is_none()
+            && (release.severity() != EventSeverity::Info
+                || release.payload().action() != EventAction::LeaseRelease
+                || !matches!(
+                    release.payload(),
+                    EventPayload::Lease(LeasePayload::Released(_))
+                )
+                || !matches!(
+                    release.payload().effect_disposition(),
+                    Some(EffectDisposition::Performed | EffectDisposition::NotPerformed)
+                ))
         {
             return Err(GlobalLedgerError::fatal(
                 "scheduled_execution_recovery_release_invalid",
@@ -959,12 +983,12 @@ impl<B: DurableStorage> EventStore<B> {
         // cut mid-run) is settled once as interrupted, from that release, whatever terminal or
         // effects it has. The recovered release is the only run-linked release written with
         // effect `not_performed`; a run's own release records `performed`.
-        let recovered_interruption = release.payload().effect_disposition()
-            == Some(EffectDisposition::NotPerformed)
+        let recovered_interruption = (handed_on.is_some()
+            || release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed))
             && is_interrupted_settlement(execution.outcome());
         let source_fact = match terminals.as_slice() {
-            _ if recovered_interruption => *release,
-            [] => *release,
+            _ if recovered_interruption => release,
+            [] => release,
             [terminal] => *terminal,
             _ => {
                 return Err(GlobalLedgerError::fatal(
@@ -974,7 +998,7 @@ impl<B: DurableStorage> EventStore<B> {
             }
         };
         let recovered_topology_valid = recovered_interruption
-            && same_scheduled_chain(release.links(), recovered_links)
+            && (handed_on.is_some() || same_scheduled_chain(release.links(), recovered_links))
             && terminals
                 .iter()
                 .all(|terminal| terminal.sequence() < release.sequence());
@@ -1185,7 +1209,7 @@ impl<B: DurableStorage> EventStore<B> {
                 }
             }
             EventType::LeaseReleased => {
-                if source_fact != *release
+                if source_fact != release
                     || !same_scheduled_chain(source_fact.links(), recovered_links)
                     || !terminals.is_empty()
                     || source_fact.timestamp_unix_ms() != execution.observed_at_unix_ms()
@@ -1729,6 +1753,28 @@ fn same_task_run_chain(actual: &EventLinks, scheduled: &EventLinks) -> bool {
         && actual.lease_id() == scheduled.lease_id()
         && actual.frame_id().is_none()
         && actual.recognition_id().is_none()
+}
+
+/// The one `lease.transferred` that handed the lease of `granted` on, on its instance.
+fn unique_transfer_from<'a>(
+    events: &'a [PersistedEvent],
+    granted: &EventLinks,
+) -> Option<&'a PersistedEvent> {
+    let transfers = events
+        .iter()
+        .filter(|event| {
+            event.links().instance_id() == granted.instance_id()
+                && matches!(
+                    event.payload(),
+                    EventPayload::Lease(LeasePayload::Transferred(transfer))
+                        if granted.lease_id() == Some(&transfer.from_lease_id())
+                )
+        })
+        .collect::<Vec<_>>();
+    match transfers.as_slice() {
+        [transfer] => Some(*transfer),
+        _ => None,
+    }
 }
 
 /// The interrupted settlement of a scheduled run the daemon's own end cut short

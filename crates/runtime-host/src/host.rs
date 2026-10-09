@@ -470,7 +470,6 @@ pub struct RuntimeHostConfig {
     /// Workflow #369 E3 (#670 rulings): the procedures the policy driver runs as contained
     /// scheduled runs (`admit_scheduled_policy_dispatch`); the others' dispatches are client
     /// runs whose outcome is reported later.
-    #[allow(dead_code)] // read by the start's recovery with the fix that follows the tests
     scheduled_procedures: BTreeSet<String>,
     config_manifest: Option<RuntimeConfigManifest>,
     /// Per instance alias: the contained task the host schedules by itself after a successful
@@ -1377,6 +1376,20 @@ impl RuntimeHost {
         if !config.frame_retention_enabled {
             println!("actingd frame_retention disabled");
         }
+        // Workflow #369 E3 (#670 ruling 1): the binding digests of the procedures the policy
+        // driver runs as contained scheduled runs; a dispatch intent names its binding digest.
+        let scheduled_policy_bindings = config
+            .procedure_manifest
+            .as_ref()
+            .map(|manifest| {
+                config
+                    .scheduled_procedures
+                    .iter()
+                    .filter_map(|procedure_ref| manifest.binding(procedure_ref))
+                    .map(|binding| binding.binding_digest().to_owned())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
         let fatal = FatalState::default();
         let shared = Arc::new(HostShared {
             owner_epoch,
@@ -1597,7 +1610,11 @@ impl RuntimeHost {
                 timed(&mut startup_recovery.policy_dispatches_ms, || {
                     // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
                     // before the reconciliation settles it.
-                    shared.recover_unreleased_policy_runs(&policy, &registered_instances)?;
+                    shared.recover_unreleased_policy_runs(
+                        &policy,
+                        &registered_instances,
+                        &scheduled_policy_bindings,
+                    )?;
                     reconcile_policy_dispatches(&mut policy, &shared.ledger, &shared.events)
                 })?;
                 let authoritative_policy_outcomes =

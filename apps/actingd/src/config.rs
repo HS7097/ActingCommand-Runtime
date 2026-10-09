@@ -1205,9 +1205,12 @@ impl ActingdConfigFile {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
         let policy = if let Some(policy) = policy {
+            // Workflow #369 E3 (#670 ruling 1): a restart closes a scheduled dispatch whose run
+            // was cut before its first task event; the host tells them apart by these refs.
             host = host
                 .with_policy_inputs(policy.inputs)
-                .with_procedure_manifest(policy.procedure_manifest);
+                .with_procedure_manifest(policy.procedure_manifest)
+                .with_scheduled_procedures(policy.scheduled_tasks.keys().cloned());
             Some(PolicyBootstrap {
                 state_root: policy_state_root,
                 catalog_approval_ids: policy.catalog_approval_ids,
