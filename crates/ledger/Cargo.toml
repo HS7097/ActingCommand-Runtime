@@ -22,6 +22,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dev-dependencies]
 actingcommand-artifact-store = { path = "../artifact-store", default-features = false, features = ["capture"] }
 actingcommand-device = { workspace = true }

@@ -91,6 +91,19 @@ impl ArtifactStoreError {
         self.io_error_kind
     }
 
+    /// Workflow #375 R5d: the same failure, without stopping the Runtime.
+    pub(crate) fn non_fatal(mut self) -> Self {
+        self.fatal = false;
+        self
+    }
+
+    /// Workflow #375 R5d: the file or its use lock is held by someone else right now (os error
+    /// 32 or 33, or a held lock), so the operation may succeed if tried again.
+    pub fn is_busy(&self) -> bool {
+        matches!(self.raw_os_error, Some(32 | 33))
+            || self.io_error_kind == Some(std::io::ErrorKind::WouldBlock)
+    }
+
     /// Workflow #375: the artifact's file could not be opened because it does not exist
     /// (`artifact_read_failed` with `NotFound`), such as a frame deleted by hand. A reader
     /// reports such material as missing instead of failing.
