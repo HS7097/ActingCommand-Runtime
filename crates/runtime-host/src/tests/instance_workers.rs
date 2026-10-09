@@ -1498,6 +1498,15 @@ fn ladder_hand_off_crash_child_process() {
         state.unknown_capture.store(true, Ordering::Release);
     }
     let outcome = host.run_scheduled_contained_task(&context, &request);
+    // A completed run's outcome is recorded by its caller, as the policy driver does; the
+    // checkpoint ends the process there.
+    if let Ok(receipt) = &outcome {
+        let completed = host.complete_scheduled_policy_run(&context, receipt);
+        panic!(
+            "the crash point did not stop the child: {:?}",
+            completed.err()
+        );
+    }
     if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref() == Ok("mid_rung_run") {
         // E6: the run failed and handed its key to the ladder. Every capture from here on
         // takes ten minutes, so the next rung run stays in flight; once it has started, the
