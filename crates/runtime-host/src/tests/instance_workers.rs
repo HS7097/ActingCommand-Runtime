@@ -1481,15 +1481,6 @@ fn ladder_hand_off_crash_child_process() {
             "lease_expired_before_run" | "lease_expired_with_claim_queued" | "run_over_budget"
         ))
     .then(|| Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)));
-    // Test (k): the run's response deadline, and with it its lease, outlasts its task's 300 s
-    // runtime budget.
-    let request = if point == "run_over_budget" {
-        request
-            .with_response_deadline_ms(600_000)
-            .expect("a ten-minute response deadline")
-    } else {
-        request
-    };
     let host_config = match &expiry_clock {
         Some(clock) => host_config.with_runtime_clock(clock.clone()),
         None => host_config,
@@ -1509,6 +1500,13 @@ fn ladder_hand_off_crash_child_process() {
     // already active there.
     let context = match std::env::var("ACTINGCOMMAND_LADDER_CRASH_EVAL_MS") {
         Ok(at) => admit_ladder_run_at(&host, &request, at.parse().expect("evaluation time")),
+        // Test (k): the task's runtime budget is 30 s, so a run inside its 60 s lease can
+        // exceed it.
+        Err(_) if point == "run_over_budget" => {
+            host.activate_policy_catalog(&over_budget_policy_sources())
+                .expect("activate the over-budget catalog");
+            admit_ladder_run_at(&host, &request, POLICY_NOW_UNIX_MS)
+        }
         Err(_) => admit_ladder_run(&host, &request),
     };
     fs::write(
@@ -1620,8 +1618,8 @@ fn ladder_hand_off_crash_child_process() {
         )
         .expect("arm the lapse");
     }
-    // Test (k): before the run's terminal is appended the clock passes 400 s, over the task's
-    // 300 s runtime budget and inside the run's lease; the run then ends at its lease end
+    // Test (k): before the run's terminal is appended the clock passes 45 s, over the task's
+    // 30 s runtime budget and inside the run's 60 s lease; the run then ends at its lease end
     // (`run_over_budget`).
     if point == "run_over_budget" {
         let clock = Arc::clone(expiry_clock.as_ref().expect("the manual clock"));
@@ -1629,7 +1627,7 @@ fn ladder_hand_off_crash_child_process() {
             LapsePoint::BeforeTerminalAppend,
             registered,
             context.lease_token().lease_id(),
-            move |_| clock.advance(400_000),
+            move |_| clock.advance(45_000),
         )
         .expect("arm the runtime");
     }
@@ -1706,6 +1704,18 @@ fn ladder_hand_off_crash_child_process() {
         "the crash point did not stop the child: {:?}",
         outcome.err()
     );
+}
+
+/// Test (k): the ladder's catalog with a task runtime budget of 30 s and an expected duration
+/// of 10 s.
+fn over_budget_policy_sources() -> CatalogSources {
+    let mut sources = policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("task fixture");
+    tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(10_000);
+    tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = serde_json::json!(30_000);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("task bytes");
+    sources
 }
 
 /// Whether `run` has a persisted capture frame (an `artifact.verified` of a frame) among
@@ -2521,8 +2531,8 @@ fn a_terminal_written_after_the_lease_expired_is_settled_from_the_terminal() {
     host.close().expect("close the restarted host");
 }
 
-/// Coordinator ruling on #670 (runtime budget rewrite), test (k): a scheduled run runs 400 s,
-/// over its task's 300 s runtime budget, fails (`task.failed`) and is cut before its release.
+/// Coordinator ruling on #670 (runtime budget rewrite), test (k): a scheduled run runs 45 s,
+/// over its task's 30 s runtime budget, fails (`task.failed`) and is cut before its release.
 /// The restart recovers its release and settles it from its terminal with the policy's own
 /// rewrite, `policy_runtime_budget_exceeded`; the next start settles nothing again, and the next
 /// evaluation proceeds without a fatal error (the rewrite is Severe, so the policy holds the
@@ -2535,8 +2545,11 @@ fn a_run_over_its_runtime_budget_is_settled_with_the_policy_rewrite() {
     let (run_id, lease_id) = crash_run_identity(root.path());
     let prefix = closed_ledger_events(root.path());
     let shape = run_shape(&prefix, &run_id, &lease_id);
-    let (terminal, _) = run_terminal(&prefix, &run_id);
-    assert_eq!(terminal.event_type(), EventType::TaskFailed, "{shape}");
+    assert_eq!(
+        run_count(&prefix, &run_id, EventType::TaskFailed),
+        1,
+        "the run's terminal:\n{shape}"
+    );
     assert_eq!(
         run_count(&prefix, &run_id, EventType::LeaseReleased),
         0,
