@@ -121,9 +121,10 @@ use actingcommand_policy::{
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::facts::{RuntimeFactChange, RuntimeFactError, RuntimeFactStore};
 use actingcommand_scheduler::{
-    CancelledQueuedLease, ConnectionId, LeasePreparation, LeaseReleaseReason, LeaseTransferReason,
-    PreparedLeaseTransfer, QueueAdmissionDecision, QueueLeaseRequest, QueuePoll, QueuedLease,
-    SchedulerConfig, SchedulerError, SeedScheduler, TransferPreparation,
+    CancelledQueuedLease, ClaimGate, ClaimKind, ClaimRequest, ConnectionId, LeasePreparation,
+    LeaseReleaseReason, LeaseTransferReason, PreparedLeaseTransfer, QueueAdmissionDecision,
+    QueueLeaseRequest, QueuePoll, QueuedLease, SchedulerConfig, SchedulerError, SeedScheduler,
+    TransferPreparation,
 };
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -135,7 +136,7 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -1327,6 +1328,7 @@ impl RuntimeHost {
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
             admission_guards: Mutex::new(BTreeMap::new()),
+            queue_order_locks: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             observe_marks: Mutex::new(observation::ObserveMarks::default()),
             contained_runs: Mutex::new(BTreeMap::new()),
@@ -2271,6 +2273,188 @@ impl RuntimeHost {
             .expire_all_queued_runtime()
     }
 
+    /// Workflow #369 S1: one sweep tick (queue expiry, lapsed leases, backstop pump).
+    #[cfg(test)]
+    pub(crate) fn expire_due_leases_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref("expire_due_leases_for_test")?
+            .expire_due_leases()
+    }
+
+    /// Workflow #369 S1: the instance's admission guard, for a test thread to hold.
+    #[cfg(test)]
+    pub(crate) fn instance_admission_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Arc<Mutex<()>>> {
+        let shared = self.shared_ref("instance_admission_for_test")?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared
+            .instance_guard(instance_id)
+            .map_err(|failure| *failure.error)
+    }
+
+    /// Workflow #369 S1: replaces a registered instance's ADB endpoint (for example with a
+    /// pending discovery binding) and returns the previous one.
+    #[cfg(test)]
+    pub(crate) fn replace_instance_endpoint_for_test(
+        &self,
+        instance_alias: &str,
+        endpoint: Option<ResolvedInstanceEndpoint>,
+    ) -> RuntimeHostResult<Option<ResolvedInstanceEndpoint>> {
+        let shared = self.shared_ref("replace_instance_endpoint_for_test")?;
+        let mut registry = lock(
+            &shared.registered_instances,
+            "replace_test_instance_endpoint",
+        )?;
+        let instance = registry
+            .values_mut()
+            .find(|instance| instance.instance_alias == instance_alias)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "test_instance_missing",
+                    "replace_instance_endpoint_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        Ok(std::mem::replace(&mut instance.adb_endpoint, endpoint))
+    }
+
+    /// Workflow #369 S1: a Runtime-internal claim of `kind` on `instance_alias`.
+    #[cfg(test)]
+    pub(crate) fn request_host_claim_for_test(
+        &self,
+        instance_alias: &str,
+        kind: ClaimKind,
+    ) -> RuntimeHostResult<HostClaimForTest> {
+        let shared = self.shared_ref("request_host_claim_for_test")?;
+        let (actor, source) = scheduled_request_transport_origin(
+            shared
+                .resolve_instance(instance_alias)
+                .map_err(|failure| *failure.error)?
+                .provenance(),
+        );
+        let issuer = shared.events.issuer();
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let request = RuntimeRequest::new(
+            issuer
+                .mint_request_id()
+                .map_err(|_| runtime_identifier_error())?,
+            issuer
+                .mint_correlation_id()
+                .map_err(|_| runtime_identifier_error())?,
+            None,
+            actor,
+            source,
+            unix_ms_now()?,
+            RuntimeOperation::AcquireLease {
+                instance_alias: instance_alias.to_owned(),
+                holder_id,
+            },
+        )
+        .map_err(|_| runtime_identifier_error())?;
+        let connection_id = ConnectionId::new(u64::MAX - 64)
+            .map_err(|error| RuntimeHostError::scheduler("build_test_claim_connection", &error))?;
+        let admission = shared
+            .request_host_claim(lease::HostClaim {
+                request: &request,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms: 60_000,
+            })
+            .map_err(|failure| *failure.error)?;
+        let (granted, queued, grant) = match admission {
+            lease::HostClaimAdmission::Granted(token) => (Some(token), None, None),
+            lease::HostClaimAdmission::Queued { status, grant } => {
+                (None, Some(status), Some(grant))
+            }
+        };
+        Ok(HostClaimForTest {
+            request,
+            connection_id,
+            granted,
+            queued,
+            grant,
+        })
+    }
+
+    /// Workflow #369 S1: a renewal of a Runtime-held lease (Q-5).
+    #[cfg(test)]
+    pub(crate) fn renew_host_claim_for_test(
+        &self,
+        claim: &HostClaimForTest,
+        token: &LeaseToken,
+        lease_ttl_ms: u64,
+    ) -> RuntimeHostResult<LeaseToken> {
+        let shared = self.shared_ref("renew_host_claim_for_test")?;
+        let validated = claim
+            .request
+            .validate()
+            .map_err(|_| runtime_identifier_error())?;
+        shared
+            .renew_held_lease(&validated, token, claim.connection_id, lease_ttl_ms)
+            .map_err(|failure| *failure.error)
+    }
+
+    /// Workflow #369 S1: the end of a held claim with no transfer reason.
+    #[cfg(test)]
+    pub(crate) fn release_host_claim_for_test(
+        &self,
+        claim: &HostClaimForTest,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("release_host_claim_for_test")?
+            .cleanup_token(
+                token,
+                claim.connection_id,
+                LeaseReleaseReason::ConnectionPrepared,
+            )
+    }
+
+    /// Workflow #369 S1: a scheduled run's failure cleanup with run links on the claim's lease
+    /// (C2); returns the run's task and run ids.
+    #[cfg(test)]
+    pub(crate) fn fail_scheduled_host_claim_for_test(
+        &self,
+        claim: &HostClaimForTest,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<(
+        actingcommand_contract::TaskId,
+        actingcommand_contract::RunId,
+    )> {
+        let shared = self.shared_ref("fail_scheduled_host_claim_for_test")?;
+        let validated = claim
+            .request
+            .validate()
+            .map_err(|_| runtime_identifier_error())?;
+        let task_id = shared
+            .events
+            .issuer()
+            .mint_task_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let run_id = shared
+            .events
+            .issuer()
+            .mint_run_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let ids = (*task_id.transport(), *run_id.transport());
+        shared.cleanup_scheduled_failure_with_run_links(
+            &validated,
+            token,
+            claim.connection_id,
+            RuntimeRunLinks::new(task_id, run_id),
+        )?;
+        Ok(ids)
+    }
+
     #[cfg(test)]
     pub(crate) fn expire_lease_once_for_test(
         &self,
@@ -2878,6 +3062,41 @@ pub(crate) struct QueueOperationTestControl {
     resume: Arc<Barrier>,
 }
 
+/// Workflow #369 S1: a test's Runtime-internal claim.
+#[cfg(test)]
+pub(crate) struct HostClaimForTest {
+    pub(crate) request: RuntimeRequest,
+    pub(crate) connection_id: ConnectionId,
+    pub(crate) granted: Option<LeaseToken>,
+    pub(crate) queued: Option<QueuedLease>,
+    grant: Option<Arc<lease::ClaimGrantSlot>>,
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for HostClaimForTest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostClaimForTest")
+            .field("granted", &self.granted.is_some())
+            .field("queued", &self.queued.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+impl HostClaimForTest {
+    /// The token a queued claim was granted, waiting at most `timeout`.
+    pub(crate) fn wait_for_grant(
+        &self,
+        timeout: Duration,
+    ) -> RuntimeHostResult<Option<LeaseToken>> {
+        match &self.grant {
+            Some(grant) => grant.wait(timeout),
+            None => Ok(self.granted.clone()),
+        }
+    }
+}
+
 #[cfg(test)]
 impl QueueOperationTestControl {
     pub(crate) fn wait_until_paused(&self) {
@@ -3063,6 +3282,11 @@ struct HostShared {
     // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     policy_outcome_gate: Mutex<()>,
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
+    // Workflow #369 Q-6: per instance, the short lock that makes an enqueue (scheduler insert,
+    // `lease.requested` + `scheduler.queued`, context registration) and a transfer (prepare and
+    // perform) one step each. Lock order: admission guard -> queue order -> scheduler. It is
+    // never held across device work.
+    queue_order_locks: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     /// Workflow #375 R5c: the latest observe frame per instance and origin.
     observe_marks: Mutex<observation::ObserveMarks>,

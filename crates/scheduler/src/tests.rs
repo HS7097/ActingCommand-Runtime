@@ -1364,3 +1364,734 @@ fn queue_timeout_and_request_identity_mismatches_fail_loudly() {
         SchedulerError::QueueRequestMismatch
     );
 }
+
+// Workflow #369 S1: one queue per instance (model-369-queue.md v3.1 Q-2 to Q-7, H-1).
+
+fn claim_config() -> SchedulerConfig {
+    SchedulerConfig {
+        max_queue_depth_per_instance: 8,
+        ..config()
+    }
+}
+
+fn claim(
+    issuer: &IdentifierIssuer,
+    instance_id: InstanceId,
+    holder_id: HolderId,
+    connection_id: ConnectionId,
+    kind: ClaimKind,
+    priority: LeasePriority,
+) -> ClaimRequest {
+    ClaimRequest {
+        request_id: request(issuer),
+        instance_id,
+        holder_id,
+        connection_id,
+        kind,
+        priority,
+        lease_ttl_ms: 900,
+    }
+}
+
+fn held_instance(
+    issuer: &IdentifierIssuer,
+    scheduler: &mut SeedScheduler,
+) -> (InstanceId, LeaseToken) {
+    let instance_id = instance(issuer);
+    let token = scheduler
+        .acquire(
+            request(issuer),
+            instance_id,
+            holder(issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("holder");
+    (instance_id, token)
+}
+
+#[test]
+fn claim_queue_orders_the_continuation_first_then_priority_then_arrival() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let startup = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(2),
+        ClaimKind::StartupPackage,
+        LeasePriority::Normal,
+    );
+    let direct = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(3),
+        ClaimKind::DirectTaskRun,
+        LeasePriority::High,
+    );
+    let continuation = claim(
+        &issuer,
+        instance_id,
+        token.holder_id(),
+        connection(1),
+        ClaimKind::LadderContinuation,
+        LeasePriority::Normal,
+    );
+    for queued in [startup, direct, continuation] {
+        let status = scheduler
+            .enqueue_claim(queued, 2)
+            .expect("internal enqueue");
+        assert_eq!(
+            status.deadline_monotonic_ms(),
+            CLAIM_NO_DEADLINE_MONOTONIC_MS
+        );
+        assert!(
+            !status.preempt_requested(),
+            "an internal claim never preempts"
+        );
+    }
+    let client = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                client,
+                instance_id,
+                holder(&issuer).1,
+                connection(4),
+                LeasePriority::Normal,
+                400,
+            ),
+            3,
+        )
+        .expect("client queue");
+    let order = scheduler
+        .queued_on(instance_id)
+        .expect("queue status")
+        .iter()
+        .map(|queued| (queued.request_id(), queued.kind(), queued.position()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![
+            (continuation.request_id, ClaimKind::LadderContinuation, 1),
+            (direct.request_id, ClaimKind::DirectTaskRun, 2),
+            (startup.request_id, ClaimKind::StartupPackage, 3),
+            (client, ClaimKind::ClientLease, 4),
+        ]
+    );
+    let active = scheduler.active_lease(instance_id).expect("holder");
+    assert!(
+        !active.preempt_requested(),
+        "a High internal claim behind a Normal lease requests no preemption (Q-7)"
+    );
+    assert!(matches!(
+        scheduler
+            .prepare_transfer(
+                &token,
+                connection(1),
+                LeaseTransferReason::Preempted,
+                None,
+                4
+            )
+            .expect("preemption check"),
+        TransferPreparation::NoCandidate
+    ));
+}
+
+#[test]
+fn closed_gate_skips_routine_entries_and_passes_operator_startup_and_continuation() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let autostart = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(2),
+        ClaimKind::Autostart,
+        LeasePriority::High,
+    );
+    let direct = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(3),
+        ClaimKind::DirectTaskRun,
+        LeasePriority::Normal,
+    );
+    scheduler.enqueue_claim(autostart, 2).expect("autostart");
+    scheduler.enqueue_claim(direct, 2).expect("direct run");
+    assert_eq!(scheduler.eligible_count(instance_id, ClaimGate::Open, 3), 2);
+    assert_eq!(
+        scheduler.eligible_count(instance_id, ClaimGate::RoutineHeld, 3),
+        1
+    );
+    let release = request(&issuer);
+    let TransferPreparation::Ready(gated) = scheduler
+        .prepare_transfer_gated(
+            &token,
+            connection(1),
+            LeaseTransferReason::ExplicitRelease,
+            Some(release),
+            ClaimGate::RoutineHeld,
+            3,
+        )
+        .expect("gated transfer")
+    else {
+        panic!("an operator entry passes a closed gate");
+    };
+    assert_eq!(gated.queued_request_id(), direct.request_id);
+    let TransferPreparation::Ready(open) = scheduler
+        .prepare_transfer_gated(
+            &token,
+            connection(1),
+            LeaseTransferReason::ExplicitRelease,
+            Some(release),
+            ClaimGate::Open,
+            3,
+        )
+        .expect("open transfer")
+    else {
+        panic!("an open gate serves the head");
+    };
+    assert_eq!(open.queued_request_id(), autostart.request_id);
+    let next = scheduler
+        .commit_transfer(gated, 4)
+        .expect("commit past the routine head");
+    assert_eq!(next.holder_id(), direct.holder_id);
+    assert_eq!(
+        scheduler
+            .active_lease(instance_id)
+            .expect("operator")
+            .kind(),
+        ClaimKind::DirectTaskRun
+    );
+    assert_eq!(scheduler.queued_count(instance_id), 1);
+
+    // Until S6b the startup claim is not gated (H-6); the continuation never is (Q-3 (0)).
+    assert!(!ClaimKind::StartupPackage.gated_by_pause());
+    assert!(!ClaimKind::LadderContinuation.gated_by_pause());
+    assert!(ClaimKind::Ladder.gated_by_pause());
+    assert!(ClaimKind::PolicyDispatch.gated_by_pause());
+    let startup = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(5),
+        ClaimKind::StartupPackage,
+        LeasePriority::Normal,
+    );
+    scheduler.enqueue_claim(startup, 5).expect("startup");
+    assert_eq!(
+        scheduler.eligible_count(instance_id, ClaimGate::RoutineHeld, 6),
+        1
+    );
+}
+
+#[test]
+fn holder_owned_continuation_is_exempt_from_gate_drain_and_capacity() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let stranger = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(9),
+        ClaimKind::LadderContinuation,
+        LeasePriority::Normal,
+    );
+    assert_eq!(
+        scheduler
+            .enqueue_claim(stranger, 2)
+            .expect_err("only the holder queues its continuation"),
+        SchedulerError::HolderMismatch
+    );
+    let free_instance = instance(&issuer);
+    assert_eq!(
+        scheduler
+            .enqueue_claim(
+                claim(
+                    &issuer,
+                    free_instance,
+                    token.holder_id(),
+                    connection(1),
+                    ClaimKind::LadderContinuation,
+                    LeasePriority::Normal,
+                ),
+                2,
+            )
+            .expect_err("a continuation needs a holder"),
+        SchedulerError::LeaseMissing
+    );
+    let routine = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(2),
+        ClaimKind::Autostart,
+        LeasePriority::High,
+    );
+    let operator = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(3),
+        ClaimKind::EmulatorControl,
+        LeasePriority::High,
+    );
+    let continuation = claim(
+        &issuer,
+        instance_id,
+        token.holder_id(),
+        connection(1),
+        ClaimKind::LadderContinuation,
+        LeasePriority::Normal,
+    );
+    for queued in [routine, operator, continuation] {
+        scheduler.enqueue_claim(queued, 2).expect("enqueue");
+    }
+    let TransferPreparation::Ready(prepared) = scheduler
+        .prepare_transfer_gated(
+            &token,
+            connection(1),
+            LeaseTransferReason::BackendFailure,
+            None,
+            ClaimGate::RoutineHeld,
+            3,
+        )
+        .expect("continuation transfer")
+    else {
+        panic!("a closed gate never holds back the continuation");
+    };
+    assert_eq!(prepared.queued_request_id(), continuation.request_id);
+    assert!(prepared.to_kind().skips_business_capacity());
+    assert!(!ClaimKind::DirectTaskRun.skips_business_capacity());
+    assert!(!ClaimKind::PolicyDispatch.skips_business_capacity());
+
+    let drained = scheduler
+        .remove_queued_for_drain(instance_id)
+        .expect("install drain");
+    assert_eq!(
+        drained
+            .iter()
+            .map(|cancelled| cancelled.queued().request_id())
+            .collect::<Vec<_>>(),
+        vec![routine.request_id, operator.request_id]
+    );
+    assert_eq!(
+        scheduler
+            .queued_on(instance_id)
+            .expect("queue status")
+            .iter()
+            .map(QueuedLease::request_id)
+            .collect::<Vec<_>>(),
+        vec![continuation.request_id]
+    );
+}
+
+#[test]
+fn an_immediate_try_never_jumps_an_eligible_entry() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let autostart = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(2),
+        ClaimKind::Autostart,
+        LeasePriority::Normal,
+    );
+    scheduler.enqueue_claim(autostart, 2).expect("autostart");
+    scheduler
+        .release_owned(&token, connection(1), LeaseReleaseReason::InstancePaused)
+        .expect("free instance, entry left standing");
+
+    let refused = scheduler
+        .acquire(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(3),
+            3,
+        )
+        .expect_err("no jump");
+    assert_eq!(
+        refused,
+        SchedulerError::QueueAhead {
+            kind: ClaimKind::Autostart,
+            position: 1,
+        }
+    );
+    assert_eq!(refused.code(), "lease_busy");
+    assert_eq!(refused.projection().code, RuntimeErrorCode::LeaseBusy);
+    assert!(!refused.is_fatal());
+
+    let operator = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(4),
+        ClaimKind::EmulatorControl,
+        LeasePriority::Normal,
+    );
+    assert_eq!(
+        scheduler
+            .prepare_claim_acquire(operator, ClaimGate::Open, 3)
+            .expect_err("an open gate makes the routine entry eligible"),
+        SchedulerError::QueueAhead {
+            kind: ClaimKind::Autostart,
+            position: 1,
+        }
+    );
+    let client = request(&issuer);
+    let QueueAdmissionDecision::Queued(queued) = scheduler
+        .request_queued(
+            queued_request(
+                client,
+                instance_id,
+                holder(&issuer).1,
+                connection(5),
+                LeasePriority::Normal,
+                400,
+            ),
+            3,
+        )
+        .expect("client queue on a free instance")
+        .into_decision()
+    else {
+        panic!("a client queues behind the waiting entry");
+    };
+    assert_eq!(queued.position(), 2);
+    assert!(!queued.preempt_requested());
+    scheduler
+        .cancel_queued(client, connection(5))
+        .expect("cancel client");
+
+    let preparation = scheduler
+        .prepare_claim_acquire(operator, ClaimGate::RoutineHeld, 3)
+        .expect("a held gate leaves no eligible entry ahead of an operator");
+    let granted = scheduler.commit_acquire(preparation, 3).expect("grant");
+    assert_eq!(granted.expires_at_monotonic_ms(), 3 + 900);
+    assert_eq!(
+        scheduler
+            .active_lease(instance_id)
+            .expect("operator")
+            .kind(),
+        ClaimKind::EmulatorControl
+    );
+    assert_eq!(scheduler.queued_count(instance_id), 1);
+}
+
+#[test]
+fn hand_off_bypasses_and_keeps_the_queue() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let waiting = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                waiting,
+                instance_id,
+                holder(&issuer).1,
+                connection(2),
+                LeasePriority::Normal,
+                400,
+            ),
+            2,
+        )
+        .expect("client waits");
+    let ladder = ClaimRequest {
+        lease_ttl_ms: 1_200,
+        ..claim(
+            &issuer,
+            instance_id,
+            holder(&issuer).1,
+            connection(7),
+            ClaimKind::Ladder,
+            LeasePriority::High,
+        )
+    };
+    assert!(matches!(
+        scheduler
+            .prepare_hand_off(
+                &token,
+                connection(1),
+                LeaseTransferReason::BackendFailure,
+                ladder,
+                ClaimGate::RoutineHeld,
+                3,
+            )
+            .expect("gated hand-off"),
+        TransferPreparation::NoCandidate
+    ));
+    let TransferPreparation::Ready(prepared) = scheduler
+        .prepare_hand_off(
+            &token,
+            connection(1),
+            LeaseTransferReason::BackendFailure,
+            ladder,
+            ClaimGate::Open,
+            3,
+        )
+        .expect("hand-off")
+    else {
+        panic!("an open gate hands off");
+    };
+    assert!(prepared.is_hand_off());
+    assert_eq!(prepared.to_kind(), ClaimKind::Ladder);
+    assert_eq!(prepared.queued_request_id(), ladder.request_id);
+    let ladder_token = scheduler
+        .commit_transfer(prepared, 4)
+        .expect("commit hand-off");
+    assert_eq!(ladder_token.holder_id(), ladder.holder_id);
+    assert_ne!(ladder_token.lease_id(), token.lease_id());
+    assert_eq!(ladder_token.expires_at_monotonic_ms(), 3 + 1_200);
+    assert_eq!(
+        scheduler.active_lease(instance_id).expect("ladder").kind(),
+        ClaimKind::Ladder
+    );
+    assert_eq!(
+        scheduler
+            .queued_on(instance_id)
+            .expect("queue status")
+            .iter()
+            .map(QueuedLease::request_id)
+            .collect::<Vec<_>>(),
+        vec![waiting],
+        "the hand-off keeps the queue"
+    );
+}
+
+#[test]
+fn an_expired_head_is_skipped_and_the_next_eligible_entry_is_granted() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let expiring = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                expiring,
+                instance_id,
+                holder(&issuer).1,
+                connection(2),
+                LeasePriority::High,
+                10,
+            ),
+            2,
+        )
+        .expect("short client wait");
+    let startup = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(3),
+        ClaimKind::StartupPackage,
+        LeasePriority::Normal,
+    );
+    scheduler.enqueue_claim(startup, 2).expect("startup");
+    let TransferPreparation::Ready(prepared) = scheduler
+        .prepare_transfer(
+            &token,
+            connection(1),
+            LeaseTransferReason::Disconnect,
+            None,
+            50,
+        )
+        .expect("transfer past an expired head")
+    else {
+        panic!("the next eligible entry receives the lease");
+    };
+    assert_eq!(prepared.queued_request_id(), startup.request_id);
+
+    scheduler
+        .release_owned(&token, connection(1), LeaseReleaseReason::InstancePaused)
+        .expect("free instance");
+    assert_eq!(
+        scheduler.grant_candidate(instance_id, ClaimGate::Open, 50),
+        Some(ClaimKind::StartupPackage)
+    );
+    let prepared = scheduler
+        .prepare_queued_grant(instance_id, ClaimGate::Open, 50)
+        .expect("pump preparation")
+        .expect("an eligible entry");
+    assert_eq!(prepared.request_id(), startup.request_id);
+    assert_eq!(prepared.kind(), ClaimKind::StartupPackage);
+    let granted = scheduler
+        .commit_acquire(LeasePreparation::New(prepared), 50)
+        .expect("pump grant");
+    assert_eq!(granted.holder_id(), startup.holder_id);
+    assert_eq!(granted.expires_at_monotonic_ms(), 50 + 900);
+    assert_eq!(
+        scheduler
+            .queued_on(instance_id)
+            .expect("queue status")
+            .iter()
+            .map(QueuedLease::request_id)
+            .collect::<Vec<_>>(),
+        vec![expiring],
+        "the grant leaves the expired entry for the pump's expiry record"
+    );
+    assert_eq!(
+        scheduler.grant_candidate(instance_id, ClaimGate::Open, 50),
+        None
+    );
+    assert!(
+        scheduler
+            .prepare_queued_grant(instance_id, ClaimGate::Open, 50)
+            .expect("held instance")
+            .is_none()
+    );
+}
+
+#[test]
+fn claim_ttl_is_granted_and_renewal_is_bounded() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let maximum_ttl_ms = ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS
+        + scheduler.config().maximum_client_heartbeat_interval_ms;
+    let too_long = ClaimRequest {
+        lease_ttl_ms: maximum_ttl_ms + 1,
+        ..claim(
+            &issuer,
+            instance_id,
+            holder(&issuer).1,
+            connection(2),
+            ClaimKind::DirectTaskRun,
+            LeasePriority::Normal,
+        )
+    };
+    assert_eq!(
+        scheduler.enqueue_claim(too_long, 2).expect_err("ttl bound"),
+        SchedulerError::InvalidConfig
+    );
+    let direct = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(2),
+        ClaimKind::DirectTaskRun,
+        LeasePriority::Normal,
+    );
+    scheduler.enqueue_claim(direct, 2).expect("direct run");
+    let release = request(&issuer);
+    let TransferPreparation::Ready(prepared) = scheduler
+        .prepare_transfer(
+            &token,
+            connection(1),
+            LeaseTransferReason::ExplicitRelease,
+            Some(release),
+            10,
+        )
+        .expect("transfer")
+    else {
+        panic!("transfer to the direct run");
+    };
+    let held = scheduler.commit_transfer(prepared, 10).expect("commit");
+    assert_eq!(
+        held.expires_at_monotonic_ms(),
+        10 + 900,
+        "the entry's own TTL"
+    );
+
+    assert_eq!(
+        scheduler
+            .renew_with_ttl(&held, connection(2), maximum_ttl_ms + 1, 20)
+            .expect_err("renew cap"),
+        SchedulerError::InvalidConfig
+    );
+    assert_eq!(
+        scheduler
+            .renew_with_ttl(&held, connection(9), 500, 20)
+            .expect_err("connection fence"),
+        SchedulerError::ConnectionMismatch
+    );
+    let renewed = scheduler
+        .renew_with_ttl(&held, connection(2), maximum_ttl_ms, 20)
+        .expect("renew to the cap");
+    assert_eq!(renewed.lease_id(), held.lease_id());
+    assert_eq!(renewed.expires_at_monotonic_ms(), 20 + maximum_ttl_ms);
+    assert_eq!(
+        scheduler
+            .renew_with_ttl(&held, connection(2), 500, 30)
+            .expect_err("a renewal replaces the token"),
+        SchedulerError::LeaseMismatch
+    );
+    assert_eq!(
+        scheduler
+            .renew_with_ttl(&renewed, connection(2), 500, 20 + maximum_ttl_ms)
+            .expect_err("a lapsed hold"),
+        SchedulerError::LeaseExpired
+    );
+    scheduler
+        .release_owned(&renewed, connection(2), LeaseReleaseReason::BackendFailure)
+        .expect("release");
+    assert_eq!(
+        scheduler
+            .renew_with_ttl(&renewed, connection(2), 500, 40)
+            .expect_err("a hold that is gone"),
+        SchedulerError::LeaseMissing
+    );
+}
+
+#[test]
+fn claim_kind_tokens_are_unique_and_the_stopped_instance_kinds_skip_admission_checks() {
+    let kinds = [
+        ClaimKind::PolicyDispatch,
+        ClaimKind::Ladder,
+        ClaimKind::LadderContinuation,
+        ClaimKind::StartupPackage,
+        ClaimKind::Autostart,
+        ClaimKind::DirectTaskRun,
+        ClaimKind::EmulatorControl,
+        ClaimKind::InputLifecycle,
+        ClaimKind::ResumeReconnect,
+        ClaimKind::SelfCheck,
+        ClaimKind::DaemonStartPreparation,
+        ClaimKind::LabOperation,
+        ClaimKind::ClientLease,
+        ClaimKind::ResourceClose,
+    ];
+    let tokens = kinds
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(tokens.len(), kinds.len());
+    assert!(tokens.iter().all(|token| {
+        token
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+    }));
+    // Q-2a: the four kinds that act on a stopped instance skip the bound-endpoint and
+    // performance-control checks and use drain capacity; every newly admitted kind that is not
+    // one of them keeps both checks and business capacity.
+    for kind in kinds {
+        let stopped_instance_kind = matches!(
+            kind,
+            ClaimKind::EmulatorControl
+                | ClaimKind::Autostart
+                | ClaimKind::ResumeReconnect
+                | ClaimKind::SelfCheck
+        );
+        if stopped_instance_kind {
+            assert!(!kind.takes_admission_checks(), "{kind:?}");
+            assert!(kind.skips_business_capacity(), "{kind:?}");
+        }
+        if kind.takes_admission_checks() {
+            assert!(!kind.skips_business_capacity(), "{kind:?}");
+        }
+    }
+}

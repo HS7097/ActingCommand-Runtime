@@ -1468,6 +1468,7 @@ impl HostShared {
                         connection_id,
                         run_links: Some(run_links),
                         lease_ttl_ms,
+                        kind: ClaimKind::PolicyDispatch,
                     });
                     match admission {
                         Ok(success) => match success.result {

@@ -259,6 +259,7 @@ impl HostShared {
                     connection_id,
                     run_links: None,
                     lease_ttl_ms: None,
+                    kind: ClaimKind::ClientLease,
                 })
             }
             RuntimeOperation::QueueLease {

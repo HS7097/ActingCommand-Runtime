@@ -849,6 +849,7 @@ impl HostShared {
                 connection_id,
                 run_links: None,
                 lease_ttl_ms: None,
+                kind: ClaimKind::InputLifecycle,
             })
             .and_then(|acquired| {
                 let RuntimeResult::LeaseGranted { token } = acquired.result else {

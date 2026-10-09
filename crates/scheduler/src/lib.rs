@@ -99,6 +99,161 @@ pub enum LeaseTransferReason {
     HostShutdown,
 }
 
+/// Workflow #369 Q-2: who holds or waits on an instance. The tag lives in memory only, on every
+/// lease and queue entry, and is the one source for "who holds or waits"; it is never persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClaimKind {
+    /// A policy dispatch: never queued, it dispatches only to a free instance.
+    PolicyDispatch,
+    /// A stuck-recovery ladder, granted by hand-off at its trigger's lease end.
+    Ladder,
+    /// The holding ladder's own continuation, queued before each rung run.
+    LadderContinuation,
+    /// An instance's startup package after an emulator start.
+    StartupPackage,
+    /// A configured emulator start at daemon start.
+    Autostart,
+    /// A direct task run (CLI, console, MCP).
+    DirectTaskRun,
+    /// An operator emulator control (CLI, console).
+    EmulatorControl,
+    /// A safe reset or an application lifecycle command.
+    InputLifecycle,
+    /// The reconnect of an instance resume.
+    ResumeReconnect,
+    /// A self-check preparation.
+    SelfCheck,
+    /// The dedicated preparation lease of a connection preparation (daemon start; until the
+    /// later #369 slices move them, also resume, self-check and emulator start).
+    DaemonStartPreparation,
+    /// A Lab operation: an immediate try, never queued.
+    LabOperation,
+    /// A client `AcquireLease` or `QueueLease`.
+    ClientLease,
+    /// A dedicated retained-session or pause close lease.
+    ResourceClose,
+}
+
+/// Workflow #369 Q-2: how a claim kind is ordered and gated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimClass {
+    /// Waits while a scheduling pause holds its instance or the global gate (Q-3 (4)).
+    Routine,
+    /// Queued by the holder itself; ordered first and never gated, drained or capacity-checked.
+    HolderOwned,
+    /// Passes a closed gate.
+    Operator,
+    /// The Runtime's own dedicated leases.
+    HostInternal,
+}
+
+impl ClaimKind {
+    /// The kind's token (`vocab:claim_kind`, Q-2's kinds in snake_case).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PolicyDispatch => "policy_dispatch",
+            Self::Ladder => "ladder",
+            Self::LadderContinuation => "ladder_continuation",
+            Self::StartupPackage => "startup_package",
+            Self::Autostart => "autostart",
+            Self::DirectTaskRun => "direct_task_run",
+            Self::EmulatorControl => "emulator_control",
+            Self::InputLifecycle => "input_lifecycle",
+            Self::ResumeReconnect => "resume_reconnect",
+            Self::SelfCheck => "self_check",
+            Self::DaemonStartPreparation => "daemon_start_preparation",
+            Self::LabOperation => "lab_operation",
+            Self::ClientLease => "client_lease",
+            Self::ResourceClose => "resource_close",
+        }
+    }
+
+    pub const fn class(self) -> ClaimClass {
+        match self {
+            Self::PolicyDispatch | Self::Ladder | Self::StartupPackage | Self::Autostart => {
+                ClaimClass::Routine
+            }
+            Self::LadderContinuation => ClaimClass::HolderOwned,
+            Self::DirectTaskRun
+            | Self::EmulatorControl
+            | Self::InputLifecycle
+            | Self::ResumeReconnect
+            | Self::SelfCheck
+            | Self::LabOperation
+            | Self::ClientLease => ClaimClass::Operator,
+            Self::DaemonStartPreparation | Self::ResourceClose => ClaimClass::HostInternal,
+        }
+    }
+
+    /// Q-3 (4): a routine entry is skipped while a pause holds. Until #369 S6b the startup
+    /// claim is not gated (H-6; `scheduling-pause.md` "not gated").
+    pub const fn gated_by_pause(self) -> bool {
+        matches!(self.class(), ClaimClass::Routine) && !matches!(self, Self::StartupPackage)
+    }
+
+    pub const fn holder_owned(self) -> bool {
+        matches!(self.class(), ClaimClass::HolderOwned)
+    }
+
+    /// Q-2a: the request-time checks today's grant paths make (a bound ADB endpoint and the
+    /// performance-control lease gate). Emulator control, autostart, resume reconnect and
+    /// self-check claims act on a stopped instance and skip them; a ladder and its
+    /// continuation were admitted by the ladder; dedicated leases never took them.
+    pub const fn takes_admission_checks(self) -> bool {
+        matches!(
+            self,
+            Self::PolicyDispatch
+                | Self::StartupPackage
+                | Self::DirectTaskRun
+                | Self::InputLifecycle
+                | Self::LabOperation
+                | Self::ClientLease
+        )
+    }
+
+    /// Q-2a, Q-3 (0)/(1), C13: a grant to this kind uses drain capacity, and a transfer to it
+    /// skips `capacity_allows_transfer` (a ladder's admission has already checked capacity; a
+    /// continuation keeps its ladder's hold).
+    pub const fn skips_business_capacity(self) -> bool {
+        matches!(
+            self,
+            Self::Ladder
+                | Self::LadderContinuation
+                | Self::EmulatorControl
+                | Self::Autostart
+                | Self::ResumeReconnect
+                | Self::SelfCheck
+                | Self::DaemonStartPreparation
+                | Self::ResourceClose
+        )
+    }
+}
+
+/// Workflow #369 Q-3 (4): the routine gate of one instance, read by the caller from the
+/// scheduling pauses at the moment of the decision (the scheduler keeps no copy of it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimGate {
+    Open,
+    /// A scheduling pause holds the instance or the global gate: routine entries wait.
+    RoutineHeld,
+}
+
+/// Workflow #369 Q-6, Q-7: a Runtime-internal claim. It is queued with no deadline and never
+/// requests a preemption; a grant gives it `lease_ttl_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaimRequest {
+    pub request_id: RequestId,
+    pub instance_id: InstanceId,
+    pub holder_id: HolderId,
+    pub connection_id: ConnectionId,
+    pub kind: ClaimKind,
+    pub priority: LeasePriority,
+    pub lease_ttl_ms: u64,
+}
+
+/// The deadline of an internal claim: never (`scheduler.queued` forbids only 0).
+pub const CLAIM_NO_DEADLINE_MONOTONIC_MS: u64 = u64::MAX;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleasedLease {
     pub token: LeaseToken,
@@ -138,17 +293,30 @@ pub struct PreparedLease {
     acquire_request_id: RequestId,
     priority: LeasePriority,
     resource_close_only: bool,
+    kind: ClaimKind,
+    /// Workflow #369 Q-4: a grant of the queued entry `acquire_request_id` on a free instance.
+    from_queue: bool,
 }
 
 #[derive(Clone, Copy)]
 struct LeaseAcquisitionPolicy {
     priority: LeasePriority,
     lease_ttl_ms: u64,
+    kind: ClaimKind,
+    gate: ClaimGate,
 }
 
 impl PreparedLease {
     pub const fn token(&self) -> &LeaseToken {
         &self.token
+    }
+
+    pub const fn kind(&self) -> ClaimKind {
+        self.kind
+    }
+
+    pub const fn request_id(&self) -> RequestId {
+        self.acquire_request_id
     }
 }
 
@@ -191,6 +359,12 @@ pub enum SchedulerError {
     TransferNotSafe,
     DestructiveStateMismatch,
     ResourceCloseOnly,
+    /// Workflow #369 Q-3 (5): an immediate try on a free instance where an eligible entry
+    /// waits; nobody jumps it. `position` is that entry's 1-based queue position.
+    QueueAhead {
+        kind: ClaimKind,
+        position: u32,
+    },
 }
 
 impl SchedulerError {
@@ -200,7 +374,7 @@ impl SchedulerError {
             Self::InvalidConnection => "invalid_connection_id",
             Self::IdentifierIssuance => "identifier_issuance_failed",
             Self::ExpiryOverflow => "lease_expiry_overflow",
-            Self::Busy { .. } => "lease_busy",
+            Self::Busy { .. } | Self::QueueAhead { .. } => "lease_busy",
             Self::Cooldown { .. } => "lease_cooldown",
             Self::StaleOwnerEpoch => "stale_owner_epoch",
             Self::LeaseMismatch => "lease_mismatch",
@@ -250,6 +424,9 @@ impl SchedulerError {
                 ..
             } => RuntimeErrorProjection::new(RuntimeErrorCode::LeaseBusy, false)
                 .with_holder(*holder_id, *lease_id),
+            Self::QueueAhead { .. } => {
+                RuntimeErrorProjection::new(RuntimeErrorCode::LeaseBusy, false)
+            }
             Self::Cooldown { retry_after_ms } => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::LeaseCooldown, false)
                     .with_retry_after(*retry_after_ms)
@@ -319,6 +496,7 @@ struct LeaseEntry {
     priority: LeasePriority,
     destructive_step: Option<(std::num::NonZeroU64, FencedWritePurpose)>,
     preempt_requested: bool,
+    kind: ClaimKind,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -329,6 +507,19 @@ struct QueueEntry {
     priority: LeasePriority,
     deadline_monotonic_ms: u64,
     arrival_sequence: u64,
+    kind: ClaimKind,
+    /// Q-5: the TTL a grant or transfer gives this entry.
+    lease_ttl_ms: u64,
+    /// Q-7, C3: only a client `QueueLease` requests a preemption.
+    may_preempt: bool,
+}
+
+impl QueueEntry {
+    /// Q-3 (4): not expired, and not a routine entry behind a closed gate.
+    fn eligible(&self, gate: ClaimGate, now_monotonic_ms: u64) -> bool {
+        self.deadline_monotonic_ms > now_monotonic_ms
+            && (gate == ClaimGate::Open || !self.kind.gated_by_pause())
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -386,6 +577,7 @@ pub struct QueuedLease {
     position: u32,
     deadline_monotonic_ms: u64,
     preempt_requested: bool,
+    kind: ClaimKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,11 +587,16 @@ pub struct ActiveLease {
     priority: LeasePriority,
     destructive_step_active: bool,
     preempt_requested: bool,
+    kind: ClaimKind,
 }
 
 impl ActiveLease {
     pub const fn token(&self) -> &LeaseToken {
         &self.token
+    }
+
+    pub const fn kind(&self) -> ClaimKind {
+        self.kind
     }
 
     pub const fn connection_id(&self) -> ConnectionId {
@@ -450,6 +647,10 @@ impl QueuedLease {
 
     pub const fn preempt_requested(&self) -> bool {
         self.preempt_requested
+    }
+
+    pub const fn kind(&self) -> ClaimKind {
+        self.kind
     }
 
     pub fn status(&self) -> SchedulerResult<LeaseQueueStatus> {
@@ -542,9 +743,20 @@ pub struct PreparedLeaseTransfer {
     to_token: LeaseToken,
     reason: LeaseTransferReason,
     release_request_id: Option<RequestId>,
+    /// Workflow #369 H-1: the receiver was never queued; the transfer leaves the queue as it is.
+    hand_off: bool,
 }
 
 impl PreparedLeaseTransfer {
+    /// The receiving claim's kind.
+    pub const fn to_kind(&self) -> ClaimKind {
+        self.queued.kind
+    }
+
+    pub const fn is_hand_off(&self) -> bool {
+        self.hand_off
+    }
+
     pub const fn from_token(&self) -> &LeaseToken {
         &self.from.token
     }
@@ -670,6 +882,8 @@ impl SeedScheduler {
         self.commit_acquire(preparation, now_monotonic_ms)
     }
 
+    /// A client lease's immediate try with the gate open; the Runtime's own grants use
+    /// [`Self::prepare_claim_acquire`].
     pub fn prepare_acquire(
         &mut self,
         request_id: RequestId,
@@ -687,6 +901,8 @@ impl SeedScheduler {
             LeaseAcquisitionPolicy {
                 priority: LeasePriority::Normal,
                 lease_ttl_ms,
+                kind: ClaimKind::ClientLease,
+                gate: ClaimGate::Open,
             },
             now_monotonic_ms,
         )
@@ -701,14 +917,7 @@ impl SeedScheduler {
         lease_ttl_ms: u64,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
-        let maximum_lease_ttl_ms = ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS
-            .checked_add(self.config.maximum_client_heartbeat_interval_ms)
-            .ok_or(SchedulerError::ExpiryOverflow)?;
-        if lease_ttl_ms <= self.config.maximum_client_heartbeat_interval_ms
-            || lease_ttl_ms > maximum_lease_ttl_ms
-        {
-            return Err(SchedulerError::InvalidConfig);
-        }
+        self.validate_claim_ttl(lease_ttl_ms)?;
         self.prepare_acquire_with_policy(
             request_id,
             instance_id,
@@ -717,6 +926,32 @@ impl SeedScheduler {
             LeaseAcquisitionPolicy {
                 priority: LeasePriority::Normal,
                 lease_ttl_ms,
+                kind: ClaimKind::ClientLease,
+                gate: ClaimGate::Open,
+            },
+            now_monotonic_ms,
+        )
+    }
+
+    /// Workflow #369 Q-3 (5), Q-6: an immediate try of `claim` on its instance. It is granted
+    /// only on a free instance where no eligible entry waits (`QueueAhead` otherwise).
+    pub fn prepare_claim_acquire(
+        &mut self,
+        claim: ClaimRequest,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeasePreparation> {
+        self.validate_claim_ttl(claim.lease_ttl_ms)?;
+        self.prepare_acquire_with_policy(
+            claim.request_id,
+            claim.instance_id,
+            claim.holder_id,
+            claim.connection_id,
+            LeaseAcquisitionPolicy {
+                priority: claim.priority,
+                lease_ttl_ms: claim.lease_ttl_ms,
+                kind: claim.kind,
+                gate,
             },
             now_monotonic_ms,
         )
@@ -731,6 +966,26 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
+        self.prepare_dedicated_lease(
+            request_id,
+            instance_id,
+            holder_id,
+            connection_id,
+            ClaimKind::ResourceClose,
+            now_monotonic_ms,
+        )
+    }
+
+    /// [`Self::prepare_resource_close`] for a dedicated lease of `kind` (Workflow #369 Q-2).
+    pub fn prepare_dedicated_lease(
+        &mut self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        holder_id: HolderId,
+        connection_id: ConnectionId,
+        kind: ClaimKind,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeasePreparation> {
         if self
             .instances
             .get(&instance_id)
@@ -738,11 +993,18 @@ impl SeedScheduler {
         {
             return Err(SchedulerError::TransferNotSafe);
         }
-        let mut preparation = self.prepare_acquire(
+        let lease_ttl_ms = self.config.lease_ttl_ms;
+        let mut preparation = self.prepare_acquire_with_policy(
             request_id,
             instance_id,
             holder_id,
             connection_id,
+            LeaseAcquisitionPolicy {
+                priority: LeasePriority::Normal,
+                lease_ttl_ms,
+                kind,
+                gate: ClaimGate::Open,
+            },
             now_monotonic_ms,
         )?;
         match &mut preparation {
@@ -785,6 +1047,9 @@ impl SeedScheduler {
                     expires_at_monotonic_ms: lease.token.expires_at_monotonic_ms(),
                 });
             }
+            if let Some(ahead) = first_eligible(state, policy.gate, now_monotonic_ms) {
+                return Err(queue_ahead(state, ahead));
+            }
         }
         let expires_at_monotonic_ms =
             self.expiry_from_ttl(now_monotonic_ms, policy.lease_ttl_ms)?;
@@ -807,6 +1072,8 @@ impl SeedScheduler {
             acquire_request_id: request_id,
             priority: policy.priority,
             resource_close_only: false,
+            kind: policy.kind,
+            from_queue: false,
         }))
     }
 
@@ -842,6 +1109,14 @@ impl SeedScheduler {
                 expires_at_monotonic_ms: lease.token.expires_at_monotonic_ms(),
             });
         }
+        if prepared.from_queue {
+            let position = state
+                .queue
+                .iter()
+                .position(|entry| entry.request_id == prepared.acquire_request_id)
+                .ok_or(SchedulerError::QueueMissing)?;
+            state.queue.remove(position);
+        }
         let lease_id = prepared.token.lease_id();
         let token = prepared.token;
         state.lease = Some(LeaseEntry {
@@ -853,15 +1128,31 @@ impl SeedScheduler {
             priority: prepared.priority,
             destructive_step: None,
             preempt_requested: false,
+            kind: prepared.kind,
         });
+        refresh_preempt_requested(state);
         state.last_release = None;
         self.lease_locations.insert(lease_id, instance_id);
         Ok(token)
     }
 
+    /// A client `QueueLease` with the gate open and an immediate grant allowed.
     pub fn request_queued(
         &mut self,
         request: QueueLeaseRequest,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<QueueAdmissionOutcome> {
+        self.request_queued_gated(request, ClaimGate::Open, true, now_monotonic_ms)
+    }
+
+    /// A client `QueueLease` (Workflow #369 Q-3, Q-6): a free instance grants at once only when
+    /// `immediate_allowed` (the caller holds the instance's admission) and no eligible entry
+    /// waits; otherwise the request queues behind the entries ahead of it.
+    pub fn request_queued_gated(
+        &mut self,
+        request: QueueLeaseRequest,
+        gate: ClaimGate,
+        immediate_allowed: bool,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<QueueAdmissionOutcome> {
         let QueueLeaseRequest {
@@ -892,58 +1183,216 @@ impl SeedScheduler {
             });
         }
         let expired = self.take_expired_for_instance(instance_id, now_monotonic_ms)?;
-        let has_active_lease = self
-            .instances
-            .get(&instance_id)
-            .and_then(|state| state.lease.as_ref())
-            .is_some();
+        let (has_active_lease, cooldown_until, entry_ahead) = {
+            let state = self.instances.entry(instance_id).or_default();
+            (
+                state.lease.is_some(),
+                state.cooldown_until_monotonic_ms,
+                first_eligible(state, gate, now_monotonic_ms).is_some(),
+            )
+        };
         if !has_active_lease {
-            let lease_ttl_ms = self.config.lease_ttl_ms;
-            let preparation = self.prepare_acquire_with_policy(
-                request_id,
-                instance_id,
-                holder_id,
-                connection_id,
-                LeaseAcquisitionPolicy {
-                    priority,
-                    lease_ttl_ms,
-                },
-                now_monotonic_ms,
-            )?;
-            return Ok(QueueAdmissionOutcome {
-                decision: QueueAdmissionDecision::Lease(preparation),
-                expired,
-            });
+            if cooldown_until > now_monotonic_ms {
+                return Err(SchedulerError::Cooldown {
+                    retry_after_ms: cooldown_until - now_monotonic_ms,
+                });
+            }
+            if immediate_allowed && !entry_ahead {
+                let lease_ttl_ms = self.config.lease_ttl_ms;
+                let preparation = self.prepare_acquire_with_policy(
+                    request_id,
+                    instance_id,
+                    holder_id,
+                    connection_id,
+                    LeaseAcquisitionPolicy {
+                        priority,
+                        lease_ttl_ms,
+                        kind: ClaimKind::ClientLease,
+                        gate,
+                    },
+                    now_monotonic_ms,
+                )?;
+                return Ok(QueueAdmissionOutcome {
+                    decision: QueueAdmissionDecision::Lease(preparation),
+                    expired,
+                });
+            }
         }
         let deadline_monotonic_ms = now_monotonic_ms
             .checked_add(timeout_ms)
             .ok_or(SchedulerError::ExpiryOverflow)?;
-        let arrival_sequence = self.next_arrival_sequence;
-        self.next_arrival_sequence = self
-            .next_arrival_sequence
-            .checked_add(1)
-            .ok_or(SchedulerError::QueueSequenceOverflow)?;
-        let state = self
-            .instances
-            .get_mut(&instance_id)
-            .ok_or(SchedulerError::LeaseMissing)?;
-        if state.queue.len() >= self.config.max_queue_depth_per_instance {
-            return Err(SchedulerError::QueueFull);
-        }
-        state.queue.push(QueueEntry {
-            request_id,
-            holder_id,
-            connection_id,
-            priority,
-            deadline_monotonic_ms,
-            arrival_sequence,
-        });
-        sort_queue(&mut state.queue);
-        refresh_preempt_requested(state);
-        let queued = queued_by_request(state, instance_id, request_id)?;
+        let lease_ttl_ms = self.config.lease_ttl_ms;
+        let queued = self.insert_queue_entry(
+            instance_id,
+            QueueEntry {
+                request_id,
+                holder_id,
+                connection_id,
+                priority,
+                deadline_monotonic_ms,
+                arrival_sequence: 0,
+                kind: ClaimKind::ClientLease,
+                lease_ttl_ms,
+                may_preempt: true,
+            },
+        )?;
         Ok(QueueAdmissionOutcome {
             decision: QueueAdmissionDecision::Queued(queued),
             expired,
+        })
+    }
+
+    /// Workflow #369 Q-6, Q-7: queues a Runtime-internal claim with no deadline. It never
+    /// requests a preemption, whatever its priority. A ladder continuation is queued only by
+    /// the current holder of its instance.
+    pub fn enqueue_claim(
+        &mut self,
+        claim: ClaimRequest,
+        _now_monotonic_ms: u64,
+    ) -> SchedulerResult<QueuedLease> {
+        self.validate_claim_ttl(claim.lease_ttl_ms)?;
+        if self.instances.values().any(|state| {
+            state
+                .lease
+                .as_ref()
+                .is_some_and(|lease| lease.acquire_request_id == claim.request_id)
+                || state
+                    .queue
+                    .iter()
+                    .any(|entry| entry.request_id == claim.request_id)
+        }) {
+            return Err(SchedulerError::QueueRequestMismatch);
+        }
+        if claim.kind.holder_owned() {
+            let holder = self
+                .instances
+                .get(&claim.instance_id)
+                .and_then(|state| state.lease.as_ref())
+                .ok_or(SchedulerError::LeaseMissing)?;
+            if holder.token.holder_id() != claim.holder_id {
+                return Err(SchedulerError::HolderMismatch);
+            }
+        }
+        self.insert_queue_entry(
+            claim.instance_id,
+            QueueEntry {
+                request_id: claim.request_id,
+                holder_id: claim.holder_id,
+                connection_id: claim.connection_id,
+                priority: claim.priority,
+                deadline_monotonic_ms: CLAIM_NO_DEADLINE_MONOTONIC_MS,
+                arrival_sequence: 0,
+                kind: claim.kind,
+                lease_ttl_ms: claim.lease_ttl_ms,
+                may_preempt: false,
+            },
+        )
+    }
+
+    fn insert_queue_entry(
+        &mut self,
+        instance_id: InstanceId,
+        mut entry: QueueEntry,
+    ) -> SchedulerResult<QueuedLease> {
+        let arrival_sequence = self.next_arrival_sequence;
+        let next_arrival_sequence = self
+            .next_arrival_sequence
+            .checked_add(1)
+            .ok_or(SchedulerError::QueueSequenceOverflow)?;
+        let state = self.instances.entry(instance_id).or_default();
+        if state.queue.len() >= self.config.max_queue_depth_per_instance {
+            return Err(SchedulerError::QueueFull);
+        }
+        self.next_arrival_sequence = next_arrival_sequence;
+        entry.arrival_sequence = arrival_sequence;
+        let request_id = entry.request_id;
+        state.queue.push(entry);
+        sort_queue(&mut state.queue);
+        refresh_preempt_requested(state);
+        queued_by_request(state, instance_id, request_id)
+    }
+
+    /// Workflow #369 Q-4: the kind of the entry the pump would grant on `instance_id` now: the
+    /// instance is free and out of takeover cooldown, and an eligible entry waits.
+    pub fn grant_candidate(
+        &self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> Option<ClaimKind> {
+        let state = self.instances.get(&instance_id)?;
+        if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
+            return None;
+        }
+        first_eligible(state, gate, now_monotonic_ms).map(|position| state.queue[position].kind)
+    }
+
+    /// Workflow #369 Q-4: prepares the pump's grant of the first eligible entry on a free
+    /// instance, with that entry's TTL. `None` when there is nothing to grant.
+    pub fn prepare_queued_grant(
+        &mut self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<Option<PreparedLease>> {
+        let Some(state) = self.instances.get(&instance_id) else {
+            return Ok(None);
+        };
+        if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
+            return Ok(None);
+        }
+        let Some(position) = first_eligible(state, gate, now_monotonic_ms) else {
+            return Ok(None);
+        };
+        let entry = state.queue[position].clone();
+        let expires_at_monotonic_ms = self.expiry_from_ttl(now_monotonic_ms, entry.lease_ttl_ms)?;
+        let lease_id = *self
+            .lease_issuer
+            .mint_lease_id()
+            .map_err(|_| SchedulerError::IdentifierIssuance)?
+            .transport();
+        let token = LeaseToken::new(
+            self.owner_epoch,
+            lease_id,
+            instance_id,
+            entry.holder_id,
+            expires_at_monotonic_ms,
+        )
+        .map_err(|_| SchedulerError::InvalidConfig)?;
+        Ok(Some(PreparedLease {
+            token,
+            connection_id: entry.connection_id,
+            acquire_request_id: entry.request_id,
+            priority: entry.priority,
+            resource_close_only: false,
+            kind: entry.kind,
+            from_queue: true,
+        }))
+    }
+
+    /// Workflow #369 Q-2: the queued entries of `instance_id` in grant order.
+    pub fn queued_on(&self, instance_id: InstanceId) -> SchedulerResult<Vec<QueuedLease>> {
+        let Some(state) = self.instances.get(&instance_id) else {
+            return Ok(Vec::new());
+        };
+        (0..state.queue.len())
+            .map(|position| queued_at_position(state, instance_id, position))
+            .collect()
+    }
+
+    /// Workflow #369 Q-3 (4): how many entries on `instance_id` the gate lets through now.
+    pub fn eligible_count(
+        &self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> usize {
+        self.instances.get(&instance_id).map_or(0, |state| {
+            state
+                .queue
+                .iter()
+                .filter(|entry| entry.eligible(gate, now_monotonic_ms))
+                .count()
         })
     }
 
@@ -1202,6 +1651,8 @@ impl SeedScheduler {
         Ok(())
     }
 
+    /// A transfer with the gate open; the Runtime's lease ends use
+    /// [`Self::prepare_transfer_gated`].
     pub fn prepare_transfer(
         &mut self,
         token: &LeaseToken,
@@ -1210,9 +1661,115 @@ impl SeedScheduler {
         release_request_id: Option<RequestId>,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<TransferPreparation> {
+        self.prepare_transfer_gated(
+            token,
+            connection_id,
+            reason,
+            release_request_id,
+            ClaimGate::Open,
+            now_monotonic_ms,
+        )
+    }
+
+    /// Workflow #369 Q-3, Q-4: hands the lease on to the first eligible entry (a holder-owned
+    /// continuation first; expired and gated entries are skipped and stay as they are), with
+    /// that entry's TTL. A preemption only goes to a client entry of higher priority.
+    pub fn prepare_transfer_gated(
+        &mut self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        reason: LeaseTransferReason,
+        release_request_id: Option<RequestId>,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<TransferPreparation> {
         if (reason == LeaseTransferReason::ExplicitRelease) != release_request_id.is_some() {
             return Err(SchedulerError::QueueRequestMismatch);
         }
+        let lease = self.transferable_lease(token, connection_id)?;
+        if lease.destructive_step.is_some() {
+            return Ok(TransferPreparation::Deferred);
+        }
+        let state = self
+            .instances
+            .get(&token.instance_id())
+            .ok_or(SchedulerError::LeaseMissing)?;
+        let Some(position) = first_eligible(state, gate, now_monotonic_ms) else {
+            return Ok(TransferPreparation::NoCandidate);
+        };
+        let queued = state.queue[position].clone();
+        if reason == LeaseTransferReason::Preempted
+            && !(queued.may_preempt && queued.priority > lease.priority)
+        {
+            return Ok(TransferPreparation::NoCandidate);
+        }
+        self.prepared_transfer(
+            lease,
+            queued,
+            reason,
+            release_request_id,
+            false,
+            now_monotonic_ms,
+        )
+    }
+
+    /// Workflow #369 H-1: turns the lease end of `token` into a transfer to `claim`, which
+    /// bypasses the queue (the queue stays as it is). A routine claim honours the gate: behind a
+    /// closed gate there is no hand-off (`NoCandidate`).
+    pub fn prepare_hand_off(
+        &mut self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        reason: LeaseTransferReason,
+        claim: ClaimRequest,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<TransferPreparation> {
+        if reason == LeaseTransferReason::ExplicitRelease {
+            return Err(SchedulerError::QueueRequestMismatch);
+        }
+        self.validate_claim_ttl(claim.lease_ttl_ms)?;
+        if claim.instance_id != token.instance_id() {
+            return Err(SchedulerError::InstanceMismatch);
+        }
+        let lease = self.transferable_lease(token, connection_id)?;
+        if lease.destructive_step.is_some() {
+            return Ok(TransferPreparation::Deferred);
+        }
+        if gate == ClaimGate::RoutineHeld && claim.kind.gated_by_pause() {
+            return Ok(TransferPreparation::NoCandidate);
+        }
+        if self.instances.values().any(|state| {
+            state
+                .lease
+                .as_ref()
+                .is_some_and(|held| held.acquire_request_id == claim.request_id)
+                || state
+                    .queue
+                    .iter()
+                    .any(|entry| entry.request_id == claim.request_id)
+        }) {
+            return Err(SchedulerError::QueueRequestMismatch);
+        }
+        let queued = QueueEntry {
+            request_id: claim.request_id,
+            holder_id: claim.holder_id,
+            connection_id: claim.connection_id,
+            priority: claim.priority,
+            deadline_monotonic_ms: CLAIM_NO_DEADLINE_MONOTONIC_MS,
+            arrival_sequence: 0,
+            kind: claim.kind,
+            lease_ttl_ms: claim.lease_ttl_ms,
+            may_preempt: false,
+        };
+        self.prepared_transfer(lease, queued, reason, None, true, now_monotonic_ms)
+    }
+
+    fn transferable_lease(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> SchedulerResult<LeaseEntry> {
         self.validate_epoch(token)?;
         let instance_id = self.locate_token_instance(token)?;
         let state = self
@@ -1226,19 +1783,20 @@ impl SeedScheduler {
         if lease.connection_id != connection_id {
             return Err(SchedulerError::ConnectionMismatch);
         }
-        if lease.destructive_step.is_some() {
-            return Ok(TransferPreparation::Deferred);
-        }
-        let Some(queued) = state.queue.first() else {
-            return Ok(TransferPreparation::NoCandidate);
-        };
-        if queued.deadline_monotonic_ms <= now_monotonic_ms {
-            return Err(SchedulerError::QueueExpired);
-        }
-        if reason == LeaseTransferReason::Preempted && queued.priority <= lease.priority {
-            return Ok(TransferPreparation::NoCandidate);
-        }
-        let expires_at_monotonic_ms = self.expiry_from(now_monotonic_ms)?;
+        Ok(lease.clone())
+    }
+
+    fn prepared_transfer(
+        &mut self,
+        from: LeaseEntry,
+        queued: QueueEntry,
+        reason: LeaseTransferReason,
+        release_request_id: Option<RequestId>,
+        hand_off: bool,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<TransferPreparation> {
+        let expires_at_monotonic_ms =
+            self.expiry_from_ttl(now_monotonic_ms, queued.lease_ttl_ms)?;
         let lease_id = *self
             .lease_issuer
             .mint_lease_id()
@@ -1247,18 +1805,19 @@ impl SeedScheduler {
         let to_token = LeaseToken::new(
             self.owner_epoch,
             lease_id,
-            instance_id,
+            from.token.instance_id(),
             queued.holder_id,
             expires_at_monotonic_ms,
         )
         .map_err(|_| SchedulerError::InvalidConfig)?;
         Ok(TransferPreparation::Ready(Box::new(
             PreparedLeaseTransfer {
-                from: lease.clone(),
-                queued: queued.clone(),
+                from,
+                queued,
                 to_token,
                 reason,
                 release_request_id,
+                hand_off,
             },
         )))
     }
@@ -1282,10 +1841,23 @@ impl SeedScheduler {
         if state.lease.as_ref() != Some(&prepared.from) {
             return Err(SchedulerError::LeaseMismatch);
         }
-        if state.queue.first() != Some(&prepared.queued) {
-            return Err(SchedulerError::QueueRequestMismatch);
-        }
-        let queued = state.queue.remove(0);
+        let queued = if prepared.hand_off {
+            if state
+                .queue
+                .iter()
+                .any(|entry| entry.request_id == prepared.queued.request_id)
+            {
+                return Err(SchedulerError::QueueRequestMismatch);
+            }
+            prepared.queued
+        } else {
+            let position = state
+                .queue
+                .iter()
+                .position(|entry| *entry == prepared.queued)
+                .ok_or(SchedulerError::QueueRequestMismatch)?;
+            state.queue.remove(position)
+        };
         let released = ReleasedLease {
             token: prepared.from.token.clone(),
             reason: transfer_release_reason(prepared.reason),
@@ -1306,11 +1878,70 @@ impl SeedScheduler {
             priority: queued.priority,
             destructive_step: None,
             preempt_requested: false,
+            kind: queued.kind,
         });
         refresh_preempt_requested(state);
         self.lease_locations.remove(&prepared.from.token.lease_id());
         self.lease_locations.insert(token.lease_id(), instance_id);
         Ok(token)
+    }
+
+    /// Workflow #369 Q-5: renews a Runtime-held lease to `lease_ttl_ms` from now (bounded as
+    /// [`Self::prepare_acquire_with_ttl`] is). The lease id stays; the token is replaced. A
+    /// hold that is gone answers `LeaseMissing`, a lapsed one `LeaseExpired`.
+    pub fn renew_with_ttl(
+        &mut self,
+        submitted_token: &LeaseToken,
+        connection_id: ConnectionId,
+        lease_ttl_ms: u64,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeaseToken> {
+        self.validate_claim_ttl(lease_ttl_ms)?;
+        self.validate_epoch(submitted_token)?;
+        let expires_at = self.expiry_from_ttl(now_monotonic_ms, lease_ttl_ms)?;
+        let owner_epoch = self.owner_epoch;
+        let lease = self
+            .instances
+            .get_mut(&submitted_token.instance_id())
+            .and_then(|state| state.lease.as_mut())
+            .filter(|lease| lease.token.lease_id() == submitted_token.lease_id())
+            .ok_or(SchedulerError::LeaseMissing)?;
+        validate_active_lease(lease, submitted_token, connection_id, now_monotonic_ms)?;
+        let renewed = LeaseToken::new(
+            owner_epoch,
+            lease.token.lease_id(),
+            submitted_token.instance_id(),
+            lease.token.holder_id(),
+            expires_at,
+        )
+        .map_err(|_| SchedulerError::InvalidConfig)?;
+        lease.token = renewed.clone();
+        Ok(renewed)
+    }
+
+    /// Workflow #369 §5.2: an install drain cancels every waiting entry of `instance_id` except
+    /// the holder-owned continuation.
+    pub fn remove_queued_for_drain(
+        &mut self,
+        instance_id: InstanceId,
+    ) -> SchedulerResult<Vec<CancelledQueuedLease>> {
+        let Some(state) = self.instances.get_mut(&instance_id) else {
+            return Ok(Vec::new());
+        };
+        let mut removed = Vec::new();
+        let mut position = 0;
+        while position < state.queue.len() {
+            if state.queue[position].kind.holder_owned() {
+                position += 1;
+            } else {
+                removed.push(CancelledQueuedLease {
+                    queued: queued_at_position(state, instance_id, position)?,
+                });
+                state.queue.remove(position);
+            }
+        }
+        refresh_preempt_requested(state);
+        Ok(removed)
     }
 
     pub fn renew(
@@ -1325,7 +1956,7 @@ impl SeedScheduler {
         }
         self.validate_epoch(submitted_token)?;
         let instance_id = self.locate_token_instance(submitted_token)?;
-        let expires_at = self.expiry_from(now_monotonic_ms)?;
+        let expires_at = self.expiry_from_ttl(now_monotonic_ms, self.config.lease_ttl_ms)?;
         let state = self
             .instances
             .get_mut(&instance_id)
@@ -1634,6 +2265,7 @@ impl SeedScheduler {
                 priority: lease.priority,
                 destructive_step_active: lease.destructive_step.is_some(),
                 preempt_requested: lease.preempt_requested,
+                kind: lease.kind,
             })
     }
 
@@ -1772,8 +2404,18 @@ impl SeedScheduler {
         Ok(())
     }
 
-    fn expiry_from(&self, now_monotonic_ms: u64) -> SchedulerResult<u64> {
-        self.expiry_from_ttl(now_monotonic_ms, self.config.lease_ttl_ms)
+    /// The bound of a requested TTL: above the heartbeat interval and at most the longest
+    /// response deadline plus one heartbeat interval (1 805 s by default).
+    fn validate_claim_ttl(&self, lease_ttl_ms: u64) -> SchedulerResult<()> {
+        let maximum_lease_ttl_ms = ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS
+            .checked_add(self.config.maximum_client_heartbeat_interval_ms)
+            .ok_or(SchedulerError::ExpiryOverflow)?;
+        if lease_ttl_ms <= self.config.maximum_client_heartbeat_interval_ms
+            || lease_ttl_ms > maximum_lease_ttl_ms
+        {
+            return Err(SchedulerError::InvalidConfig);
+        }
+        Ok(())
     }
 
     fn expiry_from_ttl(&self, now_monotonic_ms: u64, lease_ttl_ms: u64) -> SchedulerResult<u64> {
@@ -1809,21 +2451,45 @@ impl SeedScheduler {
     }
 }
 
+/// Workflow #369 Q-3: the holder-owned continuation first, then High before Normal, then
+/// arrival order.
 fn sort_queue(queue: &mut [QueueEntry]) {
     queue.sort_by(|left, right| {
         right
-            .priority
-            .cmp(&left.priority)
+            .kind
+            .holder_owned()
+            .cmp(&left.kind.holder_owned())
+            .then_with(|| right.priority.cmp(&left.priority))
             .then_with(|| left.arrival_sequence.cmp(&right.arrival_sequence))
     });
 }
 
+/// The first entry the gate lets through now (Q-3 (4)).
+fn first_eligible(state: &InstanceState, gate: ClaimGate, now_monotonic_ms: u64) -> Option<usize> {
+    state
+        .queue
+        .iter()
+        .position(|entry| entry.eligible(gate, now_monotonic_ms))
+}
+
+/// Q-3 (5): the refusal of an immediate try that would jump the entry at `position`.
+fn queue_ahead(state: &InstanceState, position: usize) -> SchedulerError {
+    SchedulerError::QueueAhead {
+        kind: state.queue[position].kind,
+        position: u32::try_from(position)
+            .ok()
+            .and_then(|position| position.checked_add(1))
+            .unwrap_or(u32::MAX),
+    }
+}
+
+/// C3, Q-7: only a client entry at the head of the queue requests a preemption.
 fn refresh_preempt_requested(state: &mut InstanceState) {
     let preempt_requested = state
         .lease
         .as_ref()
         .zip(state.queue.first())
-        .is_some_and(|(lease, queued)| queued.priority > lease.priority);
+        .is_some_and(|(lease, queued)| queued.may_preempt && queued.priority > lease.priority);
     if let Some(lease) = state.lease.as_mut() {
         lease.preempt_requested = preempt_requested;
     }
@@ -1855,10 +2521,11 @@ fn queued_at_position(
         .ok()
         .and_then(|position| position.checked_add(1))
         .ok_or(SchedulerError::QueueSequenceOverflow)?;
-    let preempt_requested = state
-        .lease
-        .as_ref()
-        .is_some_and(|lease| entry.priority > lease.priority);
+    let preempt_requested = entry.may_preempt
+        && state
+            .lease
+            .as_ref()
+            .is_some_and(|lease| entry.priority > lease.priority);
     Ok(QueuedLease {
         request_id: entry.request_id,
         instance_id,
@@ -1868,6 +2535,7 @@ fn queued_at_position(
         position,
         deadline_monotonic_ms: entry.deadline_monotonic_ms,
         preempt_requested,
+        kind: entry.kind,
     })
 }
 
