@@ -37,7 +37,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 
 `actingcommand-runtime-client` 是唯一的客户端类型化 IPC 路径。客户端从不构造也不拥有生产设备后端，关闭一个 UI 或 CLI 客户端不会停止运行时。
 
-`actingcommand-runtime-host` 是常驻进程的所有者，出度 13，是图中最宽的节点。它独占本地 IPC、租约门控的 DeviceProxy 与生命周期控制，并且在正常依赖（不计 dev-dependencies）中是 `actingcommand-runtime-state` 的唯一消费者；`actingcommand-scheduler` 与 `actingcommand-host-metrics` 只与 `device-test` 探测工具共用，后者经进程内的本地调度器租约准入自己的设备写入。
+`actingcommand-runtime-host` 是常驻进程的所有者，出度 13，是图中最宽的节点。它独占本地 IPC、租约门控的 DeviceProxy 与生命周期控制，并且在正常依赖（不计 dev-dependencies）中是 `actingcommand-runtime-state`、`actingcommand-scheduler` 与 `actingcommand-host-metrics` 的唯一消费者。
 
 `actingcommand-scheduler` 拥有按实例的写入准入、租约生命周期与围栏权限，其依赖只有合约一个。`actingcommand-policy` 是纯调度策略合约，由目录编译器与求值器共享；它建立在纯选择求值器 `actingcommand-selection-policy` 之上（输入一份声明文档、有界候选集与显式事实快照，输出确定性的选择及其理由）。`actingcommand-execution-kernel` 持有守护进程侧的执行会话与纯粹的任务/探测决策规划，只有在调度器准入并完成围栏之后才被调用；客户端永远拿不到后端对象。
 
@@ -92,14 +92,13 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 
 工作区声明 30 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
-### apps（6）
+### apps（5）
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
 | apps/actingctl | actingcommand-actingctl | bin `actingctl` | 面向 correlation 作用域运行时流程的精简生产 CLI |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧 CLI，47 个顶层分派臂、132 条命令 |
-| apps/device-test | actingcommand-device-test | bin `actingcommand-device-test` | 设备后端探测与离线 dry-run 规划、页面/识别求值 |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
@@ -237,9 +236,6 @@ actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confir
 # 视觉模型文件夹与提供者启动事实
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
 actingcommand-vision-provider-check --models-root <vision root>\models --hash
-
-# 只读 MuMu 实例发现探针（只运行 MuMuManager version 与 info -v all；输出一行 JSON）
-actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
 注意：cargo 产出的守护进程二进制名为 `actingcommand-actingd`；短名有 `actingctl`、`actinglab`、`actingledger`。
