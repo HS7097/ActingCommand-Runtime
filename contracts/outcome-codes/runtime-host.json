@@ -80,6 +80,45 @@
       "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
+    "held_timeout": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A held start (actingd --install-held) received no release before its held deadline. The installation transition fails with admission closed; the operation is install_transition.",
+      "common_causes": "The installer stopped, timed out or lost its connection before it sent the release.",
+      "handling": "TBD"
+    },
+    "install_startup_shut_down": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. It is a formal stop: the watchdog holds it and never restarts it.",
+      "common_causes": "An installer, the console or actingctl request-shutdown stopped an owner that waited for its release.",
+      "handling": "TBD"
+    },
+    "install_startup_stopped": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. Until slice A2 turns it into a caused_by link, the latched failure is carried as the tokens cause=<code> cause_operation=<operation> on the FATAL line, in the transition's status fact and in the lifecycle failure's detail. A restart may succeed, so the watchdog considers a start.",
+      "common_causes": "A ledger write that failed on a request thread while the start was preparing.",
+      "handling": "TBD"
+    },
     "maintenance_artifact_material_unavailable": {
       "category": "error",
       "owner": "runtime-host",
@@ -171,6 +210,19 @@
       "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category.",
       "common_causes": "A defect that panics on every payload of one instance.",
       "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
+    },
+    "release_timeout": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A released start did not finish preparing before its release deadline. The installation transition fails with admission closed; the operation is install_transition.",
+      "common_causes": "A slow preparation, such as the startup recovery of a long ledger.",
+      "handling": "TBD"
     },
     "strategic_evidence_unavailable": {
       "category": "error",

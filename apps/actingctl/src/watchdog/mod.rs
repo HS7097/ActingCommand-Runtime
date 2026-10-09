@@ -8,6 +8,9 @@
 //! Contract: `contracts/runtime-watchdog.md`. Nothing here touches the ledger.
 
 mod decide;
+// Test-only: Workflow #381 A, test plan A-2 G3a-G3d and H-1 G2.
+#[cfg(test)]
+mod gate_381a;
 mod log;
 mod observe;
 mod powershell;
@@ -133,6 +136,7 @@ struct Tick {
     journal: Journal,
     live: Option<Result<decide::LiveOwner, String>>,
     fatal: Option<decide::Fatal>,
+    earlier_fatal: Option<decide::Fatal>,
     runtime_info: Option<Value>,
     writer: Option<&'static str>,
     processes: Option<Vec<decide::RuntimeProcess>>,
@@ -141,29 +145,21 @@ struct Tick {
 impl Tick {
     fn observe(root: &Path, watchdog_dir: &Path) -> Result<Self, Failure> {
         let installation = Installation::resolve(root)?;
-        let (lock, journal) = observe::owner_journal(&installation.state_root)?;
-        let live = (lock == OwnerLock::Locked)
-            .then(|| observe::live_owner(&installation.state_root, None));
         // F matters only for an unlocked journal with a record: a FATAL newer than it.
-        let fatal = match (&lock, &journal) {
-            (
-                OwnerLock::Unlocked,
-                Journal::Record {
-                    modified_unix_ms, ..
-                },
-            ) => observe::fatal_after(
-                &log_directories(&installation.root, watchdog_dir),
-                modified_unix_ms.saturating_sub(decide::CLOCK_SLACK_MS),
-            )?,
-            _ => None,
-        };
+        let observed = observe::observe_owner(
+            &installation.state_root,
+            &log_directories(&installation.root, watchdog_dir),
+        )?;
+        let live = (observed.lock == OwnerLock::Locked)
+            .then(|| observe::live_owner(&installation.state_root, None));
         Ok(Self {
             runtime_info: observe::runtime_info(&installation.state_root),
             installation,
-            lock,
-            journal,
+            lock: observed.lock,
+            journal: observed.journal,
             live,
-            fatal,
+            fatal: observed.fatal,
+            earlier_fatal: observed.earlier_fatal,
             writer: None,
             processes: None,
         })
@@ -175,6 +171,7 @@ impl Tick {
             live: self.live.clone(),
             journal: self.journal.clone(),
             fatal: self.fatal.clone(),
+            earlier_fatal: self.earlier_fatal.clone(),
         }
     }
 

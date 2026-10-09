@@ -15,6 +15,9 @@ mod suspended;
 #[allow(dead_code)]
 #[path = "../../../tests/support/c4_runtime.rs"]
 mod c4_support;
+// Test-only: Workflow #381 A, the FATAL line of a stopped held start (test plan A-2 G3b).
+#[cfg(test)]
+mod gate_381a;
 
 use actingcommand_contract::{
     EventActor, EventFamily, EventQuery, EventSource, EventType, GovernanceIdentityCard,
@@ -52,10 +55,15 @@ fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("FATAL actingd: {error}");
+            eprintln!("{}", fatal_line(&error));
             ExitCode::FAILURE
         }
     }
+}
+
+/// The developer line actingd prints as its last act when it fails; the watchdog reads it.
+fn fatal_line(error: &ActingdError) -> String {
+    format!("FATAL actingd: {error}")
 }
 
 fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {

@@ -64,6 +64,24 @@ actingcommand_contract::outcome_codes! {
         /// Error. An instance worker panicked again before it finished one payload after its
         /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
         RuntimeRestartRequired => "runtime_restart_required": error,
+        /// Error. A held or released start stopped before it finished preparing because the
+        /// Runtime latched a failure meanwhile. Operation `install_transition`. Until A2 makes
+        /// it a `caused_by` link, the latched failure travels as the tokens
+        /// `cause=<code> cause_operation=<operation>` (Workflow #381 A R3′). A restart may
+        /// succeed: the watchdog considers a start (R5′).
+        InstallStartupStopped => "install_startup_stopped": error,
+        /// Error. A held start ended because a shutdown request for its owner was accepted
+        /// before it was released. Operation `install_transition`. A formal stop: the watchdog
+        /// holds it and never restarts it (Workflow #381 A, #672 review M1).
+        InstallStartupShutDown => "install_startup_shut_down": error,
+        /// Error. A held start received no release before its deadline; the transition fails
+        /// with admission closed (Workflow #352) and the start ends with it, even when nobody
+        /// polls (#381 A R5′). Operation `install_transition`.
+        HeldTimeout => "held_timeout": error,
+        /// Error. A released start did not finish preparing before its deadline; the
+        /// transition fails with admission closed (Workflow #352) and the start ends with it
+        /// (#381 A R5′). Operation `install_transition`.
+        ReleaseTimeout => "release_timeout": error,
         /// Info. A start found a scheduled run whose dispatch has no outcome and whose lease
         /// has no run-linked `lease.released` (cut between its task terminal and its release,
         /// or mid-run), wrote the missing release (effect `not_performed`) and settles the run
