@@ -22,11 +22,13 @@
 
 #![forbid(unsafe_code)]
 
+mod bound;
 mod canonical;
 mod evaluator;
 mod facts;
 mod schema;
 
+pub use bound::{FieldDomain, UpperBound, upper_bound};
 pub use canonical::{
     CanonicalValue, MAX_DOCUMENT_BYTES, canonical_bytes, canonical_sha256, parse_canonical_json,
 };
@@ -34,12 +36,15 @@ pub use evaluator::{
     CandidateStatus, CandidateVerdict, DecisionReason, GateOutcome, GateResult, SelectionDecision,
     SelectionOutcome, TermOutcome, TermResult, evaluate,
 };
-pub use facts::{Candidate, ScalarValue, SelectionFactEntry, SelectionFactSnapshot, UnknownReason};
+pub use facts::{
+    Candidate, RecordRow, ScalarValue, SelectionFactEntry, SelectionFactSnapshot, UnknownReason,
+};
 pub use schema::{
     AppliesTo, FactDeclaration, FieldDeclaration, GateUnknownHandling, HardGate, LookupEntry,
     LookupKey, MAX_CANDIDATES, MAX_ENUM_VALUES, MAX_FACTS, MAX_FIELDS, MAX_GATES, MAX_ID_BYTES,
-    MAX_LOOKUP_ENTRIES, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_SCORING_TERMS,
-    MAX_TIE_BREAK_KEYS, OutcomeKeys, Predicate, SELECTION_POLICY_SCHEMA_VERSION, ScoringTerm,
-    SelectionError, SelectionErrorCode, SelectionMode, SelectionPolicy, SelectionRequirement,
-    SortDirection, TermUnknownHandling, TieBreakKey, Transform, ValueRef, ValueType,
+    MAX_LOOKUP_ENTRIES, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_RECORD_LIST_COLUMNS,
+    MAX_SCORING_TERMS, MAX_TIE_BREAK_KEYS, OutcomeKeys, Predicate, RowFilter,
+    SELECTION_POLICY_SCHEMA_VERSION, ScoringTerm, SelectionError, SelectionErrorCode,
+    SelectionMode, SelectionPolicy, SelectionRequirement, SortDirection, TermUnknownHandling,
+    TieBreakKey, Transform, ValueRef, ValueType,
 };

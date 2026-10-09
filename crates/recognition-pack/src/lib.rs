@@ -29,7 +29,7 @@ pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, Candidat
 
 pub use candidate_identity::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
-    CandidateIdentityTemplate, normalize_name,
+    CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, normalize_name,
 };
 
 pub use candidate_layout::{

@@ -1822,7 +1822,9 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// must seal its bytes with `policy.sha256` and name a candidate layout its own task declares
 /// on the step's `from` page; the document must apply to that layout, read only features the
 /// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
-/// require exactly one candidate. The parser's declaration gate and contained task admission
+/// require exactly one candidate. A document that declares a record list, which `keyed_fact`
+/// reads by the candidate's identity, needs a layout whose `unknown_identity` is `reject`.
+/// The parser's declaration gate and contained task admission
 /// both run this check, so an author sees the refusal before a package is built.
 fn select_policy(
     task: &Declaration<'_>,
@@ -1986,6 +1988,22 @@ fn select_policy(
                     ));
                 }
             }
+        }
+        // A record list is read by the candidate's identity, so the layout rejects an unknown
+        // identity instead of handing the evaluator an unknown key.
+        if let Some(list_index) = policy
+            .facts
+            .iter()
+            .position(|fact| matches!(fact.value_type, ValueType::RecordList { .. }))
+            && let Some(handling) = layout
+                .get("unknown_identity")
+                .and_then(Value::as_str)
+                .filter(|handling| *handling != "reject")
+        {
+            return Err(refuse(
+                &format!("/facts/{list_index}/value_type"),
+                format!("layout={layout_id} unknown_identity={handling} record_list=declared"),
+            ));
         }
         if policy.selection.required_count != 1 {
             return Err(refuse(
@@ -2806,5 +2824,103 @@ impl Declaration<'_> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A select step's document that gates and scores on a record list through `keyed_fact`.
+    fn keyed_policy_bytes() -> Vec<u8> {
+        let list = serde_json::json!({
+            "source": "keyed_fact", "fact_key": "session.example.list.targets",
+            "key_field": "member", "value_column": "rank",
+            "absent": {"type": "integer", "value": 0}
+        });
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-list",
+            "applies_to": {"candidate_layout_id": "layout-list", "outcome_keys": {
+                "selected": "list-selected", "empty": "list-empty",
+                "insufficient": "list-insufficient", "ambiguous": "list-ambiguous",
+                "unknown": "list-unknown"}},
+            "fields": [{"name": "member", "value_type": {
+                "type": "enum_string", "allowed": ["member-a", "member-b"]}}],
+            "facts": [{"fact_key": "session.example.list.targets",
+                       "value_type": {"type": "record_list", "key_column": "id",
+                                      "columns": {"rank": {"type": "integer"}}},
+                       "max_age_ms": 3_600_000, "minimum_confidence_milli": 1_000}],
+            "gates": [{"gate_id": "gate-listed",
+                       "predicate": {"kind": "integer_at_least", "value": list.clone(),
+                                     "threshold": 1},
+                       "on_unknown": {"kind": "abort_evaluation"}}],
+            "scoring": [{"term_id": "term-rank", "value": list,
+                         "transform": {"kind": "identity"}, "weight_milli": 1_000,
+                         "on_unknown": {"kind": "abort_evaluation"}}],
+            "selection": {"mode": "none_allowed", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("policy bytes")
+    }
+
+    /// A task whose one select step names the document, on a layout with `unknown_identity`.
+    fn task_bundle(unknown_identity: &str, policy: &[u8]) -> Bundle {
+        Bundle {
+            task_id: "list-task".to_owned(),
+            dir: PathBuf::from("tasks/list-task"),
+            data: serde_json::json!({
+                "game": "game-a",
+                "operations": [{"id": "choose", "from": "list", "select": {
+                    "layout_id": "layout-list",
+                    "policy": {"path": "policies/list.json",
+                               "sha256": crate::Sha256Hash::digest(policy).to_string()}}}],
+                "candidate_layouts": [{"id": "layout-list", "page_id": "list",
+                    "unknown_identity": unknown_identity,
+                    "features": [{"name": "member", "value": "identity", "identity": {
+                        "entries": [{"id": "member-a", "aliases": ["a"]},
+                                    {"id": "member-b", "aliases": ["b"]}],
+                        "recognition": {"kind": "ocr_aliases", "max_distance": 1,
+                                        "minimum_margin": 1, "minimum_confidence_milli": 800}}}]}]
+            }),
+        }
+    }
+
+    #[test]
+    fn a_record_list_document_needs_a_layout_that_rejects_unknown_identities() {
+        let bytes = keyed_policy_bytes();
+        let task = Declaration {
+            file: Path::new("tasks/list-task/task.json"),
+            schema: Some("0.9"),
+        };
+        let requested = PathBuf::from("tasks/list-task").join("policies/list.json");
+        select_policy(
+            &task,
+            &task_bundle("reject", &bytes),
+            &requested,
+            &requested,
+            &bytes,
+        )
+        .expect("a rejecting layout admits the document");
+
+        let error = select_policy(
+            &task,
+            &task_bundle("readable_attributes", &bytes),
+            &requested,
+            &requested,
+            &bytes,
+        )
+        .expect_err("readable attributes would hand the evaluator an unknown key");
+        assert_eq!(error.code, "resource_declaration_invalid");
+        let issue = error.details.expect("declaration issue");
+        assert_eq!(issue["field_path"], "/facts/0/value_type");
+        assert_eq!(issue["reason"], "invalid_value");
+        assert!(
+            error
+                .message
+                .contains("unknown_identity=readable_attributes"),
+            "{}",
+            error.message
+        );
     }
 }

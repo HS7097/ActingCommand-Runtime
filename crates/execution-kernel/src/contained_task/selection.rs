@@ -319,7 +319,8 @@ fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
 
 /// The document applies to `layout`: it names the layout, reads only features the layout
 /// declares with their type (`passed` as boolean, `measure_milli` as integer), and requires
-/// exactly one candidate.
+/// exactly one candidate. A document that reads a record list through `keyed_fact` needs a
+/// layout that rejects unknown identities, so the evaluator never meets an unknown key.
 fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<(), String> {
     if policy.applies_to.candidate_layout_id != layout.id {
         return Err(format!(
@@ -383,6 +384,12 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
                 }
             }
         }
+    }
+    if policy.uses_record_lists() && layout.unknown_identity != UnknownIdentityHandling::Reject {
+        return Err(format!(
+            "layout={} unknown_identity=readable_attributes record_list=declared",
+            layout.id
+        ));
     }
     if policy.selection.required_count != 1 {
         return Err(format!(
@@ -764,7 +771,13 @@ impl PreparedContainedTask {
             )
             .into());
         }
-        let facts = SelectionFactSnapshot::from_instance_snapshot(&snapshot, now_unix_ms);
+        // The rows of the record lists the document declares, which `keyed_fact` reads; every
+        // other record list stays unusable, so a document without one hashes as before.
+        let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+            &snapshot,
+            now_unix_ms,
+            &prepared.policy.record_list_keys(),
+        );
         let decision = decide(&prepared.policy, layout, &projection, &facts, now_unix_ms)?;
         let mut record =
             selection_record(prepared, &projection, &snapshot, now_unix_ms, &decision)?;
@@ -1114,4 +1127,75 @@ pub fn dry_run_select(
         decision,
         policy_override: policy_override.is_some(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity_layout(unknown_identity: &str) -> CandidateLayout {
+        serde_json::from_value(serde_json::json!({
+            "id": "layout-list", "page_id": "neutral/home", "kind": "fixed_slots",
+            "unknown_identity": unknown_identity,
+            "features": [{"name": "member", "value": "identity", "identity": {
+                "entries": [
+                    {"id": "member-a", "aliases": ["a"]},
+                    {"id": "member-b", "aliases": ["b"]},
+                    {"id": "member-c", "aliases": ["c"]}
+                ],
+                "recognition": {"kind": "ocr_aliases", "max_distance": 1, "minimum_margin": 1,
+                                "minimum_confidence_milli": 800}
+            }}],
+            "slots": [{"rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                       "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                       "targets": {"member": "candidate/name"}}]
+        }))
+        .expect("layout decodes")
+    }
+
+    /// A document that gates and scores on a record list read through `keyed_fact`.
+    fn keyed_policy() -> SelectionPolicy {
+        let list = serde_json::json!({
+            "source": "keyed_fact", "fact_key": "session.example.list.targets",
+            "key_field": "member", "value_column": "rank",
+            "absent": {"type": "integer", "value": 0}
+        });
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-list",
+            "applies_to": {"candidate_layout_id": "layout-list", "outcome_keys": {
+                "selected": "list-selected", "empty": "list-empty",
+                "insufficient": "list-insufficient", "ambiguous": "list-ambiguous",
+                "unknown": "list-unknown"}},
+            "fields": [{"name": "member", "value_type": {
+                "type": "enum_string", "allowed": ["member-a", "member-b", "member-c"]}}],
+            "facts": [{"fact_key": "session.example.list.targets",
+                       "value_type": {"type": "record_list", "key_column": "id",
+                                      "columns": {"rank": {"type": "integer"}}},
+                       "max_age_ms": 3_600_000, "minimum_confidence_milli": 1_000}],
+            "gates": [{"gate_id": "gate-listed",
+                       "predicate": {"kind": "integer_at_least", "value": list.clone(),
+                                     "threshold": 1},
+                       "on_unknown": {"kind": "abort_evaluation"}}],
+            "scoring": [{"term_id": "term-rank", "value": list,
+                         "transform": {"kind": "identity"}, "weight_milli": 1_000,
+                         "on_unknown": {"kind": "abort_evaluation"}}],
+            "selection": {"mode": "none_allowed", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("keyed policy decodes")
+    }
+
+    #[test]
+    fn a_keyed_fact_document_needs_a_layout_that_rejects_unknown_identities() {
+        let policy = keyed_policy();
+        policy.validate().expect("keyed policy validates");
+        check_policy(&policy, &identity_layout("reject")).expect("a rejecting layout admits it");
+        let refusal = check_policy(&policy, &identity_layout("readable_attributes"))
+            .expect_err("readable attributes would hand the evaluator an unknown key");
+        assert!(
+            refusal.contains("unknown_identity=readable_attributes"),
+            "{refusal}"
+        );
+    }
 }

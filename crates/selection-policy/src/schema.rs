@@ -13,6 +13,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::facts::ScalarValue;
+
 /// Schema version accepted by this crate.
 pub const SELECTION_POLICY_SCHEMA_VERSION: &str = "actingcommand.selection-policy.v1";
 
@@ -36,8 +38,12 @@ pub const MAX_PREDICATE_DEPTH: usize = 16;
 pub const MAX_PREDICATE_NODES: usize = 512;
 /// Upper bound on one identifier, fact key, or outcome key.
 pub const MAX_ID_BYTES: usize = 128;
-/// Upper bound on the members of one enumerated string type.
-pub const MAX_ENUM_VALUES: usize = 128;
+/// Upper bound on the members of one enumerated string type. It equals the largest business
+/// identity domain a pack may declare, because an identity field's enum must equal its domain.
+pub const MAX_ENUM_VALUES: usize = 1_024;
+/// Upper bound on the declared value columns of one record list: the fact contract's 64 fields
+/// per row, less the key column.
+pub const MAX_RECORD_LIST_COLUMNS: usize = 63;
 
 /// Closed set of failure codes reported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -98,7 +104,16 @@ impl std::error::Error for SelectionError {}
 pub enum ValueType {
     Integer,
     Boolean,
-    EnumString { allowed: Vec<String> },
+    EnumString {
+        allowed: Vec<String>,
+    },
+    /// A record-list fact, read one row at a time through [`ValueRef::KeyedFact`]. Legal only
+    /// in `facts[]`: each row holds the string `key_column` and every declared column with its
+    /// scalar type; columns a document does not declare are not read.
+    RecordList {
+        key_column: String,
+        columns: BTreeMap<String, ValueType>,
+    },
 }
 
 /// The candidate layout and the resource-declared outcome keys this document may emit.
@@ -157,8 +172,37 @@ pub struct FactDeclaration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ValueRef {
-    Field { field: String },
-    Fact { fact_key: String },
+    Field {
+        field: String,
+    },
+    Fact {
+        fact_key: String,
+    },
+    /// The `value_column` of the row of the record list `fact_key` whose key column equals the
+    /// candidate's `key_field`, among the rows `where` selects. With no such row the value is
+    /// `absent`, a known value of the column's type.
+    KeyedFact {
+        fact_key: String,
+        key_field: String,
+        value_column: String,
+        #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
+        row_filter: Option<RowFilter>,
+        absent: ScalarValue,
+    },
+}
+
+/// Selects the rows of one kind: those whose enumerated `column` equals `equals`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RowFilter {
+    pub column: String,
+    pub equals: String,
+}
+
+impl ValueRef {
+    pub(crate) fn is_keyed_fact(&self) -> bool {
+        matches!(self, Self::KeyedFact { .. })
+    }
 }
 
 /// One lookup key paired with the integer milli value it maps to.
@@ -260,6 +304,31 @@ pub enum Predicate {
     Not {
         of: Box<Predicate>,
     },
+}
+
+impl Predicate {
+    /// Every value the predicate reads, in document order.
+    pub(crate) fn collect_values<'a>(&'a self, values: &mut Vec<&'a ValueRef>) {
+        match self {
+            Self::IntegerAtLeast { value, .. }
+            | Self::IntegerAtMost { value, .. }
+            | Self::IntegerEquals { value, .. }
+            | Self::BooleanEquals { value, .. }
+            | Self::StringIn { value, .. } => values.push(value),
+            Self::All { of } | Self::Any { of } => {
+                for inner in of {
+                    inner.collect_values(values);
+                }
+            }
+            Self::Not { of } => of.collect_values(values),
+        }
+    }
+
+    fn reads_keyed_fact(&self) -> bool {
+        let mut values = Vec::new();
+        self.collect_values(&mut values);
+        values.into_iter().any(ValueRef::is_keyed_fact)
+    }
 }
 
 /// One hard gate: a candidate whose predicate does not hold is rejected.
@@ -367,6 +436,12 @@ impl SelectionPolicy {
         let mut fields = BTreeMap::new();
         for declaration in &self.fields {
             check_id(&declaration.name, "field name")?;
+            if let ValueType::RecordList { .. } = declaration.value_type {
+                return Err(SelectionError::new(
+                    SelectionErrorCode::TypeMismatch,
+                    format!("field={} value_type=record_list", declaration.name),
+                ));
+            }
             check_value_type(&declaration.value_type, &declaration.name)?;
             if fields
                 .insert(declaration.name.as_str(), &declaration.value_type)
@@ -420,6 +495,15 @@ impl SelectionPolicy {
             }
             let mut nodes = 0usize;
             check_predicate(&gate.predicate, &scope, 1, &mut nodes, &gate.gate_id)?;
+            // A list that cannot be read ends the evaluation; a rule never stands in for it.
+            if gate.predicate.reads_keyed_fact()
+                && gate.on_unknown != GateUnknownHandling::AbortEvaluation
+            {
+                return Err(SelectionError::new(
+                    SelectionErrorCode::TypeMismatch,
+                    format!("gate={} reads=keyed_fact on_unknown", gate.gate_id),
+                ));
+            }
         }
 
         let mut term_ids = BTreeSet::new();
@@ -433,6 +517,13 @@ impl SelectionPolicy {
             }
             let value_type = scope.resolve(&term.value, &term.term_id)?;
             check_transform(&term.transform, value_type, &term.term_id)?;
+            if term.value.is_keyed_fact() && term.on_unknown != TermUnknownHandling::AbortEvaluation
+            {
+                return Err(SelectionError::new(
+                    SelectionErrorCode::TypeMismatch,
+                    format!("term={} reads=keyed_fact on_unknown", term.term_id),
+                ));
+            }
         }
 
         for key in &self.tie_break {
@@ -475,6 +566,35 @@ impl SelectionPolicy {
         }
         Ok(())
     }
+
+    /// The fact keys this document declares as record lists, which only `keyed_fact` reads.
+    pub fn record_list_keys(&self) -> BTreeSet<&str> {
+        self.facts
+            .iter()
+            .filter(|declaration| matches!(declaration.value_type, ValueType::RecordList { .. }))
+            .map(|declaration| declaration.fact_key.as_str())
+            .collect()
+    }
+
+    /// Whether this document declares a record list. Only an in-task consumer reads one; the
+    /// scheduling consumer refuses such a document.
+    pub fn uses_record_lists(&self) -> bool {
+        !self.record_list_keys().is_empty()
+    }
+
+    /// Every value the gates, the terms and the tie-break keys read, in document order.
+    pub(crate) fn value_refs(&self) -> Vec<&ValueRef> {
+        let mut values = Vec::new();
+        for gate in &self.gates {
+            gate.predicate.collect_values(&mut values);
+        }
+        values.extend(self.scoring.iter().map(|term| &term.value));
+        values.extend(self.tie_break.iter().filter_map(|key| match key {
+            TieBreakKey::Value { value, .. } => Some(value),
+            TieBreakKey::CandidateId { .. } => None,
+        }));
+        values
+    }
 }
 
 pub(crate) struct Scope<'a> {
@@ -483,29 +603,82 @@ pub(crate) struct Scope<'a> {
 }
 
 impl<'a> Scope<'a> {
+    /// The declared type of the value `reference` reads. A record list is read only through
+    /// `keyed_fact`, whose value has the type of its `value_column`.
     pub(crate) fn resolve(
         &self,
         reference: &ValueRef,
         owner: &str,
     ) -> Result<&'a ValueType, SelectionError> {
         match reference {
-            ValueRef::Field { field } => {
-                self.fields.get(field.as_str()).copied().ok_or_else(|| {
+            ValueRef::Field { field } => self.field(field, owner),
+            ValueRef::Fact { fact_key } => match self.fact(fact_key, owner)? {
+                ValueType::RecordList { .. } => Err(SelectionError::new(
+                    SelectionErrorCode::TypeMismatch,
+                    format!("owner={owner} fact={fact_key} value_type=record_list"),
+                )),
+                value_type => Ok(value_type),
+            },
+            ValueRef::KeyedFact {
+                fact_key,
+                key_field,
+                value_column,
+                row_filter,
+                absent,
+            } => {
+                let mismatch = |member: &str| {
+                    SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("owner={owner} fact={fact_key} keyed_fact={member}"),
+                    )
+                };
+                let dangling = |member: &str| {
                     SelectionError::new(
                         SelectionErrorCode::DanglingReference,
-                        format!("`{owner}` reads undeclared field `{field}`"),
+                        format!("owner={owner} fact={fact_key} keyed_fact={member}"),
                     )
-                })
-            }
-            ValueRef::Fact { fact_key } => {
-                self.facts.get(fact_key.as_str()).copied().ok_or_else(|| {
-                    SelectionError::new(
-                        SelectionErrorCode::DanglingReference,
-                        format!("`{owner}` reads undeclared fact `{fact_key}`"),
-                    )
-                })
+                };
+                let ValueType::RecordList { columns, .. } = self.fact(fact_key, owner)? else {
+                    return Err(mismatch("fact_key"));
+                };
+                if !matches!(self.field(key_field, owner)?, ValueType::EnumString { .. }) {
+                    return Err(mismatch("key_field"));
+                }
+                let column = columns
+                    .get(value_column)
+                    .ok_or_else(|| dangling("value_column"))?;
+                if let Some(filter) = row_filter {
+                    match columns.get(&filter.column) {
+                        None => return Err(dangling("where")),
+                        Some(ValueType::EnumString { allowed })
+                            if allowed.iter().any(|member| member == &filter.equals) => {}
+                        Some(_) => return Err(mismatch("where")),
+                    }
+                }
+                if !absent.matches(column) {
+                    return Err(mismatch("absent"));
+                }
+                Ok(column)
             }
         }
+    }
+
+    fn field(&self, field: &str, owner: &str) -> Result<&'a ValueType, SelectionError> {
+        self.fields.get(field).copied().ok_or_else(|| {
+            SelectionError::new(
+                SelectionErrorCode::DanglingReference,
+                format!("`{owner}` reads undeclared field `{field}`"),
+            )
+        })
+    }
+
+    fn fact(&self, fact_key: &str, owner: &str) -> Result<&'a ValueType, SelectionError> {
+        self.facts.get(fact_key).copied().ok_or_else(|| {
+            SelectionError::new(
+                SelectionErrorCode::DanglingReference,
+                format!("`{owner}` reads undeclared fact `{fact_key}`"),
+            )
+        })
     }
 }
 
@@ -536,22 +709,48 @@ fn check_limit(actual: usize, limit: usize, label: &str) -> Result<(), Selection
 }
 
 fn check_value_type(value_type: &ValueType, owner: &str) -> Result<(), SelectionError> {
-    if let ValueType::EnumString { allowed } = value_type {
-        check_limit(allowed.len(), MAX_ENUM_VALUES, owner)?;
-        if allowed.is_empty() {
-            return Err(SelectionError::new(
-                SelectionErrorCode::MissingRequiredField,
-                format!("`{owner}` declares an empty enum_string"),
-            ));
-        }
-        let mut seen = BTreeSet::new();
-        for member in allowed {
-            check_id(member, "enum_string member")?;
-            if !seen.insert(member.as_str()) {
+    match value_type {
+        ValueType::Integer | ValueType::Boolean => {}
+        ValueType::EnumString { allowed } => {
+            check_limit(allowed.len(), MAX_ENUM_VALUES, owner)?;
+            if allowed.is_empty() {
                 return Err(SelectionError::new(
-                    SelectionErrorCode::DuplicateId,
-                    format!("`{owner}` repeats enum_string member `{member}`"),
+                    SelectionErrorCode::MissingRequiredField,
+                    format!("`{owner}` declares an empty enum_string"),
                 ));
+            }
+            let mut seen = BTreeSet::new();
+            for member in allowed {
+                check_id(member, "enum_string member")?;
+                if !seen.insert(member.as_str()) {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::DuplicateId,
+                        format!("`{owner}` repeats enum_string member `{member}`"),
+                    ));
+                }
+            }
+        }
+        ValueType::RecordList {
+            key_column,
+            columns,
+        } => {
+            check_id(key_column, "key_column")?;
+            check_limit(columns.len(), MAX_RECORD_LIST_COLUMNS, owner)?;
+            for (column, column_type) in columns {
+                check_id(column, "column name")?;
+                if column == key_column {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::DuplicateId,
+                        format!("fact={owner} column={column} key_column"),
+                    ));
+                }
+                if let ValueType::RecordList { .. } = column_type {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("fact={owner} column={column} value_type=record_list"),
+                    ));
+                }
+                check_value_type(column_type, owner)?;
             }
         }
     }
@@ -680,6 +879,54 @@ fn check_transform(
     Ok(())
 }
 
+/// A neutral in-task document that reads one record list through `keyed_fact`: a gate that
+/// the member is listed (`rank` at least one, `absent` zero) and a term that scores its rank.
+#[cfg(test)]
+pub(crate) fn keyed_policy() -> SelectionPolicy {
+    let list = serde_json::json!({
+        "source": "keyed_fact", "fact_key": "session.example.list.targets",
+        "key_field": "member", "value_column": "rank",
+        "absent": {"type": "integer", "value": 0}
+    });
+    serde_json::from_value(serde_json::json!({
+        "schema_version": SELECTION_POLICY_SCHEMA_VERSION,
+        "policy_id": "policy-list",
+        "applies_to": {
+            "candidate_layout_id": "layout-list",
+            "outcome_keys": {
+                "selected": "list-selected", "empty": "list-empty",
+                "insufficient": "list-insufficient", "ambiguous": "list-ambiguous",
+                "unknown": "list-unknown"
+            }
+        },
+        "fields": [{
+            "name": "member",
+            "value_type": {"type": "enum_string", "allowed": ["member-a", "member-b", "member-c"]}
+        }],
+        "facts": [{
+            "fact_key": "session.example.list.targets",
+            "value_type": {
+                "type": "record_list", "key_column": "id",
+                "columns": {"rank": {"type": "integer"}}
+            },
+            "max_age_ms": 3_600_000,
+            "minimum_confidence_milli": 1_000
+        }],
+        "gates": [{
+            "gate_id": "gate-listed",
+            "predicate": {"kind": "integer_at_least", "value": list.clone(), "threshold": 1},
+            "on_unknown": {"kind": "abort_evaluation"}
+        }],
+        "scoring": [{
+            "term_id": "term-rank", "value": list, "transform": {"kind": "identity"},
+            "weight_milli": 1_000, "on_unknown": {"kind": "abort_evaluation"}
+        }],
+        "selection": {"mode": "none_allowed", "required_count": 1},
+        "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+    }))
+    .expect("keyed policy decodes")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +934,154 @@ mod tests {
     pub(crate) fn fixture() -> SelectionPolicy {
         serde_json::from_str(include_str!("../tests/fixtures/policy.json"))
             .expect("fixture policy decodes")
+    }
+
+    /// The `keyed_fact` reference of the keyed document's term.
+    fn list_reference(policy: &mut SelectionPolicy) -> &mut ValueRef {
+        &mut policy.scoring[0].value
+    }
+
+    #[test]
+    fn a_keyed_fact_document_validates_only_when_every_reader_is_fail_closed() {
+        let policy = keyed_policy();
+        policy.validate().expect("keyed policy validates");
+        assert_eq!(
+            policy.record_list_keys(),
+            BTreeSet::from(["session.example.list.targets"])
+        );
+        assert!(policy.uses_record_lists());
+        assert!(!fixture().uses_record_lists());
+
+        // A tie-break key may read a list: the up-front check already guarantees it.
+        let mut tie_break = keyed_policy();
+        tie_break.tie_break.insert(
+            0,
+            TieBreakKey::Value {
+                value: tie_break.scoring[0].value.clone(),
+                direction: SortDirection::HighestFirst,
+            },
+        );
+        tie_break.validate().expect("keyed tie-break validates");
+
+        let cases: [(&str, fn(&mut SelectionPolicy), SelectionErrorCode); 10] = [
+            (
+                "record_list as a field",
+                |policy| policy.fields[0].value_type = policy.facts[0].value_type.clone(),
+                SelectionErrorCode::TypeMismatch,
+            ),
+            (
+                "plain fact reference to a list",
+                |policy| {
+                    policy.scoring[0].value = ValueRef::Fact {
+                        fact_key: "session.example.list.targets".to_owned(),
+                    }
+                },
+                SelectionErrorCode::TypeMismatch,
+            ),
+            (
+                "term that drops on an unreadable list",
+                |policy| policy.scoring[0].on_unknown = TermUnknownHandling::DropCandidate,
+                SelectionErrorCode::TypeMismatch,
+            ),
+            (
+                "gate that substitutes for an unreadable list",
+                |policy| {
+                    policy.gates[0].on_unknown =
+                        GateUnknownHandling::SubstituteVerdict { passes: false }
+                },
+                SelectionErrorCode::TypeMismatch,
+            ),
+            (
+                "key field of another type",
+                |policy| {
+                    policy.fields.push(FieldDeclaration {
+                        name: "level".to_owned(),
+                        value_type: ValueType::Integer,
+                    });
+                    if let ValueRef::KeyedFact { key_field, .. } = list_reference(policy) {
+                        *key_field = "level".to_owned();
+                    }
+                },
+                SelectionErrorCode::TypeMismatch,
+            ),
+            (
+                "undeclared value column",
+                |policy| {
+                    if let ValueRef::KeyedFact { value_column, .. } = list_reference(policy) {
+                        *value_column = "count".to_owned();
+                    }
+                },
+                SelectionErrorCode::DanglingReference,
+            ),
+            (
+                "where over a non-enumerated column",
+                |policy| {
+                    if let ValueRef::KeyedFact { row_filter, .. } = list_reference(policy) {
+                        *row_filter = Some(RowFilter {
+                            column: "rank".to_owned(),
+                            equals: "kind-x".to_owned(),
+                        });
+                    }
+                },
+                SelectionErrorCode::TypeMismatch,
+            ),
+            (
+                "absent of another type",
+                |policy| {
+                    if let ValueRef::KeyedFact { absent, .. } = list_reference(policy) {
+                        *absent = ScalarValue::Boolean(false);
+                    }
+                },
+                SelectionErrorCode::TypeMismatch,
+            ),
+            (
+                "key column among the columns",
+                |policy| {
+                    if let ValueType::RecordList { columns, .. } = &mut policy.facts[0].value_type {
+                        columns.insert(
+                            "id".to_owned(),
+                            ValueType::EnumString {
+                                allowed: vec!["member-a".to_owned()],
+                            },
+                        );
+                    }
+                },
+                SelectionErrorCode::DuplicateId,
+            ),
+            (
+                "nested record list column",
+                |policy| {
+                    let nested = policy.facts[0].value_type.clone();
+                    if let ValueType::RecordList { columns, .. } = &mut policy.facts[0].value_type {
+                        columns.insert("nested".to_owned(), nested);
+                    }
+                },
+                SelectionErrorCode::TypeMismatch,
+            ),
+        ];
+        for (label, mutate, code) in cases {
+            let mut policy = keyed_policy();
+            mutate(&mut policy);
+            let error = policy.validate().expect_err(label);
+            assert_eq!(error.code(), code, "{label}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_identity_domain_of_1024_members_is_declarable_and_1025_is_not() {
+        let domain = |size: usize| ValueType::EnumString {
+            allowed: (0..size)
+                .map(|index| format!("member-{index:04}"))
+                .collect(),
+        };
+        let mut policy = keyed_policy();
+        policy.fields[0].value_type = domain(MAX_ENUM_VALUES);
+        assert_eq!(MAX_ENUM_VALUES, 1_024);
+        policy.validate().expect("a 1024-member domain validates");
+
+        policy.fields[0].value_type = domain(MAX_ENUM_VALUES + 1);
+        let error = policy.validate().expect_err("a 1025-member domain");
+        assert_eq!(error.code(), SelectionErrorCode::LimitExceeded);
     }
 
     #[test]

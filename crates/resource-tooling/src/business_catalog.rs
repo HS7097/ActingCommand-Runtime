@@ -6,6 +6,7 @@
 use actingcommand_contract::{LabError, LabResult};
 use actingcommand_recognition_pack::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
+    MAX_IDENTITY_ENTRIES,
 };
 use actingcommand_selection_policy::{
     FieldDeclaration, LookupEntry, LookupKey, Transform, ValueType,
@@ -130,7 +131,7 @@ pub fn compile_business_catalog(
     if catalog.schema_version != BUSINESS_CATALOG_SCHEMA
         || !token(&catalog.catalog_id)
         || !token(server)
-        || !(1..=128).contains(&catalog.entries.len())
+        || !(1..=MAX_IDENTITY_ENTRIES).contains(&catalog.entries.len())
         || catalog.pools.len() > 128
         || catalog
             .pools

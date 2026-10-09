@@ -1259,6 +1259,34 @@ fn build_pack_maps_schema_06_ocr_target_to_canonical_output() {
 }
 
 #[test]
+fn a_business_catalog_declares_up_to_1024_identities() {
+    let catalog = |size: usize| {
+        let entries: Vec<Value> = (0..size)
+            .map(|index| {
+                json!({
+                    "id": format!("member-{index:04}"),
+                    "names": {"test": [format!("Member {index:04}")]},
+                    "source": {"uri": "https://example.invalid/source", "date": "2026-10-03"}
+                })
+            })
+            .collect();
+        serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.business-catalog.v1", "catalog_id": "synthetic",
+            "pools": {"material": 10},
+            "recognition": {"kind": "ocr_aliases", "max_distance": 1, "minimum_margin": 1,
+                            "minimum_confidence_milli": 800},
+            "entries": entries
+        }))
+        .unwrap()
+    };
+    let compiled = crate::compile_business_catalog(&catalog(1_024), "test", "business_id")
+        .expect("a 1024-row catalog compiles");
+    assert_eq!(compiled.provenance.entries.len(), 1_024);
+    crate::compile_business_catalog(&catalog(1_025), "test", "business_id")
+        .expect_err("a 1025-row catalog is refused");
+}
+
+#[test]
 fn build_pack_without_ocr_targets_preserves_existing_output() {
     let pack = ocr_test_converter("0.6", None)
         .build_pack()
