@@ -473,6 +473,61 @@ pub trait LedgerTransactionWork: Send + 'static {
     ) -> Result<TransactionStateObservation, TransactionWorkError>;
 }
 
+/// Workflow #369 E3 (#670 safety net; verification N-1): the codes with which the ledger
+/// refuses one run's scheduled settlement after validating that run's facts. Such a refusal is
+/// not terminal: the writer keeps running (a completion refused after its execution was
+/// appended leaves that execution durable), and a start records the run and carries on. Every
+/// other settlement failure (an event id, a sanitize or an action id failure, any storage
+/// fault) stays terminal.
+pub const SCHEDULED_SETTLEMENT_REFUSALS: [&str; 38] = [
+    "scheduled_execution_recovery_admission_not_unique",
+    "scheduled_execution_recovery_clock_regressed",
+    "scheduled_execution_recovery_conflict",
+    "scheduled_execution_recovery_draft_invalid",
+    "scheduled_execution_recovery_draft_type_invalid",
+    "scheduled_execution_recovery_fact_type_invalid",
+    "scheduled_execution_recovery_failure_conflict",
+    "scheduled_execution_recovery_failure_invalid",
+    "scheduled_execution_recovery_failure_severity_ambiguous",
+    "scheduled_execution_recovery_intent_not_unique",
+    "scheduled_execution_recovery_interruption_conflict",
+    "scheduled_execution_recovery_lease_not_unique",
+    "scheduled_execution_recovery_links_invalid",
+    "scheduled_execution_recovery_not_unique",
+    "scheduled_execution_recovery_order_invalid",
+    "scheduled_execution_recovery_outcome_conflict",
+    "scheduled_execution_recovery_payload_conflict",
+    "scheduled_execution_recovery_release_invalid",
+    "scheduled_execution_recovery_release_not_unique",
+    "scheduled_execution_recovery_severity_invalid",
+    "scheduled_execution_recovery_success_conflict",
+    "scheduled_execution_recovery_task_request_not_unique",
+    "scheduled_execution_recovery_terminal_not_unique",
+    "scheduled_execution_recovery_time_conflict",
+    "scheduled_recovery_admission_not_unique",
+    "scheduled_recovery_completion_conflict",
+    "scheduled_recovery_completion_not_unique",
+    "scheduled_recovery_draft_invalid",
+    "scheduled_recovery_draft_type_invalid",
+    "scheduled_recovery_execution_links_conflict",
+    "scheduled_recovery_execution_not_unique",
+    "scheduled_recovery_fact_type_invalid",
+    "scheduled_recovery_intent_not_unique",
+    "scheduled_recovery_lease_not_unique",
+    "scheduled_recovery_links_invalid",
+    "scheduled_recovery_payload_conflict",
+    "scheduled_recovery_release_not_unique",
+    "scheduled_recovery_release_order_invalid",
+];
+
+/// Whether `code` is one of [`SCHEDULED_SETTLEMENT_REFUSALS`] (with test hooks, also the test
+/// refusal `scheduled_execution_recovery_refused_for_test`).
+pub fn is_scheduled_settlement_refusal_code(code: &str) -> bool {
+    SCHEDULED_SETTLEMENT_REFUSALS.contains(&code)
+        || cfg!(any(test, feature = "test-hooks"))
+            && code == "scheduled_execution_recovery_refused_for_test"
+}
+
 /// Workflow #369 E3 (#670 safety net), test hook: the next scheduled settlement of each listed
 /// decision is refused, once, as a settlement validation would refuse it
 /// (`scheduled_execution_recovery_refused_for_test`).
@@ -532,6 +587,26 @@ impl GlobalLedgerError {
 
     pub fn is_fatal(&self) -> bool {
         self.terminal
+    }
+
+    /// A refusal of one run's scheduled settlement ([`SCHEDULED_SETTLEMENT_REFUSALS`]): not
+    /// terminal.
+    pub(crate) fn settlement_refusal(code: &'static str, operation: &'static str) -> Self {
+        debug_assert!(is_scheduled_settlement_refusal_code(code), "{code}");
+        Self {
+            code,
+            operation,
+            detail: None,
+            terminal: false,
+            rolled_back_work: None,
+            io_kind: None,
+        }
+    }
+
+    /// Whether this is a refusal of one run's scheduled settlement: one of the explicit
+    /// [`SCHEDULED_SETTLEMENT_REFUSALS`], never terminal.
+    pub fn is_scheduled_settlement_refusal(&self) -> bool {
+        !self.terminal && is_scheduled_settlement_refusal_code(self.code)
     }
 
     pub(crate) fn fatal(code: &'static str, operation: &'static str) -> Self {
@@ -2201,6 +2276,7 @@ fn writer_loop<S: LedgerStore>(
                 execution,
                 response,
             } => {
+                let before = store.latest_sequence();
                 let result = store.reconcile_scheduled_policy_settlement(*execution);
                 command_succeeded = result.is_ok();
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
@@ -2217,6 +2293,15 @@ fn writer_loop<S: LedgerStore>(
                     return Err(error);
                 }
                 if let Err(error) = result {
+                    // A settlement refusal is not terminal (#670 safety net); an execution
+                    // appended before its completion was refused stays, and reaches the
+                    // subscribers.
+                    for event in store.query(&EventQuery {
+                        from_sequence: Some(before.saturating_add(1)),
+                        ..EventQuery::default()
+                    }) {
+                        deliver_live_event(&mut subscribers, &event);
+                    }
                     command_observation.replied(response.send(Err(error)).is_ok());
                 }
             }

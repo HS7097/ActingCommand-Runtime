@@ -445,7 +445,7 @@ impl<B: DurableStorage> EventStore<B> {
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)> {
         #[cfg(any(test, feature = "test-hooks"))]
         if super::take_settlement_refusal_for_test(&execution.decision_id) {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_refused_for_test",
                 "reconcile_scheduled_policy_settlement",
             ));
@@ -482,7 +482,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [intent] = intents.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_intent_not_unique",
                 "build_policy_completion_recovery",
             ));
@@ -500,13 +500,13 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [admission] = admissions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_admission_not_unique",
                 "build_policy_completion_recovery",
             ));
         };
         let Some(admission) = admission.admission() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_payload_conflict",
                 "build_policy_completion_recovery",
             ));
@@ -523,7 +523,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [execution] = executions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_execution_not_unique",
                 "build_policy_completion_recovery",
             ));
@@ -579,14 +579,14 @@ impl<B: DurableStorage> EventStore<B> {
             || !draft.artifacts().is_empty()
             || !event_links_empty(draft.links())
         {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_draft_invalid",
                 "recover_policy_completion",
             ));
         }
         let EventPayload::Policy(PolicyPayload::DispatchCompleted(completion)) = draft.payload()
         else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_draft_type_invalid",
                 "recover_policy_completion",
             ));
@@ -605,7 +605,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(intent_fact, intent)] = intents.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_intent_not_unique",
                 "recover_policy_completion",
             ));
@@ -623,7 +623,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(admission_fact, admission)] = admissions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_admission_not_unique",
                 "recover_policy_completion",
             ));
@@ -640,7 +640,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [execution_fact] = executions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_execution_not_unique",
                 "recover_policy_completion",
             ));
@@ -648,7 +648,7 @@ impl<B: DurableStorage> EventStore<B> {
         let EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution)) =
             execution_fact.payload()
         else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_fact_type_invalid",
                 "recover_policy_completion",
             ));
@@ -668,7 +668,7 @@ impl<B: DurableStorage> EventStore<B> {
             [] => None,
             [completion] => Some(*completion),
             _ => {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_recovery_completion_not_unique",
                     "recover_policy_completion",
                 ));
@@ -685,7 +685,7 @@ impl<B: DurableStorage> EventStore<B> {
                 && admission_fact.sequence() < execution_fact.sequence())
             || !same_chain_without_lease(intent_fact.links(), admission_fact.links())
         {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_payload_conflict",
                 "recover_policy_completion",
             ));
@@ -702,14 +702,14 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [lease_granted] = lease_grants.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_lease_not_unique",
                 "recover_policy_completion",
             ));
         };
         let recovered_links = execution_fact.links();
         if !same_scheduled_chain(recovered_links, lease_granted.links()) {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_execution_links_conflict",
                 "recover_policy_completion",
             ));
@@ -735,7 +735,7 @@ impl<B: DurableStorage> EventStore<B> {
             ([release], _) => *release,
             ([], Some((end, _))) => end,
             _ => {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_recovery_release_not_unique",
                     "recover_policy_completion",
                 ));
@@ -744,7 +744,7 @@ impl<B: DurableStorage> EventStore<B> {
         if release.sequence() <= admission_fact.sequence()
             || release.sequence() >= execution_fact.sequence()
         {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_release_order_invalid",
                 "recover_policy_completion",
             ));
@@ -753,7 +753,7 @@ impl<B: DurableStorage> EventStore<B> {
             let EventPayload::Policy(PolicyPayload::DispatchCompleted(existing)) =
                 existing_completion.payload()
             else {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_recovery_fact_type_invalid",
                     "recover_policy_completion",
                 ));
@@ -762,7 +762,7 @@ impl<B: DurableStorage> EventStore<B> {
                 || !same_scheduled_chain(existing_completion.links(), lease_granted.links())
                 || existing_completion.sequence() <= execution_fact.sequence()
             {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_recovery_completion_conflict",
                     "recover_policy_completion",
                 ));
@@ -776,7 +776,7 @@ impl<B: DurableStorage> EventStore<B> {
             action_id,
         )
         .map_err(|_| {
-            GlobalLedgerError::fatal(
+            GlobalLedgerError::settlement_refusal(
                 "scheduled_recovery_links_invalid",
                 "recover_policy_completion",
             )
@@ -795,14 +795,14 @@ impl<B: DurableStorage> EventStore<B> {
             || !draft.artifacts().is_empty()
             || !event_links_empty(draft.links())
         {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_draft_invalid",
                 "recover_policy_execution",
             ));
         }
         let EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution)) = draft.payload()
         else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_draft_type_invalid",
                 "recover_policy_execution",
             ));
@@ -817,7 +817,7 @@ impl<B: DurableStorage> EventStore<B> {
             PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
         };
         if draft.severity() != expected_severity {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_severity_invalid",
                 "recover_policy_execution",
             ));
@@ -836,7 +836,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(intent_fact, intent)] = intents.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_intent_not_unique",
                 "recover_policy_execution",
             ));
@@ -854,7 +854,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(admission_fact, admission)] = admissions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_admission_not_unique",
                 "recover_policy_execution",
             ));
@@ -866,7 +866,7 @@ impl<B: DurableStorage> EventStore<B> {
             || execution.instance_id() != intent.instance_id()
             || !same_chain_without_lease(intent_fact.links(), admission_fact.links())
         {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_payload_conflict",
                 "recover_policy_execution",
             ));
@@ -886,7 +886,7 @@ impl<B: DurableStorage> EventStore<B> {
             [] => None,
             [existing] => Some(*existing),
             _ => {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_execution_recovery_not_unique",
                     "recover_policy_execution",
                 ));
@@ -904,7 +904,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .count();
         if completion_count > 1 || completion_count == 1 && existing_execution.is_none() {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_outcome_conflict",
                 "recover_policy_execution",
             ));
@@ -919,7 +919,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [lease_granted] = lease_grants.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_lease_not_unique",
                 "recover_policy_execution",
             ));
@@ -948,7 +948,7 @@ impl<B: DurableStorage> EventStore<B> {
             ([release], _) => *release,
             ([], Some((end, _))) => end,
             _ => {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_execution_recovery_release_not_unique",
                     "recover_policy_execution",
                 ));
@@ -966,7 +966,7 @@ impl<B: DurableStorage> EventStore<B> {
                     Some(EffectDisposition::Performed | EffectDisposition::NotPerformed)
                 ))
         {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_release_invalid",
                 "recover_policy_execution",
             ));
@@ -984,7 +984,7 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         if terminals.len() > 1 {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_terminal_not_unique",
                 "recover_policy_execution",
             ));
@@ -995,9 +995,9 @@ impl<B: DurableStorage> EventStore<B> {
         // settled once as interrupted, from that release or end. A run's release with no
         // terminal is taken through `same_task_run_chain`, under the grant's request or the
         // run's own task request (final review M-1). A run that has a terminal is settled from
-        // it (`terminal_lease_end_valid`). An interrupted settlement of a run whose terminals all
-        // precede its `not_performed` release on the grant's chain is still accepted, as
-        // before.
+        // it (`terminal_lease_end_valid`); an interrupted settlement of such a run is refused,
+        // whatever the order of its terminal and its release or lease end (coordinator ruling
+        // on #670, R4).
         let recovered_interruption = (handed_on.is_some()
             || release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed))
             && is_interrupted_settlement(execution.outcome());
@@ -1006,7 +1006,7 @@ impl<B: DurableStorage> EventStore<B> {
             [] => release,
             [terminal] => *terminal,
             _ => {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_execution_recovery_terminal_not_unique",
                     "recover_policy_execution",
                 ));
@@ -1046,18 +1046,14 @@ impl<B: DurableStorage> EventStore<B> {
                 .and_then(|record| record.budget.runtime_exceeded(0, runtime_ms))
                 == Some(true)
         };
-        let recovered_topology_valid = recovered_interruption
-            && (handed_on.is_some()
-                || same_scheduled_chain(release.links(), recovered_links)
-                || terminals.is_empty())
-            && terminals
-                .iter()
-                .all(|terminal| terminal.sequence() < release.sequence());
+        // Coordinator ruling on #670 (R4; verification N-2): only a run with no terminal is
+        // settled as interrupted.
+        let recovered_topology_valid = recovered_interruption && terminals.is_empty();
         if !(intent_fact.sequence() < lease_granted.sequence()
             && lease_granted.sequence() < admission_fact.sequence()
             && admission_fact.sequence() < source_fact.sequence())
         {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_order_invalid",
                 "recover_policy_execution",
             ));
@@ -1066,7 +1062,7 @@ impl<B: DurableStorage> EventStore<B> {
             let EventPayload::Policy(PolicyPayload::ExecutionRecorded(existing)) =
                 existing_execution.payload()
             else {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_execution_recovery_fact_type_invalid",
                     "recover_policy_execution",
                 ));
@@ -1111,7 +1107,7 @@ impl<B: DurableStorage> EventStore<B> {
                 || !same_scheduled_chain(existing_execution.links(), recovered_links)
                 || !topology_valid
             {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_execution_recovery_conflict",
                     "recover_policy_execution",
                 ));
@@ -1121,7 +1117,7 @@ impl<B: DurableStorage> EventStore<B> {
         match source_fact.event_type() {
             _ if recovered_interruption => {
                 if !recovered_topology_valid {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_interruption_conflict",
                         "recover_policy_execution",
                     ));
@@ -1129,7 +1125,7 @@ impl<B: DurableStorage> EventStore<B> {
             }
             EventType::TaskCompleted => {
                 let [terminal] = terminals.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_terminal_not_unique",
                         "recover_policy_execution",
                     ));
@@ -1137,7 +1133,7 @@ impl<B: DurableStorage> EventStore<B> {
                 let task_requests =
                     matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_task_request_not_unique",
                         "recover_policy_execution",
                     ));
@@ -1146,7 +1142,7 @@ impl<B: DurableStorage> EventStore<B> {
                     .timestamp_unix_ms()
                     .checked_sub(task_request.timestamp_unix_ms())
                     .ok_or_else(|| {
-                        GlobalLedgerError::fatal(
+                        GlobalLedgerError::settlement_refusal(
                             "scheduled_execution_recovery_clock_regressed",
                             "recover_policy_execution",
                         )
@@ -1176,7 +1172,7 @@ impl<B: DurableStorage> EventStore<B> {
                         } if *actual == runtime_ms
                     ) || runtime_rewrite_valid(true, runtime_ms))
                 {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_success_conflict",
                         "recover_policy_execution",
                     ));
@@ -1184,7 +1180,7 @@ impl<B: DurableStorage> EventStore<B> {
             }
             EventType::TaskFailed => {
                 let [terminal] = terminals.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_terminal_not_unique",
                         "recover_policy_execution",
                     ));
@@ -1193,7 +1189,7 @@ impl<B: DurableStorage> EventStore<B> {
                     EventSeverity::Warning => PolicyFailureClass::Recoverable,
                     EventSeverity::Fatal => PolicyFailureClass::Severe,
                     EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
-                        return Err(GlobalLedgerError::fatal(
+                        return Err(GlobalLedgerError::settlement_refusal(
                             "scheduled_execution_recovery_failure_severity_ambiguous",
                             "recover_policy_execution",
                         ));
@@ -1201,7 +1197,7 @@ impl<B: DurableStorage> EventStore<B> {
                 };
                 let EventPayload::Task(TaskPayload::Semantic(payload)) = source_fact.payload()
                 else {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_failure_invalid",
                         "recover_policy_execution",
                     ));
@@ -1212,7 +1208,7 @@ impl<B: DurableStorage> EventStore<B> {
                     ..
                 } = payload.fact()
                 else {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_failure_invalid",
                         "recover_policy_execution",
                     ));
@@ -1220,7 +1216,7 @@ impl<B: DurableStorage> EventStore<B> {
                 let task_requests =
                     matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_task_request_not_unique",
                         "recover_policy_execution",
                     ));
@@ -1229,7 +1225,7 @@ impl<B: DurableStorage> EventStore<B> {
                     .timestamp_unix_ms()
                     .checked_sub(task_request.timestamp_unix_ms())
                     .ok_or_else(|| {
-                        GlobalLedgerError::fatal(
+                        GlobalLedgerError::settlement_refusal(
                             "scheduled_execution_recovery_clock_regressed",
                             "recover_policy_execution",
                         )
@@ -1248,7 +1244,7 @@ impl<B: DurableStorage> EventStore<B> {
                                 && failure.runtime_ms == runtime_ms
                     ) || runtime_rewrite_valid(false, runtime_ms))
                 {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_failure_conflict",
                         "recover_policy_execution",
                     ));
@@ -1284,21 +1280,21 @@ impl<B: DurableStorage> EventStore<B> {
                                 && failure.runtime_ms == 0
                     )
                 {
-                    return Err(GlobalLedgerError::fatal(
+                    return Err(GlobalLedgerError::settlement_refusal(
                         "scheduled_execution_recovery_interruption_conflict",
                         "recover_policy_execution",
                     ));
                 }
             }
             _ => {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::settlement_refusal(
                     "scheduled_execution_recovery_fact_type_invalid",
                     "recover_policy_execution",
                 ));
             }
         }
         if execution.observed_at_unix_ms() != source_fact.timestamp_unix_ms() {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_time_conflict",
                 "recover_policy_execution",
             ));
@@ -1310,7 +1306,7 @@ impl<B: DurableStorage> EventStore<B> {
             action_id,
         )
         .map_err(|_| {
-            GlobalLedgerError::fatal(
+            GlobalLedgerError::settlement_refusal(
                 "scheduled_execution_recovery_links_invalid",
                 "recover_policy_execution",
             )

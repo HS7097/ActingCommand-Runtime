@@ -1641,8 +1641,9 @@ pub(super) struct UnsettledDispatch {
 
 /// The refusals of one run's recovered settlement that the start records instead of failing
 /// (#670 safety net): the host's own checks of the run's facts and outcome, and the ledger's
-/// settlement validation (`scheduled_execution_recovery_*`, `scheduled_recovery_*`). Every other
-/// failure, among them a ledger that cannot be read or written, stays fatal.
+/// explicit settlement refusals (`actingcommand_ledger::SCHEDULED_SETTLEMENT_REFUSALS`, which the
+/// ledger raises as non-terminal). Every other failure, among them a ledger that cannot be read
+/// or written, stays fatal.
 const PER_RUN_SETTLEMENT_REFUSALS: [&str; 10] = [
     "policy_run_identity_missing",
     "policy_run_lease_fact_not_unique",
@@ -1657,11 +1658,8 @@ const PER_RUN_SETTLEMENT_REFUSALS: [&str; 10] = [
 ];
 
 fn per_run_settlement_refusal(error: &RuntimeHostError) -> bool {
-    PER_RUN_SETTLEMENT_REFUSALS.contains(&error.code()) || ledger_settlement_refusal(error.code())
-}
-
-fn ledger_settlement_refusal(code: &str) -> bool {
-    code.starts_with("scheduled_execution_recovery_") || code.starts_with("scheduled_recovery_")
+    PER_RUN_SETTLEMENT_REFUSALS.contains(&error.code())
+        || actingcommand_ledger::is_scheduled_settlement_refusal_code(error.code())
 }
 
 /// A ledger refusal of one run's recovered settlement keeps its code (#670 safety net); any
@@ -1670,7 +1668,7 @@ fn settlement_refusal_or_ledger_error(
     error: &actingcommand_ledger::GlobalLedgerError,
     operation: &'static str,
 ) -> RuntimeHostError {
-    if ledger_settlement_refusal(error.code()) {
+    if error.is_scheduled_settlement_refusal() {
         RuntimeHostError::fatal(error.code(), operation, RuntimeErrorCode::LedgerFailure)
     } else {
         ledger_error(operation)
@@ -1689,7 +1687,7 @@ pub(super) fn reconcile_policy_dispatches(
         let completion = match ledger.reconcile_scheduled_policy_settlement(execution) {
             Ok(completion) => completion,
             // #670 safety net: as for an outcome, a refused completion is recorded.
-            Err(error) if ledger_settlement_refusal(error.code()) => {
+            Err(error) if error.is_scheduled_settlement_refusal() => {
                 policy.quarantine_dispatch(&decision_id);
                 start.unsettled.push(UnsettledDispatch {
                     decision_id,
