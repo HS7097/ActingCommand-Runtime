@@ -51,7 +51,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/actinglab",
         "A2d lists it until B4 converts the actinglab sites",
     ),
-    member("apps/device-test", "A2a converts the device-test tool"),
     member("apps/ledger-forensics", "A2c converts actingledger"),
     member(
         "apps/vision-provider-check",

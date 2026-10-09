@@ -13,6 +13,10 @@ behind Runtime scheduler IPC and offline `--scene` commands became state-free. T
 retains an explicit fail-loud compatibility tombstone, but no Lab arbitrator package, store, lease,
 recovery file, or device backend authority remains.
 
+Runtime v0.11.6 retired the device-test probe (`apps/device-test`,
+`actingcommand-device-test`). The task-loop rows below name it as the consumer it
+was at the baseline.
+
 ## Workspace dependency snapshot
 
 | Package | Current relevant consumers | C5 disposition |

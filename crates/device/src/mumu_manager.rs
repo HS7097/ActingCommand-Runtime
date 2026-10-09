@@ -191,7 +191,7 @@ pub struct MumuDiscoveryReport {
     pub instances: Vec<DiscoveredMumuInstance>,
 }
 
-/// The single discovery entry used by the daemon and the device-test probe. `env_folder` is
+/// The single discovery entry, used by the daemon. `env_folder` is
 /// the caller-injected `ACTINGCOMMAND_NEMU_FOLDER` value (see [`resolve_mumu_manager`]).
 pub fn discover_mumu_instances(
     explicit_root: Option<&Path>,

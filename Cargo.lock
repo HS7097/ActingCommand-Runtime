@@ -132,26 +132,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actingcommand-device-test"
-version = "0.1.0"
-dependencies = [
- "actingcommand-artifact-store",
- "actingcommand-contract",
- "actingcommand-device",
- "actingcommand-execution-kernel",
- "actingcommand-host-metrics",
- "actingcommand-ledger",
- "actingcommand-ledger-forensics",
- "actingcommand-page-detector",
- "actingcommand-recognition",
- "actingcommand-recognition-pack",
- "actingcommand-runtime-database",
- "actingcommand-scheduler",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "actingcommand-execution-kernel"
 version = "0.1.0"
 dependencies = [

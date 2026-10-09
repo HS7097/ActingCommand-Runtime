@@ -37,7 +37,7 @@ ActingCommand Runtime is a resident Rust runtime for running multi-target automa
 
 `actingcommand-runtime-client` is the only typed IPC path available to clients. A client never constructs and never owns a production device backend, and closing a UI or CLI client does not stop the runtime.
 
-`actingcommand-runtime-host` owns the resident process. With an out-degree of 13 it is the widest node in the graph. It exclusively holds local IPC, the lease-gated DeviceProxy and lifecycle control, and, among normal (non-dev) dependencies, it is the sole consumer of `actingcommand-runtime-state`; `actingcommand-scheduler` and `actingcommand-host-metrics` it shares only with the `device-test` probing tool, which admits its own device writes through a process-local scheduler lease.
+`actingcommand-runtime-host` owns the resident process. With an out-degree of 13 it is the widest node in the graph. It exclusively holds local IPC, the lease-gated DeviceProxy and lifecycle control, and, among normal (non-dev) dependencies, it is the sole consumer of `actingcommand-runtime-state`, `actingcommand-scheduler` and `actingcommand-host-metrics`.
 
 `actingcommand-scheduler` owns per-instance write admission, lease lifetime and fencing authority, and its only dependency is the contract. `actingcommand-policy` is a pure scheduling-policy contract shared by the catalog compiler and the evaluator; it builds on `actingcommand-selection-policy`, a pure selection evaluator (a declared document, a bounded candidate set and an explicit fact snapshot in, a deterministic choice with its reasons out). `actingcommand-execution-kernel` holds the daemon-side execution session and pure task/probe decision planning; it is invoked only after the scheduler has admitted the work and fencing has completed, and a client never obtains a backend object.
 
@@ -92,14 +92,13 @@ There are four workflows in total: three CI workflows and the on-demand `release
 
 The workspace declares 30 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
-### apps (6)
+### apps (5)
 
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
 | apps/actingctl | actingcommand-actingctl | bin `actingctl` | Lean production CLI for correlation-scoped runtime flows |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | Lean process adapter for the resident runtime |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 47 top-level dispatch arms, 132 commands |
-| apps/device-test | actingcommand-device-test | bin `actingcommand-device-test` | Device backend probing, offline dry-run planning, page/recognition evaluation |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
@@ -235,9 +234,6 @@ actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confir
 # Vision model folders and provider startup facts
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
 actingcommand-vision-provider-check --models-root <vision root>\models --hash
-
-# Read-only MuMu instance discovery probe (runs only MuMuManager version and info -v all; prints one JSON line)
-actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
 Note: the daemon binary cargo produces is named `actingcommand-actingd`; the short names are `actingctl`, `actinglab`, `actingledger`.
