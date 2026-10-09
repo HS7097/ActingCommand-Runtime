@@ -26,7 +26,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -117,6 +117,22 @@ fn install_transition_run(
     }
 }
 
+/// Workflow #381 A R1′: the client configuration of one run. An install-transition run gets its
+/// budget as the exchange timeout and as one deadline counted from `started`.
+fn client_config(state_root: &Path, command: &Command, started: Instant) -> RuntimeClientConfig {
+    let (actor, source) = command.origin();
+    let config = RuntimeClientConfig::new(state_root, actor, source);
+    let Command::InstallTransition { action } = command else {
+        return config;
+    };
+    let run = install_transition_run(action);
+    let config = config.with_io_timeout(run.exchange_timeout);
+    match run.budget {
+        Some(budget) => config.with_deadline(started + budget),
+        None => config,
+    }
+}
+
 fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     let started = Instant::now();
     let Invocation {
@@ -162,19 +178,12 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     } else {
         None
     };
-    let (actor, source) = command.origin();
     let install_run = match &command {
         Command::InstallTransition { action } => Some(install_transition_run(action)),
         _ => None,
     };
-    let mut client_config = RuntimeClientConfig::new(&state_root, actor, source);
-    if let Some(install_run) = install_run {
-        client_config = client_config.with_io_timeout(install_run.exchange_timeout);
-        if let Some(budget) = install_run.budget {
-            client_config = client_config.with_deadline(started + budget);
-        }
-    }
-    let client = RuntimeClient::connect(client_config).map_err(ActingctlError::runtime)?;
+    let client = RuntimeClient::connect(client_config(&state_root, &command, started))
+        .map_err(ActingctlError::runtime)?;
     let optional_instance = instance.clone();
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
     let output = match command {

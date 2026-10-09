@@ -63,6 +63,19 @@
       "common_causes": "The installer stopped, timed out or lost its connection before it sent the release.",
       "handling": "TBD"
     },
+    "install_startup_shut_down": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. It is a formal stop: the watchdog holds it and never restarts it.",
+      "common_causes": "An installer, the console or actingctl request-shutdown stopped an owner that waited for its release.",
+      "handling": "TBD"
+    },
     "install_startup_stopped": {
       "category": "error",
       "owner": "runtime-host",
@@ -72,8 +85,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held or released start stopped before it finished preparing, because a shutdown was accepted or the Runtime latched a failure; the operation is install_transition. Until slice A2 turns it into a caused_by link, a latched failure is carried as the tokens cause=<code> cause_operation=<operation> on the FATAL line, in the transition's status fact and in the lifecycle failure's detail. A restart may succeed, so the watchdog considers a start.",
-      "common_causes": "An installer that shut down the held owner; a ledger write that failed on a request thread while the start was preparing.",
+      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. Until slice A2 turns it into a caused_by link, the latched failure is carried as the tokens cause=<code> cause_operation=<operation> on the FATAL line, in the transition's status fact and in the lifecycle failure's detail. A restart may succeed, so the watchdog considers a start.",
+      "common_causes": "A ledger write that failed on a request thread while the start was preparing.",
       "handling": "TBD"
     },
     "maintenance_artifact_material_unavailable": {

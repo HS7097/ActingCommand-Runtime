@@ -8,11 +8,19 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 
 struct Barrier {
     root: PathBuf,
-    released: Mutex<bool>,
+    state: Mutex<BarrierState>,
     changed: Condvar,
+}
+
+#[derive(Default)]
+struct BarrierState {
+    released: bool,
+    /// Commits that reached the barrier since it was armed.
+    held: usize,
 }
 
 fn armed() -> &'static Mutex<Vec<Arc<Barrier>>> {
@@ -31,7 +39,7 @@ impl WriterStallGate {
     pub fn arm(state_root: &Path) -> std::io::Result<Self> {
         let barrier = Arc::new(Barrier {
             root: state_root.canonicalize()?,
-            released: Mutex::new(false),
+            state: Mutex::new(BarrierState::default()),
             changed: Condvar::new(),
         });
         armed()
@@ -39,6 +47,21 @@ impl WriterStallGate {
             .unwrap_or_else(PoisonError::into_inner)
             .push(Arc::clone(&barrier));
         Ok(Self { barrier })
+    }
+
+    /// Whether a commit is held at the gate, waiting at most `wait` for one to arrive.
+    pub fn wait_held_commit(&self, wait: Duration) -> bool {
+        let state = self
+            .barrier
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (state, _) = self
+            .barrier
+            .changed
+            .wait_timeout_while(state, wait, |state| state.held == 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        state.held > 0
     }
 
     /// Lets every stopped commit finish; later commits no longer stop.
@@ -53,11 +76,11 @@ impl Drop for WriterStallGate {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|barrier| !Arc::ptr_eq(barrier, &self.barrier));
-        *self
-            .barrier
-            .released
+        self.barrier
+            .state
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = true;
+            .unwrap_or_else(PoisonError::into_inner)
+            .released = true;
         self.barrier.changed.notify_all();
     }
 }
@@ -74,14 +97,13 @@ pub(crate) fn before_durable_commit(root: &Path) {
     let Some(barrier) = barrier else {
         return;
     };
-    let mut released = barrier
-        .released
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    while !*released {
-        released = barrier
+    let mut state = barrier.state.lock().unwrap_or_else(PoisonError::into_inner);
+    state.held += 1;
+    barrier.changed.notify_all();
+    while !state.released {
+        state = barrier
             .changed
-            .wait(released)
+            .wait(state)
             .unwrap_or_else(PoisonError::into_inner);
     }
 }

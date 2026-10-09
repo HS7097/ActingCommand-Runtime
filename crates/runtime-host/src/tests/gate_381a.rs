@@ -451,3 +451,48 @@ fn gate_a_held_start_whose_deadline_passes_ends_under_held_timeout() {
         stopped.complete_message()
     );
 }
+
+/// #672 review M1: a shutdown request accepted while a start is held is a formal stop. The start
+/// ends under `install_startup_shut_down` (operation `install_transition`), a top code the
+/// watchdog holds, never under one it restarts.
+#[test]
+fn gate_an_accepted_shutdown_of_a_held_start_ends_it_as_a_formal_stop() {
+    let root = TempDir::new().expect("tempdir");
+    let start = HeldStart::spawn(root.path(), HELD_TIMEOUT_MS);
+    start.reached(PreparationCheckpoint::Held);
+    let mut operator = TestClient::connect_state_root(root.path());
+    let shutdown = operator.request(RuntimeOperation::RequestShutdown {
+        target: start.info().shutdown_target(),
+    });
+    let receipt = operator.send(&shutdown);
+    let ended = start.ended();
+    drop(operator);
+
+    assert!(
+        matches!(
+            receipt.result(),
+            Some(RuntimeResult::ShutdownAccepted { .. })
+        ),
+        "the shutdown of the held owner: {:?}",
+        host_failure_code(&receipt)
+    );
+    let Some(ended) = ended else {
+        panic!("the held start stayed held after its shutdown was accepted");
+    };
+    let stopped = ended
+        .err()
+        .expect("the shut-down held start ends with an error");
+    assert_eq!(
+        (stopped.code(), stopped.operation()),
+        ("install_startup_shut_down", "install_transition"),
+        "FATAL line: {}",
+        stopped.complete_message()
+    );
+    assert!(
+        stopped
+            .complete_message()
+            .starts_with("runtime host error install_startup_shut_down during install_transition"),
+        "FATAL line: {}",
+        stopped.complete_message()
+    );
+}

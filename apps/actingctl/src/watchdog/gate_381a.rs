@@ -151,12 +151,18 @@ fn gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold() {
             "{line}"
         );
     }
-    let config = "FATAL actingd: adb_install_missing";
-    assert_eq!(
-        decision(&Fixture::stopped_owner(config).observed(), &fresh).name(),
-        "fatal_hold",
-        "{config}"
-    );
+    // A configuration FATAL, and (#672 review M1) an accepted shutdown of a held start, a
+    // formal stop, still hold.
+    for line in [
+        "FATAL actingd: adb_install_missing",
+        "FATAL actingd: runtime host error install_startup_shut_down during install_transition",
+    ] {
+        assert_eq!(
+            decision(&Fixture::stopped_owner(line).observed(), &fresh).name(),
+            "fatal_hold",
+            "{line}"
+        );
+    }
     let exhausted = WatchdogState {
         starts: (1..=3)
             .map(|minute| StartRecord {

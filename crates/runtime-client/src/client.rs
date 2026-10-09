@@ -133,6 +133,14 @@ impl RuntimeClientConfig {
         self
     }
 
+    pub const fn io_timeout(&self) -> Duration {
+        self.io_timeout
+    }
+
+    pub const fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+
     pub fn with_io_timeout(mut self, io_timeout: Duration) -> Self {
         self.io_timeout = io_timeout;
         self
@@ -5667,10 +5675,16 @@ fn unix_ms_now() -> RuntimeClientResult<u64> {
 /// Workflow #381 A R1′: `timeout`, cut to what remains before the session's deadline; at least
 /// 1 ms, because a zero socket timeout is not a timeout.
 fn within_deadline(timeout: Duration, deadline: Option<Instant>) -> Duration {
-    match deadline {
-        Some(deadline) => timeout
-            .min(deadline.saturating_duration_since(Instant::now()))
-            .max(Duration::from_millis(1)),
+    bounded_timeout(
+        timeout,
+        deadline.map(|deadline| deadline.saturating_duration_since(Instant::now())),
+    )
+}
+
+/// `timeout`, cut to the `remaining` time of a session deadline (none: unchanged); at least 1 ms.
+pub(crate) fn bounded_timeout(timeout: Duration, remaining: Option<Duration>) -> Duration {
+    match remaining {
+        Some(remaining) => timeout.min(remaining).max(Duration::from_millis(1)),
         None => timeout,
     }
 }
