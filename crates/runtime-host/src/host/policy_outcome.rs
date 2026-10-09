@@ -316,7 +316,7 @@ impl HostShared {
                 ),
             )?;
         }
-        Ok(())
+        Ok(ended_without_release)
     }
 
     // policy_outcome_gate excludes a context committing its outcome while these
