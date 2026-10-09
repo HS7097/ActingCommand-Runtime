@@ -1,5 +1,27 @@
 name: CI
 
+# Test plan v2.2 §1 (Batch 0a): one lint job, seven module test jobs and the ubuntu summary job
+# `gate`, whose check name stays `rust`. Each module job compiles its selection once
+# (`--no-run`), then runs it with the same selection and features.
+#
+# One-line forms (`gate_ci_jobs_cover_every_member` in
+# tools/actinglab-architecture/tests/gate_map.rs reads them without a YAML parser):
+# - job env `CI_PACKAGES: -p <package> ...`: the job's test selection; every workspace member is
+#   in exactly one module job.
+# - job env `CI_SKIP: <libtest path> ...`: the registered flaky tests of ci/flaky-tests.toml
+#   (board issue #71) that the job's packages hold, `''` when none. libtest's `--skip` matches
+#   substrings, so the guard requires each path to match exactly one test of the job.
+# - optional job env `CI_FEATURES: --features <features>`: the job's feature selection.
+# - optional job env `CI_EXTRA_FEATURES: <features>` with `CI_EXTRA_FILTER: <filter> ...`: a
+#   second `--lib` run under those features, limited to the filters.
+# - `needs: [...]` and `if: ${{ always() ... }}` of `gate`: every job except `gate` and the
+#   non-gating `flaky`; `gate` checks its own needs list again when it runs.
+# - job env `FLAKY_TESTS: <package>::<target>::<libtest path>[@<features>] ...` of `flaky`: each
+#   mirror entry once per configuration its module job runs it in.
+#
+# A push to main runs only the five jobs that save a dependency cache (lint, light, exec-core,
+# exec-tooling, apps); pull requests and pushes to stable run every job.
+
 on:
   push:
     branches: [main, stable]
@@ -9,91 +31,63 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+env:
+  # Test plan §1.2: faster links and smaller PDBs; backtraces keep their files and lines.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 jobs:
-  rust:
+  lint:
     runs-on: windows-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        id: toolchain
-      - name: Rust cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/rust-setup
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-trybuild-clean-v1-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-trybuild-clean-v1-${{ steps.toolchain.outputs.cachekey }}-
+          family: lint
+          save: 'true'
       - name: Format
         run: cargo fmt --all -- --check
       - name: Build locked workspace
         run: cargo build --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+
+  light:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CI_PACKAGES: -p actingcommand-outcome-guard -p actingcommand-actinglab-architecture -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-policy -p actingcommand-selection-policy
+      CI_SKIP: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: light
+          save: 'true'
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-run @selection
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build failed with exit code $LASTEXITCODE"
+          }
       - name: Test
         id: test
         shell: pwsh
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-          # Workflow #374: the watchdog's install test registers a real scheduled task here only.
-          ACTINGCOMMAND_TEST_REGISTER_TASK: '1'
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo build --locked -p actingledger --bin actingledger
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
           if ($LASTEXITCODE -ne 0) {
-            throw "actingledger build failed with exit code $LASTEXITCODE"
+            throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
           }
-          $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
-          # Workflow #374: the watchdog's process test starts a real actingd through a fixed entry.
-          cargo build --locked -p actingcommand-actingd --bin actingcommand-actingd
-          if ($LASTEXITCODE -ne 0) {
-            throw "actingd build failed with exit code $LASTEXITCODE"
-          }
-          $env:ACTINGCOMMAND_TEST_ACTINGD_EXE = (Resolve-Path -LiteralPath 'target/debug/actingcommand-actingd.exe' -ErrorAction Stop).Path
-
-          cargo test --workspace --exclude actingcommand-actingd --exclude actingcommand-runtime-client --no-fail-fast
-          $workspaceExitCode = $LASTEXITCODE
-          Write-Host "Workspace excluding actingd and runtime-client exit code: $workspaceExitCode"
-
-          cargo test -p actingcommand-runtime-client --no-fail-fast -- --test-threads=1
-          $runtimeClientExitCode = $LASTEXITCODE
-          Write-Host "runtime-client package tests exit code: $runtimeClientExitCode"
-
-          cargo test --workspace --bin actingcommand-actingd --no-fail-fast
-          $actingdExitCode = $LASTEXITCODE
-          Write-Host "actingd binary tests exit code: $actingdExitCode"
-
-          cargo --config 'profile.test.opt-level=3' --config 'profile.test.debug-assertions=true' --config 'profile.test.overflow-checks=true' --config 'profile.test.debug=2' test --workspace --test process --no-fail-fast -- --test-threads=1
-          $processExitCode = $LASTEXITCODE
-          Write-Host "process integration tests exit code: $processExitCode"
-
-          if ($workspaceExitCode -ne 0 -or $runtimeClientExitCode -ne 0 -or $actingdExitCode -ne 0 -or $processExitCode -ne 0) {
-            exit 1
-          }
-          exit 0
-      - name: Test observation
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: pwsh
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::runtime_input_proxy_renews_before_short_lease_expiry -- --exact --test-threads=1
-          $heartbeatObservationExitCode = $LASTEXITCODE
-          Write-Host "Heartbeat proxy observation test exit code: $heartbeatObservationExitCode"
-
-          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::long_input_extends_only_its_response_wait -- --exact --test-threads=1
-          $longInputObservationExitCode = $LASTEXITCODE
-          Write-Host "Long input observation test exit code: $longInputObservationExitCode"
-
-          if ($heartbeatObservationExitCode -ne 0 -or $longInputObservationExitCode -ne 0) {
-            exit 1
-          }
-          exit 0
       # Workflow #378: regenerate the merged outcome catalog whenever the Test step ran, pass or
       # fail (G9 fails on the first push of a fragment change by design), and upload it for the
       # pushed head; the implementer commits that artifact unchanged. It runs after every test
@@ -115,6 +109,62 @@ jobs:
           name: outcome-codes-${{ github.event.pull_request.head.sha || github.sha }}
           path: contracts/outcome-codes.json
           if-no-files-found: error
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+
+  exec-core:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI_PACKAGES: -p actingcommand-recognition -p actingcommand-recognition-pack -p actingcommand-page-detector -p actingcommand-vision-ffi -p actingcommand-onnx-provider-support -p actingcommand-ppocr-onnx-json-provider -p actingcommand-device -p actingcommand-execution-kernel -p actingcommand-pack-containment
+      CI_SKIP: ''
+    steps:
+      - uses: actions/checkout@v4
+      # Its own family (test plan §1.2): `mid`, saved by exec-tooling, lacks ort, trybuild and
+      # this selection's feature set, so a warm exec-core run on `mid` still compiled 58
+      # third-party crates (run 37932458391).
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: exec-core
+          save: 'true'
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-run @selection
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build failed with exit code $LASTEXITCODE"
+          }
+      - name: Test
+        id: test
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
+          if ($LASTEXITCODE -ne 0) {
+            throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+      # pack-containment's trybuild stays here until E-1 replaces it with compile_fail doctests
+      # (test plan §4 #4); this step leaves with it.
       - name: Remove trybuild cache artifacts
         if: always()
         shell: pwsh
@@ -122,3 +172,396 @@ jobs:
           if (Test-Path -LiteralPath target/tests) {
             Remove-Item -LiteralPath target/tests -Recurse -Force -ErrorAction Stop
           }
+
+  exec-tooling:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI_PACKAGES: -p actingcommand-resource-tooling -p actingcommand-lab
+      CI_SKIP: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: mid
+          save: 'true'
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-run @selection
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build failed with exit code $LASTEXITCODE"
+          }
+      - name: Test
+        id: test
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
+          if ($LASTEXITCODE -ne 0) {
+            throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+
+  ledger:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI_PACKAGES: -p actingcommand-ledger -p actingcommand-runtime-state -p actingcommand-runtime-database -p actingcommand-artifact-store -p actingcommand-ledger-forensics -p actingledger
+      CI_SKIP: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: heavy
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-run @selection
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build failed with exit code $LASTEXITCODE"
+          }
+      - name: Test
+        id: test
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          # The ledger's forensics tests run the actingledger that the test build placed; this
+          # handoff leaves with LED-R6 (test plan §4 #19).
+          $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
+          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
+          if ($LASTEXITCODE -ne 0) {
+            throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+
+  host-lab:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-actinglab
+      # actinglab's dev-dependency turns it on anyway; written out so the selection says it.
+      CI_FEATURES: --features actingcommand-runtime-host/fixture-backends
+      CI_SKIP: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: heavy
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES $env:CI_FEATURES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-run @selection
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build failed with exit code $LASTEXITCODE"
+          }
+      - name: Test
+        id: test
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES $env:CI_FEATURES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
+          if ($LASTEXITCODE -ne 0) {
+            throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+
+  runtime-client:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI_PACKAGES: -p actingcommand-runtime-client
+      CI_SKIP: tests::typed_client_discovers_runtime_and_routes_queries_and_input tests::runtime_input_proxy_renews_before_short_lease_expiry
+      # Call 2: the recorder tests that exist only under the feature and the tests with
+      # feature-only trace assertions. A test that gains such an assertion joins this filter in
+      # the same PR.
+      CI_EXTRA_FEATURES: test-observation
+      CI_EXTRA_FILTER: 'test_observation:: runtime_input_proxy_renews_before_short_lease_expiry long_input_extends_only_its_response_wait'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: heavy
+      # Two configurations (test plan §4 #1), so two builds: the default features the UI ships
+      # with, and `test-observation`, which adds trace code to runtime-client and runtime-host.
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-run @selection
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build (default features) failed with exit code $LASTEXITCODE"
+          }
+          cargo test --locked --no-run @selection --features $env:CI_EXTRA_FEATURES --lib
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build ($env:CI_EXTRA_FEATURES) failed with exit code $LASTEXITCODE"
+          }
+      - name: Test
+        id: test
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+
+          # Call 1: the delivered configuration, every test, single-threaded until C-4.
+          cargo test --locked --no-fail-fast @selection -- --test-threads=1 @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results 'runtime-client.log')
+          $defaultExitCode = $LASTEXITCODE
+          Write-Host "runtime-client (default features) exit code: $defaultExitCode"
+
+          # Call 2: CI_EXTRA_FEATURES, limited to CI_EXTRA_FILTER.
+          $filter = "$env:CI_EXTRA_FILTER".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-fail-fast @selection --features $env:CI_EXTRA_FEATURES --lib -- @filter --test-threads=1 @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results 'runtime-client-test-observation.log')
+          $observationExitCode = $LASTEXITCODE
+          Write-Host "runtime-client (test-observation) exit code: $observationExitCode"
+
+          if ($defaultExitCode -ne 0 -or $observationExitCode -ne 0) {
+            exit 1
+          }
+          exit 0
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+
+  apps:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI_PACKAGES: -p actingcommand-actingd -p actingcommand-actingctl -p actingcommand-device-test -p actingcommand-vision-provider-check
+      CI_SKIP: process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: heavy
+          save: 'true'
+      # Test plan §4 #3: actinglab with its production features, built once here and handed to
+      # actingd's process test instead of a cargo build inside the test.
+      - name: Build actinglab
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo build --locked -p actingcommand-actinglab --bin actinglab
+          if ($LASTEXITCODE -ne 0) {
+            throw "actinglab build failed with exit code $LASTEXITCODE"
+          }
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          cargo test --locked --no-run @selection
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build failed with exit code $LASTEXITCODE"
+          }
+      # The dev test profile (test plan §4 #2 retired opt-level=3). Call 1 runs the binaries' unit
+      # tests in parallel; call 2 runs every integration test (process, c4_process,
+      # watchdog_process, and any added later) single-threaded, each output line timestamped so
+      # the gap between two lines is one test's time against its deadlines. No apps package has
+      # a lib target (cargo refuses `--lib` then); guard 1 fails once one gains one, and `--lib`
+      # with `--doc` join here in that PR.
+      - name: Test
+        id: test
+        shell: pwsh
+        env:
+          # Workflow #374: the watchdog's install test registers a real scheduled task here only.
+          ACTINGCOMMAND_TEST_REGISTER_TASK: '1'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          $env:ACTINGCOMMAND_TEST_ACTINGLAB_EXE = (Resolve-Path -LiteralPath 'target/debug/actinglab.exe' -ErrorAction Stop).Path
+
+          cargo test --locked --no-fail-fast @selection --bins -- @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results 'apps-bins.log')
+          $binsExitCode = $LASTEXITCODE
+          Write-Host "apps unit tests (--bins) exit code: $binsExitCode"
+
+          cargo test --locked --no-fail-fast @selection --test '*' -- --test-threads=1 @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results 'apps-integration.log')
+          $integrationExitCode = $LASTEXITCODE
+          Write-Host "apps integration tests (--test '*') exit code: $integrationExitCode"
+
+          if ($binsExitCode -ne 0 -or $integrationExitCode -ne 0) {
+            exit 1
+          }
+          exit 0
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+
+  # D5 (Alice 10-09): runs only the registered flaky tests of ci/flaky-tests.toml, each once, and
+  # uploads the results as evidence. It is not in gate.needs, so it never holds a merge.
+  flaky:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      FLAKY_TESTS: actingcommand-runtime-client::lib::tests::typed_client_discovers_runtime_and_routes_queries_and_input actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry@test-observation actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: heavy
+      - name: Flaky tests
+        id: test
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          $entries = "$env:FLAKY_TESTS".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          if ($entries.Count -eq 0) {
+            Write-Host "ci/flaky-tests.toml registers no test: nothing to run"
+            exit 0
+          }
+          $failed = @()
+          foreach ($entry in $entries) {
+            $selector, $features = $entry -split '@', 2
+            $package, $target, $path = $selector -split '::', 3
+            if (-not $path) {
+              throw "FLAKY_TESTS entry '$entry' is not <package>::<target>::<libtest path>[@<features>]"
+            }
+            # @(...) keeps a one-element result an array: splatting a bare string passes its
+            # characters one by one.
+            $targetArguments = @(
+              if ($target -eq 'lib') { '--lib' }
+              elseif ($target.StartsWith('bin:')) { '--bin'; $target.Substring(4) }
+              else { '--test'; $target }
+            )
+            $featureArguments = @(if ($features) { '--features'; $features })
+            $configuration = if ($features) { '@' + $features.Replace('/', '+') } else { '' }
+            $log = Join-Path $results ($selector.Replace('::', '.') + $configuration + '.log')
+            Write-Host "=== $entry"
+            cargo test --locked -p $package @targetArguments @featureArguments -- --exact $path 2>&1 |
+              ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+              Tee-Object -FilePath $log
+            $exitCode = $LASTEXITCODE
+            $ran = @(Select-String -LiteralPath $log -SimpleMatch -Pattern "test $path ... ").Count
+            if ($exitCode -ne 0) {
+              $failed += "$entry (exit code $exitCode)"
+            } elseif ($ran -ne 1) {
+              $failed += "$entry (ran $ran times, expected once)"
+            }
+          }
+          if ($failed.Count -ne 0) {
+            throw ("flaky tests did not pass: " + ($failed -join '; '))
+          }
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: warn
+
+  # The summary check. Its check name stays `rust`, the required check of `runtime-main-quality`.
+  gate:
+    name: rust
+    needs: [lint, light, exec-core, exec-tooling, ledger, host-lab, runtime-client, apps]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+      # Guard 1 runs inside `light`; if `light` left this needs list, its red would not reach
+      # `rust`. So `rust` re-derives the gating jobs from this file itself.
+      - name: needs lists every gating job
+        shell: python3 {0}
+        run: |
+          import pathlib
+          import sys
+
+          jobs, needs, in_jobs, current = [], None, False, None
+          for line in pathlib.Path(".github/workflows/ci.yml").read_text(encoding="utf-8").splitlines():
+              content = line.lstrip()
+              if not content or content.startswith("#"):
+                  continue
+              indent = len(line) - len(content)
+              if indent == 0:
+                  in_jobs = line.rstrip() == "jobs:"
+                  continue
+              if in_jobs and indent == 2:
+                  current = content.rstrip().removesuffix(":")
+                  jobs.append(current)
+              elif in_jobs and indent == 4 and current == "gate" and content.startswith("needs:"):
+                  listed = content.removeprefix("needs:").strip()
+                  if not (listed.startswith("[") and listed.endswith("]")):
+                      sys.exit(f"gate needs is not a one-line list: {listed}")
+                  needs = [job.strip() for job in listed[1:-1].split(",") if job.strip()]
+          gating = sorted(job for job in jobs if job not in ("gate", "flaky"))
+          if needs is None or sorted(needs) != gating:
+              sys.exit(f"gate needs {needs}, but the gating jobs of ci.yml are {gating}")
+          print("gate needs every gating job: " + ", ".join(gating))
+      - name: Every job is green
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -e '[to_entries[]|select(.value.result!="success")|.key]|if length==0 then true else ("not green: "+join(", ")|halt_error(1)) end'
