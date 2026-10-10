@@ -5,9 +5,9 @@
 <img src="docs/assets/readme/actingcommand-icon.png" width="112" alt="ActingCommand icon">
 
 **Chief Executive Officer & Chairman** — HS7097<br/>
-**Chief Technology Officer & Chief Architect** — Claude Opus 5.5 · GPT‑6 Astra · Claude Fable 5 · GPT‑5.6 Sol<br/>
-**Board Secretary & Chief Audit Officer** — Claude Opus 5.5 · Claude Fable 5.1<br/>
-**Principal Engineer** — Claude Opus 5.5 · GPT‑6 Astra · GPT‑5.6 Sol<br/>
+**Chief Technology Officer & Chief Architect** — Claude Opus 5.5 · GPT‑6 Astra · Claude Fable 5.1 · Claude Fable 5 · GPT‑5.5<br/>
+**Board Secretary & Chief Audit Officer** — Claude Opus 5.5 · Claude Fable 5.1 · Claude Fable 5 · Claude Opus 4.8<br/>
+**Principal Engineer** — Claude Opus 5.5 · GPT‑6 Astra · GPT‑5.6 Sol · GPT‑5.5<br/>
 **Interviewing** — DeepSeek
 
 </div>
@@ -123,7 +123,7 @@ Steps 5 and 6 describe the 0.11 behaviour. The 0.12 series plans one door for al
 
 **Offline reads** are served by `actingledger`, which opens only a read-only evidence snapshot and never writes. Its subcommands are `open`, `events`, `chain --req <request-id>`, `tail`, `repairs`, `export` (optionally with `--performance` / `--stability` / `--task-evidence`), `views` (one page of the ledger's terminal views, the same page the runtime serves), `material --request <json>` (one verified range of one committed artifact), `signatures`, `facts --at <sequence>` (the runtime fact store replayed at one ledger position) and `replay`. Except for bare `export`, which prints a human-readable multi-line text report, every report is single-line JSON; when evidence has gaps the report is printed first and the tool then exits nonzero with `signature_replay_incomplete`, `stability_export_incomplete`, `task_evidence_export_incomplete`, `ledger_view_source_incomplete` or, for `facts`, `runtime_facts_not_available` / the failure code.
 
-**Result codes.** Each component registers its result codes in a fragment under `contracts/outcome-codes/`; `outcome-guard merge` merges them into the code catalog `contracts/outcome-codes.json` (since v0.11.5). Unifying every program's results on this catalog is under way in the 0.12 series.
+**Result codes.** The codes registered so far (from `runtime-host`, `contract`, `artifact-store` and `ledger`) live in fragments under `contracts/outcome-codes/`; `outcome-guard merge` merges them into the code catalog `contracts/outcome-codes.json` (since v0.11.5). Unifying every program's results on this catalog is under way in the 0.12 series.
 
 ## Invariants and guards
 
@@ -332,7 +332,7 @@ Note: the daemon binary cargo produces is named `actingcommand-actingd`; the sho
 
 - **Debug phase.** The main loop is: find a problem → fix it → check against the expected behaviour → change again. Deployment and convenience come second.
 - **Everything is a pre-release.** Interfaces, configuration and file formats still change. Only the latest release is supported; older series (including 0.11) receive no fixes.
-- **Breaking changes are coming with the 0.12 series**: a new ledger format (a 0.11 state root is not carried over), new `actingctl` output and exit codes, MCP tiers removed, and Lab no longer installed by default. The current setup wizard (UI v0.11.3) is expected not to install a 0.12.0 Runtime; that needs the next UI release.
+- **Breaking changes are coming with the 0.12 series**: a new ledger format (a 0.11 state root is not carried over), new `actingctl` output and exit codes, MCP tiers removed, and Lab no longer installed by default. The current setup wizard and console (UI v0.11.3) are expected not to work with a 0.12.0 Runtime; that needs the next UI release.
 - **Real-device status.** Since early October the Runtime has run daily routine batches by catalog on real MuMu instances with three standard packs. The content coverage of the standard packs is still incomplete, and multi-day unattended long runs are still being validated.
 
 ### Current boundaries

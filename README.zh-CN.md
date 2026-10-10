@@ -5,9 +5,9 @@
 <img src="docs/assets/readme/actingcommand-icon.png" width="112" alt="ActingCommand 图标">
 
 **首席执行官 兼 董事长** — HS7097<br/>
-**首席技术官 兼 首席架构师** — Claude Opus 5.5 · GPT‑6 Astra · Claude Fable 5 · GPT‑5.6 Sol<br/>
-**董事会秘书 兼 首席审计官** — Claude Opus 5.5 · Claude Fable 5.1<br/>
-**首席技术工程师** — Claude Opus 5.5 · GPT‑6 Astra · GPT‑5.6 Sol<br/>
+**首席技术官 兼 首席架构师** — Claude Opus 5.5 · GPT‑6 Astra · Claude Fable 5.1 · Claude Fable 5 · GPT‑5.5<br/>
+**董事会秘书 兼 首席审计官** — Claude Opus 5.5 · Claude Fable 5.1 · Claude Fable 5 · Claude Opus 4.8<br/>
+**首席技术工程师** — Claude Opus 5.5 · GPT‑6 Astra · GPT‑5.6 Sol · GPT‑5.5<br/>
 **正在面试** — DeepSeek
 
 </div>
@@ -123,7 +123,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 **离线读取**由 `actingledger` 提供，它只开只读证据快照，从不写入。子命令为：`open`、`events`、`chain --req <request-id>`、`tail`、`repairs`、`export`（可加 `--performance` / `--stability` / `--task-evidence`）、`views`（账本终态视图的一页，与运行时提供的页相同）、`material --request <json>`（一件已提交工件的一段已校验字节）、`signatures`、`facts --at <sequence>`（按账本位置重放程序事实库）、`replay`。除裸 `export` 输出人类可读的多行文本报告外，其余报告都是单行 JSON；证据存在缺口时先打印报告再以 `signature_replay_incomplete`、`stability_export_incomplete`、`task_evidence_export_incomplete`、`ledger_view_source_incomplete` 非零退出；`facts` 不可用时以 `runtime_facts_not_available` 或失败码非零退出。
 
-**结果码。** 各组件把自己的结果码登记在 `contracts/outcome-codes/` 下的分片里；`outcome-guard merge` 把它们合并成码目录 `contracts/outcome-codes.json`（v0.11.5 起）。0.12 系列正在把所有程序的结果统一到这份码目录上。
+**结果码。** 目前已登记的结果码（来自 `runtime-host`、`contract`、`artifact-store`、`ledger`）放在 `contracts/outcome-codes/` 下的分片里；`outcome-guard merge` 把它们合并成码目录 `contracts/outcome-codes.json`（v0.11.5 起）。0.12 系列正在把所有程序的结果统一到这份码目录上。
 
 ## 不变式与守卫
 
@@ -332,7 +332,7 @@ actingcommand-vision-provider-check --models-root <vision root>\models --hash
 
 - **调试阶段。** 主循环是：发现问题 → 修复 → 对照预期检查 → 再改。部署与易用性是次要的。
 - **全部是预发布。** 接口、配置与文件格式还会变。只支持最新版；旧系列（包括 0.11）不出修复。
-- **0.12 系列会有破坏性变化**：新账本格式（0.11 的状态根不带过去）、`actingctl` 的输出与退出码变化、MCP 档位取消、Lab 默认不装。当前安装向导（UI v0.11.3）预计装不了 0.12.0 的 Runtime，要等下一版 UI。
+- **0.12 系列会有破坏性变化**：新账本格式（0.11 的状态根不带过去）、`actingctl` 的输出与退出码变化、MCP 档位取消、Lab 默认不装。当前的安装向导与监控台（UI v0.11.3）预计用不了 0.12.0 的 Runtime，要等下一版 UI。
 - **实机现状。** 自 10 月上旬起，Runtime 在真实 MuMu 实例上按目录每天跑例行批次，使用三个标准包。标准包的内容覆盖还不完整，多日无人值守长跑仍在验证。
 
 ### 当前边界
