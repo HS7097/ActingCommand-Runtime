@@ -17,6 +17,9 @@ use std::sync::{Arc, Mutex};
 #[path = "../../../tests/support/emulator_controller.rs"]
 mod emulator_controller;
 
+// Workflow #381 B, test plan E-2 G2.
+mod gate_381b;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {

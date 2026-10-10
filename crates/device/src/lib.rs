@@ -11,6 +11,12 @@
 #[cfg(test)]
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+// Workflow #381 B: the device gate tests (test plan §2.1, `src/tests/gate_<item>.rs`).
+#[cfg(test)]
+mod tests {
+    mod gate_381b;
+}
+
 pub mod adb;
 mod adb_bounds_diagnostic;
 mod backend_open;

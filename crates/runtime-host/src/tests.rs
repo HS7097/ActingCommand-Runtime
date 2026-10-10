@@ -108,6 +108,7 @@ mod detection;
 mod facts;
 mod forward_projection;
 mod gate_381a;
+mod gate_381b;
 mod home_entry;
 mod input;
 mod input_failure;
