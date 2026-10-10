@@ -257,7 +257,7 @@ pub fn mumu_capability_profile(
                 | EmulatorCapability::InstanceRestart => (
                     EmulatorCapabilityImplementation::Supported,
                     EmulatorCapabilityAvailability::Available,
-                    "Dispatched as MuMuManager control -v <index> launch|shutdown only by an explicit User+Ui or Cli emulator control request, after the per-instance lease fence and device-session close; a restart is a shutdown and then a launch, and the vendor restart verb is never dispatched. Typed refusals: emulator_control_busy (fence), emulator_control_unavailable (no discovery binding) or emulator_control_unsupported (provider), mumu_manager.control_exit / .control_errcode (tool failure with exit code), mumu_manager.launch_error (launch_err_code != 0), mumu_manager.wait_timeout (readiness deadline).",
+                    "MuMuManager control -v <index> launch|shutdown, only for an explicit User+Ui or Cli emulator control request after the lease fence and session close; a restart is a shutdown then a launch, never the vendor restart verb. Typed refusals: emulator_control_busy (fence), emulator_control_unavailable (no discovery binding), emulator_control_unsupported (provider), mumu_manager.control_exit / .control_errcode, mumu_manager.launch_error (launch_err_code != 0), mumu_manager.wait_timeout (readiness deadline).",
                     "mumu_manager.control",
                 ),
                 EmulatorCapability::InstanceCreate
