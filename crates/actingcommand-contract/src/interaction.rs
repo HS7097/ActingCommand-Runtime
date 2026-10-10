@@ -42,6 +42,7 @@ pub struct ClientActionRecord {
     surface_id: String,
     control_id: String,
     kind: ClientActionKind,
+    /// Checked by the registered instance alias rule (`validate_instance_alias`), bytes unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     instance_alias: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,7 +72,9 @@ impl ClientActionRecord {
         validate_identifier(&self.surface_id, "surface_id")?;
         validate_identifier(&self.control_id, "control_id")?;
         if let Some(instance_alias) = &self.instance_alias {
-            validate_identifier(instance_alias, "instance_alias")?;
+            crate::validate_instance_alias(instance_alias).map_err(|_| {
+                SanitizationError::new("invalid_interaction_identifier", "instance_alias")
+            })?;
         }
         match (&self.kind, &self.value) {
             (ClientActionKind::Button, None) | (ClientActionKind::Command, None) => Ok(()),
