@@ -5,13 +5,18 @@
 //! M2), replayed over the injected vendor surface (EXEC-I1); and the two tables the readiness
 //! wait reads (`contracts/emulator-control.md`, the `info` document and the errcode envelope).
 //! Time is the replay's own clock: a poll, a listing and a sleep advance it, nothing waits.
+//! The real-device check of 2026-10-11 07:11 JST adds the capability profile a discovery report
+//! yields: startup admits it, so a profile the contract refuses makes every MuMu configuration
+//! unbootable.
 
 use crate::discovery::DeviceDiscoveryProcess;
+use crate::emulator::{EmulatorCapability, EmulatorCapabilityAvailability};
 use crate::mumu_manager::{
-    DeviceProcessPresence, InstanceState, MUMU_MANAGER_COMMAND_TIMEOUT,
+    DeviceProcessPresence, DiscoveredMumuInstance, InstanceState, MUMU_MANAGER_COMMAND_TIMEOUT,
     MUMU_MANAGER_PROCESS_LIST_INTERVAL, MUMU_MANAGER_PROCESS_LIST_TIMEOUT,
-    MUMU_MANAGER_STATE_WAIT_STOP, MUMU_MANAGER_TIMEOUT_STAGE, MumuControlOutput, MumuManagerRunner,
-    control_instance_with, errcode_envelope, parse_instance_document,
+    MUMU_MANAGER_STATE_WAIT_STOP, MUMU_MANAGER_TIMEOUT_STAGE, MumuControlOutput,
+    MumuDiscoveryReport, MumuManagerRunner, MumuManagerSource, MumuManagerVersion,
+    control_instance_with, errcode_envelope, mumu_capability_profile, parse_instance_document,
 };
 use crate::{DeviceError, DeviceErrorCategory, DeviceResult};
 use actingcommand_contract::EmulatorInstanceAction;
@@ -421,5 +426,52 @@ fn gate_errcode_zero_is_the_acknowledgment_and_any_other_errcode_fails() {
                 assert_eq!(failure.exit_code, exit_code, "{stdout}");
             }
         }
+    }
+}
+
+/// Incident 2026-10-11 07:11 JST (real-device check of #381 B): actingd stopped at startup with
+/// `emulator_capability_admission_refused`, because the MuMu capability profile carried a
+/// failure-semantics text over the contract's bound. The profile of a realistic discovery report
+/// (MuMuManager 6.5.7.0, one running instance) is admitted, and reading the inventory and the
+/// status, start, stop and restart are available.
+#[test]
+fn gate_the_capability_profile_of_a_discovery_report_admits_start_stop_and_restart() {
+    let version = MumuManagerVersion::parse("6.5.7.0").expect("a four-part version");
+    let report = MumuDiscoveryReport {
+        source: MumuManagerSource::ExplicitRoot,
+        mumu_manager_path: PathBuf::from("C:/fixture/nx_main/MuMuManager.exe"),
+        version,
+        registry_display_version: None,
+        instances: vec![DiscoveredMumuInstance {
+            install_root: PathBuf::from("C:/fixture"),
+            mumu_manager_path: PathBuf::from("C:/fixture/nx_main/MuMuManager.exe"),
+            adb_path: PathBuf::from("C:/fixture/nx_main/adb.exe"),
+            instance_index: 0,
+            instance_name: "fixture".to_owned(),
+            adb_host: Some("127.0.0.1".to_owned()),
+            adb_port: Some(16384),
+            running: true,
+            player_state: Some("start_finished".to_owned()),
+            android_version: Some("12".to_owned()),
+            mumu_version: version,
+        }],
+    };
+    let profile = mumu_capability_profile(&report)
+        .expect("the capability profile of a discovery report is admitted");
+    for capability in [
+        EmulatorCapability::InventoryRead,
+        EmulatorCapability::InstanceStatusRead,
+        EmulatorCapability::InstanceStart,
+        EmulatorCapability::InstanceStop,
+        EmulatorCapability::InstanceRestart,
+    ] {
+        let evidence = profile
+            .capability(capability)
+            .unwrap_or_else(|error| panic!("{capability:?} is not available: {error:?}"));
+        assert_eq!(
+            evidence.availability(),
+            EmulatorCapabilityAvailability::Available,
+            "{capability:?}"
+        );
     }
 }
