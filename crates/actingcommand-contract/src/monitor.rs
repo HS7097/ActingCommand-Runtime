@@ -662,7 +662,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn runtime_monitor_state_advances_only_from_due_completed_runs() {
         let scheduled = RuntimeMonitorState::scheduled(100).expect("scheduled state");
         let decision =

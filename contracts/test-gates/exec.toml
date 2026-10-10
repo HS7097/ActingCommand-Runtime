@@ -427,6 +427,14 @@ tests = [
 ]
 incident = []
 
+# Source and Runtime admission budgets agree
+[[gate]]
+key = "36"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::package_api::explicit_postcondition_budget_source_and_runtime_admission_agree",
+]
+incident = []
 
 # One JSON envelope and the exit-code table
 [[gate]]

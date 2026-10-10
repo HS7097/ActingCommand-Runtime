@@ -9,7 +9,6 @@ use std::time::Duration;
 #[test]
 fn gate_a_session_deadline_cuts_each_wait_to_what_remains_with_a_1_ms_floor() {
     let seconds = Duration::from_secs;
-    std::thread::sleep(Duration::from_millis(1));
     assert_eq!(bounded_timeout(seconds(60), Some(seconds(10))), seconds(10));
     assert_eq!(bounded_timeout(seconds(5), Some(seconds(10))), seconds(5));
     assert_eq!(
