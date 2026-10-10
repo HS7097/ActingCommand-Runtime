@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 
+use actingcommand_contract::outcome::Category;
 use serde_json::{Value, json};
 
 use super::selection_catalog::{
@@ -20,6 +21,7 @@ use super::selection_catalog::{
     fact, fact_ref, field_ref, gate, identity_term, instance, integer_fact, integer_field,
     selection,
 };
+use crate::codes::PolicyCode;
 use crate::{PolicyEvaluation, PolicyEvaluationResult, SchedulingDecisionState, TaskDecision};
 
 const FACT_REFRESH_UNBOUND: &str = "fact_refresh_unbound";
@@ -56,6 +58,7 @@ fn gate_d2_t1_an_unknown_realistic_fact_defers_only_its_candidate_and_the_round_
     assert!(!has_intent(&evaluation, ALPHA, A));
     let deferred = decision(&evaluation, ALPHA, A);
     assert_eq!(deferred.state, SchedulingDecisionState::Deferred);
+    assert_registered_warning(PolicyCode::FactRefreshUnbound, FACT_REFRESH_UNBOUND);
     assert_eq!(
         values(deferred, FACT_REFRESH_UNBOUND),
         [unbound(STOCK, "fact_expired")]
@@ -172,6 +175,7 @@ fn gate_d2_t4_a_candidate_carries_every_unknown_key_and_one_reading_none_still_r
         .unwrap_or_else(|error| panic!("the gate document evaluates: {error}"));
     let alpha = decision(&evaluation, ALPHA, A);
     assert_eq!(alpha.state, SchedulingDecisionState::Deferred);
+    assert_registered_warning(PolicyCode::FactRefreshUnbound, FACT_REFRESH_UNBOUND);
     assert_eq!(
         values(alpha, FACT_REFRESH_UNBOUND),
         [unbound(K2, "fact_stale")]
@@ -300,6 +304,7 @@ fn gate_d2_t7_an_expired_field_is_never_scored_with_its_old_value() {
     );
     assert!(evaluation.dispatch_intents.is_empty(), "nothing is ranked");
     assert_eq!(deferred.state, SchedulingDecisionState::Deferred);
+    assert_registered_warning(PolicyCode::FactRefreshUnbound, FACT_REFRESH_UNBOUND);
     assert_eq!(
         values(deferred, FACT_REFRESH_UNBOUND),
         [unbound(STOCK, "fact_expired")]
@@ -343,6 +348,7 @@ fn without_catalog_identity(mut evaluation: PolicyEvaluation) -> PolicyEvaluatio
 fn assert_input_unknown(evaluation: &PolicyEvaluation, rule_id: &str, unknown_reason: &str) {
     let deferred = decision(evaluation, ALPHA, A);
     assert_eq!(deferred.state, SchedulingDecisionState::Deferred);
+    assert_registered_warning(PolicyCode::SelectionInputUnknown, SELECTION_INPUT_UNKNOWN);
     assert_eq!(
         values(deferred, SELECTION_INPUT_UNKNOWN),
         [tokens(&[
@@ -359,6 +365,13 @@ fn assert_input_unknown(evaluation: &PolicyEvaluation, rule_id: &str, unknown_re
     let unaffected = decision(evaluation, ALPHA, B);
     assert!(values(unaffected, SELECTION_INPUT_UNKNOWN).is_empty());
     assert!(values(unaffected, FACT_REFRESH_UNBOUND).is_empty());
+}
+
+/// The code is registered under the spelling the model gives and its one category, warning
+/// (model §7.1).
+fn assert_registered_warning(code: PolicyCode, spelling: &str) {
+    assert_eq!(code.as_str(), spelling);
+    assert_eq!(code.category(), Category::Warning);
 }
 
 fn assert_bounded_by(evaluation: &PolicyEvaluation, bound: u64) {

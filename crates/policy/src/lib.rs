@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 mod canonical;
+mod codes;
 mod compiler;
 mod evaluator;
 mod forward;
