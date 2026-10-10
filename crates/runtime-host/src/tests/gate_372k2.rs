@@ -191,35 +191,49 @@ fn classes(rows: &[SlotRow], occurrence: u64) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// How the fixture instance is backed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    /// A device the host self-checks, as an operator's instance pause requires; its
+    /// availability is its preparation's.
+    Device,
+    /// A fixture whose availability follows `Slots::available` at every evaluation.
+    Fixture,
+}
+
 fn open_slot_host(
     root: &TempDir,
     registered: InstanceId,
     clock: &Arc<ManualRuntimeClock>,
+    backend: Backend,
 ) -> RuntimeHost {
     let mut facts = policy_facts();
     facts.outcomes.clear();
+    let provider = FakeProvider::one(
+        POLICY_INSTANCE_ALIAS,
+        registered,
+        Arc::new(FakeState::default()),
+    );
+    let provider = match backend {
+        Backend::Device => provider,
+        Backend::Fixture => provider.fixture_simulation(),
+    };
     RuntimeHost::start(
         config(root)
             .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
             .with_runtime_clock(clock.clone()),
-        Arc::new(
-            FakeProvider::one(
-                POLICY_INSTANCE_ALIAS,
-                registered,
-                Arc::new(FakeState::default()),
-            )
-            .fixture_simulation(),
-        ),
+        Arc::new(provider),
     )
     .expect("start the clock-slot host")
 }
 
-/// A host whose instance availability follows `available` at every evaluation.
+/// One host on a manual Runtime clock, and the records read from it so far.
 struct Slots {
     host: RuntimeHost,
     clock: Arc<ManualRuntimeClock>,
     root: TempDir,
     registered: InstanceId,
+    backend: Backend,
     available: bool,
     approved: BTreeSet<String>,
     read: usize,
@@ -227,10 +241,14 @@ struct Slots {
 
 impl Slots {
     fn start(sources: &CatalogSources, unix_ms: u64) -> Self {
+        Self::start_on(Backend::Device, sources, unix_ms)
+    }
+
+    fn start_on(backend: Backend, sources: &CatalogSources, unix_ms: u64) -> Self {
         let root = TempDir::new().expect("tempdir");
         let registered = instance_id();
         let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
-        let host = open_slot_host(&root, registered, &clock);
+        let host = open_slot_host(&root, registered, &clock, backend);
         host.activate_policy_catalog(sources)
             .expect("activate the clock-slot catalog");
         Self {
@@ -238,21 +256,33 @@ impl Slots {
             clock,
             root,
             registered,
+            backend,
             available: true,
             approved: BTreeSet::new(),
             read: 0,
         }
     }
 
-    fn activate(&self, sources: &CatalogSources, unix_ms: u64) {
+    /// Moves the Runtime clock and samples the host's capacity at the new time, as its
+    /// capacity monitor does while time passes.
+    fn set_time(&self, unix_ms: u64) {
         self.clock.set_unix_ms(unix_ms);
+        let sample_capacity = self
+            .host
+            .capacity_sampler_for_test()
+            .expect("capacity owner");
+        sample_capacity().expect("capacity sample");
+    }
+
+    fn activate(&self, sources: &CatalogSources, unix_ms: u64) {
+        self.set_time(unix_ms);
         self.host
             .activate_policy_catalog(sources)
             .expect("activate the next clock-slot catalog");
     }
 
     fn evaluate(&mut self, unix_ms: u64) -> PolicyCycle {
-        self.clock.set_unix_ms(unix_ms);
+        self.set_time(unix_ms);
         let mut facts = policy_facts();
         facts.outcomes.clear();
         facts.instances[0].available = self.available;
@@ -365,6 +395,7 @@ impl Slots {
             host,
             root,
             registered,
+            backend,
             available,
             approved,
             read,
@@ -372,12 +403,13 @@ impl Slots {
         } = self;
         host.close().expect("close the clock-slot host");
         let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
-        let host = open_slot_host(&root, registered, &clock);
+        let host = open_slot_host(&root, registered, &clock, backend);
         Self {
             host,
             clock,
             root,
             registered,
+            backend,
             available,
             approved,
             read,
@@ -594,7 +626,15 @@ fn gate_clock_slot_operator_pause_is_deferred_once_and_a_short_unavailability_is
         slots.new_rows().is_empty(),
         "a pause and its resume leave one record"
     );
+    slots.close();
 
+    // The instance availability of a fixture follows the evaluation inputs.
+    let mut slots = Slots::start_on(
+        Backend::Fixture,
+        &slot_sources(1, &[slot_task(&[600], 1)], None),
+        at(0, 9, 0),
+    );
+    slots.dispatch(at(0, 10, 0), SLOT_TASK);
     slots.available = false;
     let cycle = slots.evaluate(at(1, 10, 0));
     assert!(
