@@ -1,0 +1,70 @@
+{
+  "owner": "policy",
+  "codes": {
+    "fact_refresh_unbound": {
+      "category": "warning",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "reader_problem": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scheduling-layer selection document read a realistic instance fact key (fact_key, a resource. or inventory. key that recognition writes) for a candidate on the instance, and the value is unknown (unknown_reason), but no reader can refresh it (reader_problem, when known). Only that candidate is deferred, with no wake; it is evaluated again when the instance facts, the catalog or the configuration change. Other candidates and instances are unaffected.",
+      "common_causes": "The instance has never had the fact read, or its record expired, went stale for the document, lost confidence or has another type; the instance has no recognition maintenance package bound, or that package does not mark the key.",
+      "handling": "Run a task that reads the fact on that instance, or bind a recognition maintenance package that marks the key; the candidate is reconsidered once the fact is published."
+    },
+    "selection_evaluation_aborted": {
+      "category": "error",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "retired",
+      "since": "0.9.0",
+      "retired_in": "0.12.0",
+      "description": "Retired. A scheduling-layer selection document met an unknown input under an abort_evaluation clause, and the whole scheduling evaluation failed for every instance. Since 0.12.0 the scheduling layer defers only the candidate that read the input (fact_refresh_unbound or selection_input_unknown) and the round goes on.",
+      "common_causes": "An instance fact the document reads was missing or expired on one instance while the document declared abort_evaluation for it.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted. Before 0.12.0, refresh the fact or change the clause to drop_candidate."
+    },
+    "selection_input_unknown": {
+      "category": "warning",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "rule_id": "required",
+        "unknown_reason": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A gate or term (rule_id) of a scheduling-layer selection document met an unknown input (unknown_reason) for a candidate on the instance that no reading can supply: an instruction key or pack data no instruction supplied, a fixed field, or a lookup that covers no value. Only that candidate is deferred, with no wake; it is evaluated again when the instance facts or the catalog change. One entry is written per rule that met such an input.",
+      "common_causes": "An instruction key (session.) was never set for the instance; the document's lookup lacks an entry and a default for a value the candidate has; the document reads a field the candidate does not carry.",
+      "handling": "Supply the instruction for the instance, or fix the selection document (add the lookup entry or default, or read a field the scheduling layer provides) and approve the catalog again."
+    },
+    "selection_unknown_clause_ignored": {
+      "category": "warning",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "unknown_clause": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A gate or term (rule_id) of a scheduling-layer selection document declares a drop_candidate or substitute clause (unknown_clause) that the scheduling layer does not apply: there an unknown input defers the candidate that read it. The document's author meant something else than what runs. An abort_evaluation clause gives no warning.",
+      "common_causes": "A selection document written for an in-task select step, where the clauses apply, is used as the scheduling-layer document.",
+      "handling": "Expect the candidate to be deferred instead of dropped or scored with the substitute; to keep the clause's effect, use the document in a select step instead."
+    }
+  }
+}
