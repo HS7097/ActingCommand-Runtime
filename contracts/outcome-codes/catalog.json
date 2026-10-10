@@ -542,6 +542,22 @@
       "type": "vocab:budget_dimension",
       "description": "The policy budget dimension that is exhausted."
     },
+    "unknown_reason": {
+      "type": "vocab:unknown_reason",
+      "description": "Why an input a selection document reads could not be read as a known value."
+    },
+    "rule_id": {
+      "type": "token",
+      "description": "The id of a selection document's gate or scoring term."
+    },
+    "unknown_clause": {
+      "type": "vocab:unknown_clause",
+      "description": "The on_unknown clause a selection document declares for a gate or term."
+    },
+    "reader_problem": {
+      "type": "vocab:reader_problem",
+      "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -2199,6 +2215,90 @@
         }
       }
     },
+    "unknown_reason": {
+      "description": "Why an input a selection document reads could not be read as a known value.",
+      "tokens": {
+        "fact_missing": {
+          "description": "No record exists under the fact key."
+        },
+        "fact_expired": {
+          "description": "The record's own expiry has passed."
+        },
+        "fact_stale": {
+          "description": "The record is older than the freshness bound the document declares."
+        },
+        "fact_low_confidence": {
+          "description": "The record's confidence is below the floor the document declares."
+        },
+        "fact_not_scalar": {
+          "description": "The record holds an artifact or a record list, not a scalar."
+        },
+        "type_mismatch": {
+          "description": "The value present does not have the declared type."
+        },
+        "field_missing": {
+          "description": "The candidate carries no value under the field name."
+        },
+        "resource_observation_missing": {
+          "description": "No observation exists for the resource a rule reads."
+        },
+        "lookup_miss": {
+          "description": "No lookup entry covers the value and the transform declares no default."
+        }
+      }
+    },
+    "unknown_clause": {
+      "description": "An on_unknown clause of a selection document that the scheduling layer does not apply.",
+      "tokens": {
+        "drop_candidate": {
+          "description": "The clause drops the candidate from ranking."
+        },
+        "substitute": {
+          "description": "The clause substitutes a declared verdict (gate) or value (term)."
+        }
+      }
+    },
+    "reader_problem": {
+      "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding.",
+      "tokens": {
+        "key_not_marked": {
+          "description": "The recognition maintenance package carries no reading mark for the key."
+        },
+        "designated_operation": {
+          "description": "The package declares a designated operation, so it is not a reader."
+        },
+        "no_marks": {
+          "description": "The package carries no reading mark."
+        },
+        "recognize_only": {
+          "description": "The package is recognize-only, so it is not a reader."
+        },
+        "stability_termination": {
+          "description": "The package ends on a stability termination, so it is not a reader."
+        },
+        "policy_fact_authority": {
+          "description": "The key is a policy fact of the catalog, so a reading of it is refused."
+        },
+        "live_pool_key": {
+          "description": "The key is observed by a ledger-fact pool, so a reading of it is refused."
+        },
+        "package_unbound": {
+          "description": "The instance has no recognition maintenance package bound."
+        },
+        "not_declared": {
+          "description": "The bound package is not declared for recognition maintenance, so the binding is ignored."
+        },
+        "disabled": {
+          "description": "Fact refresh is turned off in the configuration."
+        },
+        "confidence_below_document": {
+          "description": "The reading mark's confidence floor is below the floor the document declares."
+        },
+        "interval_exceeds_freshness": {
+          "description": "The minimum reading interval exceeds the freshness the document or the mark requires."
+        }
+      }
+    },
     "evidence_completeness": {
       "description": "How complete evidence is.",
       "source": {
@@ -3832,6 +3932,18 @@
     ],
     "frame_retention_": [
       "runtime-host"
+    ],
+    "fact_refresh_": [
+      "policy"
+    ],
+    "selection_input_": [
+      "policy"
+    ],
+    "selection_unknown_": [
+      "policy"
+    ],
+    "selection_evaluation_": [
+      "policy"
     ],
     "artifact_kept_": [
       "artifact-store"
