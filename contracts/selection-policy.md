@@ -134,22 +134,20 @@ default call, `evaluate`, which an in-task select step makes:
 - `abort_evaluation` — the whole evaluation ends with an `unknown` outcome
   carrying the reason and the rule that met it. Nothing is chosen.
 
+A tie-break key carries no such clause; the one rule above covers it, and the
+verdict records every key it could not read.
+
 Under the collect option, `evaluate_collect`, none of the three applies: an
 unknown input neither ends the evaluation, nor drops the candidate, nor is
 replaced. The result is one entry per candidate, in input order: its score when
 every gate holds and every term reads a known value; the gate that rejected it
-when a gate is decided against it (the gates are a conjunction, so a decided
-gate rejects even after an undecided one); otherwise its unknown set, every
-input that left a gate undecided or that a term could not use, each once, with
-the gate or term that met it, the fact key or field name it read, and the
-reason. A member of `all` or `any` that the other members outweigh is not in
+when a gate is decided against it; otherwise its unknown set, every input that
+left a gate undecided or that a term could not use, each once, with the gate or
+term that met it, the fact key or field name it read, and the reason. A member of `all` or `any` that the other members outweigh is not in
 the set. Each entry also lists the inputs read as known values, a `fact` source
 with the last instant it stays known, the earlier of the record's expiry and its
 publication plus `max_age_ms`. Tie-break keys are not read, nothing is selected,
 and no hash is computed.
-
-A tie-break key carries no such clause; the one rule above covers it, and the
-verdict records every key it could not read.
 
 Predicates are three-valued. `all` is false if any member is false, unknown if
 any member is unknown and none is false, true otherwise. `any` is true if any
