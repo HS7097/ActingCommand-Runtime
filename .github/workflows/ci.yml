@@ -21,6 +21,25 @@ name: CI
 #
 # A push to main runs only the five jobs that save a dependency cache (lint, light, exec-core,
 # exec-tooling, apps); pull requests and pushes to stable run every job.
+#
+# Attributed test results (Batch 0b, test plan §2.1 "gate 的核对"):
+# - Each module job's `Build tests` step writes its test build's cargo messages
+#   (`--message-format=json-render-diagnostics`, diagnostics stay rendered on stderr) to
+#   `$RUNNER_TEMP/test-build/`; that is the job's exe → (package, target) table.
+# - `Attribute test results` runs `ci/gate_check.py attribute` on every tee'd log of the Test step
+#   and writes `<log stem>.results.json` beside it in the uploaded `test-results-<job>`:
+#   {"format": "actingcommand-gate-results/1", "job", "log", "configuration" (the run's
+#   `--features` value, "" for the default features, as in ci/flaky-tests.toml), "binaries": [
+#   {"package", "target" (`lib`, `bin:<name>` or the integration test), "exe", "running",
+#   "summary" (libtest's `test result:` counts), "tests": {"<libtest path>": "ok" | "FAILED" |
+#   "ignored"}}]}. Doc-tests are not attributed.
+# - cargo's exit code still decides the Test step. A parse failure (a result line before any
+#   Running line, an exe missing from the table, a binary whose attributed lines differ from its
+#   `running N tests` or its `test result:` counts) fails the attribution step and writes no file.
+# - `gate` downloads every `test-results-*` and runs `ci/gate_check.py check`: each name of
+#   contracts/test-gates/*.toml runs exactly once per configuration of its job and passes; a name
+#   of ci/flaky-tests.toml is reported as skipped; on pull requests no fragment has fewer keys
+#   than at the base.
 
 on:
   push:
@@ -69,7 +88,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-          cargo test --locked --no-run @selection
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build failed with exit code $LASTEXITCODE"
           }
@@ -87,6 +108,21 @@ jobs:
             Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
           if ($LASTEXITCODE -ne 0) {
             throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
+          if ($LASTEXITCODE -ne 0) {
+            throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
       # Workflow #378: regenerate the merged outcome catalog whenever the Test step ran, pass or
       # fail (G9 fails on the first push of a fragment change by design), and upload it for the
@@ -137,7 +173,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-          cargo test --locked --no-run @selection
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build failed with exit code $LASTEXITCODE"
           }
@@ -150,11 +188,29 @@ jobs:
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
           $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
           $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
-          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+          # Single-threaded (Batch 0b): device's vendor_stdio tests redirect the process stdout (fd 1
+          # and STD_OUTPUT_HANDLE) while they run, which swallowed the libtest lines of tests running
+          # beside them (runs 38073013499, 38073816490); the attribution needs every line.
+          cargo test --locked --no-fail-fast @selection -- --test-threads=1 @skip 2>&1 |
             ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
             Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
           if ($LASTEXITCODE -ne 0) {
             throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
+          if ($LASTEXITCODE -ne 0) {
+            throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
       - name: Upload test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
@@ -190,7 +246,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-          cargo test --locked --no-run @selection
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build failed with exit code $LASTEXITCODE"
           }
@@ -208,6 +266,21 @@ jobs:
             Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
           if ($LASTEXITCODE -ne 0) {
             throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
+          if ($LASTEXITCODE -ne 0) {
+            throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
       - name: Upload test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
@@ -234,7 +307,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-          cargo test --locked --no-run @selection
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build failed with exit code $LASTEXITCODE"
           }
@@ -255,6 +330,21 @@ jobs:
             Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
           if ($LASTEXITCODE -ne 0) {
             throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
+          if ($LASTEXITCODE -ne 0) {
+            throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
       - name: Upload test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
@@ -283,7 +373,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES $env:CI_FEATURES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-          cargo test --locked --no-run @selection
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build failed with exit code $LASTEXITCODE"
           }
@@ -301,6 +393,21 @@ jobs:
             Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
           if ($LASTEXITCODE -ne 0) {
             throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
+          if ($LASTEXITCODE -ne 0) {
+            throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
       - name: Upload test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
@@ -334,11 +441,14 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-          cargo test --locked --no-run @selection
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build (default features) failed with exit code $LASTEXITCODE"
           }
-          cargo test --locked --no-run @selection --features $env:CI_EXTRA_FEATURES --lib
+          $messages = Join-Path $build "build-$env:CI_EXTRA_FEATURES.jsonl"
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection --features $env:CI_EXTRA_FEATURES --lib > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build ($env:CI_EXTRA_FEATURES) failed with exit code $LASTEXITCODE"
           }
@@ -371,6 +481,24 @@ jobs:
             exit 1
           }
           exit 0
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $results = Join-Path $env:RUNNER_TEMP 'test-results'
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'runtime-client.log') '--configuration='
+          $defaultExitCode = $LASTEXITCODE
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'runtime-client-test-observation.log') "--configuration=$env:CI_EXTRA_FEATURES"
+          $observationExitCode = $LASTEXITCODE
+          if ($defaultExitCode -ne 0 -or $observationExitCode -ne 0) {
+            throw "attributing the runtime-client test logs failed (default $defaultExitCode, $env:CI_EXTRA_FEATURES $observationExitCode)"
+          }
       - name: Upload test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -406,7 +534,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-          cargo test --locked --no-run @selection
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
           if ($LASTEXITCODE -ne 0) {
             throw "test build failed with exit code $LASTEXITCODE"
           }
@@ -446,6 +576,24 @@ jobs:
             exit 1
           }
           exit 0
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $results = Join-Path $env:RUNNER_TEMP 'test-results'
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'apps-bins.log') '--configuration='
+          $binsExitCode = $LASTEXITCODE
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'apps-integration.log') '--configuration='
+          $integrationExitCode = $LASTEXITCODE
+          if ($binsExitCode -ne 0 -or $integrationExitCode -ne 0) {
+            throw "attributing the apps test logs failed (bins $binsExitCode, integration $integrationExitCode)"
+          }
       - name: Upload test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -527,9 +675,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
+      # Full history, so the gate check reads the base branch's fragments (`git show`).
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/workflows/ci.yml
+          fetch-depth: 0
+          sparse-checkout: |
+            .github/workflows/ci.yml
+            ci/
+            contracts/test-gates/
           sparse-checkout-cone-mode: false
       # Guard 1 runs inside `light`; if `light` left this needs list, its red would not reach
       # `rust`. So `rust` re-derives the gating jobs from this file itself.
@@ -565,3 +718,18 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           echo "$NEEDS" | jq -e '[to_entries[]|select(.value.result!="success")|.key]|if length==0 then true else ("not green: "+join(", ")|halt_error(1)) end'
+      # Batch 0b: the step above stays the first gate; these two run after a red one too, so the
+      # run also names every map entry that did not run or did not pass.
+      - name: Download attributed test results
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: test-results-*
+          path: ${{ runner.temp }}/test-results
+      - name: Gate map against the test results
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python3 --version
+          python3 ci/gate_check.py check --results "$RUNNER_TEMP/test-results" --base "origin/$BASE_REF"

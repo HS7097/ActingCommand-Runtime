@@ -123,7 +123,8 @@ A lookup that covers neither the value nor a default yields `lookup_miss`.
 
 Unknown is never read as `false`, as `0`, or as an empty string, and it is never
 defaulted away. Each gate and each term states what happens when its input is
-unknown, and the document cannot omit that statement:
+unknown, and the document cannot omit that statement. The statement governs the
+default call, `evaluate`, which an in-task select step makes:
 
 - `drop_candidate` — the candidate leaves the ranking, its status becomes
   `unknown_dropped`, and the reason is recorded.
@@ -135,6 +136,18 @@ unknown, and the document cannot omit that statement:
 
 A tie-break key carries no such clause; the one rule above covers it, and the
 verdict records every key it could not read.
+
+Under the collect option, `evaluate_collect`, none of the three applies: an
+unknown input neither ends the evaluation, nor drops the candidate, nor is
+replaced. The result is one entry per candidate, in input order: its score when
+every gate holds and every term reads a known value; the gate that rejected it
+when a gate is decided against it; otherwise its unknown set, every input that
+left a gate undecided or that a term could not use, each once, with the gate or
+term that met it, the fact key or field name it read, and the reason. A member of `all` or `any` that the other members outweigh is not in
+the set. Each entry also lists the inputs read as known values, a `fact` source
+with the last instant it stays known, the earlier of the record's expiry and its
+publication plus `max_age_ms`. Tie-break keys are not read, nothing is selected,
+and no hash is computed.
 
 Predicates are three-valued. `all` is false if any member is false, unknown if
 any member is unknown and none is false, true otherwise. `any` is true if any
@@ -176,16 +189,18 @@ chooser:
   identified as `<task_id>@<instance_id>`, with the fields `task.priority`,
   `task.strategic_weight_milli`, `task.urgency_milli`, `task.aging_ms`,
   `task.load_cost_milli`, `instance.affinity`, plus the instance's scalar facts
-  under their own keys. A document declares whichever of these it reads.
+  that have not expired at the evaluation instant, under their own keys. A
+  document declares whichever of these it reads.
 - The fact snapshot is the instance's own projection of the evaluation's facts,
   built the same way `from_fact_records` builds one: most specific scope per key,
   record lists unusable, timestamps and durations as integer milliseconds. The
   evaluator is called once per instance.
-- Only `score_milli` of a `ranked` verdict is read. `selection`, `tie_break`,
-  the outcome and the chosen identifiers are ignored, except that an `unknown`
-  outcome ends the scheduling evaluation with an error, so a document meant for
-  scheduling should prefer `drop_candidate` or a substitution over
-  `abort_evaluation` unless stopping the round is the intent.
+- The call is the collect option, `evaluate_collect`, so the document's
+  `on_unknown` clauses do not apply at this layer. Only a candidate's score is
+  read, and a candidate a gate rejects carries none. A candidate with an unknown
+  input is deferred on its own, under the reasons the scheduling contract names,
+  and the scheduling evaluation goes on; `selection` and `tie_break` are not
+  used.
 - The document is hashed into the catalog identity and validated at catalog
   compile time with this crate's `validate`, so an invalid document rejects the
   whole catalog instead of being skipped.
