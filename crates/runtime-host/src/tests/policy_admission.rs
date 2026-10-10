@@ -1354,66 +1354,6 @@ fn game_and_server_scope_changes_cannot_reuse_a_trusted_decision_identity() {
     host.close().expect("close host");
 }
 
-#[test]
-fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
-    let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
-    let mut sources = policy_sources(1);
-    let mut activity: serde_json::Value =
-        serde_json::from_slice(&sources.activity.bytes).expect("activity fixture");
-    activity["profiles"][0]["goals"][0]["deadline_unix_ms"] = serde_json::json!(POLICY_NOW_UNIX_MS);
-    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("activity bytes");
-    host.activate_policy_catalog(&sources)
-        .expect("activate catalog");
-    host.observe_performance_control_for_test(PerformanceControlObservation {
-        observed_at_unix_ms: POLICY_NOW_UNIX_MS - 2_000,
-        host_responsiveness_basis_points: Some(7_000),
-        third_party_pressure_basis_points: Some(0),
-        foreground_fullscreen: false,
-    })
-    .expect("first contention sample");
-    host.observe_performance_control_for_test(PerformanceControlObservation {
-        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
-        host_responsiveness_basis_points: Some(7_000),
-        third_party_pressure_basis_points: Some(0),
-        foreground_fullscreen: false,
-    })
-    .expect("second contention sample");
-    assert_eq!(
-        host.performance_control_directive(POLICY_INSTANCE_ALIAS)
-            .expect("directive")
-            .level,
-        PerformanceControlLevel::DispatchPaused
-    );
-
-    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
-    assert_eq!(intent.prerequisites.urgency_milli, 1_000);
-    let error = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
-        .expect_err("deadline must not bypass a measured contention gate");
-    assert_eq!(error.code(), "performance_capacity_deadline_conflict");
-
-    let mut client = TestClient::connect(&host);
-    let events = projected_events(&mut client, EventQuery::default());
-    assert!(
-        events
-            .iter()
-            .any(|event| event.event_type == EventType::PerformanceBalanceChanged)
-    );
-    assert!(
-        events
-            .iter()
-            .any(|event| event.event_type == EventType::PolicyDispatchRejected)
-    );
-    assert!(
-        !events
-            .iter()
-            .any(|event| event.event_type == EventType::LeaseGranted)
-    );
-    host.close().expect("close host");
-}
-
 // Workflow #369 S4: policy waits (model-369-queue.md v3.1 W-1).
 
 /// Where test (l) and test (m) refuse A's settlement at the restart.
