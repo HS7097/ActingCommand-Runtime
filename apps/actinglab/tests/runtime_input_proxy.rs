@@ -381,7 +381,7 @@ fn lab_operation_on_a_held_instance_is_refused_busy_before_any_input() {
         .unwrap()
         .transport();
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(&runtime_root, b"lab-busy-spec"),
+        RuntimeHostConfig::new(&runtime_root, b"lab-evidence-spec"),
         Arc::new(FakeProvider {
             instance_alias: "node.a",
             instance_id,
