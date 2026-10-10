@@ -1,0 +1,556 @@
+# Gate map, exec fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
+# Keys are the ids of rd-1009/tests/inventory-exec.md. One `[[gate]]` row per key with exactly
+# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
+# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
+# appended to; a row leaves only when its feature retires.
+
+# Contained-task admission fails closed
+[[gate]]
+key = "1"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::page_set_declarations_fail_closed_at_admission",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::scheduling_outcome_coverage_requires_only_reachable_terminal_conditions",
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::schema_0_7_task_timeout_exactly_matches_the_validated_control",
+]
+incident = []
+
+# Run state machine
+[[gate]]
+key = "2"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::pre_execution_guard_passes_when_page_and_target_match",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::pre_execution_guard_rejects_changed_execution_page",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::pre_execution_guard_allows_any_page_guard_when_target_matches",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::pre_execution_guard_rejects_target_mismatch_on_same_page",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::every_failed_retry_attempt_finishes_before_the_next_attempt_starts",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::independent_max_steps_stops_the_no_end_path_at_61_instead_of_default_100",
+    "actingcommand-execution-kernel::lib::run::tests::max_steps_is_visible_terminal_not_fake_success",
+]
+incident = []
+
+# Post-admission OCR
+[[gate]]
+key = "6"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::post_admission_ocr_collects_one_bounded_stream_and_compares_422_names",
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::post_admission_ocr_evaluates_sixteen_targets_on_each_declared_page_in_order",
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::post_admission_ocr_page_and_target_forms_fail_closed_before_provider_access",
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::post_admission_ocr_two_page_gates_are_unique_positive_and_non_ocr",
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::production_post_admission_ocr_without_provider_still_fails_loud",
+]
+incident = []
+
+# Stability counter and typed terminal
+[[gate]]
+key = "7"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::stability_success_finishes_one_ocr_comparison_and_selects_the_owned_outcome",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::stability_declaration_admission_is_exact_and_fail_closed",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::stability_resets_then_increments_and_stops_exactly_at_threshold",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::stability_max_steps_emits_typed_terminal_and_existing_scheduler_error",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::stability_trace_failure_stops_before_step_commit_or_later_input",
+]
+incident = []
+
+# Input sampling inside the region; intent persisted before input
+[[gate]]
+key = "8"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::xorshift64_uniform_rect_v1_matches_fixed_vectors",
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::effect_intent_persistence_failure_stops_before_sampled_input",
+]
+incident = []
+
+# Offline simulation and the effecting runtime share decisions and refusals
+[[gate]]
+key = "9"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::offline::tests::offline_and_effecting_runtime_share_the_first_decision",
+    "actingcommand-execution-kernel::lib::offline::tests::offline_and_effecting_runtime_share_completion_and_no_op",
+    "actingcommand-execution-kernel::lib::offline::tests::offline_and_effecting_runtime_share_all_typed_refusals",
+]
+incident = []
+
+# Kernel sessions
+[[gate]]
+key = "10"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::kernel_close_preserves_each_failed_instance",
+    "actingcommand-execution-kernel::lib::tests::c1b9_d02_readonly_close_authority",
+    "actingcommand-execution-kernel::lib::tests::c1b9_d08_panic_owner",
+    "actingcommand-execution-kernel::lib::tests::c1b9_d09_close_terminal_cache",
+    "actingcommand-execution-kernel::lib::tests::c1b9_d14_occurrence_folding",
+    "actingcommand-execution-kernel::lib::tests::input_and_capture_open_lazily_once_and_share_one_daemon_session",
+    "actingcommand-execution-kernel::lib::tests::application_lifecycle_is_serialized_by_the_daemon_session_and_invalidates_backends",
+    "actingcommand-execution-kernel::lib::tests::instance_sessions_are_partitioned_and_identity_mismatch_is_fatal",
+    "actingcommand-execution-kernel::lib::tests::input_failure_returns_original_error_then_later_input_uses_fresh_session",
+    "actingcommand-execution-kernel::lib::tests::segmented_swipe_capability_failure_preserves_device_detail",
+    "actingcommand-execution-kernel::lib::tests::failed_input_open_is_retired_before_separate_capture",
+    "actingcommand-execution-kernel::lib::tests::capture_failure_returns_original_error_then_later_capture_uses_fresh_session",
+    "actingcommand-execution-kernel::lib::tests::application_failure_returns_original_error_then_later_input_uses_fresh_session",
+    "actingcommand-execution-kernel::lib::tests::backend_open_and_close_failures_surface_without_private_details",
+    "actingcommand-execution-kernel::lib::tests::execution_error_preserves_secondary_cleanup_detail",
+    "actingcommand-execution-kernel::lib::tests::backend_panic_is_caught_then_later_input_uses_fresh_session",
+    "actingcommand-execution-kernel::lib::tests::stale_failed_session_cannot_evict_same_instance_replacement",
+    "actingcommand-execution-kernel::lib::tests::kernel_retirement_failure_keeps_the_operation_error_primary_and_visible",
+    "actingcommand-execution-kernel::lib::tests::drop_closes_daemon_owned_input_session",
+]
+incident = []
+
+# Vision adapter
+[[gate]]
+key = "14"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::provider::tests::vision_model_identity_rejects_host_paths_and_noncanonical_hashes",
+    "actingcommand-execution-kernel::lib::provider::tests::nn_adapter_crops_roi_before_calling_existing_ffi_engine",
+    "actingcommand-execution-kernel::lib::provider::tests::adapter_accepts_canonical_non_full_frame_ocr_roi",
+    "actingcommand-execution-kernel::lib::provider::tests::adapter_maps_cpu_and_cuda_execution_attestation_and_rejects_model_mismatch",
+    "actingcommand-execution-kernel::lib::provider::tests::adapter_rejects_any_ocr_provider_warning",
+    "actingcommand-execution-kernel::lib::provider::tests::adapter_rejects_test_double_backend_and_retires_panicking_engine",
+    "actingcommand-execution-kernel::lib::provider::tests::adapter_preserves_typed_provider_timeout",
+]
+incident = []
+
+# Template match
+[[gate]]
+key = "16"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::tests::full_frame_refines_true_best_beyond_legacy_top_four",
+    "actingcommand-recognition::lib::tests::template_match_respects_region_and_returns_full_frame_coordinates",
+    "actingcommand-recognition::lib::tests::invalid_rects_are_fatal",
+]
+incident = []
+
+# Pack admission per schema
+[[gate]]
+key = "18"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::tests::supported_schemas_reject_unknown_fields",
+    "actingcommand-recognition-pack::lib::tests::schema_0_6_rejects_deprecated_template_primitives",
+]
+incident = []
+
+# Target evaluation
+[[gate]]
+key = "19"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::tests::template_target_hit_passes",
+    "actingcommand-recognition-pack::lib::tests::template_target_below_threshold_fails",
+    "actingcommand-recognition-pack::lib::tests::ccoeff_match_metric_evaluates_template_targets",
+    "actingcommand-recognition-pack::lib::tests::full_frame_region_evaluates_template_targets",
+    "actingcommand-recognition-pack::lib::tests::target_threshold_overrides_default_threshold",
+    "actingcommand-recognition-pack::lib::tests::template_evaluation_returns_raw_and_normalized_scores",
+    "actingcommand-recognition-pack::lib::tests::template_region_evaluation_returns_ordered_rows_and_selected_winner",
+    "actingcommand-recognition-pack::lib::tests::template_region_evaluation_uses_lowest_index_tie_and_selects_none_when_all_fail",
+    "actingcommand-recognition-pack::lib::tests::template_region_evaluation_rejects_invalid_batch_without_partial_result",
+    "actingcommand-recognition-pack::lib::tests::color_target_red_expected_red_passes",
+    "actingcommand-recognition-pack::lib::tests::color_target_red_expected_blue_fails",
+    "actingcommand-recognition-pack::lib::tests::template_with_passing_color_check_passes",
+    "actingcommand-recognition-pack::lib::tests::template_with_failing_color_check_fails",
+    "actingcommand-recognition-pack::lib::tests::relative_color_rejects_a_high_scoring_gray_status_row",
+    "actingcommand-recognition-pack::lib::tests::relative_color_selects_the_valid_candidate_and_tracks_its_movement",
+    "actingcommand-recognition-pack::lib::tests::relative_color_does_not_match_without_the_template",
+    "actingcommand-recognition-pack::lib::tests::relative_color_declaration_and_resolved_region_fail_closed",
+    "actingcommand-recognition-pack::lib::tests::template_threshold_out_of_range_is_fatal",
+    "actingcommand-recognition-pack::lib::tests::color_max_distance_negative_is_fatal",
+    "actingcommand-recognition-pack::lib::tests::nan_and_infinite_thresholds_are_fatal",
+    "actingcommand-recognition-pack::lib::tests::default_thresholds_are_usable",
+]
+incident = []
+
+# Vision requirement
+[[gate]]
+key = "20"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::tests::vision_model_mismatch_prevents_inference",
+    "actingcommand-recognition-pack::lib::tests::ocr_invalid_confidence_and_out_of_roi_blocks_fail_closed",
+]
+incident = []
+
+# Page semantics
+[[gate]]
+key = "23"
+coverage = "Y"
+tests = [
+    "actingcommand-page-detector::lib::tests::online_page_results_preserve_native_values_groups_and_partial_uses",
+    "actingcommand-page-detector::lib::tests::page_set_parses",
+    "actingcommand-page-detector::lib::tests::page_set_parse_failure_is_fatal",
+    "actingcommand-page-detector::lib::tests::new_accepts_valid_page_set",
+    "actingcommand-page-detector::lib::tests::schema_0_3_page_set_is_supported",
+    "actingcommand-page-detector::lib::tests::schema_0_6_page_required_ocr_and_forbidden_nn_use_unified_evaluator",
+    "actingcommand-page-detector::lib::tests::template_only_page_in_mixed_vision_pack_does_not_require_provider",
+    "actingcommand-page-detector::lib::tests::contains_page_reports_known_pages",
+    "actingcommand-page-detector::lib::tests::unsupported_schema_is_fatal",
+    "actingcommand-page-detector::lib::tests::empty_page_id_is_fatal",
+    "actingcommand-page-detector::lib::tests::duplicate_page_id_is_fatal",
+    "actingcommand-page-detector::lib::tests::required_empty_is_fatal",
+    "actingcommand-page-detector::lib::tests::any_of_group_can_satisfy_page_without_required_targets",
+    "actingcommand-page-detector::lib::tests::any_of_group_failed_does_not_match",
+    "actingcommand-page-detector::lib::tests::any_of_empty_group_is_fatal",
+    "actingcommand-page-detector::lib::tests::any_of_conflict_with_required_is_fatal",
+    "actingcommand-page-detector::lib::tests::duplicate_target_in_same_role_is_fatal",
+    "actingcommand-page-detector::lib::tests::target_conflict_across_roles_is_fatal",
+    "actingcommand-page-detector::lib::tests::required_all_passed_matches",
+    "actingcommand-page-detector::lib::tests::required_failed_does_not_match",
+    "actingcommand-page-detector::lib::tests::optional_failed_does_not_affect_match",
+    "actingcommand-page-detector::lib::tests::optional_passed_is_reported",
+    "actingcommand-page-detector::lib::tests::forbidden_passed_does_not_match",
+    "actingcommand-page-detector::lib::tests::forbidden_failed_does_not_affect_match",
+    "actingcommand-page-detector::lib::tests::missing_page_id_is_fatal",
+    "actingcommand-page-detector::lib::tests::missing_target_id_is_fatal",
+    "actingcommand-page-detector::lib::tests::click_only_required_is_fatal",
+    "actingcommand-page-detector::lib::tests::click_only_optional_is_fatal",
+    "actingcommand-page-detector::lib::tests::click_only_forbidden_is_fatal",
+    "actingcommand-page-detector::lib::tests::click_only_any_of_is_fatal",
+    "actingcommand-page-detector::lib::tests::evaluate_all_returns_all_pages",
+    "actingcommand-page-detector::lib::tests::evaluate_all_timed_preserves_results_order_and_deterministic_durations",
+    "actingcommand-page-detector::lib::tests::evaluate_all_keeps_order_and_continues_after_page_error",
+    "actingcommand-page-detector::lib::tests::evaluate_all_reports_batch_validation_before_any_page_runs",
+    "actingcommand-page-detector::lib::tests::evaluate_all_preserves_completed_and_unexecuted_on_mid_batch_invariant_failure",
+    "actingcommand-page-detector::lib::tests::evaluate_page_does_not_evaluate_unrequested_page_targets",
+    "actingcommand-page-detector::lib::tests::coordinate_mismatch_is_fatal",
+]
+incident = []
+
+# ORT init, watchdog, CTC decode, tensors, detector map, provider plan
+[[gate]]
+key = "26"
+coverage = "Y"
+tests = [
+    "actingcommand-onnx-provider-support::lib::tests::ort_runtime_initializer_is_idempotent_under_concurrency",
+    "actingcommand-onnx-provider-support::lib::tests::watchdog_reports_early_cancel_before_timeout",
+    "actingcommand-onnx-provider-support::lib::tests::watchdog_terminates_after_timeout_without_cancel",
+    "actingcommand-ppocr-onnx-json-provider::lib::nn::tests::frame_to_tensor_keeps_nhwc_order",
+    "actingcommand-ppocr-onnx-json-provider::lib::nn::tests::frame_to_tensor_converts_to_nchw_order",
+    "actingcommand-ppocr-onnx-json-provider::lib::nn::tests::labels_from_scores_sorts_descending",
+    "actingcommand-ppocr-onnx-json-provider::lib::nn::tests::labels_from_scores_rejects_mismatched_count",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::session_plan_keeps_cpu_and_cuda_provider_registration_disjoint",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::node_placement_diagnostic_is_explicit_and_cuda_only",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::node_placement_diagnostic_records_exact_cpu_nodes_without_inference",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::node_placement_diagnostic_fails_closed_on_incomplete_cpu_group",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::node_placement_diagnostic_reports_all_cuda_without_cpu_nodes",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::decodes_ctc_output_with_blank_and_repeated_labels",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::rejects_output_without_dictionary_entry",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::treats_extra_ppocr_class_as_special_token",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::confidence_uses_existing_probability_distribution",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::converts_region_to_nchw_recognition_tensor",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::recognition_resize_samples_linear_bgr_inside_region_and_zero_pads",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::recognition_resize_quantizes_uint8_and_caps_width_for_rgba_and_gray",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::parses_detector_probability_map",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::detects_and_merges_nearby_text_components",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::distinguishes_full_frame_from_sub_frame_region",
+    "actingcommand-ppocr-onnx-json-provider::lib::tests::canonical_sub_frame_roi_result_preserves_region_without_warning",
+]
+incident = []
+
+# Package containment limits and isolation
+[[gate]]
+key = "27"
+coverage = "Y"
+tests = [
+    "actingcommand-pack-containment::lib::tests::rejects_hash_mismatch_before_decompress",
+    "actingcommand-pack-containment::lib::tests::rejects_zip_slip_path",
+    "actingcommand-pack-containment::lib::tests::entry_read_limit_uses_remaining_total_and_resident_budgets",
+    "actingcommand-pack-containment::lib::tests::benches_are_isolated_by_instance",
+]
+incident = []
+
+# Success and error page structural overlap is rejected
+[[gate]]
+key = "28"
+coverage = "Y"
+tests = [
+    "actingcommand-pack-containment::lib::tests::packaged_error_page_reference_must_exist_in_packaged_page_set",
+    "actingcommand-pack-containment::lib::tests::packaged_error_page_identifiers_must_be_nonempty_and_unique",
+    "actingcommand-pack-containment::lib::tests::packaged_error_page_is_available_through_formal_detector",
+    "actingcommand-pack-containment::lib::tests::packaged_success_error_structural_overlap_is_rejected",
+    "actingcommand-pack-containment::lib::tests::packaged_success_pages_include_complete_terminal_destination_and_expectation_sets",
+    "actingcommand-pack-containment::lib::tests::packaged_success_page_declarations_fail_closed",
+    "actingcommand-pack-containment::lib::tests::packaged_structural_overlap_checks_every_post_action_set_member",
+]
+incident = []
+
+# Source snapshot compile
+[[gate]]
+key = "29"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::resource_convert::tests::schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithms",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_derives_variant_any_of_only_without_positive_page_rule",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_matches_authoritative_mail_page_rule_output",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_applies_page_rules",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_rejects_unknown_page_rule",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_materializes_page_referenced_only_by_error_pages",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_materializes_and_validates_scheduling_outcome_references",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::error_page_only_reference_is_consumed_by_formal_detector",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::error_page_conversion_is_byte_deterministic",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::invalid_error_page_identifiers_fail_loud",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::finite_page_sets_are_normalized_materialized_and_not_truncated",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::singleton_page_declarations_keep_legacy_scalar_shapes",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::destructive_actions_keep_exact_pre_normalization_null_semantics",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::invalid_finite_page_declarations_fail_closed",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::malformed_expect_after_declarations_fail_closed",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::error_page_rule_and_asset_references_fail_loud",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::selected_build_requires_error_page_definition_in_selected_closure",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::selected_build_prunes_nonresident_page_rules_and_soft_targets",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pack_includes_color_probe_targets",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pack_maps_schema_06_ocr_target_to_canonical_output",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pack_without_ocr_targets_preserves_existing_output",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::ocr_targets_reject_wrong_schema_container_and_entry_shape",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::ocr_targets_reject_invalid_existing_contract_fields",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::ocr_target_duplicates_coalesce_only_when_identical",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::selected_build_retains_required_ocr_target_closure",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_pack_includes_verify_template_targets",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::source_parser_accepts_explicit_maa_task_overlays",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::source_declarations_strictly_admit_maa_semantic_mapping_read_only",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::source_parser_rejects_missing_coordinate_space_without_writing_outputs",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::default_operation_bundle_mode_does_not_apply_maa_overlay_fields",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_synthesizes_guard_from_operation_verify_template",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_synthesizes_guard_from_source_anchor_without_operation_verify_template",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_synthesizes_any_page_guard_from_matching_anchor_template",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_synthesizes_guard_from_source_anchor_without_verify_template",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_rejects_rect_and_specific_rect_without_guard_source",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_rejects_drag_without_guard_source",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_rejects_point_and_long_press_without_guard_source",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_allows_explicit_trusted_unguarded_long_press",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_allows_explicit_trusted_unguarded_drag",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_synthesizes_guard_from_operation_verify_template_click_rect",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_rejects_unmatched_verify_template_without_rect_guard_source",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::build_primitives_allows_explicit_trusted_unguarded_coordinate",
+    "actingcommand-pack-containment::lib::source::tests::derives_target_ids_like_python_converter",
+    "actingcommand-pack-containment::lib::source::tests::converts_region_and_click_shapes",
+    "actingcommand-pack-containment::lib::source::tests::resolves_page_anchor_variants_as_any_of_group",
+    "actingcommand-pack-containment::lib::source::tests::color_check_region_is_flattened",
+    "actingcommand-pack-containment::lib::source::tests::resource_selectors_are_generic_and_path_safe",
+    "actingcommand-pack-containment::lib::source::tests::validate_page_rule_targets_rejects_missing_targets",
+    "actingcommand-pack-containment::lib::source::tests::schema_0_7_task_timeout_is_optional_bounded_and_non_mutating",
+    "actingcommand-pack-containment::lib::source::tests::schema_0_7_max_steps_is_optional_bounded_and_non_mutating",
+    "actingcommand-pack-containment::lib::source::tests::source_drag_rejects_canonical_or_mixed_endpoint_spelling",
+    "actingcommand-pack-containment::lib::source::tests::converted_offset_click_rejects_color_probe_guard",
+    "actingcommand-pack-containment::lib::source::tests::schema_0_6_converter_rejects_deprecated_template_primitives_with_migration_diagnostics",
+]
+incident = []
+
+# Task-graph expansion fails loudly on cycles and limits
+[[gate]]
+key = "30"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::expands_base_task_with_child_override",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::expands_implicit_at_task_and_virtual_back_references",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::expands_virtual_field_references_from_context",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::expands_all_virtual_list_field_references",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::expands_multi_at_task_id_before_binary_virtual_reference",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::expands_parenthesized_difference_before_at_prefix",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::explicit_at_task_rebases_base_lists_and_uses_task_template_default",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::implicit_at_task_inherits_base_template",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::explicit_at_with_base_task_uses_declared_base_task",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::bare_back_virtual_reference_is_skipped",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::algorithm_change_drops_algorithm_specific_inherited_fields",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::base_task_uses_child_template_default_even_when_parent_has_template",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::base_task_return_example_uses_child_template_default",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::base_task_return_example_uses_child_template_default_with_implicit_algorithm",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::base_task_chain_without_template_uses_child_default",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::base_task_child_template_overrides_parent_template",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::multi_file_override_without_base_task_inherits_previous_definition",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::base_task_cycle_fails_loudly",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::virtual_self_cycle_fails_loudly",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::virtual_two_node_cycle_fails_loudly_with_chain",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::virtual_at_composition_growth_cycle_fails_loudly",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::virtual_cross_at_composition_growth_cycle_fails_loudly",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::at_task_name_components_5000_fails_without_stack_overflow",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::at_task_name_components_63_and_64_are_allowed",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::at_task_name_components_65_is_rejected",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::virtual_three_node_cycle_fails_loudly_with_chain",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::nested_expression_virtual_cycle_uses_same_stack",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::legal_deep_virtual_chain_still_expands",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::legal_at_composition_chain_below_depth_limit_expands",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::algorithm_change_preserves_input_text_task_info_field",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::algorithm_change_drops_replace_full_ocr_field",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::unresolved_reference_fails_loudly",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::typed_facts_preserve_inherited_composed_and_maa_defaulted_origins",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::multi_task_facts_are_sorted_and_preserve_exact_existing_facts",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::bounded_intake_rejects_root_symlink_depth_files_bytes_and_task_limits",
+    "actingcommand-resource-tooling::lib::maa_task_graph::tests::malformed_core_typed_fields_fail_loudly",
+]
+incident = []
+
+# Atomic package publication and authoring journal
+[[gate]]
+key = "31"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::package_publish::tests::process_crash_leaves_old_visibility_and_is_recoverable",
+    "actingcommand-resource-tooling::lib::authoring::tests::interrupted_candidate_move_is_rolled_back_before_the_next_publish",
+]
+incident = []
+
+# package validate
+[[gate]]
+key = "32"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_accepts_safe_zip",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_distinguishes_external_hash_from_self_computed_provenance",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_external_hash_mismatch",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_reports_unsupported_recognition_targets",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_zip_slip",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_executable_entry",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_hash_mismatch",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_unsafe_manifest_hash_path_without_echoing_traversal",
+    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_custom_lab_resource_root",
+]
+incident = []
+
+# Lab bundle normalization, drive dry-run routes, environment detection
+[[gate]]
+key = "34"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::lab_run::tests::lab_bundle_normalizes_finite_target_and_destination_sets",
+    "actingcommand-lab::lib::drive::tests::navigate_dry_run_uses_typed_route",
+    "actingcommand-lab::lib::env_detection::tests::stale_resource_hash_blocks_resolution",
+    "actingcommand-lab::lib::env_detection::lock::tests::pid_reuse_is_recovered_only_after_start_time_mismatch",
+]
+incident = []
+
+# Source and Runtime admission budgets agree
+[[gate]]
+key = "36"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::package_api::explicit_postcondition_budget_source_and_runtime_admission_agree",
+]
+incident = []
+
+# One JSON envelope and the exit-code table
+[[gate]]
+key = "37"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::lab2_cli_contract::child_process_stdout_remains_one_json_envelope",
+    "actingcommand-actinglab::package_offline::package_dry_run_never_overwrites_existing_or_hard_linked_inputs",
+]
+incident = []
+
+# Production device effects only through the Runtime
+[[gate]]
+key = "38"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::runtime_input_proxy::lab_operation_evidence_consistency_preserves_complete_and_incomplete_records",
+    "actingcommand-actinglab::runtime_input_proxy::resource_restore_preserves_native_evidence_and_read_only_source_parsing",
+    "actingcommand-actinglab::runtime_input_proxy::online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contracts",
+    "actingcommand-actinglab::runtime_input_proxy::session_app_routes_application_lifecycle_through_runtime_without_client_package_identity",
+    "actingcommand-actinglab::runtime_input_proxy::session_status_and_monitor_policy_project_resident_runtime_without_legacy_state",
+    "actingcommand-actinglab::runtime_input_proxy::session_stream_projects_runtime_capture_sequence_without_legacy_state",
+    "actingcommand-actinglab::runtime_input_proxy::runtime_backed_session_clients_fail_visibly_when_runtime_is_unavailable",
+    "actingcommand-actinglab::runtime_input_proxy::lab_package_debug_is_a_correlated_runtime_request_without_device_authority",
+    "actingcommand-actinglab::runtime_input_proxy::runtime_owned_evidence_export_without_formal_summary_fails_closed",
+    "actingcommand-actinglab::runtime_input_proxy::runtime_debug_session_export_without_formal_summary_fails_closed",
+    "actingcommand-actinglab::runtime_input_proxy::production_do_uses_runtime_capture_and_fenced_input",
+    "actingcommand-actinglab::runtime_input_proxy::online_lab2_observe_and_do_share_runtime_authority_without_local_state",
+    "actingcommand-actinglab::runtime_input_proxy::online_lab2_do_guard_failure_records_observation_without_runtime_input",
+    "actingcommand-actinglab::runtime_input_proxy::online_lab2_ensure_and_wait_use_runtime_authority_without_local_state",
+    "actingcommand-actinglab::runtime_input_proxy::production_tap_uses_runtime_proxy_without_local_adb_configuration",
+    "actingcommand-actinglab::runtime_input_proxy::production_lab_run_routes_device_effects_through_runtime_only",
+    "actingcommand-actinglab::runtime_input_proxy::runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed",
+]
+incident = []
+
+# lab2 commands and the session record
+[[gate]]
+key = "39"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::lab2_do_destructive_overlap_requires_opt_in_and_allows_explicit_opt_in",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_start_status_and_stop_write_context",
+    "actingcommand-actinglab::bin:actinglab::tests::top_level_record_alias_uses_session_record_context",
+    "actingcommand-actinglab::bin:actinglab::tests::stream_command_reports_bounded_dry_run_contract",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_active_start_requires_force",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_records_region_schema",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_color_probe_records_deferred_schema",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_color_probe_samples_frame",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_verify_template_records_deferred_schema",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_verify_template_materializes_frame_crop",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_recomputes_frame_backed_color_probe",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_deferred_color_probe_does_not_fake_expected_color",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_rebacktests_frame_backed_verify_template",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_materializes_frame_crop",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_rejects_artifact_dir_outside_state_dir",
+    "actingcommand-actinglab::bin:actinglab::tests::ensure_path_within_rejects_directory_alias_escape",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_artifact_source_must_stay_within_state_dir",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_anchor_materializes_current_capture_source_frame_metadata",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_rejects_frame_and_capture_together",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_contrast_frame_passes_when_distinct",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_contrast_frame_fails_when_matching",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_auto_region_materializes_frame_crop",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_auto_region_prefers_contrast_rejected_candidate",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_candidates_lists_auto_region_report",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_candidates_lists_color_probe_auto_region_report",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_candidates_requires_auto_region_report",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_auto_without_frame_stays_deferred",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_anchor_rejects_out_of_bounds_frame_crop",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_operation_records_coord_click",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_requires_active_record",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_step_rejects_duplicate_step_id",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_updates_anchor_metadata",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_rebacktests_frame_backed_anchor",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_selects_auto_region_candidate_and_rebacktests",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_candidate_index_requires_auto_region_report",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_updates_operation_metadata",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_requires_supported_field",
+    "actingcommand-actinglab::bin:actinglab::tests::drift_diagnostics_contract_rejects_fields_outside_amend_whitelist",
+    "actingcommand-actinglab::bin:actinglab::tests::recognize_target_output_uses_shared_evaluation_shape",
+    "actingcommand-actinglab::bin:actinglab::tests::env_needs_detection_hint_is_machine_readable",
+    "actingcommand-actinglab::bin:actinglab::tests::drift_diagnostics_uses_measured_matched_rect_without_proposed_region",
+    "actingcommand-actinglab::bin:actinglab::tests::record_drift_target_not_found_is_safety_blocked",
+    "actingcommand-actinglab::bin:actinglab::tests::record_drift_target_ambiguous_is_safety_blocked",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_from_drift_diagnostics_updates_anchor",
+    "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_from_drift_diagnostics_requires_readable_json",
+]
+incident = []
+
+# ADB resolution and target recovery
+[[gate]]
+key = "40"
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::adb::tests::empty_adb_config_does_not_fall_back_to_path_adb",
+    "actingcommand-device::lib::adb::tests::device_state_error_carries_bounded_native_stage",
+]
+incident = []
+
+# ADB and capture library from one installation; discovery maps to the instance
+[[gate]]
+key = "41"
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::mumu::tests::coordinated_backend_paths_reject_cross_installation_inputs",
+    "actingcommand-device::lib::discovery::tests::discovery_lists_running_mumu_serials",
+]
+incident = []
+
+# Capture selection and touch fallback bounds
+[[gate]]
+key = "42"
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::capture::tests::priority_capture_uses_second_backend_after_first_failure",
+    "actingcommand-device::lib::touch::tests::shared_input_validation_blocks_fallback_on_out_of_bounds",
+    "actingcommand-device::lib::maatouch::tests::validate_input_rejects_x_over_max",
+]
+incident = []
