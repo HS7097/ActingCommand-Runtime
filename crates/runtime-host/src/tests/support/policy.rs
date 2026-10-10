@@ -7,7 +7,7 @@ const MAPPED_RUN_MIN_ADVANCE_MS: u64 = 120_000;
 /// activity window (08:00-22:00 UTC). The restarted host's Runtime clock starts at it and the
 /// evaluations after the restart run at fixed instants from it, so they never precede the
 /// records they read and never depend on the wall clock.
-const POLICY_RESTART_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 7_200_000;
+const POLICY_RESTART_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 39_600_000;
 
 fn policy_sources(version: u64) -> CatalogSources {
     let mut sources = CatalogSources {
