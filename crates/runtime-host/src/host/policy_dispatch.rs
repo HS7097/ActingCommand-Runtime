@@ -776,6 +776,9 @@ impl HostShared {
         for signal in &cycle.detection_planning_signals {
             self.record_policy_planning_signal(signal.clone())?;
         }
+        for signal in &cycle.clock_slot_signals {
+            self.record_policy_planning_signal(signal.clone())?;
+        }
         lock(
             &self.trusted_policy_dispatches,
             "record_trusted_policy_dispatches",

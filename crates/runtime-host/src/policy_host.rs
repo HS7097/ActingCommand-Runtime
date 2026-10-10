@@ -3,6 +3,7 @@
 //! Runtime-owned catalog generations and replayable policy admission state.
 
 mod catalog_preview;
+pub(crate) mod clock_slot;
 pub use catalog_preview::{
     CatalogPreview, CatalogPreviewPhases, CatalogPreviewRequest, preview_policy_catalog_transition,
 };
@@ -226,6 +227,8 @@ pub struct PolicyCycle {
     pub evaluation: Option<PolicyEvaluation>,
     pub pending_dispatch_intents: Vec<DispatchIntent>,
     pub detection_planning_signals: Vec<PolicyPlanningSignalEventData>,
+    /// Workflow #372 K2: the clock-slot records this cycle appends after its detection signals.
+    pub clock_slot_signals: Vec<PolicyPlanningSignalEventData>,
     pub measurement: Option<PolicyEvaluationMeasurement>,
 }
 
@@ -1329,6 +1332,7 @@ impl PolicyHost {
                 evaluation: None,
                 pending_dispatch_intents: Vec::new(),
                 detection_planning_signals: Vec::new(),
+                clock_slot_signals: Vec::new(),
                 measurement: None,
             });
         }
@@ -1341,6 +1345,7 @@ impl PolicyHost {
         let immediate_retries = self
             .control
             .immediate_retry_pairs(&active.compiled, time.unix_ms)?;
+        let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
         let mut evaluation = evaluate_with_immediate_retries::<RuntimeHostError>(
             &active.compiled,
@@ -1349,7 +1354,7 @@ impl PolicyHost {
             time,
             seed,
             &immediate_retries,
-            |intent| match (
+            deferrals.capture(|intent| match (
                 scheduling_pause(&intent.instance_id),
                 instance_occupancy(&intent.instance_id),
             ) {
@@ -1392,6 +1397,7 @@ impl PolicyHost {
                     Ok(_) => Ok(CandidateEligibility::Eligible),
                     Err(error) if is_availability_denial(&error) => {
                         let rejection = error.policy_rejection();
+                        deferrals.note_budget(&rejection);
                         Ok(CandidateEligibility::Deferred {
                             reason: DecisionReason {
                                 code: rejection.code,
@@ -1405,7 +1411,7 @@ impl PolicyHost {
                     }
                     Err(error) => Err(error),
                 },
-            },
+            }),
         )?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
         let elapsed_micros = u64::try_from(started.elapsed().as_micros()).map_err(|_| {
@@ -1445,6 +1451,17 @@ impl PolicyHost {
                 )
             })
             .collect::<BTreeSet<_>>();
+        let clock_slot_signals = clock_slot::preview(
+            &self.store,
+            &active.compiled,
+            &facts.tasks,
+            &facts.instances,
+            &evaluation,
+            &pending_dispatch_intents,
+            &in_flight,
+            deferrals,
+            time,
+        )?;
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
         self.arbitration
@@ -1455,6 +1472,7 @@ impl PolicyHost {
             evaluation: Some(evaluation),
             pending_dispatch_intents,
             detection_planning_signals,
+            clock_slot_signals,
             measurement: Some(PolicyEvaluationMeasurement {
                 sampled_at_monotonic_ms,
                 elapsed_micros,

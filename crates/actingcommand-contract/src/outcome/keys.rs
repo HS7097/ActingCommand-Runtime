@@ -58,6 +58,8 @@ outcome_keys! {
     next_eligible_unix_ms: unix_ms,
     next_occurrence_unix_ms: unix_ms,
     window_start_unix_ms: unix_ms,
+    window_end_unix_ms: unix_ms,
+    first_run: boolean,
     count: integer,
     holder_kind: vocab(claim_kind),
     limit_count: integer,

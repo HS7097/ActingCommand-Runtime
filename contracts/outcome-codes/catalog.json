@@ -210,6 +210,14 @@
       "type": "unix_ms",
       "description": "The start of a scheduling window, in Unix milliseconds."
     },
+    "window_end_unix_ms": {
+      "type": "unix_ms",
+      "description": "The end of the activity window a clock slot was refused or deferred in, in Unix milliseconds."
+    },
+    "first_run": {
+      "type": "boolean",
+      "description": "The pair had no earlier dispatch."
+    },
     "count": {
       "type": "integer",
       "description": "A count."
@@ -3861,6 +3869,9 @@
       "runtime-host"
     ],
     "policy_settlement_dispatch_": [
+      "runtime-host"
+    ],
+    "clock_slot_": [
       "runtime-host"
     ]
   },
