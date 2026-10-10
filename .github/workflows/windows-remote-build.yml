@@ -386,6 +386,7 @@ jobs:
             }
             $config.state_root = $state
             $config.secret_fingerprint_salt = 'boot-smoke-salt-0123456789'
+            $config.bind_host = '192.0.2.1'
             [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 
             $process = Start-Process -FilePath (Join-Path $runtime 'actingcommand-actingd.exe') `
