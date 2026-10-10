@@ -13,19 +13,22 @@ ShutdownRequested.
 
 ## Responsiveness input
 
-Host responsiveness measures execution spans: `capture_latency_ms` (500 ms
-target), `recognition_latency_ms` (1,000 ms), `action_effect_latency_ms`
-(1,500 ms), `touch_response_us` (100,000 us) and `capture_acquire_us`
-(250,000 us). Each measured span scores 10,000 at or below its target and
-`floor(target * 10,000 / actual)` above it; the monitor uses the lowest score
-from fresh signals within the latest 64 pipeline entries. Freshness remains twice the sample
-interval, and consumed or expired signals do not supply another observation.
+Host responsiveness measures execution spans: `recognition_latency_ms`
+(1,000 ms target), `action_effect_latency_ms` (1,500 ms), `touch_response_us`
+(100,000 us) and `capture_acquire_us` (250,000 us). Each measured span scores
+10,000 at or below its target and `floor(target * 10,000 / actual)` above it;
+the monitor uses the lowest score from fresh signals within the latest 64
+pipeline entries. Freshness remains twice the sample interval, and consumed or
+expired signals do not supply another observation.
 
 `frame_gap_ms` describes frame arrival cadence, including declared observation
-waits and time without work. It remains in stutter events, `max_frame_gap_ms`,
-the bounded context queue and related diagnostic event chains. It contributes
-no responsiveness score. A signal containing only a frame gap supplies no
-responsiveness measurement: the field remains `None`, and a control observation
+waits and time without work. `capture_latency_ms` is the event-to-event capture
+time, including backend open and reopen. Both remain in stutter events, the
+context's `max_frame_gap_ms` and `max_capture_latency_ms` (also in a policy
+failure's `perf_context`), the bounded context queue, the summary and related
+diagnostic event chains. Neither contributes a responsiveness score. A signal
+containing only these two supplies no responsiveness measurement: the field
+remains `None`, and a control observation
 exists only when another fresh scoring signal or usable system-pressure sample
 exists. System pressure keeps its own source timestamp and coverage rules;
 unavailable process coverage remains unknown. The original sampler-failure,
@@ -101,34 +104,25 @@ missing controller state is an error; nothing is allowed by default.
 
 `admit_policy_dispatch` consults the directive of the intent's instance after
 trusted-dispatch authorization and approval projection and before capacity
-admission. The urgency rules are unchanged: whenever a dispatch is deferred,
-urgency of 950 or more fails with `performance_capacity_deadline_conflict` and
-urgency of 750 or more records a `PerformanceBalanceChanged` event with reason
-`DeadlineConflict`, the instance id, the instance's effective level as both
-previous and current level, and the deadline disposition
-(`InformationWarning` from 750, `CapacityFailure` from 950). Below 750 the
-deferral fails with `performance_contention_dispatch_deferred` and records no
-balance event. Every deferral is nonfatal (`InvalidRequest`) and is recorded
-as the `PolicyDispatchRejected` fact that names the instance and the code.
+admission.
 
-- Normal: allowed; any open throttle window of the instance is closed.
-- DispatchPaused, Suspended, ShutdownRequested: deferred with the codes and
-  events above; any open throttle window of the instance is closed.
-- Throttled, YieldRequested, QosReduced: the dispatch may start no earlier
-  than `throttle_delay_ms` after the instance's first throttled attempt. The
-  first attempt opens a per-instance throttle window ending at
-  `now + throttle_delay_ms` and is deferred with the codes and events above;
-  the returned error carries `retry_after_ms` (the wait still owed) and its
-  rejection record carries `next_eligible_unix_ms = now + retry_after_ms`. An
-  attempt at or after the window end is allowed and closes the window; an
-  earlier attempt is deferred with the remaining wait. A window that was opened
-  under a different level, or a remaining wait longer than the level's own
-  delay (a clock anomaly), restarts the window with the current delay instead
-  of granting. The driver's next policy cycle retries with a fresh decision.
+- Normal, DispatchPaused, Throttled, YieldRequested, QosReduced: allowed, on
+  every attempt. No level opens a throttle window, and the gate gives no
+  `retry_after_ms`.
+- Suspended, ShutdownRequested: deferred with
+  `performance_contention_dispatch_deferred`. The deferral is nonfatal
+  (`InvalidRequest`) and is recorded as the `PolicyDispatchRejected` fact that
+  names the instance and the code. The driver's next policy cycle retries with
+  a fresh decision.
+
+Urgency never changes the gate's outcome: a deferral has the same code at any
+urgency, never fails as a deadline conflict, and records no
+`PerformanceBalanceChanged` event. Urgency only orders candidates in the
+evaluator.
 
 Capacity admission follows an allowed gate unchanged. The resource overlay
-(`apply_to_resources`: budget scaling and the heavy-dispatch cap by the global
-level) is unchanged.
+(`apply_to_resources`) does not scale the host budgets by the level: they only
+express capacity. Its heavy-dispatch cap by the global level is unchanged.
 
 ## Lease admission
 
