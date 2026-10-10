@@ -132,7 +132,9 @@ class Binary:
         self.nested = 0
 
     def label(self):
-        return f"{self.package}::{self.target} ({self.exe}, Running at line {self.line})"
+        if self.package is None:
+            return f"the libtest session at line {self.line}"
+        return f"{self.package}::{self.target} ({self.exe}, session at line {self.line})"
 
 
 def libtest_name(name):
@@ -142,84 +144,86 @@ def libtest_name(name):
 
 
 def parse_log(log, table):
-    """Every test binary of one log with its attributed results; a list of failures."""
-    binaries, failures = [], []
-    current = None  # a Binary, "doc-tests", or "unknown" after a Running line we cannot attribute
+    """Every test binary of one log with its attributed results; a list of failures.
+
+    cargo prints its `Running` and `Doc-tests` headers on stderr and libtest prints each
+    binary's session (`running N tests` … `test result:`) on stdout. The Test step merges the two
+    streams, so a header can land among the lines of the session before it (run 38082835971).
+    Each stream keeps its own order, and cargo runs every test binary before any doc test, so
+    the k-th session belongs to the k-th `Running` header; the sessions after them are doc tests
+    (one or two per `Doc-tests` header: rustdoc runs standalone and merged doc tests apart).
+    """
+    headers, sessions, failures = [], [], []
+    session = None  # the open session, from its `running N tests` to its `test result:`
     lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
     for number, raw in enumerate(lines, 1):
         line = STAMP.sub("", ANSI.sub("", raw), count=1).rstrip()
         running = RUNNING.match(line)
         if running:
-            exe = exe_name(running["exe"].strip())
-            if exe not in table:
-                failures.append(f"line {number}: {exe} is missing from the test build table")
-                current = "unknown"
-                continue
-            current = Binary(*table[exe], exe, number)
-            binaries.append(current)
+            headers.append((exe_name(running["exe"].strip()), number))
             continue
         if DOCTESTS.match(line):
-            current = "doc-tests"  # doc tests are no #[test] fn: not attributed
+            headers.append((None, number))  # doc tests are no #[test] fn: not attributed
             continue
-        if current == "doc-tests":
+        count = COUNT.match(line)
+        result = RESULT.match(line)
+        summary = SUMMARY.match(line)
+        started = None if result else STARTED.match(line)
+        if session is None:
+            if count:
+                session = Binary(None, None, None, number)
+                session.running = int(count["count"])
+                sessions.append(session)
+            elif result or summary or started:
+                failures.append(f"line {number}: a libtest line outside any session: {line}")
             continue
-        libtest_line = COUNT.match(line) or RESULT.match(line) or SUMMARY.match(line)
-        if current is None:
-            if libtest_line or STARTED.match(line):
-                failures.append(f"line {number}: a libtest line before any Running line: {line}")
-            continue
-        if current == "unknown":
-            continue
-        binary = current
-        if binary.summary is not None:
-            if libtest_line or STARTED.match(line):
-                failures.append(
-                    f"line {number}: a libtest line after the summary of {binary.label()}: {line}"
-                )
-            continue
-        if binary.pending is not None:
+        if session.pending is not None:
             # libtest wrote `test <path> ... ` and its result word follows as its next output:
             # single-threaded it runs the test in between, multi-threaded it writes both at once.
             # A child process sharing stdout can still write lines in between; they are not
             # libtest's own.
             token = TOKEN.match(line)
             if token:
-                record(binary, binary.pending, token["result"], number, failures)
-                binary.pending = None
-            elif libtest_line or STARTED.match(line):
-                binary.nested += 1
+                record(session, session.pending, token["result"], number, failures)
+                session.pending = None
+            elif count or result or summary or started:
+                session.nested += 1
             continue
-        count = COUNT.match(line)
         if count:
-            if binary.running is None:
-                binary.running = int(count["count"])
-            else:
-                binary.nested += 1  # a child run of the same exe (`*_child` entries)
-            continue
-        summary = SUMMARY.match(line)
-        if summary:
-            binary.summary = {key: int(value) for key, value in summary.groupdict().items()}
-            continue
-        result = RESULT.match(line)
-        if result:
+            session.nested += 1  # a child run of the same exe (`*_child` entries)
+        elif summary:
+            session.summary = {key: int(value) for key, value in summary.groupdict().items()}
+            session = None
+        elif result:
             name = libtest_name(result["name"])
             if name is None:
-                binary.foreign += 1  # not a libtest path, e.g. trybuild's `test tests/ui/x.rs ... ok`
-            elif binary.running is None:
-                failures.append(f"line {number}: a result before `running N tests`: {line}")
+                session.foreign += 1  # not a libtest path, e.g. trybuild's `test tests/ui/x.rs ... ok`
             else:
-                record(binary, name, result["result"], number, failures)
-            continue
-        started = STARTED.match(line)
-        if started:
+                record(session, name, result["result"], number, failures)
+        elif started:
             name = libtest_name(started["name"])
             if name is None:
-                binary.foreign += 1
-            elif binary.running is None:
-                failures.append(f"line {number}: a test started before `running N tests`: {line}")
+                session.foreign += 1
             else:
-                binary.pending = name
-    for binary in binaries:
+                session.pending = name
+    tests = [header for header in headers if header[0] is not None]
+    docs = len(headers) - len(tests)
+    if any(exe is None for exe, _ in headers[: len(tests)]):
+        failures.append("a Doc-tests header comes before a Running header")
+        return [], failures
+    if len(sessions) < len(tests) + docs or (docs == 0 and len(sessions) != len(tests)):
+        failures.append(
+            f"{len(tests)} Running and {docs} Doc-tests headers but {len(sessions)} libtest sessions"
+        )
+        return [], failures
+    binaries = []
+    for (exe, header_line), binary in zip(tests, sessions):
+        if exe not in table:
+            failures.append(f"line {header_line}: {exe} is missing from the test build table")
+            continue
+        binary.package, binary.target = table[exe]
+        binary.exe = exe
+        binaries.append(binary)
         failures.extend(check_binary(binary))
     return binaries, failures
 
