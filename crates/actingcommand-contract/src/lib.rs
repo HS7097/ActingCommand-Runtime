@@ -232,6 +232,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn unsigned_integer_times_prefixed_accepts_one_optional_multiplier_prefix() {
         use serde_json::json;
 

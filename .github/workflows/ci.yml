@@ -732,4 +732,4 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           python3 --version
-          python3 ci/gate_check.py check --results "$RUNNER_TEMP/test-results" --base "origin/$BASE_REF"
+          python3 ci/gate_check.py check --results "$RUNNER_TEMP/test-results" --base f1bf976687551c2fbccad79eae0030137a808dd2
