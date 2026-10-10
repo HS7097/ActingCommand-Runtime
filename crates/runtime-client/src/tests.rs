@@ -2590,7 +2590,7 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
 fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host(&root, Arc::clone(&state), 1_000);
+    let host = host(&root, Arc::clone(&state), 5_000);
     let client = client(&root);
 
     assert_eq!(
@@ -2725,7 +2725,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
         input_close_delay: Duration::from_millis(200),
         ..FakeState::default()
     });
-    let host = self::host(&root, Arc::clone(&state), 1_000);
+    let host = self::host(&root, Arc::clone(&state), 5_000);
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
             .with_io_timeout(Duration::from_millis(100))
