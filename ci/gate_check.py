@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Gate tooling of .github/workflows/ci.yml (test plan v2.2 §2.1, Batch 0b).
+"""Gate tooling of .github/workflows/ci.yml (test plan v2.2 §2.1, Batch 0b) and of the boot
+smoke of .github/workflows/windows-remote-build.yml (REG-0, BOOT-SMOKE).
 
 attribute (every module job, on the Windows runner)
     Attributes every libtest result line of one tee'd test log to (package, target,
@@ -15,7 +16,11 @@ check (the `gate` job, check name `rust`, on ubuntu)
     A name of ci/flaky-tests.toml is reported as "flaky, skipped". On pull requests the key count
     of each fragment must not fall below the base branch's. Exits 1 on any violation.
 
-Standard library only; `check` needs Python 3.11+ (tomllib).
+known-unbootable <path> (the `Boot smoke` step of the exact-SHA build, on the Windows runner)
+    Validates ci/known-unbootable.toml, the machine-readable copy of Workflow #390 REG-0, and
+    prints its rows on stdout as one JSON array. Any violation exits 1, naming the row and rule.
+
+Standard library only; `check` and `known-unbootable` need Python 3.11+ (tomllib).
 """
 
 import argparse
@@ -521,6 +526,59 @@ def cmd_check(args):
     print("gate map: every map name ran once per configuration and passed")
 
 
+# ---------------------------------------------------------------------------------------------
+# known-unbootable
+
+UNBOOTABLE_KEYS = ("expected_code", "restored_by", "slice", "stage")
+UNBOOTABLE_STAGES = ("config_read", "ledger_open", "takeover", "ready")
+UNBOOTABLE_CODE = re.compile(r"\A[a-z][a-z0-9_]*\Z")
+
+
+def cmd_known_unbootable(args):
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        fail("tomllib is missing (Python 3.11+ is required)")
+    path = Path(args.path)
+    try:
+        document = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        fail(f"{path.as_posix()} cannot be read as TOML: {error}")
+    violations = []
+    for key in sorted(set(document) - {"unbootable"}):
+        violations.append(f"{path.as_posix()}: `{key}`: the file holds only `[[unbootable]]` rows")
+    rows = document.get("unbootable", [])
+    if not isinstance(rows, list):
+        violations.append(f"{path.as_posix()}: `unbootable` is not an array of tables")
+        rows = []
+    codes = {}
+    for index, row in enumerate(rows, 1):
+        at = f"{path.as_posix()} row {index}"
+        if not isinstance(row, dict):
+            violations.append(f"{at}: not a table")
+            continue
+        if tuple(sorted(row)) != UNBOOTABLE_KEYS:
+            violations.append(f"{at}: keys {sorted(row)}, not exactly {list(UNBOOTABLE_KEYS)}")
+            continue
+        for key in UNBOOTABLE_KEYS:
+            if not isinstance(row[key], str) or not row[key].strip():
+                violations.append(f"{at}: `{key}` is not a non-empty string")
+        if row["stage"] not in UNBOOTABLE_STAGES:
+            violations.append(f"{at}: `stage` {row['stage']!r} is not one of {list(UNBOOTABLE_STAGES)}")
+        code = row["expected_code"]
+        if not isinstance(code, str) or not UNBOOTABLE_CODE.match(code):
+            violations.append(f"{at}: `expected_code` {code!r} does not match ^[a-z][a-z0-9_]*$")
+        elif code in codes:
+            violations.append(f"{at}: `expected_code` {code!r} is also row {codes[code]}'s")
+        else:
+            codes[code] = index
+    if violations:
+        for violation in violations:
+            print(violation, file=sys.stderr)
+        fail(f"{path.as_posix()}: {len(violations)} violation(s)")
+    print(json.dumps(rows, ensure_ascii=False))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -532,8 +590,14 @@ def main():
     check = commands.add_parser("check", help="hold the gate map against the results")
     check.add_argument("--results", required=True, help="folder of test-results-<job> artifacts")
     check.add_argument("--base", help="origin/<base branch> on pull requests")
+    unbootable = commands.add_parser("known-unbootable", help="validate and print the REG-0 copy")
+    unbootable.add_argument("path")
     args = parser.parse_args()
-    {"attribute": cmd_attribute, "check": cmd_check}[args.command](args)
+    {
+        "attribute": cmd_attribute,
+        "check": cmd_check,
+        "known-unbootable": cmd_known_unbootable,
+    }[args.command](args)
 
 
 if __name__ == "__main__":
