@@ -104,6 +104,18 @@ tests = [
 ]
 incident = []
 
+# Emulator control and endpoint rebind through the provider seam (rebind refused while a session
+# is open)
+[[gate]]
+key = "11"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_381b::gate_emulator_control_and_discovery_open_and_touch_no_device_session",
+    "actingcommand-execution-kernel::lib::tests::gate_381b::gate_a_rebind_while_a_device_session_is_open_is_refused_and_the_binding_stays",
+    "actingcommand-execution-kernel::lib::tests::gate_381b::gate_a_start_binds_the_reported_port_and_a_stop_returns_the_binding_to_pending",
+]
+incident = ["#381 B"]
+
 # Vision adapter
 [[gate]]
 key = "14"
