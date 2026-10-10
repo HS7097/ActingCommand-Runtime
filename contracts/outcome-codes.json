@@ -1348,6 +1348,42 @@
     "with_console": {
       "type": "boolean",
       "description": "Whether the console starts too."
+    },
+    "restart_phase": {
+      "type": "vocab:emulator_restart_phase",
+      "description": "The phase of an emulator restart that a failure belongs to."
+    },
+    "stop_result": {
+      "type": "vocab:emulator_stop_result",
+      "description": "How the Stop phase of an emulator restart ended."
+    },
+    "stop_elapsed_ms": {
+      "type": "duration_ms",
+      "description": "Time the Stop of an emulator restart or of a stop took, in milliseconds."
+    },
+    "start_elapsed_ms": {
+      "type": "duration_ms",
+      "description": "Time the Start phase of an emulator restart took, in milliseconds."
+    },
+    "start_dispatched": {
+      "type": "boolean",
+      "description": "Whether the Start phase of an emulator restart ran."
+    },
+    "process_started": {
+      "type": "boolean",
+      "description": "Whether the emulator instance's process was started at the last observation."
+    },
+    "android_started": {
+      "type": "boolean",
+      "description": "Whether Android in the emulator instance was started at the last observation."
+    },
+    "adb_port_present": {
+      "type": "boolean",
+      "description": "Whether the last observation of the emulator instance reported an ADB port."
+    },
+    "device_process_present": {
+      "type": "vocab:device_process_presence",
+      "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
     }
   },
   "vocabularies": {
@@ -3900,6 +3936,90 @@
           "description": "The current value."
         }
       }
+    },
+    "emulator_restart_phase": {
+      "description": "The phase of an emulator restart.",
+      "tokens": {
+        "stop": {
+          "description": "The Stop phase."
+        },
+        "start": {
+          "description": "The Start phase."
+        }
+      }
+    },
+    "emulator_stop_result": {
+      "description": "How the Stop phase of an emulator restart ended: confirmed, or the device stage it failed at (the stage's last part).",
+      "tokens": {
+        "confirmed": {
+          "description": "The Stop was confirmed."
+        },
+        "control_exit": {
+          "description": "The shutdown command exited non-zero (mumu_manager.control_exit)."
+        },
+        "control_errcode": {
+          "description": "The shutdown command answered an errcode envelope with errcode not 0 (mumu_manager.control_errcode)."
+        },
+        "launch_error": {
+          "description": "info reported launch_err_code not 0 (mumu_manager.launch_error)."
+        },
+        "wait_timeout": {
+          "description": "The readiness wait for the stopped state expired (mumu_manager.wait_timeout)."
+        },
+        "run": {
+          "description": "MuMuManager could not be started, or a poll could not run (mumu_manager.run)."
+        },
+        "timeout": {
+          "description": "The shutdown command passed its bound (mumu_manager.timeout)."
+        },
+        "path": {
+          "description": "The MuMuManager path is not valid UTF-8 (mumu_manager.path)."
+        },
+        "errcode": {
+          "description": "An info poll answered an errcode envelope (mumu_manager.errcode)."
+        },
+        "entry": {
+          "description": "An info poll's instance entry carried an errcode envelope (mumu_manager.entry)."
+        },
+        "exit": {
+          "description": "An info poll exited non-zero (mumu_manager.exit)."
+        },
+        "shape": {
+          "description": "An info poll answered an unexpected shape (mumu_manager.shape)."
+        },
+        "decode": {
+          "description": "An info poll's output is not UTF-8 (mumu_manager.decode)."
+        },
+        "json": {
+          "description": "An info poll's output is not JSON (mumu_manager.json)."
+        },
+        "output_bound": {
+          "description": "An info poll's output passed its bound (mumu_manager.output_bound)."
+        },
+        "unavailable": {
+          "description": "The instance has no MuMuManager binding (emulator_control.unavailable)."
+        },
+        "unsupported": {
+          "description": "The provider has no instance control (emulator_control.unsupported)."
+        },
+        "unregistered": {
+          "description": "The instance is not registered with the provider (emulator_control.unregistered)."
+        }
+      }
+    },
+    "device_process_presence": {
+      "description": "Whether a vendor device process of an emulator instance was still running when a Stop's process listing last looked.",
+      "tokens": {
+        "true": {
+          "description": "The last listing still showed the device process."
+        },
+        "false": {
+          "description": "The last listing showed no device process of the instance."
+        },
+        "unknown": {
+          "description": "No listing answered: it failed, passed its bound or never ran."
+        }
+      }
     }
   },
   "domains": {
@@ -3974,6 +4094,12 @@
     ],
     "policy_settlement_dispatch_": [
       "runtime-host"
+    ],
+    "emulator_restart_": [
+      "runtime-host"
+    ],
+    "emulator_stop_": [
+      "runtime-host"
     ]
   },
   "codes": {
@@ -4042,6 +4168,69 @@
       "description": "A policy candidate, or its admission, met an instance that a claim holds or that an eligible claim waits for (holder_kind names the holder, or the waiting claim that receives the key next; count is the number of eligible waiting claims). The candidate is deferred with no wake, or its intent is rejected at info; the policy driver evaluates again when a lease is released, transferred or expires.",
       "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
       "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
+    },
+    "emulator_restart_start_failed": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "required",
+        "process_started": "optional",
+        "restart_phase": "required",
+        "start_dispatched": "required",
+        "start_elapsed_ms": "required",
+        "stop_elapsed_ms": "required",
+        "stop_result": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "common_causes": "The instance did not boot within the start's readiness wait, or MuMuManager refused the launch.",
+      "handling": "TBD"
+    },
+    "emulator_restart_stop_failed": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "required",
+        "process_started": "optional",
+        "restart_phase": "required",
+        "start_dispatched": "required",
+        "start_elapsed_ms": "optional",
+        "stop_elapsed_ms": "required",
+        "stop_result": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
+      "handling": "TBD"
+    },
+    "emulator_stop_process_unverified": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_process_present": "required",
+        "instance_id": "required",
+        "stop_elapsed_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Stop was confirmed by MuMuManager info alone: the process listing that checks that no vendor device process of the instance is left failed or passed its bound, so device_process_present is unknown. Recorded once per Stop under the request's links (a stuck-recovery ladder's on its emulator-restart rung), before command.validated.",
+      "common_causes": "The process listing (PowerShell) did not answer within its bound under host load, or could not start.",
+      "handling": "TBD"
     },
     "fact_refresh_unbound": {
       "category": "warning",
