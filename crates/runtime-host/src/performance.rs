@@ -1773,11 +1773,10 @@ fn pressure_measurements(
 
 fn pipeline_responsiveness_basis_points(signal: &PipelinePerformanceSignal) -> Option<u16> {
     // Frame cadence includes declared waits and idle time; only measured execution spans
-    // contribute to responsiveness. A cadence-only signal therefore has no score.
+    // contribute to responsiveness. A cadence-only signal therefore has no score. The
+    // event-to-event capture latency includes backend open and reopen, so it stays in stutter
+    // events and the context but scores nothing either (Workflow #385 P-0).
     [
-        signal
-            .capture_latency_ms
-            .map(|value| latency_score(value, 500)),
         signal
             .recognition_latency_ms
             .map(|value| latency_score(value, 1_000)),
@@ -1788,8 +1787,7 @@ fn pipeline_responsiveness_basis_points(signal: &PipelinePerformanceSignal) -> O
         // Touch response is the host-side input backend call: MaaTouch/Minitouch write+flush,
         // AdbShellInput child exit, plus the host→kernel round-trip until the kernel span lands;
         // 100 ms keeps a shell-input ack healthy while a stalled bridge scores down.
-        // Capture acquire is one backend frame acquisition alone, so 250 ms sits under the
-        // 500 ms event-to-event capture latency target above.
+        // Capture acquire is one backend frame acquisition alone (250 ms target).
         signal
             .touch_response_us
             .map(|value| latency_score(value, 100_000)),
@@ -2801,8 +2799,8 @@ mod tests {
             .record_pipeline_signal(
                 PipelinePerformanceSignal::new("fixture-instance", 1_500, 5_396)
                     .expect("signal")
-                    .with_capture_latency(1_000)
-                    .expect("capture"),
+                    .with_recognition_latency(2_000)
+                    .expect("recognition"),
             )
             .expect("pipeline sample");
         let observation = monitor
@@ -2863,7 +2861,7 @@ mod tests {
         monitor
             .record_pipeline_signal(
                 PipelinePerformanceSignal::measured("fixture-instance", 2_000)
-                    .with_capture_latency(1_000)
+                    .with_recognition_latency(2_000)
                     .expect("slow execution"),
             )
             .expect("unconsumed execution");
@@ -2909,8 +2907,8 @@ mod tests {
             .record_pipeline_signal(
                 PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
                     .expect("pipeline signal")
-                    .with_capture_latency(1_000)
-                    .expect("measured slow capture"),
+                    .with_recognition_latency(2_000)
+                    .expect("measured slow recognition"),
             )
             .expect("pipeline sample");
 
@@ -2934,8 +2932,8 @@ mod tests {
             .record_pipeline_signal(
                 PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
                     .expect("pipeline sample")
-                    .with_capture_latency(1_000)
-                    .expect("measured slow capture"),
+                    .with_recognition_latency(2_000)
+                    .expect("measured slow recognition"),
             )
             .expect("pipeline sample");
         assert_eq!(
