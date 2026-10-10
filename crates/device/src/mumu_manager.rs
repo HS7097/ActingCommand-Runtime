@@ -575,7 +575,9 @@ pub fn query_instances(
 /// The undocumented `{"errcode","errmsg"}` envelope, rendered for a message, when it reports a
 /// failure: `errcode` present and not `0`. Observed on 6.5.7.0: `control` acknowledges success
 /// with `{"errcode": 0, "errmsg": ""}` and exit 0, so `errcode == 0` is never a failure.
-fn errcode_envelope(object: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+pub(crate) fn errcode_envelope(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
     let errcode = object.get("errcode")?;
     if errcode.as_i64() == Some(0) {
         return None;
