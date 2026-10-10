@@ -188,7 +188,10 @@ jobs:
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
           $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
           $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
-          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+          # Single-threaded (Batch 0b): device's vendor_stdio tests redirect the process stdout (fd 1
+          # and STD_OUTPUT_HANDLE) while they run, which swallowed the libtest lines of tests running
+          # beside them (runs 38073013499, 38073816490); the attribution needs every line.
+          cargo test --locked --no-fail-fast @selection -- --test-threads=1 @skip 2>&1 |
             ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
             Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
           if ($LASTEXITCODE -ne 0) {
@@ -205,7 +208,7 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration" --threads many
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration" --threads 1
           if ($LASTEXITCODE -ne 0) {
             throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
