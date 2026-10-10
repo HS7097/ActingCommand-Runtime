@@ -307,13 +307,42 @@ ranking, the evaluator runs an optional score stage:
   `task.load_cost_milli` (integers), `instance.affinity` (boolean), and every
   scalar fact the instance can see (its own, its server's and its game's scope,
   the most specific scope per key; timestamps and durations become integer
-  milliseconds; record lists are unusable). The document is evaluated once per
-  instance over that instance's candidates and its own fact projection, pinned to
-  the evaluation's `fact_snapshot_id` and instant. Only the per-candidate
-  `score_milli` of a `ranked` verdict is consumed; a rejected or dropped verdict
-  yields no score, and an `unknown` outcome (`abort_evaluation`) fails the whole
-  evaluation with `selection_evaluation_aborted`. A document the crate cannot
+  milliseconds; record lists are unusable). A fact field carries only a record
+  that has not expired at the evaluation instant, by the fact contract's own
+  predicate (`now > expires_at` is expired); the `fact` source still reads an
+  expired record as `fact_expired`. The document is evaluated once per instance
+  over that instance's candidates and its own fact projection, pinned to the
+  evaluation's `fact_snapshot_id` and instant, with the selection-policy crate's
+  collect option (`evaluate_collect`): the `on_unknown` clauses the document
+  declares do not apply at this layer. Only a candidate's score is consumed; a
+  candidate a gate rejects carries no score. A document the crate cannot
   evaluate fails with `selection_policy_invalid`.
+- A candidate whose gates or terms meet an unknown input is deferred on its own
+  (`Deferred`, with no wake: it is evaluated again when the instance facts, the
+  catalog or the configuration change) and takes no part in ranking. The other
+  candidates of the instance and every other instance are scored as usual, and
+  the evaluation succeeds. Its reasons follow the first rule that matches
+  (Workflow #384, D2):
+  - an input that is not a realistic key gives one `selection_input_unknown`
+    (`instance_id=<id> rule_id=<gate or term id> unknown_reason=<reason>`) per
+    gate or term that met one. A realistic key is an instance fact key of the
+    `resource.` or `inventory.` family, read without a lookup miss; instruction
+    keys (`session.`), pack data and the fields `task.*` and
+    `instance.affinity` are not, and a reading cannot supply them;
+  - otherwise every unknown key gives one `fact_refresh_unbound`
+    (`instance_id=<id> fact_key=<key> unknown_reason=<reason>`). A fact field
+    whose record has expired reports `fact_expired`; one with no record reports
+    `field_missing`.
+
+  `<reason>` is one of `fact_missing`, `fact_expired`, `fact_stale`,
+  `fact_low_confidence`, `fact_not_scalar`, `type_mismatch`, `field_missing` or
+  `lookup_miss`.
+- Every document fact a scored or gate-rejected candidate's evaluation read bounds
+  its `facts_fresh_until_unix_ms`: a `fact` source by the earlier of its record's
+  `expires_at` and its publication plus the document's `max_age_ms`, a fact field
+  by its record's `expires_at`. The evaluation wakes at that bound + 1, as for an
+  applied resource target, and admission refuses an intent past it as
+  `policy_facts_stale`.
 - `EvaluationFacts.priority_offsets` carries manual offsets
   `{task_id, instance_id?, offset_milli, origin: user|agent, observed_at_unix_ms}`;
   an instance-level entry overrides the task-level entry, `|offset_milli|` is
