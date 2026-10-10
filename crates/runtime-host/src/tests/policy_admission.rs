@@ -1408,13 +1408,17 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
             ),
         ]))
     };
-    let scheduled = || {
-        config(&root).with_scheduled_procedures([
-            "procedure.observe".to_owned(),
-            "procedure.observe-b".to_owned(),
-        ])
+    // Board #71: the first start's Runtime clock stands at the fixture's time and the restart's
+    // at the fixed restart instant.
+    let scheduled = |clock_unix_ms| {
+        config(&root)
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(clock_unix_ms, 0)))
+            .with_scheduled_procedures([
+                "procedure.observe".to_owned(),
+                "procedure.observe-b".to_owned(),
+            ])
     };
-    let host = RuntimeHost::start(scheduled(), provider()).expect("first start");
+    let host = RuntimeHost::start(scheduled(POLICY_NOW_UNIX_MS), provider()).expect("first start");
     host.activate_policy_catalog(&pending_policy_sources(1))
         .expect("two-instance catalog activation");
     let cycle = evaluate_pending_policy(&host, PolicyTrigger::FactsChanged);
@@ -1443,10 +1447,12 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
     host.close().expect("close with A's dispatch open");
 
     let restart = match refusal {
-        StartSettlementRefusal::Host => scheduled().with_policy_settlement_refusal_for_test(run_id),
+        StartSettlementRefusal::Host => {
+            scheduled(POLICY_RESTART_UNIX_MS).with_policy_settlement_refusal_for_test(run_id)
+        }
         StartSettlementRefusal::Ledger => {
             actingcommand_ledger::refuse_scheduled_settlement_for_test(&intent.decision_id);
-            scheduled()
+            scheduled(POLICY_RESTART_UNIX_MS)
         }
     };
     let host = RuntimeHost::start(restart, provider())
@@ -1485,8 +1491,8 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
     assert!(!paused.contains_key(POLICY_INSTANCE_ALIAS_B));
 
     // The restart's own records (the pause, the Error) are later than the fixture's time, so
-    // the evaluation after it runs at the wall clock.
-    let now = unix_ms_now().expect("wall clock");
+    // the evaluation after it runs at the restart's fixed instant.
+    let now = POLICY_RESTART_UNIX_MS;
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
             &pending_policy_facts(),
