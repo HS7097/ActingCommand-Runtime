@@ -307,7 +307,9 @@ uses its original bounded snapshot scan and reports the verified prefix and any
 corrupt tail. Neither path opens referenced artifact content.
 
 `GlobalLedger::open_selected(root, event_types, deadline)` returns the events of
-the given types. On SQLite it authenticates, in one read transaction, the keyed
+the given types. It opens the database read-only without the whole-file
+`quick_check` (`RuntimeDatabase::open_existing_unchecked`). On SQLite it
+authenticates, in one read transaction, the keyed
 meta row, sequence contiguity (`COUNT`, `MIN`, `MAX` equal to head, 1, head), the
 head row against the meta head hash, and each selected row on its own (decode,
 metadata, stored sequence, predecessor hash, tag and index columns), with its

@@ -71,8 +71,9 @@ key = "10"
 coverage = "Y"
 tests = [
     "actingcommand-actingd::process::check_config_previews_the_catalog_plan_read_only",
+    "actingcommand-runtime-host::lib::tests::gate_375_r3::gate_check_config_preview_runs_no_whole_file_quick_check",
 ]
-incident = []
+incident = ["#375 R375-3 v1.2"]
 
 # Request shaping
 [[gate]]
