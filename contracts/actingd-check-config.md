@@ -694,7 +694,7 @@ then `R\tools\platform-tools\adb.exe`. Under the A/B layout an `actingd` in
 `<root>` that the lock names: its adb is `<root>\tools\platform-tools\adb.exe`,
 never a slot's (Workflow #359). acsetup runs `check-config` with the `actingd`
 of the slot it prepares, so that check sees and hashes the root's adb; acsetup
-runs nothing from its staging directory. A development build, the H3 check of
+runs nothing from its staging directory. A development build, the boot smoke of
 the exact-SHA build and a staging directory named after the zip files (older
 acsetup) are no install root and behave as before.
 
