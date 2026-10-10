@@ -621,6 +621,8 @@ fn application_lifecycle_is_denied_while_another_client_holds_the_instance() {
         ApplicationLifecycleAction::Stop,
     ));
 
+    // Workflow #369 W-3 (S5): the command waits its 3 s cap in the queue before its refusal.
+    contender.set_receipt_read_timeout();
     let receipt = contender.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
     assert_eq!(state.application_count.load(Ordering::Acquire), 0);

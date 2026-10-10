@@ -103,5 +103,15 @@ actingcommand_contract::outcome_codes! {
         /// links). The start carries on: the dispatch stays open, out of the active workloads,
         /// and the run's instance is paused with this code as its reason.
         PolicySettlementDispatchUnsettled => "policy_settlement_dispatch_unsettled": error,
+        /// Error. An operator request (a direct task run, a safe reset, an application
+        /// lifecycle command, a self-check or an instance resume's reconnect) waited its cap in
+        /// its instance's queue without a grant, and its entry was removed (Workflow #369 S5;
+        /// keys `timeout_ms`, and `holder_kind`, `queue_position` when known). The scheduler
+        /// spells it too until A2b moves its spellings into a registry.
+        LeaseQueueExpired => "lease_queue_expired": error,
+        /// Error. An immediate try met a holder or an eligible waiting entry; a Lab operation's
+        /// refusal names it (Workflow #369 S5; keys `holder_kind`, `queue_position`, both
+        /// optional). The scheduler spells it too until A2b moves its spellings into a registry.
+        LeaseBusy => "lease_busy": error,
     }
 }

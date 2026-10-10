@@ -60,6 +60,7 @@ outcome_keys! {
     window_start_unix_ms: unix_ms,
     count: integer,
     holder_kind: vocab(claim_kind),
+    queue_position: integer,
     limit_count: integer,
     used: integer,
     requested: integer,

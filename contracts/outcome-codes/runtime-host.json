@@ -325,6 +325,39 @@
       "description": "A frame moved into its kept folder, but the move counter kept/.moves (entry) could not be written, so other processes may find moved frames only at their next walk of the kept folders, within 60 s. Reported once per process.",
       "common_causes": "A folder or a read-only file where kept/.moves should be; access to the kept folder denied.",
       "handling": "Remove whatever occupies kept/.moves so that a file can be written there; the next move writes the counter again."
+    },
+    "lease_queue_expired": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "timeout_ms": "required",
+        "holder_kind": "optional",
+        "queue_position": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), and a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease.queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. The scheduler spells it too until its spellings move into a registry.",
+      "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or another operator request held the instance for longer than the cap; a takeover cooldown after an unclean restart; business capacity refused the grant for the whole cap.",
+      "handling": "Nothing ran. Retry once the holder named by holder_kind has released the instance; actingctl status shows lease_active and queued_request_count meanwhile."
+    },
+    "lease_busy": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "holder_kind": "optional",
+        "queue_position": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An immediate try for an instance met a holder, or an eligible waiting entry that nobody may jump (Workflow #369). A Lab operation's refusal names who is in the way, before any frame or input: holder_kind is the holder's kind on a held instance, or the waiting entry's kind on a free one, where queue_position is that entry's position. A client AcquireLease and the Runtime's dedicated leases are refused with this code too. The scheduler spells it too until its spellings move into a registry.",
+      "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or an operator request holds the instance or waits for it.",
+      "handling": "Nothing ran. Retry once the instance is free; actingctl status shows lease_active and queued_request_count."
     }
   }
 }

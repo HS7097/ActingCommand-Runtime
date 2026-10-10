@@ -218,6 +218,10 @@
       "type": "vocab:claim_kind",
       "description": "The kind of claim that holds an instance or waits for it (Workflow #369)."
     },
+    "queue_position": {
+      "type": "integer",
+      "description": "The 1-based position of a waiting claim in its instance's queue (Workflow #369)."
+    },
     "limit_count": {
       "type": "integer",
       "description": "A limit on a number of items or a depth."

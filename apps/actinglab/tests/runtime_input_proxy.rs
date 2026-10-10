@@ -334,6 +334,129 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
     host.close().unwrap();
 }
 
+/// Workflow #369 Q-2, Q-3 (5), E5: a Lab operation stays an immediate try. On an instance
+/// another client holds, it is refused `lease_busy` at its lease stage, before any frame or
+/// input, and its evidence verifies as before.
+#[test]
+fn lab_operation_on_a_held_instance_is_refused_busy_before_any_input() {
+    use actingcommand_contract::{
+        ContainedLabOperationRequest, EventFamily, InputAction, LabOperationSelection,
+        LabOperationStage, LabProjectionHint,
+    };
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let package = root.path().join("lab-busy.zip");
+    let mut package_files: Vec<(&str, &[u8])> = vec![
+        ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"seed"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"seed"}"#),
+        ("resources/operations/seed/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","game":"neutral","server":"test","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"private-value","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["anchor"],"optional":["private-value"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+        ("resources/navigation/neutral.test.projection.json", br#"{"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"private-value","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]}"#),
+    ];
+    let hashes: serde_json::Map<String, Value> = package_files
+        .iter()
+        .filter(|(path, _)| path.starts_with("resources/") && *path != "resources/manifest.json")
+        .map(|(path, bytes)| {
+            (
+                path.strip_prefix("resources/").unwrap().to_string(),
+                serde_json::json!(format!("{:x}", Sha256::digest(bytes))),
+            )
+        })
+        .collect();
+    let manifest =
+        serde_json::to_vec(&serde_json::json!({"entry_task_id":"seed","hashes":hashes})).unwrap();
+    package_files
+        .iter_mut()
+        .find(|(path, _)| *path == "resources/manifest.json")
+        .unwrap()
+        .1 = &manifest;
+    write_zip(&package, &package_files);
+    let hash = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"lab-busy-spec"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+    let holder = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .unwrap();
+    let token = holder.acquire_lease("node.a").unwrap();
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    let captures = state.captures.load(Ordering::Acquire);
+
+    let verified = client
+        .begin_debug_session()
+        .unwrap()
+        .run_contained_lab_operation(
+            "node.a",
+            ContainedLabOperationRequest {
+                package_path: package.to_str().unwrap().to_string(),
+                expected_sha256: hash.into(),
+                selection: LabOperationSelection::Coordinates {
+                    action: InputAction::Tap { x: 0, y: 0 },
+                },
+                projection_hint: LabProjectionHint {
+                    sequence: None,
+                    content_sha256: None,
+                },
+                after: None,
+            },
+        )
+        .unwrap();
+
+    let record = &verified.operation().record;
+    let failure = record.failure.as_ref().expect("the busy refusal");
+    assert_eq!(failure.stage, LabOperationStage::Lease);
+    assert_eq!(failure.code, "lease_busy");
+    assert_eq!(failure.error.code, RuntimeErrorCode::LeaseBusy);
+    assert!(record.prepared.lease_id.is_none());
+    assert!(record.prepared.before_frame.is_none());
+    assert!(!record.input_returned);
+    assert_eq!(state.captures.load(Ordering::Acquire), captures);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    let events = client
+        .query_events(
+            EventQuery {
+                correlation_id: Some(record.prepared.correlation_id),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .unwrap();
+    let refusal = failure.event.expect("the refusal's record");
+    assert!(events.iter().any(|event| event.sequence == refusal.sequence
+        && event.event_type == EventType::SchedulerDenied));
+    assert!(!events.iter().any(|event| matches!(
+        event.event_type.family(),
+        EventFamily::Capture | EventFamily::Input | EventFamily::Task
+    )));
+    holder.release_lease(&token).unwrap();
+    drop(client);
+    drop(holder);
+    host.close().unwrap();
+}
+
 #[test]
 fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     use actingcommand_contract::{
@@ -1277,10 +1400,12 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
     );
     assert_eq!(busy_exit, 4);
     assert_eq!(busy["error"]["code"], "device_error");
+    // Workflow #369 W-3 (S5): the command waits its cap in the instance's queue, then is
+    // refused `lease_queue_expired` (`QueueExpired`) instead of an immediate `LeaseBusy`.
     assert!(
         busy["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("LeaseBusy"))
+            .is_some_and(|message| message.contains("QueueExpired"))
     );
     assert_eq!(state.application_calls.load(Ordering::Acquire), 0);
     lease_client

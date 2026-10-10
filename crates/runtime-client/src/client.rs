@@ -1180,8 +1180,10 @@ impl RuntimeClient {
 
     /// Lifts a scheduling pause (`ResumeScheduling`, Workflow #191 ps1) and returns the
     /// `RuntimeResult::SchedulingResumed` result verbatim. An instance resume reconnects the
-    /// device, so its receipt wait is `CONNECTION_PREPARATION_WAIT_MS` plus the IO margin
-    /// (Workflow #191 h2); a global resume keeps the IO timeout.
+    /// device, so its receipt wait is `CONNECTION_PREPARATION_WAIT_MS` (Workflow #191 h2) plus
+    /// the reconnect claim's wait in the instance's queue, `CONNECTION_PREPARATION_CLAIM_WAIT_MS`
+    /// (Workflow #369 W-3), plus the IO margin: 33 000 ms + IO; a global resume keeps the IO
+    /// timeout.
     pub fn resume_scheduling(
         &self,
         scope: SchedulingPauseScope,
@@ -1363,7 +1365,9 @@ impl RuntimeClient {
 
     /// Reconnects one physical instance and self-checks it now (`SelfCheckInstance`,
     /// Workflow #317 sc3) and returns the `RuntimeResult::InstanceSelfChecked` result verbatim.
-    /// The receipt wait is `CONNECTION_PREPARATION_WAIT_MS` plus the IO margin (#191 h2).
+    /// The receipt wait is `CONNECTION_PREPARATION_WAIT_MS` (#191 h2) plus the self-check
+    /// claim's wait in the instance's queue, `CONNECTION_PREPARATION_CLAIM_WAIT_MS` (Workflow
+    /// #369 W-3), plus the IO margin: 33 000 ms + IO.
     pub fn self_check_instance(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeResult> {
         let result = self.execute(
             "self_check_instance",
@@ -5730,9 +5734,27 @@ pub(super) fn receipt_response_timeout(
         RuntimeOperation::Input { action, .. } => {
             input_response_timeout(io_timeout, backend_open_timeout, action)
         }
+        // Workflow #369 W-3: a safe reset and an application lifecycle command first wait up to
+        // `INPUT_LIFECYCLE_CLAIM_WAIT_MS` for their turn in the instance's queue.
         RuntimeOperation::SafeReset { .. } => {
-            input_response_timeout(io_timeout, backend_open_timeout, &InputAction::Reset)
+            input_response_timeout(io_timeout, backend_open_timeout, &InputAction::Reset)?
+                .checked_add(Duration::from_millis(
+                    actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS,
+                ))
+                .ok_or_else(|| {
+                    RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "safe_reset")
+                })
         }
+        RuntimeOperation::ApplicationLifecycle { .. } => io_timeout
+            .checked_add(Duration::from_millis(
+                actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS,
+            ))
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    "runtime_receipt_timeout_overflow",
+                    "application_lifecycle",
+                )
+            }),
         RuntimeOperation::ReleaseLease { .. } => {
             backend_open_timeout.checked_add(io_timeout).ok_or_else(|| {
                 RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "release_lease")
@@ -5741,20 +5763,21 @@ pub(super) fn receipt_response_timeout(
         // Workflow #317 sc3: the preparation phase closes a session the instance still holds
         // and opens the backends (first frame included) before it answers; since Workflow #191 H
         // the new session stays open unless the open failed or the multi-Nemu gate closes it.
-        // An instance resume reconnects through it. Both wait its backend-open bound plus the IO
-        // margin (Workflow #191 h2).
+        // An instance resume reconnects through it. Both wait its backend-open bound (Workflow
+        // #191 h2) plus their claim's wait in the instance's queue (Workflow #369 W-3) plus the
+        // IO margin.
         RuntimeOperation::SelfCheckInstance { .. }
         | RuntimeOperation::ResumeScheduling {
             scope: SchedulingPauseScope::Instance { .. },
             ..
-        } => Duration::from_millis(actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS)
-            .checked_add(io_timeout)
-            .ok_or_else(|| {
-                RuntimeClientError::fatal(
-                    "runtime_receipt_timeout_overflow",
-                    "connection_preparation",
-                )
-            }),
+        } => Duration::from_millis(
+            actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS
+                + actingcommand_contract::CONNECTION_PREPARATION_CLAIM_WAIT_MS,
+        )
+        .checked_add(io_timeout)
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "connection_preparation")
+        }),
         _ => Ok(io_timeout),
     }
 }
