@@ -542,6 +542,22 @@
       "type": "vocab:budget_dimension",
       "description": "The policy budget dimension that is exhausted."
     },
+    "unknown_reason": {
+      "type": "vocab:unknown_reason",
+      "description": "Why an input a selection document reads could not be read as a known value."
+    },
+    "rule_id": {
+      "type": "token",
+      "description": "The id of a selection document's gate or scoring term."
+    },
+    "unknown_clause": {
+      "type": "vocab:unknown_clause",
+      "description": "The on_unknown clause a selection document declares for a gate or term."
+    },
+    "reader_problem": {
+      "type": "vocab:reader_problem",
+      "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -2199,6 +2215,90 @@
         }
       }
     },
+    "unknown_reason": {
+      "description": "Why an input a selection document reads could not be read as a known value.",
+      "tokens": {
+        "fact_missing": {
+          "description": "No record exists under the fact key."
+        },
+        "fact_expired": {
+          "description": "The record's own expiry has passed."
+        },
+        "fact_stale": {
+          "description": "The record is older than the freshness bound the document declares."
+        },
+        "fact_low_confidence": {
+          "description": "The record's confidence is below the floor the document declares."
+        },
+        "fact_not_scalar": {
+          "description": "The record holds an artifact or a record list, not a scalar."
+        },
+        "type_mismatch": {
+          "description": "The value present does not have the declared type."
+        },
+        "field_missing": {
+          "description": "The candidate carries no value under the field name."
+        },
+        "resource_observation_missing": {
+          "description": "No observation exists for the resource a rule reads."
+        },
+        "lookup_miss": {
+          "description": "No lookup entry covers the value and the transform declares no default."
+        }
+      }
+    },
+    "unknown_clause": {
+      "description": "An on_unknown clause of a selection document that the scheduling layer does not apply.",
+      "tokens": {
+        "drop_candidate": {
+          "description": "The clause drops the candidate from ranking."
+        },
+        "substitute": {
+          "description": "The clause substitutes a declared verdict (gate) or value (term)."
+        }
+      }
+    },
+    "reader_problem": {
+      "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding.",
+      "tokens": {
+        "key_not_marked": {
+          "description": "The recognition maintenance package carries no reading mark for the key."
+        },
+        "designated_operation": {
+          "description": "The package declares a designated operation, so it is not a reader."
+        },
+        "no_marks": {
+          "description": "The package carries no reading mark."
+        },
+        "recognize_only": {
+          "description": "The package is recognize-only, so it is not a reader."
+        },
+        "stability_termination": {
+          "description": "The package ends on a stability termination, so it is not a reader."
+        },
+        "policy_fact_authority": {
+          "description": "The key is a policy fact of the catalog, so a reading of it is refused."
+        },
+        "live_pool_key": {
+          "description": "The key is observed by a ledger-fact pool, so a reading of it is refused."
+        },
+        "package_unbound": {
+          "description": "The instance has no recognition maintenance package bound."
+        },
+        "not_declared": {
+          "description": "The bound package is not declared for recognition maintenance, so the binding is ignored."
+        },
+        "disabled": {
+          "description": "Fact refresh is turned off in the configuration."
+        },
+        "confidence_below_document": {
+          "description": "The reading mark's confidence floor is below the floor the document declares."
+        },
+        "interval_exceeds_freshness": {
+          "description": "The minimum reading interval exceeds the freshness the document or the mark requires."
+        }
+      }
+    },
     "evidence_completeness": {
       "description": "How complete evidence is.",
       "source": {
@@ -3833,6 +3933,18 @@
     "frame_retention_": [
       "runtime-host"
     ],
+    "fact_refresh_": [
+      "policy"
+    ],
+    "selection_input_": [
+      "policy"
+    ],
+    "selection_unknown_": [
+      "policy"
+    ],
+    "selection_evaluation_": [
+      "policy"
+    ],
     "artifact_kept_": [
       "artifact-store"
     ],
@@ -3930,6 +4042,24 @@
       "description": "A policy candidate, or its admission, met an instance that a claim holds or that an eligible claim waits for (holder_kind names the holder, or the waiting claim that receives the key next; count is the number of eligible waiting claims). The candidate is deferred with no wake, or its intent is rejected at info; the policy driver evaluates again when a lease is released, transferred or expires.",
       "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
       "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
+    },
+    "fact_refresh_unbound": {
+      "category": "warning",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "reader_problem": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scheduling-layer selection document read a realistic instance fact key (fact_key, a resource. or inventory. key that recognition writes) for a candidate on the instance, and the value is unknown (unknown_reason), but no reader can refresh it (reader_problem, when known). Only that candidate is deferred, with no wake; it is evaluated again when the instance facts, the catalog or the configuration change. Other candidates and instances are unaffected.",
+      "common_causes": "The instance has never had the fact read, or its record expired, went stale for the document, lost confidence or has another type; the instance has no recognition maintenance package bound, or that package does not mark the key.",
+      "handling": "Run a task that reads the fact on that instance, or bind a recognition maintenance package that marks the key; the candidate is reconsidered once the fact is published."
     },
     "foreign_adb_error": {
       "category": "error",
@@ -4406,6 +4536,53 @@
       "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category.",
       "common_causes": "A defect that panics on every payload of one instance.",
       "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
+    },
+    "selection_evaluation_aborted": {
+      "category": "error",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "retired",
+      "since": "0.9.0",
+      "retired_in": "0.12.0",
+      "description": "Retired. A scheduling-layer selection document met an unknown input under an abort_evaluation clause, and the whole scheduling evaluation failed for every instance. Since 0.12.0 the scheduling layer defers only the candidate that read the input (fact_refresh_unbound or selection_input_unknown) and the round goes on.",
+      "common_causes": "An instance fact the document reads was missing or expired on one instance while the document declared abort_evaluation for it.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted. Before 0.12.0, refresh the fact or change the clause to drop_candidate."
+    },
+    "selection_input_unknown": {
+      "category": "warning",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "rule_id": "required",
+        "unknown_reason": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A gate or term (rule_id) of a scheduling-layer selection document met an unknown input (unknown_reason) for a candidate on the instance that no reading can supply: an instruction key or pack data no instruction supplied, a fixed field, or a lookup that covers no value. Only that candidate is deferred, with no wake; it is evaluated again when the instance facts or the catalog change. One entry is written per rule that met such an input.",
+      "common_causes": "An instruction key (session.) was never set for the instance; the document's lookup lacks an entry and a default for a value the candidate has; the document reads a field the candidate does not carry.",
+      "handling": "Supply the instruction for the instance, or fix the selection document (add the lookup entry or default, or read a field the scheduling layer provides) and approve the catalog again."
+    },
+    "selection_unknown_clause_ignored": {
+      "category": "warning",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "unknown_clause": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A gate or term (rule_id) of a scheduling-layer selection document declares a drop_candidate or substitute clause (unknown_clause) that the scheduling layer does not apply: there an unknown input defers the candidate that read it. The document's author meant something else than what runs. An abort_evaluation clause gives no warning.",
+      "common_causes": "A selection document written for an in-task select step, where the clauses apply, is used as the scheduling-layer document.",
+      "handling": "Expect the candidate to be deferred instead of dropped or scored with the substitute; to keep the clause's effect, use the document in a select step instead."
     },
     "strategic_evidence_unavailable": {
       "category": "error",
