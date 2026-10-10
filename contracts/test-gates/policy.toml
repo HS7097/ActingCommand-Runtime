@@ -1,0 +1,358 @@
+# Gate map, policy fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
+# Keys are the ids of rd-1009/tests/inventory-policy.md. One `[[gate]]` row per key with exactly
+# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
+# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
+# appended to; a row leaves only when its feature retires.
+
+# Scheduler configuration
+[[gate]]
+key = "1"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::defaults_freeze_c3a_heartbeat_cooldown_and_ttl",
+    "actingcommand-scheduler::lib::tests::invalid_cooldown_relation_is_fatal",
+    "actingcommand-scheduler::lib::tests::queue_limits_are_bounded_at_configuration_time",
+]
+incident = []
+
+# One active lease per instance
+[[gate]]
+key = "2"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::zero_stagger_same_instance_has_one_grant_and_one_busy_denial",
+    "actingcommand-scheduler::lib::tests::different_instances_are_independent",
+    "actingcommand-scheduler::lib::tests::queues_and_transfers_are_partitioned_by_instance",
+]
+incident = []
+
+# Fencing
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::fencing_rejects_every_mismatched_field_before_write",
+    "actingcommand-scheduler::lib::tests::current_epoch_write_is_denied_by_takeover_cooldown_before_lease_lookup",
+]
+incident = []
+
+# Idempotent renew and release
+[[gate]]
+key = "4"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::renew_and_release_are_idempotent_by_request_id",
+    "actingcommand-scheduler::lib::tests::repeated_request_id_with_mutated_token_is_not_idempotent",
+    "actingcommand-scheduler::lib::tests::released_request_cannot_be_replayed_from_another_connection",
+]
+incident = []
+
+# Takeover cooldown
+[[gate]]
+key = "6"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::takeover_cooldown_blocks_only_affected_instances",
+    "actingcommand-scheduler::lib::tests::elapsed_takeover_cooldowns_leave_the_crash_protection_set",
+    "actingcommand-scheduler::lib::tests::status_accessors_report_queue_depth_and_takeover_cooldown",
+]
+incident = []
+
+# One queue per instance
+[[gate]]
+key = "7"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::queue_is_bounded_priority_ordered_and_idempotent",
+    "actingcommand-scheduler::lib::tests::claim_queue_orders_the_continuation_first_then_priority_then_arrival",
+    "actingcommand-scheduler::lib::tests::expiry_cancellation_and_disconnect_are_visible_and_connection_bound",
+    "actingcommand-scheduler::lib::tests::queue_timeout_and_request_identity_mismatches_fail_loudly",
+    "actingcommand-scheduler::lib::tests::an_expired_head_is_skipped_and_the_next_eligible_entry_is_granted",
+    "actingcommand-scheduler::lib::tests::zero_stagger_queued_admission_has_one_grant_and_one_queue",
+]
+incident = []
+
+# Pause gate
+[[gate]]
+key = "8"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::closed_gate_skips_routine_entries_and_passes_operator_startup_and_continuation",
+]
+incident = []
+
+# Destructive step
+[[gate]]
+key = "11"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::destructive_step_defers_preemption_until_prepared_transfer_is_committed",
+    "actingcommand-scheduler::lib::tests::pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary",
+    "actingcommand-scheduler::lib::tests::equal_priority_waits_but_explicit_release_can_transfer",
+    "actingcommand-scheduler::lib::tests::prepared_lease_does_not_mutate_state_before_commit",
+]
+incident = []
+
+# Claim-kind table
+[[gate]]
+key = "15"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::claim_kind_tokens_are_unique_and_the_stopped_instance_kinds_skip_admission_checks",
+]
+incident = []
+
+# Bounds equal the published schemas
+[[gate]]
+key = "18"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::compiler::tests::compiler_enforces_frozen_projection_and_budget_boundaries",
+    "actingcommand-policy::lib::compiler::tests::compiler_enforces_fact_freshness_boundaries",
+    "actingcommand-policy::lib::compiler::tests::compiler_clock_offsets_match_the_published_independent_bounds",
+    "actingcommand-policy::lib::schema::tests::published_schema_bounds_match_compiler_constants",
+    "actingcommand-policy::lib::schema::tests::published_integer_schemas_are_bounded_to_jcs_safe_values",
+]
+incident = []
+
+# Catalog identity
+[[gate]]
+key = "19"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::compiler::tests::neutral_catalog_compiles_to_stable_hash_and_dry_run",
+    "actingcommand-policy::lib::compiler::tests::timeline_v2_versions_fields_and_references_are_closed",
+    "actingcommand-policy::lib::compiler::tests::local_clock_rejects_absolute_schedule_and_reveal_identity_changes_hash",
+]
+incident = []
+
+# Determinism
+[[gate]]
+key = "21"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::same_inputs_produce_byte_stable_decisions",
+    "actingcommand-policy::h1_completion::accelerated_48h_policy_replay_is_deterministic_and_recoverable",
+]
+incident = []
+
+# Unknown or stale facts stay Unknown
+[[gate]]
+key = "22"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::unknown_fact_stays_unknown_and_requests_detection",
+    "actingcommand-policy::lib::evaluator::tests::stale_fact_is_not_silently_false",
+    "actingcommand-policy::lib::evaluator::tests::record_deadline_uses_each_item_expiry_and_preserves_unknown_and_blocked_states",
+    "actingcommand-policy::lib::evaluator::tests::record_list_fact_and_ttl_share_the_typed_predicate_surface",
+]
+incident = []
+
+# Invalid snapshots fail loudly before any intent
+[[gate]]
+key = "24"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::invalid_snapshots_fail_loud_before_any_intent",
+]
+incident = []
+
+# Clock triggers
+[[gate]]
+key = "25"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::clock_trigger_uses_last_dispatch_and_returns_next_wake",
+    "actingcommand-policy::lib::evaluator::tests::cooldown_defers_an_otherwise_due_task",
+    "actingcommand-policy::lib::evaluator::tests::local_clock_uses_monotonic_coordinate_and_projects_to_unix",
+    "actingcommand-policy::lib::evaluator::tests::server_clock_applies_dst_and_maintenance_drift",
+    "actingcommand-policy::lib::evaluator::tests::server_clock_accepts_independently_bounded_utc_and_dst_offsets",
+]
+incident = []
+
+# Timeline v2 windows
+[[gate]]
+key = "27"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::timeline_v2_weekly_tables_follow_four_hour_boundaries",
+    "actingcommand-policy::lib::evaluator::tests::timeline_v2_at_window_clips_validity_and_wakes_at_end",
+    "actingcommand-policy::lib::evaluator::tests::timeline_v2_scope_and_expired_instance_windows_do_not_dispatch",
+    "actingcommand-policy::lib::evaluator::tests::timeline_v2_zero_duration_and_overflow_fail_closed",
+    "actingcommand-policy::lib::evaluator::tests::timeline_v2_generation_and_reason_chain_bind_actual_consumption",
+]
+incident = []
+
+# Placement and ranking
+[[gate]]
+key = "28"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::placement_enforces_scope_capability_affinity_and_host_budget",
+    "actingcommand-policy::lib::evaluator::tests::contention_penalizes_heavier_load_in_ranking",
+    "actingcommand-policy::lib::evaluator::tests::heavy_scene_concurrency_budget_blocks_another_heavy_dispatch",
+    "actingcommand-policy::lib::evaluator::tests::outcomes_and_dispatches_remain_instance_scoped",
+    "actingcommand-policy::lib::evaluator::tests::unavailable_instance_is_explicitly_blocked",
+    "actingcommand-policy::lib::evaluator::tests::aging_eventually_prevents_lower_priority_starvation",
+]
+incident = []
+
+# The intent pins freshness, limits, catalog hash and ledger position
+[[gate]]
+key = "31"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::dispatch_intent_pins_fact_freshness_and_loop_budget",
+]
+incident = []
+
+# Resource projection
+[[gate]]
+key = "32"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::resource_projection_and_deadline_contribute_typed_urgency",
+    "actingcommand-policy::lib::evaluator::tests::resource_projection_exposes_its_next_change_as_a_wake",
+]
+incident = []
+
+# Forward projection
+[[gate]]
+key = "35"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::forward::tests::forward_projection_reuses_evaluator_and_is_deterministic",
+    "actingcommand-policy::lib::forward::tests::missing_observation_reports_insufficient_evidence_without_fake_dispatch",
+    "actingcommand-policy::lib::forward::tests::exhausted_evaluation_budget_is_not_reported_as_a_complete_projection",
+]
+incident = []
+
+# Maintenance assessment
+[[gate]]
+key = "36"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::forward::tests::maintenance_requires_both_evidence_series",
+    "actingcommand-policy::lib::forward::tests::maintenance_rejects_reused_ledger_sequence_identity",
+    "actingcommand-policy::lib::forward::tests::maintenance_rejects_evidence_after_the_ledger_bound",
+    "actingcommand-policy::lib::forward::tests::maintenance_suggestion_is_evidence_pinned_and_deterministic",
+    "actingcommand-policy::lib::forward::tests::maintenance_assessment_identity_includes_the_ledger_bound",
+    "actingcommand-policy::lib::forward::tests::stable_trends_do_not_create_a_recheck_suggestion",
+]
+incident = []
+
+# Strategy projection
+[[gate]]
+key = "37"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::strategy::tests::projection_is_deterministic_and_mechanical",
+    "actingcommand-policy::lib::strategy::tests::metric_refs_are_derived_from_frozen_inputs_and_report_values_are_only_checks",
+    "actingcommand-policy::lib::strategy::tests::catalog_production_rate_is_bounded_and_deterministic",
+    "actingcommand-policy::lib::strategy::tests::missing_template_enters_planning_without_stopping_other_instances",
+    "actingcommand-policy::lib::strategy::tests::outlier_and_cohort_budgets_never_drop_or_merge_members",
+    "actingcommand-policy::lib::strategy::tests::cohorts_never_form_cross_goal_cartesian_groups",
+    "actingcommand-policy::lib::strategy::tests::report_rejects_cross_game_assessments",
+    "actingcommand-policy::lib::strategy::tests::report_identity_rejects_mutated_instance_state",
+]
+incident = []
+
+# Canonical JSON
+[[gate]]
+key = "39"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::canonical::tests::canonical_form_sorts_object_keys_and_keeps_array_order",
+    "actingcommand-selection-policy::lib::canonical::tests::canonical_parse_rejects_every_floating_point_spelling",
+    "actingcommand-selection-policy::lib::canonical::tests::canonical_parse_rejects_duplicate_and_non_string_keys",
+    "actingcommand-selection-policy::lib::canonical::tests::canonical_parse_enforces_the_safe_integer_boundaries",
+    "actingcommand-selection-policy::lib::canonical::tests::canonical_rendering_rejects_a_serialized_float",
+    "actingcommand-selection-policy::lib::canonical::tests::canonical_identity_is_stable_across_key_order",
+    "actingcommand-selection-policy::lib::canonical::tests::canonical_parse_rejects_an_oversized_document",
+]
+incident = []
+
+# Closed schema
+[[gate]]
+key = "40"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::schema::tests::the_fixture_document_validates",
+    "actingcommand-selection-policy::lib::schema::tests::a_foreign_schema_version_is_refused",
+    "actingcommand-selection-policy::lib::schema::tests::an_undeclared_reference_is_a_dangling_reference",
+    "actingcommand-selection-policy::lib::schema::tests::a_non_integer_value_needs_a_lookup",
+    "actingcommand-selection-policy::lib::schema::tests::a_lookup_key_outside_the_value_type_is_refused",
+    "actingcommand-selection-policy::lib::schema::tests::a_string_in_member_outside_the_value_type_is_refused",
+    "actingcommand-selection-policy::lib::schema::tests::a_tie_break_key_over_an_enum_string_is_refused",
+    "actingcommand-selection-policy::lib::schema::tests::repeated_identifiers_are_refused",
+    "actingcommand-selection-policy::lib::schema::tests::exactly_one_pins_its_required_count_and_top_k_needs_one",
+    "actingcommand-selection-policy::lib::schema::tests::declared_limits_are_enforced",
+    "actingcommand-selection-policy::lib::schema::tests::a_zero_freshness_bound_is_refused",
+    "actingcommand-selection-policy::lib::schema::tests::an_unknown_document_field_is_refused_on_decode",
+]
+incident = []
+
+# Fact resolution
+[[gate]]
+key = "41"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::facts::tests::the_most_specific_scope_wins_for_one_key",
+    "actingcommand-selection-policy::lib::facts::tests::a_contract_snapshot_keeps_only_records_in_its_context",
+    "actingcommand-selection-policy::lib::facts::tests::an_absent_expired_or_stale_fact_is_unknown_and_never_zero",
+    "actingcommand-selection-policy::lib::facts::tests::confidence_below_the_declared_floor_is_unknown",
+    "actingcommand-selection-policy::lib::facts::tests::a_non_scalar_record_is_kept_as_an_unusable_reason",
+    "actingcommand-selection-policy::lib::facts::tests::a_value_of_another_type_is_a_type_mismatch",
+]
+incident = []
+
+# Same input, same decision; candidate order does not matter
+[[gate]]
+key = "42"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::evaluator::tests::the_same_input_yields_the_same_decision_and_the_same_identity",
+    "actingcommand-selection-policy::lib::evaluator::tests::reordering_the_candidate_set_keeps_the_same_selection",
+]
+incident = []
+
+# Unknown handling
+[[gate]]
+key = "43"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::evaluator::tests::an_unknown_fact_drops_candidates_instead_of_scoring_it_as_zero",
+    "actingcommand-selection-policy::lib::evaluator::tests::an_expired_fact_is_unknown_rather_than_stale_data",
+    "actingcommand-selection-policy::lib::evaluator::tests::a_declared_substitution_is_used_and_recorded",
+    "actingcommand-selection-policy::lib::evaluator::tests::an_aborting_rule_ends_the_evaluation_with_an_unknown_outcome",
+    "actingcommand-selection-policy::lib::evaluator::tests::a_gate_that_cannot_be_decided_follows_its_declared_handling",
+    "actingcommand-selection-policy::lib::evaluator::tests::an_unknown_member_leaves_a_conjunction_undecided_but_a_false_member_decides_it",
+]
+incident = ["#384"]
+
+# Modes and ties
+[[gate]]
+key = "44"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::evaluator::tests::exactly_one_takes_the_single_highest_survivor",
+    "actingcommand-selection-policy::lib::evaluator::tests::top_k_reports_insufficient_instead_of_selecting_fewer",
+    "actingcommand-selection-policy::lib::evaluator::tests::none_allowed_accepts_an_empty_answer_and_takes_what_it_can",
+    "actingcommand-selection-policy::lib::evaluator::tests::an_unbroken_tie_at_the_cut_is_ambiguous_rather_than_arbitrary",
+    "actingcommand-selection-policy::lib::evaluator::tests::an_unknown_tie_break_key_orders_last_whatever_the_listing_order_is",
+    "actingcommand-selection-policy::lib::evaluator::tests::a_known_tie_break_key_separates_from_an_unknown_one_but_two_unknowns_do_not",
+    "actingcommand-selection-policy::lib::evaluator::tests::reversing_a_tie_break_direction_reverses_the_choice",
+]
+incident = []
+
+# Arithmetic, identifiers and the fixture breakdown
+[[gate]]
+key = "45"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::evaluator::tests::an_overflowing_weight_is_an_error_rather_than_a_wrapped_score",
+    "actingcommand-selection-policy::lib::evaluator::tests::a_repeated_or_empty_candidate_identifier_is_an_error",
+    "actingcommand-selection-policy::lib::evaluator::tests::a_lookup_that_covers_nothing_is_unknown_and_a_default_answers_it",
+    "actingcommand-selection-policy::lib::evaluator::tests::the_golden_fixture_selects_the_declared_top_two_with_a_full_breakdown",
+]
+incident = []
