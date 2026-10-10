@@ -120,7 +120,7 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration" --threads many
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
           if ($LASTEXITCODE -ne 0) {
             throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
@@ -208,7 +208,7 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration" --threads 1
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
           if ($LASTEXITCODE -ne 0) {
             throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
@@ -278,7 +278,7 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration" --threads many
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
           if ($LASTEXITCODE -ne 0) {
             throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
@@ -342,7 +342,7 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration" --threads many
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
           if ($LASTEXITCODE -ne 0) {
             throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
@@ -405,7 +405,7 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration" --threads many
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
           if ($LASTEXITCODE -ne 0) {
             throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
           }
@@ -492,9 +492,9 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $results = Join-Path $env:RUNNER_TEMP 'test-results'
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'runtime-client.log') '--configuration=' --threads 1
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'runtime-client.log') '--configuration='
           $defaultExitCode = $LASTEXITCODE
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'runtime-client-test-observation.log') "--configuration=$env:CI_EXTRA_FEATURES" --threads 1
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'runtime-client-test-observation.log') "--configuration=$env:CI_EXTRA_FEATURES"
           $observationExitCode = $LASTEXITCODE
           if ($defaultExitCode -ne 0 -or $observationExitCode -ne 0) {
             throw "attributing the runtime-client test logs failed (default $defaultExitCode, $env:CI_EXTRA_FEATURES $observationExitCode)"
@@ -587,9 +587,9 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $results = Join-Path $env:RUNNER_TEMP 'test-results'
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'apps-bins.log') '--configuration=' --threads many
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'apps-bins.log') '--configuration='
           $binsExitCode = $LASTEXITCODE
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'apps-integration.log') '--configuration=' --threads 1
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $results 'apps-integration.log') '--configuration='
           $integrationExitCode = $LASTEXITCODE
           if ($binsExitCode -ne 0 -or $integrationExitCode -ne 0) {
             throw "attributing the apps test logs failed (bins $binsExitCode, integration $integrationExitCode)"

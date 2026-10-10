@@ -136,7 +136,7 @@ def libtest_name(name):
     return name if LIBTEST_PATH.match(name) else None
 
 
-def parse_log(log, table, single_threaded):
+def parse_log(log, table):
     """Every test binary of one log with its attributed results; a list of failures."""
     binaries, failures = [], []
     current = None  # a Binary, "doc-tests", or "unknown" after a Running line we cannot attribute
@@ -173,8 +173,10 @@ def parse_log(log, table, single_threaded):
                 )
             continue
         if binary.pending is not None:
-            # Single-threaded: libtest printed `test <path> ... ` and runs the test; whatever
-            # comes before the bare result word is that test's (or its child's) output.
+            # libtest wrote `test <path> ... ` and its result word follows as its next output:
+            # single-threaded it runs the test in between, multi-threaded it writes both at once.
+            # A child process sharing stdout can still write lines in between; they are not
+            # libtest's own.
             token = TOKEN.match(line)
             if token:
                 record(binary, binary.pending, token["result"], number, failures)
@@ -208,8 +210,6 @@ def parse_log(log, table, single_threaded):
             name = libtest_name(started["name"])
             if name is None:
                 binary.foreign += 1
-            elif not single_threaded:
-                binary.nested += 1  # multi-threaded libtest prints whole result lines only
             elif binary.running is None:
                 failures.append(f"line {number}: a test started before `running N tests`: {line}")
             else:
@@ -254,10 +254,10 @@ def check_binary(binary):
 def cmd_attribute(args):
     log = Path(args.log)
     table = exe_table([Path(path) for path in args.build])
-    binaries, failures = parse_log(log, table, single_threaded=args.threads == "1")
+    binaries, failures = parse_log(log, table)
     if not binaries:
         failures.append("the log has no Running line")
-    print(f"{log.name} (configuration {args.configuration!r}, test threads {args.threads}):")
+    print(f"{log.name} (configuration {args.configuration!r}):")
     for binary in binaries:
         summary = binary.summary or {}
         print(
@@ -529,7 +529,6 @@ def main():
     attribute.add_argument("--build", action="append", required=True, help="test build JSON")
     attribute.add_argument("--log", required=True)
     attribute.add_argument("--configuration", required=True, help="--features value; '' default")
-    attribute.add_argument("--threads", choices=("1", "many"), required=True)
     check = commands.add_parser("check", help="hold the gate map against the results")
     check.add_argument("--results", required=True, help="folder of test-results-<job> artifacts")
     check.add_argument("--base", help="origin/<base branch> on pull requests")
