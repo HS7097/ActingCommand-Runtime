@@ -5,15 +5,17 @@
 //!
 //! Discovery dispatches only the read-only subcommands `version` and `info -v all`.
 //! `control_instance` is the single place that dispatches the documented
-//! `control -v <index> launch|shutdown|restart`, then reads readiness back through
-//! `info -v <index>`. The hidden `api` subcommand and every other mutating subcommand
-//! (`setting`, `launch`, `shutdown`, `restart`, ...) are never used. No vendor-private file is
-//! read.
+//! `control -v <index> launch|shutdown`, then reads readiness back through `info -v <index>`
+//! (and, for a Stop, the process listing). Workflow #381 B: the vendor's `control ... restart`
+//! is never dispatched; a restart is a shutdown and then a launch, composed by the Runtime
+//! host, and a Restart reaching this module is refused before any vendor command. The hidden
+//! `api` subcommand and every other mutating subcommand (`setting`, `launch`, `shutdown`,
+//! `restart`, ...) are never used. No vendor-private file is read.
 
 use crate::adb::{
     ACTINGCOMMAND_NEMU_FOLDER_ENV, CommandProgram, decode_adb_text, run_raw_with_timeout,
 };
-use crate::discovery::DeviceDiscoveryProcess;
+use crate::discovery::{DeviceDiscoveryProcess, is_mumu_device_process, mumu_instance_id};
 use crate::emulator::{
     EmulatorCapability, EmulatorCapabilityAvailability, EmulatorCapabilityBackend,
     EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
@@ -43,7 +45,7 @@ pub const MUMU_MANAGER_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Bound for one `control -v <index> ...` dispatch. The vendor documents neither a return
 /// value nor whether the command blocks, so the bound is a Runtime policy, not a vendor fact.
 pub const MUMU_MANAGER_CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
-/// Default readiness wait after `launch` / `restart` (running state through `info`).
+/// Default readiness wait after `launch` (running state through `info`).
 pub const MUMU_MANAGER_STATE_WAIT_START: Duration = Duration::from_secs(120);
 /// Default readiness wait after `shutdown` (process gone through `info`). Observed on
 /// MuMuManager 6.5.7.0: while `player_state` is `stopping`, `info -v <index>` did not answer
@@ -234,9 +236,9 @@ pub const MUMU_CAPABILITY_PROVIDER_ID: &str = "mumu.manager";
 ///
 /// `inventory.read` and `instance.status.read` are available because `info -v all` answered;
 /// `instance.start|stop|restart` are available through `control_instance` (documented
-/// `control -v <index> launch|shutdown|restart`, executed only by the Runtime's emulator
-/// control operation); every other capability is unsupported and unavailable through this
-/// provider.
+/// `control -v <index> launch|shutdown`, executed only by the Runtime's emulator control
+/// operation, which composes a restart as a shutdown and then a launch); every other
+/// capability is unsupported and unavailable through this provider.
 pub fn mumu_capability_profile(
     report: &MumuDiscoveryReport,
 ) -> DeviceResult<EmulatorCapabilityProfile> {
@@ -255,7 +257,7 @@ pub fn mumu_capability_profile(
                 | EmulatorCapability::InstanceRestart => (
                     EmulatorCapabilityImplementation::Supported,
                     EmulatorCapabilityAvailability::Available,
-                    "Dispatched as MuMuManager control -v <index> launch|shutdown|restart only by an explicit User+Ui or Cli emulator control request, after the per-instance lease fence and device-session close. Typed refusals: emulator_control_busy (fence), emulator_control_unavailable (no discovery binding) or emulator_control_unsupported (provider), mumu_manager.control_exit / .control_errcode (tool failure with exit code), mumu_manager.launch_error (launch_err_code != 0), mumu_manager.wait_timeout (readiness deadline).",
+                    "Dispatched as MuMuManager control -v <index> launch|shutdown only by an explicit User+Ui or Cli emulator control request, after the per-instance lease fence and device-session close; a restart is a shutdown and then a launch, and the vendor restart verb is never dispatched. Typed refusals: emulator_control_busy (fence), emulator_control_unavailable (no discovery binding) or emulator_control_unsupported (provider), mumu_manager.control_exit / .control_errcode (tool failure with exit code), mumu_manager.launch_error (launch_err_code != 0), mumu_manager.wait_timeout (readiness deadline).",
                     "mumu_manager.control",
                 ),
                 EmulatorCapability::InstanceCreate
@@ -712,8 +714,9 @@ impl InstanceState {
         self.process_started && self.android_started && self.adb_port.is_some()
     }
 
-    /// The readiness criterion of one control action: running after `Start` / `Restart`,
-    /// process gone after `Stop`.
+    /// The `info` half of one control action's readiness criterion: running after `Start`,
+    /// process gone after `Stop` (a Stop also needs its process check, Workflow #381 B F2). A
+    /// `Restart` never reaches the wait.
     pub const fn satisfies(&self, action: EmulatorInstanceAction) -> bool {
         match action {
             EmulatorInstanceAction::Start | EmulatorInstanceAction::Restart => self.running(),
@@ -833,12 +836,33 @@ pub const fn mumu_state_wait(action: EmulatorInstanceAction) -> Duration {
     }
 }
 
-const fn mumu_control_verb(action: EmulatorInstanceAction) -> &'static str {
+/// The vendor verb of one action; `None` for a Restart, which is never dispatched (Workflow
+/// #381 B, coordinator answer D4).
+const fn mumu_control_verb(action: EmulatorInstanceAction) -> Option<&'static str> {
     match action {
-        EmulatorInstanceAction::Start => "launch",
-        EmulatorInstanceAction::Stop => "shutdown",
-        EmulatorInstanceAction::Restart => "restart",
+        EmulatorInstanceAction::Start => Some("launch"),
+        EmulatorInstanceAction::Stop => Some("shutdown"),
+        EmulatorInstanceAction::Restart => None,
     }
+}
+
+/// Workflow #381 B F2: whether the listing shows a vendor device process (`MuMuNxDevice.exe`)
+/// that carries the instance's index.
+fn device_process_listed(processes: &[DeviceDiscoveryProcess], instance_index: u16) -> bool {
+    processes.iter().any(|process| {
+        is_mumu_device_process(process)
+            && mumu_instance_id(process).is_ok_and(|index| index == instance_index)
+    })
+}
+
+/// A failed action's process check: a Stop's last listing, `Unknown` when none answered; none
+/// for a Start.
+fn failed_presence(
+    action: EmulatorInstanceAction,
+    listed: Option<DeviceProcessPresence>,
+) -> Option<DeviceProcessPresence> {
+    (action == EmulatorInstanceAction::Stop)
+        .then(|| listed.unwrap_or(DeviceProcessPresence::Unknown))
 }
 
 /// One `control` dispatch as `control_instance` reads it (Workflow #381 B, EXEC-I1).
@@ -920,10 +944,15 @@ fn control_failure_context(error: DeviceError) -> DeviceError {
     )
 }
 
-/// Dispatches `control -v <index> launch|shutdown|restart` once, bounded by
+/// Dispatches `control -v <index> launch|shutdown` once, bounded by
 /// `MUMU_MANAGER_CONTROL_TIMEOUT`, then polls `info -v <index>` every second (each poll bounded
 /// by `MUMU_MANAGER_COMMAND_TIMEOUT`) until the action's readiness criterion holds or `wait`
-/// elapses. The vendor documents no return value, exit code or blocking behaviour for
+/// elapses. Workflow #381 B F2 (review M2): a Stop is confirmed only when `info` reports the
+/// process stopped and no `MuMuNxDevice.exe` carrying `-v <index>` is left; the process listing
+/// runs only after `info` reported the process stopped, at most once per
+/// `MUMU_MANAGER_PROCESS_LIST_INTERVAL`, each within `MUMU_MANAGER_PROCESS_LIST_TIMEOUT`, and a
+/// failed listing accepts `info`'s answer with `device_process_present=unknown`. A Restart is
+/// refused with `mumu_manager.restart_refused` before any vendor command (D4). The vendor documents no return value, exit code or blocking behaviour for
 /// `control`; observed on 6.5.7.0, `launch` and `shutdown` return within about a second with
 /// exit 0 and `{"errcode": 0, "errmsg": ""}` without blocking. A non-zero exit and an
 /// `{"errcode","errmsg"}` envelope with `errcode != 0` are failures exactly like `info`;
@@ -966,20 +995,32 @@ pub(crate) fn control_instance_with(
     wait: Duration,
 ) -> EmulatorControlResult<EmulatorControlOutcome> {
     let started = runner.now();
+    let Some(verb) = mumu_control_verb(action) else {
+        return Err(EmulatorControlFailure::without_output(
+            control_failure_context(
+                DeviceError::fatal(
+                    "MuMuManager control restart is never dispatched: a restart is a shutdown and then a launch, composed by the Runtime host",
+                )
+                .with_diagnostic(DeviceErrorCategory::Protocol, "mumu_manager.restart_refused"),
+            ),
+            elapsed_ms_between(started, runner.now()),
+        ));
+    };
     let index = instance_index.to_string();
-    let verb = mumu_control_verb(action);
     let args = ["control", "-v", index.as_str(), verb];
     let command = args.join(" ");
     let output = match runner.control(&args) {
         Ok(output) => output,
         Err(error) => {
-            return Err(EmulatorControlFailure::without_output(
+            let mut failure = EmulatorControlFailure::without_output(
                 control_failure_context(error.with_diagnostic_if_absent(
                     DeviceErrorCategory::BackendLaunch,
                     "mumu_manager.run",
                 )),
                 elapsed_ms_between(started, runner.now()),
-            ));
+            );
+            failure.device_process_present = failed_presence(action, None);
+            return Err(failure);
         }
     };
     let exit_code = output.exit_code;
@@ -990,14 +1031,15 @@ pub(crate) fn control_instance_with(
     let failure = |error: DeviceError,
                    output_summary: String,
                    last_state: Option<InstanceState>,
-                   elapsed_ms: u64| {
+                   elapsed_ms: u64,
+                   device_process_present: Option<DeviceProcessPresence>| {
         Box::new(EmulatorControlFailure {
             error: control_failure_context(error),
             exit_code,
             output_summary,
             last_state,
             elapsed_ms,
-            device_process_present: None,
+            device_process_present,
         })
     };
     if exit_code != Some(0) {
@@ -1011,6 +1053,7 @@ pub(crate) fn control_instance_with(
             summary,
             None,
             elapsed_ms_between(started, runner.now()),
+            failed_presence(action, None),
         ));
     }
     if let Some(envelope) = envelope {
@@ -1025,11 +1068,15 @@ pub(crate) fn control_instance_with(
             summary,
             None,
             elapsed_ms_between(started, runner.now()),
+            failed_presence(action, None),
         ));
     }
     let deadline = runner.now() + wait;
     let mut last_state: Option<InstanceState> = None;
     let mut expired_polls: u32 = 0;
+    // Workflow #381 B F2: the last listing's answer and when the next one may run.
+    let mut listed: Option<DeviceProcessPresence> = None;
+    let mut next_listing: Option<Duration> = None;
     loop {
         match runner.read_state(instance_index) {
             Ok(state) => {
@@ -1045,20 +1092,46 @@ pub(crate) fn control_instance_with(
                         summary,
                         Some(state),
                         elapsed_ms_between(started, runner.now()),
+                        failed_presence(action, listed),
                     ));
                 }
                 if state.satisfies(action) {
-                    return Ok(EmulatorControlOutcome {
-                        exit_code,
-                        output_summary: summary,
-                        instance_index,
-                        process_started: state.process_started,
-                        running: state.running(),
-                        adb_port: state.adb_port,
-                        player_state: state.player_state,
-                        elapsed_ms: elapsed_ms_between(started, runner.now()),
-                        device_process_present: None,
-                    });
+                    // Workflow #381 B F2 (review M2): a Stop also needs the device process gone.
+                    // The listing runs only now that `info` reports the process stopped, at most
+                    // once per interval; a failed listing accepts `info`'s answer.
+                    let confirmed = if action == EmulatorInstanceAction::Stop {
+                        let now = runner.now();
+                        if next_listing.is_none_or(|at| now >= at) {
+                            next_listing = Some(now + MUMU_MANAGER_PROCESS_LIST_INTERVAL);
+                            match runner.list_processes(MUMU_MANAGER_PROCESS_LIST_TIMEOUT) {
+                                Ok(processes)
+                                    if device_process_listed(&processes, instance_index) =>
+                                {
+                                    listed = Some(DeviceProcessPresence::Present);
+                                    None
+                                }
+                                Ok(_) => Some(Some(DeviceProcessPresence::Absent)),
+                                Err(_) => Some(Some(DeviceProcessPresence::Unknown)),
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(None)
+                    };
+                    if let Some(device_process_present) = confirmed {
+                        return Ok(EmulatorControlOutcome {
+                            exit_code,
+                            output_summary: summary,
+                            instance_index,
+                            process_started: state.process_started,
+                            running: state.running(),
+                            adb_port: state.adb_port,
+                            player_state: state.player_state,
+                            elapsed_ms: elapsed_ms_between(started, runner.now()),
+                            device_process_present,
+                        });
+                    }
                 }
                 last_state = Some(state);
             }
@@ -1076,6 +1149,7 @@ pub(crate) fn control_instance_with(
                     summary,
                     None,
                     elapsed_ms_between(started, runner.now()),
+                    failed_presence(action, listed),
                 ));
             }
         }
@@ -1092,7 +1166,12 @@ pub(crate) fn control_instance_with(
                     "MuMuManager {command}: instance {index} did not reach the {} state within {} ms ({})",
                     match action {
                         EmulatorInstanceAction::Start | EmulatorInstanceAction::Restart => "running",
-                        EmulatorInstanceAction::Stop => "stopped",
+                        EmulatorInstanceAction::Stop => match listed {
+                            Some(DeviceProcessPresence::Present) => {
+                                "stopped (its device process is still listed)"
+                            }
+                            _ => "stopped",
+                        },
                     },
                     wait.as_millis(),
                     if last_state.is_some() {
@@ -1105,6 +1184,7 @@ pub(crate) fn control_instance_with(
                 summary,
                 last_state,
                 elapsed_ms_between(started, runner.now()),
+                failed_presence(action, listed),
             ));
         }
         runner.sleep(MUMU_MANAGER_STATE_POLL_INTERVAL);

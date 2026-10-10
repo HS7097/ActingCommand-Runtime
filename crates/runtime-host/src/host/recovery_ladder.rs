@@ -77,10 +77,12 @@ pub(super) const LADDER_CLAIM_TTL_MS: u64 = 120_000;
 /// Rung 2's bound before its startup run: the entry's ADB probe (30 s) and the application
 /// stop (60 s, an ADB application command).
 const APPLICATION_RESTART_ENTRY_BOUND_MS: u64 = 90_000;
-/// Rung 3's Stop: the provider's control bound, 60 + 120 + 10 s (`runtime-client`'s emulator
-/// control receipt wait); review L-3.
-const EMULATOR_STOP_BOUND_MS: u64 = 190_000;
-/// Rung 3's Start: the Stop bound plus the ADB baseline (30 s).
+/// Rung 3's Stop (review L-3; Workflow #381 B, coordinator answer D3): the control bound
+/// 60 s + the readiness wait 120 s + the last `info` poll 10 s + the last process listing 10 s
+/// (F2) + the bounded state read after a failure 10 s (review M3) = 210 s.
+const EMULATOR_STOP_BOUND_MS: u64 = 210_000;
+/// Rung 3's Start: 60 + 120 + 10 s and the ADB baseline 30 s = 220 s on success; a failure ends
+/// at 60 + 120 + 10 s and the state read 10 s = 200 s.
 const EMULATOR_START_BOUND_MS: u64 = 220_000;
 
 /// One admitted ladder: its trigger, the facts' links and its claim.
@@ -1161,6 +1163,10 @@ impl HostShared {
 
     /// R3: the existing provider confirms the old process gone before the current instance
     /// is started. One admission guard spans both actions and the first readiness attempt.
+    /// Workflow #381 B F3: a Stop whose readiness wait expired (`emulator_control_wait_timeout`)
+    /// still leads on to the Start, with the Stop's rejected event as the `stop` of
+    /// `recovery_environment_ready` and no `recovery_instance_stopped`; every other Stop failure
+    /// fails the rung without a Start.
     /// Workflow #369 H-3: Stop and Start run on the ladder's key (the control's fence admits
     /// it, and the retained session is closed under it), each renewed before it (review L-3);
     /// the readiness wait renews to its window's end. Workflow #369-1: the rung then waits for
@@ -1218,6 +1224,20 @@ impl HostShared {
                 Ok(driven) => driven,
                 Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
                     return Err(*failure.error);
+                }
+                Err(failure)
+                    if action == EmulatorInstanceAction::Stop
+                        && failure.error.code()
+                            == super::emulator_instance::EMULATOR_CONTROL_WAIT_TIMEOUT =>
+                {
+                    let Some(rejected) = failure.terminal else {
+                        return Ok(RungAttempt::Failed {
+                            run_id: None,
+                            reason: failure.error.code(),
+                        });
+                    };
+                    stopped = Some(rejected);
+                    continue;
                 }
                 Err(failure) => {
                     return Ok(RungAttempt::Failed {

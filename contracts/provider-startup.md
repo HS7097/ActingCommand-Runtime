@@ -47,9 +47,10 @@ When at least one configured instance carries a discovery binding key
 any instance is bound. At startup only the vendor-documented read-only
 subcommands `version` and `info -v all` are dispatched, with a 10 s timeout and
 no console window, and no vendor-private file is read. The documented
-`control -v <index> launch|shutdown|restart` IS dispatched later, but only by an
+`control -v <index> launch|shutdown` IS dispatched later (a restart is a shutdown and then a launch), but only by an
 explicit User+Ui or Cli `ControlEmulatorInstance` request, only after the
-per-instance lease fence and the device-session close, once per request, with
+per-instance lease fence and the device-session close, once per request (once per phase
+for a restart), with
 every dispatch recorded intent -> result (`emulator-control.md`); the hidden
 `api` subcommand stays banned, and the resolved `MuMuManager.exe` path is
 carried on each discovered binding for that purpose. `MuMuManager.exe` is
