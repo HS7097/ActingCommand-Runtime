@@ -700,8 +700,9 @@ impl GlobalLedger {
     /// Workflow #375 R375-3: the events of `event_types`, each authenticated on its own,
     /// with the keyed head row and sequence contiguity. Rows of other types are never read,
     /// so this opening does not establish their integrity; artifacts are restored
-    /// Unrecorded and no retention state is derived. A segment root is read whole, as
-    /// `open_evidence` with `sqlite_material_not_read`.
+    /// Unrecorded and no retention state is derived. The database is opened without the
+    /// whole-file check (`RuntimeDatabase::open_existing_unchecked`, R375-3 v1.2). A segment
+    /// root is read whole, as `open_evidence` with `sqlite_material_not_read`.
     pub fn open_selected(
         root: impl Into<PathBuf>,
         event_types: &[EventType],
@@ -721,7 +722,7 @@ impl GlobalLedger {
             .try_exists()
             .map_err(|error| GlobalLedgerError::io("ledger_io", "inspect_evidence_key", &error))?;
         if database_exists || key_exists {
-            let database = RuntimeDatabase::open_existing(&root, true)?;
+            let database = RuntimeDatabase::open_existing_unchecked(&root)?;
             if sqlite::has_schema(&database)? {
                 let read = sqlite::read_selected(&database, event_types, budget)?;
                 let mut events = Vec::with_capacity(read.events.len());

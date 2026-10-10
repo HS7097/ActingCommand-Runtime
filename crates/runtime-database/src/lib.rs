@@ -170,6 +170,25 @@ impl RuntimeDatabase {
 
     /// Opens existing material without initialization, key creation, or schema writes.
     pub fn open_existing(root: &Path, read_only: bool) -> RuntimeDatabaseResult<Self> {
+        Self::open_existing_storage(root, read_only, true)
+    }
+
+    /// Workflow #375 R375-3 v1.2: opens existing storage read-only exactly as
+    /// `open_existing(root, true)` does, without the whole-file `PRAGMA quick_check(1)`.
+    /// Only for the check-config catalog preview, which authenticates every row it reads;
+    /// startup and `ledger-maintenance verify` open through `open_existing`, which still
+    /// runs the check.
+    pub fn open_existing_unchecked(root: &Path) -> RuntimeDatabaseResult<Self> {
+        Self::open_existing_storage(root, true, false)
+    }
+
+    /// The one body of `open_existing` and `open_existing_unchecked`. A read-write open
+    /// always runs the whole-file check.
+    fn open_existing_storage(
+        root: &Path,
+        read_only: bool,
+        whole_file_check: bool,
+    ) -> RuntimeDatabaseResult<Self> {
         require_regular_directory(root)?;
         let database_path = root.join(DATABASE_FILE);
         require_regular_file(&database_path)?;
@@ -233,11 +252,13 @@ impl RuntimeDatabase {
                     RuntimeDatabaseError::sql("configure_existing_database", &error)
                 })?;
         }
-        let integrity: String = connection
-            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
-            .map_err(|error| RuntimeDatabaseError::sql("verify_existing_database", &error))?;
-        if integrity != "ok" {
-            return Err(failure("state_database_corrupt", "open_existing_database"));
+        if whole_file_check || !read_only {
+            let integrity: String = connection
+                .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+                .map_err(|error| RuntimeDatabaseError::sql("verify_existing_database", &error))?;
+            if integrity != "ok" {
+                return Err(failure("state_database_corrupt", "open_existing_database"));
+            }
         }
         Ok(Self {
             root: root.canonicalize().map_err(|error| {
