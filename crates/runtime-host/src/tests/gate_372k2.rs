@@ -419,6 +419,13 @@ impl Slots {
     fn close(self) {
         self.host.close().expect("close the clock-slot host");
     }
+
+    /// A clean stop that keeps the state root for a read after it.
+    fn close_keeping_root(self) -> TempDir {
+        let Self { host, root, .. } = self;
+        host.close().expect("close the clock-slot host");
+        root
+    }
 }
 
 /// Test 1, an activation overnight: `daily [07:00, 19:00]`, limit 2, no history. The
@@ -811,4 +818,248 @@ fn gate_clock_slot_a_pair_waiting_in_the_round_leaves_no_record() {
     );
     assert!(rows.iter().all(|row| row.task_id != waiting));
     slots.close();
+}
+
+/// Test 7, the token bound: every gate code of the gate table, with every `budget_dimension`
+/// token and 13-digit times, gives a refused and a deferred `fact_code` that the contract's
+/// planning-signal validation accepts; so does the longest owed token.
+#[test]
+fn gate_clock_slot_every_token_passes_the_planning_signal_validation() {
+    use crate::policy_host::clock_slot::{SlotRecord, SlotValues, clock_slot_signal};
+    use actingcommand_contract::{
+        AuditInput, EventDraft, EventLinksDraft, EventOrigin, PolicyBudgetDimension,
+        PolicyPayloadDraft,
+    };
+    use actingcommand_ledger::Sha256SecretFingerprinter;
+
+    /// Every gate code of the K2 gate table that leaves a record.
+    const GATE_CODES: [&str; 13] = [
+        "policy_budget_exhausted",
+        "policy_activity_window_closed",
+        "policy_task_paused",
+        "instance_override_disabled",
+        "capability_missing",
+        "activity_profile_missing",
+        "dispatch_paused_global",
+        "dispatch_paused_instance",
+        "dispatch_instance_held",
+        "policy_retry_backoff_active",
+        "policy_activity_interval_active",
+        "dispatch_instance_cooldown",
+        "instance_unavailable",
+    ];
+    const TIME: u64 = 1_700_042_400_000;
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let fingerprinter =
+        Sha256SecretFingerprinter::new(b"clock-slot-token-bound").expect("fingerprinter");
+    // The contract's own path: the event draft of a planning signal, sanitized.
+    let validate = |signal: PolicyPlanningSignalEventData| -> String {
+        let fact_code = signal.fact_code.clone();
+        let links = EventLinksDraft::default()
+            .with_request_id(issuer.mint_request_id().expect("request id"))
+            .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
+            .with_action_id(issuer.mint_action_id().expect("action id"));
+        EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            TIME,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            links,
+            PolicyPayloadDraft::planning_signal_observed(signal, AuditInput::new()).into(),
+        )
+        .sanitize(&fingerprinter)
+        .unwrap_or_else(|error| panic!("{fact_code} passes the validation: {error:?}"));
+        fact_code
+    };
+    let dimensions = [
+        None,
+        Some(PolicyBudgetDimension::TaskDaily),
+        Some(PolicyBudgetDimension::TaskWindow),
+        Some(PolicyBudgetDimension::TaskRuntime),
+        Some(PolicyBudgetDimension::ActivityDaily),
+        Some(PolicyBudgetDimension::ActivityWindow),
+        Some(PolicyBudgetDimension::ActivityRuntime),
+    ];
+    for gate_code in GATE_CODES {
+        for dimension in dimensions {
+            for kind in [SlotRecord::Refused, SlotRecord::Deferred] {
+                let values = SlotValues {
+                    gate_code: Some(gate_code.to_owned()),
+                    budget_dimension: dimension,
+                    occurrence_unix_ms: TIME,
+                    window_end_unix_ms: Some(TIME),
+                    next_eligible_unix_ms: Some(TIME),
+                    next_occurrence_unix_ms: Some(TIME),
+                    ..SlotValues::default()
+                };
+                let fact_code = validate(clock_slot_signal(
+                    kind,
+                    SLOT_TASK,
+                    POLICY_INSTANCE_ALIAS,
+                    &values,
+                    TIME,
+                ));
+                if let Some(dimension) = dimension {
+                    let token = serde_json::to_value(dimension).expect("dimension token");
+                    let token = token.as_str().expect("a vocabulary token");
+                    assert!(
+                        fact_code.contains(&format!(":budget_dimension={token}:")),
+                        "{fact_code}"
+                    );
+                }
+            }
+        }
+    }
+    let owed = SlotValues {
+        occurrence_unix_ms: TIME,
+        window_start_unix_ms: Some(TIME),
+        next_occurrence_unix_ms: Some(TIME),
+        first_run: true,
+        ..SlotValues::default()
+    };
+    validate(clock_slot_signal(
+        SlotRecord::Owed,
+        SLOT_TASK,
+        POLICY_INSTANCE_ALIAS,
+        &owed,
+        TIME,
+    ));
+}
+
+/// Test 8, the golden id: one fixed (task, alias, occurrence) gives one fixed `signal_id`. The
+/// digest was computed apart from the code under test, with
+/// `py -3 -c "import hashlib; print(hashlib.sha256(b'\x00'.join([b'fixture.slot', b'fixture-instance-a', b'1700042400000'])).hexdigest())"`.
+#[test]
+fn gate_clock_slot_signal_id_matches_its_golden_digest() {
+    use crate::policy_host::clock_slot::{SlotRecord, signal_id};
+
+    const DIGEST: &str = "71e71662307a84a87c8c3106c9825315b88842d26ebdaa8bae127ab06c2facc2";
+    let occurrence = at(0, 10, 0);
+    assert_eq!(occurrence, 1_700_042_400_000);
+    for (kind, word) in [
+        (SlotRecord::Refused, "refused"),
+        (SlotRecord::Deferred, "deferred"),
+        (SlotRecord::Owed, "owed"),
+    ] {
+        assert_eq!(
+            signal_id(kind, SLOT_TASK, POLICY_INSTANCE_ALIAS, occurrence),
+            format!("signal:clock_slot:{word}:{DIGEST}")
+        );
+    }
+}
+
+/// Test 9, E1: a record of each code serializes with exactly the planning-signal key set,
+/// deserializes and serializes again to the same bytes, and its projection row decodes to it.
+#[test]
+fn gate_clock_slot_records_round_trip_through_ledger_and_projection() {
+    use crate::policy_host::clock_slot::{SlotRecord, SlotValues, clock_slot_signal};
+    use actingcommand_contract::{PolicyBudgetDimension, PolicyPlanningSignalPayload};
+
+    let owed = SlotValues {
+        occurrence_unix_ms: at(0, 19, 0),
+        window_start_unix_ms: Some(at(1, 6, 0)),
+        next_occurrence_unix_ms: Some(at(1, 7, 0)),
+        first_run: true,
+        ..SlotValues::default()
+    };
+    let deferred = SlotValues {
+        gate_code: Some("dispatch_paused_instance".to_owned()),
+        occurrence_unix_ms: at(1, 7, 0),
+        window_end_unix_ms: Some(at(1, 23, 30)),
+        next_occurrence_unix_ms: Some(at(1, 19, 0)),
+        ..SlotValues::default()
+    };
+    let refused = SlotValues {
+        gate_code: Some("policy_budget_exhausted".to_owned()),
+        budget_dimension: Some(PolicyBudgetDimension::TaskDaily),
+        occurrence_unix_ms: at(1, 19, 0),
+        window_end_unix_ms: Some(at(1, 23, 30)),
+        next_eligible_unix_ms: Some(at(2, 6, 0)),
+        next_occurrence_unix_ms: Some(at(2, 7, 0)),
+        ..SlotValues::default()
+    };
+    let signals = [
+        (SlotRecord::Owed, &owed, at(1, 6, 9)),
+        (SlotRecord::Deferred, &deferred, at(1, 7, 0)),
+        (SlotRecord::Refused, &refused, at(1, 19, 0)),
+    ]
+    .map(|(kind, values, observed_at_unix_ms)| {
+        clock_slot_signal(
+            kind,
+            SLOT_TASK,
+            POLICY_INSTANCE_ALIAS,
+            values,
+            observed_at_unix_ms,
+        )
+    });
+    let slots = Slots::start(
+        &slot_sources(1, &[slot_task(&[420, 1140], 2)], None),
+        at(1, 6, 0),
+    );
+    for signal in &signals {
+        slots
+            .host
+            .record_policy_planning_signal(signal.clone())
+            .expect("record the clock-slot signal");
+    }
+    let events = slots
+        .host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        })
+        .expect("planning signals");
+    let payloads = events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) => Some(payload),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(payloads.len(), signals.len());
+    for (payload, signal) in payloads.iter().zip(&signals) {
+        assert_eq!(payload.signal_id(), signal.signal_id);
+        assert_eq!(payload.fact_code(), signal.fact_code);
+        let bytes = serde_json::to_vec(payload).expect("encode the record");
+        let record: serde_json::Value = serde_json::from_slice(&bytes).expect("record JSON");
+        let keys = record
+            .as_object()
+            .expect("a record object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "action",
+                "signal_id",
+                "instance_id",
+                "task_id",
+                "kind",
+                "fact_code",
+                "observed_at_unix_ms",
+                "audit",
+            ])
+        );
+        let decoded: PolicyPlanningSignalPayload =
+            serde_json::from_slice(&bytes).expect("decode the record");
+        assert_eq!(
+            serde_json::to_vec(&decoded).expect("encode the record again"),
+            bytes
+        );
+    }
+    let root = slots.close_keeping_root();
+    let state =
+        RuntimeStateStore::open(root.path(), b"runtime-host-test-salt").expect("open the state");
+    for signal in &signals {
+        let (_, stored) = state
+            .load_planning_signal(&signal.signal_id)
+            .expect("read the projection")
+            .expect("a projection row");
+        assert_eq!(&stored, signal);
+    }
 }
