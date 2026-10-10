@@ -1050,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_overlay_caps_heavy_concurrency_and_scales_budgets() {
+    fn resource_overlay_caps_heavy_concurrency() {
         let config = PerformanceControlConfig {
             escalation_samples: 1,
             ..PerformanceControlConfig::default()

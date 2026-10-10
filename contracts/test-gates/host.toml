@@ -284,10 +284,15 @@ tests = [
     "actingcommand-runtime-host::lib::performance_control::tests::third_party_contention_is_independent_and_presence_alone_is_not_pressure",
     "actingcommand-runtime-host::lib::performance_control::tests::recovery_releases_only_one_instance_per_transition",
     "actingcommand-runtime-host::lib::performance_control::tests::clock_jump_preserves_control_state_and_resets_transition_evidence",
-    "actingcommand-runtime-host::lib::performance_control::tests::deadline_conflict_never_crosses_the_dispatch_gate",
-    "actingcommand-runtime-host::lib::performance_control::tests::resource_overlay_caps_heavy_concurrency_and_scales_budgets",
+    "actingcommand-runtime-host::lib::performance_control::tests::resource_overlay_caps_heavy_concurrency",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t01_levels_below_suspended_allow_dispatch",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t01_dispatch_paused_admission_records_no_rejection",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t02_suspended_urgent_dispatch_defers_without_deadline_failure",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t03_qos_reduced_keeps_host_budget_for_light",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t04_capture_latency_alone_scores_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t05_fast_acquire_and_touch_score_full",
 ]
-incident = []
+incident = ["#385 P-0"]
 
 # Coverage semantics of host metrics
 [[gate]]
