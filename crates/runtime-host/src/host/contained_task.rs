@@ -4802,7 +4802,7 @@ impl HostShared {
             cap_ms,
         )?;
         let deadline_monotonic_ms =
-            match self.contained_task_deadline(receipt_deadline_monotonic_ms, &token) {
+            match self.contained_task_deadline_until(receipt_deadline_monotonic_ms, &token) {
                 Ok(deadline) => deadline,
                 Err(failure) => {
                     return Err(self.cleanup_composite_failure(token, connection_id, failure));
@@ -4858,17 +4858,37 @@ impl HostShared {
             .ok_or_else(|| contained_task_package_failure("contained_task_deadline_overflow"))
     }
 
-    /// Workflow #369 W-3: a direct run's deadline stays anchored at its receipt; after its
-    /// grant it is the earlier of that receipt deadline and the lease boundary.
     fn contained_task_deadline(
         &self,
-        receipt_deadline_monotonic_ms: u64,
+        request: &ContainedTaskRequest,
         token: &LeaseToken,
     ) -> Result<u64, RequestFailure> {
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let requested = receipt_deadline_monotonic_ms;
+        let requested = now
+            .checked_add(request.response_deadline_ms())
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_deadline_overflow",
+                    "derive_contained_task_deadline",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        self.contained_task_deadline_until(requested, token)
+    }
+
+    /// The earlier of `requested` and the lease boundary; refused when it has passed. Workflow
+    /// #369 W-3: a direct run passes its receipt deadline, so its deadline stays anchored at
+    /// receipt however long it waited for its grant.
+    fn contained_task_deadline_until(
+        &self,
+        requested: u64,
+        token: &LeaseToken,
+    ) -> Result<u64, RequestFailure> {
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
         let reserve = lock(&self.scheduler, "read_contained_task_deadline_config")?
             .config()
             .maximum_client_heartbeat_interval_ms;
