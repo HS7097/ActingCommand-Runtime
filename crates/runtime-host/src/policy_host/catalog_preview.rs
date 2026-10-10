@@ -9,7 +9,10 @@
 //! read-only view of the same database and the catalog generations from their immutable
 //! directories, so the preview runs beside a running daemon: it takes no lock, never writes the
 //! database and stages nothing (SQLite may leave the `-wal` / `-shm` sidecars of a cleanly
-//! stopped root). The decision and the approval plan are the functions startup uses.
+//! stopped root). The ledger and the State documents are both read without the whole-file
+//! `PRAGMA quick_check(1)` (R375-3 v1.2): page-level damage in parts of the file the preview
+//! does not read is left to startup and `ledger-maintenance verify`. The decision and the
+//! approval plan are the functions startup uses.
 
 use super::catalog_transaction::{CATALOG_PROJECTION_TYPES, catalog_projection_events};
 use super::*;
@@ -211,15 +214,16 @@ fn read_state(
     }
     phases.ledger_ms = elapsed_ms(reading);
     let projecting = Instant::now();
-    let database = actingcommand_runtime_database::RuntimeDatabase::open_existing(state_root, true)
-        .map_err(|error| {
-            RuntimeHostError::fatal(
-                error.code(),
-                error.operation(),
-                RuntimeErrorCode::LedgerFailure,
-            )
-            .with_native_detail(format!("{error:?}"))
-        })?;
+    let database =
+        actingcommand_runtime_database::RuntimeDatabase::open_existing_unchecked(state_root)
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })?;
     let state = Arc::new(
         RuntimeStateStore::from_database(Arc::new(database))
             .map_err(|error| RuntimeHostError::state(&error))?,
