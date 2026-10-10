@@ -328,7 +328,7 @@ tests = [
     "actingcommand-selection-policy::lib::evaluator::tests::a_gate_that_cannot_be_decided_follows_its_declared_handling",
     "actingcommand-selection-policy::lib::evaluator::tests::an_unknown_member_leaves_a_conjunction_undecided_but_a_false_member_decides_it",
 ]
-incident = []
+incident = ["#384"]
 
 # Modes and ties
 [[gate]]
