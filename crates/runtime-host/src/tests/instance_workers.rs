@@ -1475,12 +1475,23 @@ fn ladder_hand_off_crash_child_process() {
         "lease_lapsed_before_package" => Some(LapsePoint::PackageAdmitted),
         _ => None,
     };
-    let expiry_clock = (lapse_point.is_some()
+    // Board #71 (TCLOCK): a parent that restarts at a fixed instant runs its child on a manual
+    // clock from that fixed time, so every record of the child precedes the restart.
+    let fixed_clock_ms = std::env::var(LADDER_CRASH_CLOCK_ENV)
+        .ok()
+        .map(|at| at.parse::<u64>().expect("child clock instant"));
+    let expiry_clock = (fixed_clock_ms.is_some()
+        || lapse_point.is_some()
         || matches!(
             point.as_str(),
             "lease_expired_before_run" | "lease_expired_with_claim_queued" | "run_over_budget"
         ))
-    .then(|| Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)));
+    .then(|| {
+        Arc::new(ManualRuntimeClock::new(
+            fixed_clock_ms.unwrap_or(POLICY_NOW_UNIX_MS),
+            0,
+        ))
+    });
     let host_config = match &expiry_clock {
         Some(clock) => host_config.with_runtime_clock(clock.clone()),
         None => host_config,
@@ -1764,6 +1775,19 @@ fn spawn_ladder_crash_child(root: &Path, point: &str) -> (std::process::Child, P
     spawn_ladder_crash_child_with(root, point, &[])
 }
 
+/// The crash child's fixed clock: its Runtime clock starts at this unix ms (board #71).
+const LADDER_CRASH_CLOCK_ENV: &str = "ACTINGCOMMAND_LADDER_CRASH_CLOCK_MS";
+
+/// `spawn_ladder_crash_child` with the child's Runtime clock fixed at the fixture's time, for a
+/// test that restarts at `POLICY_RESTART_UNIX_MS` (board #71).
+fn spawn_fixed_clock_crash_child(root: &Path, point: &str) -> (std::process::Child, PathBuf) {
+    spawn_ladder_crash_child_with(
+        root,
+        point,
+        &[(LADDER_CRASH_CLOCK_ENV, POLICY_NOW_UNIX_MS.to_string())],
+    )
+}
+
 /// `spawn_ladder_crash_child` with extra environment for the child.
 fn spawn_ladder_crash_child_with(
     root: &Path,
@@ -1821,6 +1845,21 @@ fn restart_ladder_host(root: &Path, registered: InstanceId) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
     RuntimeHost::start(
         host_config,
+        Arc::new(FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state)),
+    )
+    .expect("restart after the crash")
+}
+
+/// `restart_ladder_host` with the restarted host's Runtime clock standing at the fixed restart
+/// instant, `POLICY_RESTART_UNIX_MS` (board #71): its own records are stamped there, and the
+/// policy evaluations after it run there.
+fn restart_ladder_host_at_fixed_instant(root: &Path, registered: InstanceId) -> RuntimeHost {
+    let (host_config, _) = ladder_setup(root);
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    RuntimeHost::start(
+        host_config
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_RESTART_UNIX_MS, 0))),
         Arc::new(FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state)),
     )
     .expect("restart after the crash")
@@ -1909,11 +1948,17 @@ fn evaluation_now() -> u64 {
 
 /// A crash at E3's second crash point (between the ladder claim's `scheduler.queued` and the
 /// run's `lease.released`) on `root`, admitted at `eval_ms` when given: the run has its
-/// `task.failed` and no release, and the hand-off's transfer was not written.
+/// `task.failed` and no release, and the hand-off's transfer was not written. The child's
+/// Runtime clock is fixed at its admission time (`eval_ms`, else the fixture's time; board
+/// #71).
 fn crash_inside_the_hand_off(root: &Path, eval_ms: Option<u64>) -> (RunId, LeaseId) {
-    let environment = eval_ms
+    let mut environment = eval_ms
         .map(|at| vec![("ACTINGCOMMAND_LADDER_CRASH_EVAL_MS", at.to_string())])
         .unwrap_or_default();
+    environment.push((
+        LADDER_CRASH_CLOCK_ENV,
+        eval_ms.unwrap_or(POLICY_NOW_UNIX_MS).to_string(),
+    ));
     let (child, marker) = spawn_ladder_crash_child_with(
         root,
         "after_ladder_claim_queued_before_hand_off",
@@ -1996,10 +2041,12 @@ fn assert_settled_once_as_interrupted(events: &[PersistedEvent], run_id: &RunId)
     assert_eq!(record.severity(), EventSeverity::Info);
 }
 
-/// Waits until the retry backoff of the run's recorded failure, if it has one, has passed on
-/// the wall clock: a run settled from its failed terminal starts its pair's retry backoff
-/// (P2), and the next dispatch of the pair is due only after it.
-fn wait_out_retry_backoff(events: &[PersistedEvent], run_id: &RunId) {
+/// The retry backoff of the run's recorded failure, if it has one, has passed at the fixed
+/// restart instant: a run settled from its failed terminal starts its pair's retry backoff
+/// (P2), and the next dispatch of the pair is due only after it. The evaluations after the
+/// restart run at `POLICY_RESTART_UNIX_MS` (board #71), so the backoff is checked against that
+/// instant instead of being waited out on the wall clock.
+fn assert_retry_backoff_passed(events: &[PersistedEvent], run_id: &RunId) {
     let retry_at = events.iter().find_map(|event| match event.payload() {
         EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
             if event.links().run_id() == Some(run_id) =>
@@ -2013,12 +2060,13 @@ fn wait_out_retry_backoff(events: &[PersistedEvent], run_id: &RunId) {
     });
     if let Some(retry_at) = retry_at {
         assert!(
-            retry_at <= evaluation_now() + 120_000,
+            retry_at <= POLICY_RESTART_UNIX_MS + 120_000,
             "a retry backoff of at most two minutes"
         );
-        while evaluation_now() <= retry_at {
-            thread::sleep(Duration::from_millis(100));
-        }
+        assert!(
+            POLICY_RESTART_UNIX_MS > retry_at,
+            "the retry backoff has passed at the restart's instant"
+        );
     }
 }
 
@@ -2105,14 +2153,14 @@ fn assert_settled_once_from_its_terminal(events: &[PersistedEvent], run_id: &Run
 fn a_crash_inside_the_hand_off_is_settled_from_its_terminal_and_a_new_dispatch_proceeds() {
     let (root, registered) = crash_root();
     let (run_id, _) = crash_inside_the_hand_off(root.path(), None);
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert_settled_once_from_its_terminal(&events, &run_id);
-    wait_out_retry_backoff(&events, &run_id);
+    assert_retry_backoff_passed(&events, &run_id);
     let (_, request) = ladder_setup(root.path());
-    let context = admit_ladder_run_at(&host, &request, evaluation_now());
+    let context = admit_ladder_run_at(&host, &request, POLICY_RESTART_UNIX_MS);
     assert_ne!(context.run_id(), run_id);
-    let at = evaluation_now();
+    let at = POLICY_RESTART_UNIX_MS;
     host.evaluate_policy_cycle_with_test_inputs(
         &policy_facts(),
         &policy_resources(),
@@ -2130,11 +2178,12 @@ fn a_crash_inside_the_hand_off_is_settled_from_its_terminal_and_a_new_dispatch_p
 
 /// After a restart: a new dispatch on the instance is admitted, and the evaluation after it is
 /// not fatal (an open dispatch left beside it would make it `policy_instance_dispatch_conflict`).
+/// Both run at the fixed restart instant (board #71).
 fn assert_a_new_dispatch_proceeds(host: &RuntimeHost, root: &Path, cut_run: &RunId) {
     let (_, request) = ladder_setup(root);
-    let context = admit_ladder_run_at(host, &request, evaluation_now());
+    let context = admit_ladder_run_at(host, &request, POLICY_RESTART_UNIX_MS);
     assert_ne!(context.run_id(), *cut_run);
-    let at = evaluation_now();
+    let at = POLICY_RESTART_UNIX_MS;
     host.evaluate_policy_cycle_with_test_inputs(
         &policy_facts(),
         &policy_resources(),
@@ -2159,7 +2208,7 @@ fn assert_a_new_dispatch_proceeds(host: &RuntimeHost, root: &Path, cut_run: &Run
 fn a_scheduled_dispatch_killed_before_its_first_task_event_is_settled_and_a_new_dispatch_proceeds()
 {
     let (root, registered) = crash_root();
-    let (child, marker) = spawn_ladder_crash_child(root.path(), "after_admission_before_run");
+    let (child, marker) = spawn_fixed_clock_crash_child(root.path(), "after_admission_before_run");
     kill_at_marker(child, &marker);
     let (run_id, _) = crash_run_identity(root.path());
     let prefix = closed_ledger_events(root.path());
@@ -2174,7 +2223,7 @@ fn a_scheduled_dispatch_killed_before_its_first_task_event_is_settled_and_a_new_
         }),
         "the run has no task event"
     );
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     assert_settled_once_as_interrupted(&all_events(&host), &run_id);
     assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
     host.close().expect("close the restarted host");
@@ -2189,7 +2238,7 @@ fn a_scheduled_dispatch_killed_before_its_first_task_event_is_settled_and_a_new_
 fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() {
     let (root, registered) = crash_root();
     let (child, marker) =
-        spawn_ladder_crash_child(root.path(), "after_lease_transfer_before_release");
+        spawn_fixed_clock_crash_child(root.path(), "after_lease_transfer_before_release");
     kill_at_marker(child, &marker);
     let (run_id, lease_id) = crash_run_identity(root.path());
     let prefix = closed_ledger_events(root.path());
@@ -2200,7 +2249,7 @@ fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() 
         EventPayload::Lease(LeasePayload::Transferred(transfer))
             if transfer.from_lease_id() == lease_id
     )));
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert_eq!(
         run_count(&events, &run_id, EventType::LeaseReleased),
@@ -2216,7 +2265,7 @@ fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() 
         run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
         1
     );
-    wait_out_retry_backoff(&events, &run_id);
+    assert_retry_backoff_passed(&events, &run_id);
     assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
     host.close().expect("close the restarted host");
 }
@@ -2228,7 +2277,7 @@ fn a_crash_after_the_hand_off_transfer_settles_the_run_once_without_a_release() 
 #[test]
 fn a_scheduled_dispatch_whose_lease_expired_is_settled_once_and_a_new_dispatch_proceeds() {
     let (root, registered) = crash_root();
-    let (child, marker) = spawn_ladder_crash_child(root.path(), "lease_expired_before_run");
+    let (child, marker) = spawn_fixed_clock_crash_child(root.path(), "lease_expired_before_run");
     kill_at_marker(child, &marker);
     let (run_id, lease_id) = crash_run_identity(root.path());
     let prefix = closed_ledger_events(root.path());
@@ -2239,7 +2288,7 @@ fn a_scheduled_dispatch_whose_lease_expired_is_settled_once_and_a_new_dispatch_p
         event.event_type() == EventType::LeaseReleased
             && event.links().lease_id() == Some(&lease_id)
     }));
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert!(
         !events.iter().any(|event| {
@@ -2297,7 +2346,8 @@ fn run_shape(events: &[PersistedEvent], run: &RunId, lease: &LeaseId) -> String 
 #[test]
 fn an_expiry_handed_on_to_a_waiting_claim_is_one_lease_end_and_settles_the_run_once() {
     let (root, registered) = crash_root();
-    let (child, marker) = spawn_ladder_crash_child(root.path(), "lease_expired_with_claim_queued");
+    let (child, marker) =
+        spawn_fixed_clock_crash_child(root.path(), "lease_expired_with_claim_queued");
     kill_at_marker(child, &marker);
     let (run_id, lease_id) = crash_run_identity(root.path());
     let prefix = closed_ledger_events(root.path());
@@ -2331,7 +2381,7 @@ fn an_expiry_handed_on_to_a_waiting_claim_is_one_lease_end_and_settles_the_run_o
     } else {
         expiry.timestamp_unix_ms()
     };
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert!(
         !events.iter().any(|event| {
@@ -2373,7 +2423,7 @@ fn an_expiry_handed_on_to_a_waiting_claim_is_one_lease_end_and_settles_the_run_o
 #[test]
 fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
     let (root, registered) = crash_root();
-    let (mut child, marker) = spawn_ladder_crash_child(root.path(), "lease_lapsed_mid_run");
+    let (mut child, marker) = spawn_fixed_clock_crash_child(root.path(), "lease_lapsed_mid_run");
     let deadline = Instant::now() + WAIT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll the crash child") {
@@ -2456,7 +2506,7 @@ fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
         _ => None,
     });
     assert!(terminal_code.is_some(), "the run's terminal:\n{shape}");
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert_eq!(
         run_count(&events, &run_id, EventType::LeaseReleased),
@@ -2489,7 +2539,7 @@ fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
 #[test]
 fn a_terminal_written_after_the_lease_expired_is_settled_from_the_terminal() {
     let (root, registered) = crash_root();
-    let (child, marker) = spawn_ladder_crash_child(root.path(), "terminal_after_expiry");
+    let (child, marker) = spawn_fixed_clock_crash_child(root.path(), "terminal_after_expiry");
     kill_at_marker(child, &marker);
     let (run_id, lease_id) = crash_run_identity(root.path());
     let prefix = closed_ledger_events(root.path());
@@ -2513,7 +2563,7 @@ fn a_terminal_written_after_the_lease_expired_is_settled_from_the_terminal() {
         }),
         "{shape}"
     );
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert_eq!(
         run_count(&events, &run_id, EventType::LeaseReleased),
@@ -2529,7 +2579,7 @@ fn a_terminal_written_after_the_lease_expired_is_settled_from_the_terminal() {
         run_count(&events, &run_id, EventType::PolicyDispatchCompleted),
         1
     );
-    wait_out_retry_backoff(&events, &run_id);
+    assert_retry_backoff_passed(&events, &run_id);
     assert_a_new_dispatch_proceeds(&host, root.path(), &run_id);
     host.close().expect("close the restarted host");
 }
@@ -2612,7 +2662,8 @@ fn a_run_over_its_runtime_budget_is_settled_with_the_policy_rewrite() {
 #[test]
 fn a_run_with_no_terminal_is_settled_as_interrupted_from_its_run_linked_release() {
     let (root, registered) = crash_root();
-    let (mut child, marker) = spawn_ladder_crash_child(root.path(), "lease_lapsed_before_package");
+    let (mut child, marker) =
+        spawn_fixed_clock_crash_child(root.path(), "lease_lapsed_before_package");
     let deadline = Instant::now() + WAIT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll the crash child") {
@@ -2649,7 +2700,7 @@ fn a_run_with_no_terminal_is_settled_as_interrupted_from_its_run_linked_release(
         panic!("the run's release:\n{shape}");
     };
     let released_at = release.timestamp_unix_ms();
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert_eq!(
         run_count(&events, &run_id, EventType::LeaseReleased),
@@ -2692,7 +2743,7 @@ fn recorded_observed_at(events: &[PersistedEvent], run_id: &RunId) -> u64 {
 #[test]
 fn a_release_without_run_links_is_the_lease_end_of_a_scheduled_dispatch() {
     let (root, registered) = crash_root();
-    let (child, marker) = spawn_ladder_crash_child(root.path(), "host_close_before_run");
+    let (child, marker) = spawn_fixed_clock_crash_child(root.path(), "host_close_before_run");
     kill_at_marker(child, &marker);
     let (run_id, lease_id) = crash_run_identity(root.path());
     let prefix = closed_ledger_events(root.path());
@@ -2709,7 +2760,7 @@ fn a_release_without_run_links_is_the_lease_end_of_a_scheduled_dispatch() {
     };
     assert!(close_release.links().run_id().is_none(), "{shape}");
     let closed_at = close_release.timestamp_unix_ms();
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     let events = all_events(&host);
     assert_eq!(
         run_count(&events, &run_id, EventType::LeaseReleased),
@@ -2810,14 +2861,14 @@ fn a_scheduled_dispatch_the_start_leaves_open_is_recorded_once() {
 fn two_cut_hand_offs_on_one_instance_are_each_settled_and_the_next_start_evaluates() {
     let (root, registered) = crash_root();
     let (first, _) = crash_inside_the_hand_off(root.path(), None);
-    let host = restart_ladder_host(root.path(), registered);
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
     assert!(host.fatal_error().expect("runtime health").is_none());
-    wait_out_retry_backoff(&all_events(&host), &first);
+    assert_retry_backoff_passed(&all_events(&host), &first);
     host.close().expect("close after the first crash");
-    let (second, _) = crash_inside_the_hand_off(root.path(), Some(evaluation_now()));
+    let (second, _) = crash_inside_the_hand_off(root.path(), Some(POLICY_RESTART_UNIX_MS));
     assert_ne!(first, second);
-    let host = restart_ladder_host(root.path(), registered);
-    let at = evaluation_now();
+    let host = restart_ladder_host_at_fixed_instant(root.path(), registered);
+    let at = POLICY_RESTART_UNIX_MS;
     host.evaluate_policy_cycle_with_test_inputs(
         &policy_facts(),
         &policy_resources(),
