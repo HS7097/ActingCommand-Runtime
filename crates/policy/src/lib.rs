@@ -21,3 +21,10 @@ pub use resource_targets::*;
 pub use schema::*;
 pub use source::{CatalogDocumentSource, CatalogSources, validate_catalog_declaration};
 pub use strategy::*;
+
+/// Gate tests that need the crate's private items (test plan §2.1), and their shared fixtures.
+#[cfg(test)]
+mod tests {
+    mod gate_d2_s1;
+    mod selection_catalog;
+}
