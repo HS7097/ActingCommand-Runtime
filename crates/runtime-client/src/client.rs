@@ -70,6 +70,15 @@ const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 /// host waits up to 30 s more for the ADB baseline (#316-B3), so the worst case is
 /// 60 + 120 + 10 + 30 = 220 s; 230 s covers it plus the IO margin.
 const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(230);
+
+/// The receipt wait of one `ControlEmulatorInstance` action (Workflow #381 B, test plan C-3).
+pub(crate) fn emulator_control_response_timeout(action: EmulatorInstanceAction) -> Duration {
+    match action {
+        EmulatorInstanceAction::Start
+        | EmulatorInstanceAction::Stop
+        | EmulatorInstanceAction::Restart => EMULATOR_CONTROL_RESPONSE_TIMEOUT,
+    }
+}
 /// Receipt wait for `DiscoverInstances`: the provider runs two vendor commands (`version`,
 /// then `info -v all`), each bounded at 10 s (`MUMU_MANAGER_COMMAND_TIMEOUT`); 25 s covers
 /// both plus the IO margin.
@@ -1130,7 +1139,7 @@ impl RuntimeClient {
                 action,
             },
             correlation,
-            Some(EMULATOR_CONTROL_RESPONSE_TIMEOUT),
+            Some(emulator_control_response_timeout(action)),
         )?;
         match receipt.result() {
             Some(

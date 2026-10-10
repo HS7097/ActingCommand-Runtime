@@ -81,6 +81,12 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use zip::{ZipWriter, write::FileOptions};
 
+// Workflow #381 B (HOST-I1): the scripted emulator controller shared with execution-kernel and
+// actingctl's gate binary.
+#[allow(dead_code)]
+#[path = "../../../tests/support/emulator_controller.rs"]
+mod emulator_controller;
+
 // Shared fixture fragments retain one private test scope.
 include!("tests/support/backend.rs");
 include!("tests/support/startup.rs");

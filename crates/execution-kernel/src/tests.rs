@@ -11,6 +11,12 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+// Workflow #381 B (EXEC-I2): the scripted emulator controller shared with runtime-host
+// (HOST-I1) and actingctl's gate binary.
+#[allow(dead_code)]
+#[path = "../../../tests/support/emulator_controller.rs"]
+mod emulator_controller;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {
@@ -103,6 +109,9 @@ fn kernel_close_preserves_each_failed_instance() {
 struct FakeProvider {
     state: Arc<Mutex<FakeState>>,
     instances: BTreeMap<String, ResolvedExecutionInstance>,
+    /// Workflow #381 B (EXEC-I2): the one discovery-bound instance whose emulator the scripted
+    /// controller drives (control, state read, rebind, discovery), if any.
+    emulator: Option<(String, Arc<emulator_controller::FakeEmulatorController>)>,
 }
 
 // Defect regressions D02/D08/D09/D14: PR298 review 5120590779, Workflow #257 C1B9 v16.
@@ -400,8 +409,35 @@ impl FakeProvider {
                     )
                 })
                 .collect(),
+            emulator: None,
         }
     }
+
+    /// Workflow #381 B (EXEC-I2): `instance_alias` becomes discovery-bound, its emulator driven
+    /// by `controller`.
+    fn with_emulator(
+        mut self,
+        instance_alias: &str,
+        controller: Arc<emulator_controller::FakeEmulatorController>,
+    ) -> Self {
+        self.emulator = Some((instance_alias.to_owned(), controller));
+        self
+    }
+
+    fn emulator_of(
+        &self,
+        instance_alias: &str,
+    ) -> Option<&emulator_controller::FakeEmulatorController> {
+        self.emulator
+            .as_ref()
+            .filter(|(alias, _)| alias == instance_alias)
+            .map(|(_, controller)| controller.as_ref())
+    }
+}
+
+/// Workflow #381 B (EXEC-I2): the discovery binding of the fake emulator instance.
+fn fake_emulator_binding() -> DiscoveredInstanceBinding {
+    DiscoveredInstanceBinding::new(0, "fixture", "1.0.0", "C:/fixture/MuMuManager.exe")
 }
 
 impl ExecutionBackendProvider for FakeProvider {
@@ -410,7 +446,81 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        self.instances.get(instance_alias).cloned()
+        let resolved = self.instances.get(instance_alias).cloned()?;
+        let Some(controller) = self.emulator_of(instance_alias) else {
+            return Some(resolved);
+        };
+        Some(match controller.bound_port() {
+            Some(port) => resolved.with_adb_endpoint(
+                ResolvedAdbEndpoint::new("127.0.0.1", port, false)
+                    .with_discovered_binding(fake_emulator_binding()),
+            ),
+            None => resolved.with_pending_endpoint(PendingAdbEndpoint::new(
+                "127.0.0.1",
+                fake_emulator_binding(),
+            )),
+        })
+    }
+
+    fn control_instance(
+        &self,
+        instance_alias: &str,
+        action: actingcommand_contract::EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        match self.emulator_of(instance_alias) {
+            Some(controller) => controller.control(0, action),
+            None => Err(EmulatorControlFailure::without_output(
+                DeviceError::fatal("emulator control unsupported by this provider")
+                    .with_diagnostic(
+                        actingcommand_device::DeviceErrorCategory::Protocol,
+                        "emulator_control.unsupported",
+                    ),
+                0,
+            )),
+        }
+    }
+
+    fn read_instance_state(&self, instance_alias: &str) -> DeviceResult<InstanceState> {
+        match self.emulator_of(instance_alias) {
+            Some(controller) => controller.read_state(),
+            None => Err(DeviceError::fatal("emulator state read unsupported")),
+        }
+    }
+
+    fn rebind_discovered_endpoint(
+        &self,
+        instance_alias: &str,
+        adb_port: Option<u16>,
+    ) -> DeviceResult<()> {
+        let controller = self
+            .emulator_of(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("endpoint rebinding unsupported"))?;
+        controller.rebind(adb_port);
+        Ok(())
+    }
+
+    fn discover_instances(
+        &self,
+    ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
+        let Some((_, controller)) = &self.emulator else {
+            return Err(Box::new(InstanceDiscoveryFailure {
+                code: "instance_discovery_unavailable",
+                error: DeviceError::fatal("instance discovery unsupported"),
+            }));
+        };
+        controller.note(emulator_controller::EmulatorCall::Discover);
+        let adb_port = controller.bound_port();
+        Ok(ProviderInstanceDiscovery {
+            provider_version: "1.0.0".to_owned(),
+            instances: vec![ProviderDiscoveredInstance {
+                instance_index: 0,
+                instance_name: "fixture".to_owned(),
+                adb_host: adb_port.map(|_| "127.0.0.1".to_owned()),
+                adb_port,
+                running: adb_port.is_some(),
+                android_version: None,
+            }],
+        })
     }
 
     fn open_input(

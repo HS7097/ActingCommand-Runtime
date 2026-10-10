@@ -19,11 +19,12 @@ use actingcommand_device::{
     create_touch_backend_for_fenced_input, discover_mumu_instances, mumu_state_wait,
 };
 pub use actingcommand_execution_kernel::{
-    DiscoveredInstanceBinding, EmulatorControlFailure, EmulatorControlOutcome,
-    EmulatorControlResult, ExecutionBackendProvider, ForegroundApplicationObservation,
-    InstanceDiscoveryFailure, PendingAdbEndpoint, ProviderDiscoveredInstance,
-    ProviderInstanceDiscovery, RecognitionVisionProvider, ResolvedAdbEndpoint,
-    ResolvedExecutionInstance, ResolvedInstanceEndpoint, VisionFfiProvider, VisionModelIdentity,
+    DeviceProcessPresence, DiscoveredInstanceBinding, EmulatorControlFailure,
+    EmulatorControlOutcome, EmulatorControlResult, ExecutionBackendProvider,
+    ForegroundApplicationObservation, InstanceDiscoveryFailure, InstanceState, PendingAdbEndpoint,
+    ProviderDiscoveredInstance, ProviderInstanceDiscovery, RecognitionVisionProvider,
+    ResolvedAdbEndpoint, ResolvedExecutionInstance, ResolvedInstanceEndpoint, VisionFfiProvider,
+    VisionModelIdentity,
 };
 #[cfg(feature = "fixture-backends")]
 pub use fixtures::FixtureInstanceSpec;
@@ -1014,6 +1015,47 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             discovered.instance_index(),
             action,
             mumu_state_wait(action),
+        )
+    }
+
+    /// Workflow #381 B (review M3): one `info -v <index>` read (bounded by
+    /// `MUMU_MANAGER_COMMAND_TIMEOUT`) of a discovery-bound entry, with the same refusals as
+    /// `control_instance`. No device session is opened or touched here.
+    fn read_instance_state(&self, instance_alias: &str) -> DeviceResult<InstanceState> {
+        let refused = |message: &str, stage: &'static str| {
+            DeviceError::fatal(message)
+                .with_diagnostic(DeviceErrorCategory::Protocol, stage)
+                .with_diagnostic_context(
+                    "execution_backend_registry",
+                    "read_instance_state",
+                    DeviceErrorSensitivity::Sensitive,
+                )
+        };
+        let entry = match self.entries.get(instance_alias) {
+            Some(RegistryEntry::Real(entry)) => entry,
+            #[cfg(feature = "fixture-backends")]
+            Some(RegistryEntry::Fixture(_)) => {
+                return Err(refused(
+                    "emulator state unavailable: a fixture simulation instance has no emulator",
+                    "emulator_control.unavailable",
+                ));
+            }
+            None => {
+                return Err(refused(
+                    "execution backend instance is not registered",
+                    "emulator_control.unregistered",
+                ));
+            }
+        };
+        let Some(discovered) = entry.endpoint().state.discovered_binding().cloned() else {
+            return Err(refused(
+                "emulator state unavailable: the instance was registered explicitly, without MuMuManager discovery",
+                "emulator_control.unavailable",
+            ));
+        };
+        actingcommand_device::read_instance_state(
+            discovered.mumu_manager_path(),
+            discovered.instance_index(),
         )
     }
 

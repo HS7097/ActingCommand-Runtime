@@ -445,6 +445,15 @@ impl ExecutionKernel {
         self.provider.control_instance(instance_alias, action)
     }
 
+    /// Workflow #381 B (review M3): one bounded read of the emulator instance's state, driven
+    /// on the provider directly like `control_instance`: no session is opened or touched.
+    pub fn read_emulator_instance_state(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_device::DeviceResult<actingcommand_device::InstanceState> {
+        self.provider.read_instance_state(instance_alias)
+    }
+
     /// Re-runs the provider's instance discovery on demand, driven on the provider directly
     /// like `control_instance`: no session is opened or touched and nothing is bound.
     pub fn discover_instances(

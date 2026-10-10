@@ -103,7 +103,7 @@ fn mumu_device_from_process(
     })
 }
 
-fn is_mumu_device_process(process: &DeviceDiscoveryProcess) -> bool {
+pub(crate) fn is_mumu_device_process(process: &DeviceDiscoveryProcess) -> bool {
     if process.name.eq_ignore_ascii_case("MuMuNxDevice.exe") {
         return true;
     }
@@ -115,7 +115,7 @@ fn is_mumu_device_process(process: &DeviceDiscoveryProcess) -> bool {
         .is_some_and(|name| name.eq_ignore_ascii_case("MuMuNxDevice.exe"))
 }
 
-fn mumu_instance_id(process: &DeviceDiscoveryProcess) -> Result<u16, String> {
+pub(crate) fn mumu_instance_id(process: &DeviceDiscoveryProcess) -> Result<u16, String> {
     let command_line = process.command_line.as_deref().unwrap_or_default();
     match parse_dash_v_instance(command_line) {
         Ok(Some(instance_id)) => Ok(instance_id),
@@ -368,10 +368,9 @@ fn dedup_discovered_devices(devices: Vec<DiscoveredDevice>) -> Vec<DiscoveredDev
     output
 }
 
+/// The process-metadata listing script both listings run.
 #[cfg(windows)]
-fn system_processes() -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
-    // Discovery is process-metadata only because mixed ADB servers can disturb MuMu instances.
-    let script = r#"
+const PROCESS_LISTING_SCRIPT: &str = r#"
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Get-CimInstance Win32_Process | ForEach-Object {
@@ -384,7 +383,19 @@ Get-CimInstance Win32_Process | ForEach-Object {
   [Console]::Out.WriteLine(($fields -join "`t"))
 }
 "#;
-    let powershell = std::env::var_os("SystemRoot")
+
+#[cfg(windows)]
+const PROCESS_LISTING_ARGS: [&str; 5] = [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    PROCESS_LISTING_SCRIPT,
+];
+
+#[cfg(windows)]
+fn powershell_executable() -> PathBuf {
+    std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .map(|root| {
             root.join("System32")
@@ -393,32 +404,78 @@ Get-CimInstance Win32_Process | ForEach-Object {
                 .join("powershell.exe")
         })
         .filter(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from("powershell.exe"));
-    let output = Command::new(&powershell)
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
+        .unwrap_or_else(|| PathBuf::from("powershell.exe"))
+}
+
+#[cfg(windows)]
+fn system_processes() -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+    // Discovery is process-metadata only because mixed ADB servers can disturb MuMu instances.
+    let output = Command::new(powershell_executable())
+        .args(PROCESS_LISTING_ARGS)
         .output()
         .map_err(|err| {
             DeviceError::fatal(format!("failed to enumerate Windows processes: {err}"))
         })?;
-    let stdout = String::from_utf8(output.stdout).map_err(|err| {
+    process_rows_from_output(output.status, output.stdout, &output.stderr)
+}
+
+#[cfg(windows)]
+fn process_rows_from_output(
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: &[u8],
+) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+    let stdout = String::from_utf8(stdout).map_err(|err| {
         DeviceError::fatal(format!(
             "Windows process enumeration produced non-UTF-8 stdout: {err}"
         ))
     })?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
+    let stderr = String::from_utf8_lossy(stderr);
+    if !status.success() {
         return Err(DeviceError::fatal(format!(
-            "Windows process enumeration failed with {}\nstderr:\n{stderr}",
-            output.status
+            "Windows process enumeration failed with {status}\nstderr:\n{stderr}"
         )));
     }
     parse_process_rows(&stdout)
+}
+
+#[cfg(windows)]
+const POWERSHELL_PROGRAM: crate::adb::CommandProgram = crate::adb::CommandProgram {
+    name: "powershell",
+    stdout_reader: "powershell_stdout",
+    stderr_reader: "powershell_stderr",
+    windows_creation_flags: 0x0800_0000,
+    timeout_stage: None,
+};
+
+/// Workflow #381 B F2 (review M2): one process listing, the same metadata as discovery, that
+/// fails once `bound` expires (no console window). A Stop's process check reads it; a failure
+/// here is a failed listing, never a failed Stop.
+#[cfg(windows)]
+pub(crate) fn system_processes_within(
+    bound: std::time::Duration,
+) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+    let powershell = powershell_executable();
+    let program = powershell.to_str().ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "PowerShell path is not valid UTF-8: {}",
+            powershell.display()
+        ))
+    })?;
+    let output = crate::adb::run_raw_with_timeout(
+        POWERSHELL_PROGRAM,
+        program,
+        &PROCESS_LISTING_ARGS,
+        bound,
+    )?;
+    process_rows_from_output(output.status, output.stdout, &output.stderr)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn system_processes_within(
+    _bound: std::time::Duration,
+) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+    Ok(Vec::new())
 }
 
 #[cfg(not(windows))]

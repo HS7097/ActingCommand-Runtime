@@ -13,6 +13,7 @@
 use crate::adb::{
     ACTINGCOMMAND_NEMU_FOLDER_ENV, CommandProgram, decode_adb_text, run_raw_with_timeout,
 };
+use crate::discovery::DeviceDiscoveryProcess;
 use crate::emulator::{
     EmulatorCapability, EmulatorCapabilityAvailability, EmulatorCapabilityBackend,
     EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
@@ -49,10 +50,19 @@ pub const MUMU_MANAGER_STATE_WAIT_START: Duration = Duration::from_secs(120);
 /// for more than 30 s, so every poll in that phase expires its bound and counts as no
 /// observation; the wait must outlast that phase.
 pub const MUMU_MANAGER_STATE_WAIT_STOP: Duration = Duration::from_secs(120);
+/// Workflow #381 B F2 (review M2): a Stop lists the running processes only after `info`
+/// reported the instance's process stopped, and at most once per this interval.
+pub const MUMU_MANAGER_PROCESS_LIST_INTERVAL: Duration = Duration::from_secs(5);
+/// Workflow #381 B F2 (review M2): the bound of one process listing, equal to
+/// `MUMU_MANAGER_COMMAND_TIMEOUT`. A listing past it is a failed listing
+/// (`device_process_present=unknown`), never a timeout of the Stop. A Stop's worst case is
+/// 60 s (`control`) + 120 s (`MUMU_MANAGER_STATE_WAIT_STOP`) + 10 s (the last `info` poll) +
+/// 10 s (the last listing) = 200 s.
+pub const MUMU_MANAGER_PROCESS_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const MUMU_MANAGER_STATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Diagnostic stage of a `MuMuManager` run whose bound expired (distinct from
 /// `mumu_manager.run`, a spawn or poll failure). Tolerated by the readiness wait.
-const MUMU_MANAGER_TIMEOUT_STAGE: &str = "mumu_manager.timeout";
+pub(crate) const MUMU_MANAGER_TIMEOUT_STAGE: &str = "mumu_manager.timeout";
 /// Bound of the retained `control` stdout+stderr summary (the ledger native-detail bound).
 const MAX_EMULATOR_CONTROL_SUMMARY_BYTES: usize = 1024;
 pub const MAX_MUMU_INSTANCE_NAME_BYTES: usize = 256;
@@ -723,6 +733,29 @@ impl InstanceState {
     }
 }
 
+/// Workflow #381 B F2: whether a vendor device process (`MuMuNxDevice.exe` carrying
+/// `-v <index>`) still ran for the instance when a Stop's process listing last looked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceProcessPresence {
+    /// The last listing still showed the instance's device process.
+    Present,
+    /// The last listing showed no device process of the instance.
+    Absent,
+    /// No listing answered: it failed or never ran.
+    Unknown,
+}
+
+impl DeviceProcessPresence {
+    /// The `device_process_present` token.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Present => "true",
+            Self::Absent => "false",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// One completed `control` dispatch whose readiness criterion was met.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmulatorControlOutcome {
@@ -740,6 +773,9 @@ pub struct EmulatorControlOutcome {
     /// Undocumented vendor field, recorded opaquely.
     pub player_state: Option<String>,
     pub elapsed_ms: u64,
+    /// Workflow #381 B F2: a Stop's process check (`Absent`, or `Unknown` when the listing
+    /// failed and `info` alone confirmed the Stop); `None` for a Start.
+    pub device_process_present: Option<DeviceProcessPresence>,
 }
 
 /// Typed failure of one `control` dispatch or of the readiness wait that follows it.
@@ -761,6 +797,10 @@ pub struct EmulatorControlFailure {
     /// at least one poll answered.
     pub last_state: Option<InstanceState>,
     pub elapsed_ms: u64,
+    /// Workflow #381 B F2: a Stop's process check when it failed (`Present` when the last
+    /// listing still showed the device process, otherwise `Unknown`); `None` for a Start and
+    /// for a failure without a dispatch.
+    pub device_process_present: Option<DeviceProcessPresence>,
 }
 
 /// The failure is boxed: it carries the device error, the output summary and the last state.
@@ -776,6 +816,7 @@ impl EmulatorControlFailure {
             output_summary: summary,
             last_state: None,
             elapsed_ms,
+            device_process_present: None,
         })
     }
 }
@@ -798,6 +839,85 @@ const fn mumu_control_verb(action: EmulatorInstanceAction) -> &'static str {
     }
 }
 
+/// One `control` dispatch as `control_instance` reads it (Workflow #381 B, EXEC-I1).
+pub(crate) struct MumuControlOutput {
+    /// Exit code of the command (`None` when it ended by signal).
+    pub(crate) exit_code: Option<i32>,
+    /// The exit status as the developer message names it.
+    pub(crate) status: String,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+}
+
+/// Workflow #381 B (test plan EXEC-I1): the vendor and system surface `control_instance`
+/// drives: the `control` dispatch, the `info -v <index>` reader, the process listing and a
+/// monotonic clock. The public entry drives the system through [`SystemMumuManagerRunner`];
+/// tests inject a scripted runner.
+pub(crate) trait MumuManagerRunner {
+    /// Runs `MuMuManager <args>` once, bounded by `MUMU_MANAGER_CONTROL_TIMEOUT`.
+    fn control(&mut self, args: &[&str]) -> DeviceResult<MumuControlOutput>;
+    /// Runs `info -v <index>` once through [`read_instance_state`].
+    fn read_state(&mut self, instance_index: u16) -> DeviceResult<InstanceState>;
+    /// Lists the running processes once, within `bound`.
+    fn list_processes(&mut self, bound: Duration) -> DeviceResult<Vec<DeviceDiscoveryProcess>>;
+    /// Monotonic time since an arbitrary origin.
+    fn now(&mut self) -> Duration;
+    fn sleep(&mut self, duration: Duration);
+}
+
+/// The production runner: `MuMuManager.exe` itself, the system process listing and the
+/// monotonic clock.
+struct SystemMumuManagerRunner<'path> {
+    mumu_manager_path: &'path Path,
+    path: &'path str,
+    origin: Instant,
+}
+
+impl MumuManagerRunner for SystemMumuManagerRunner<'_> {
+    fn control(&mut self, args: &[&str]) -> DeviceResult<MumuControlOutput> {
+        let output = run_raw_with_timeout(
+            MUMU_MANAGER_PROGRAM,
+            self.path,
+            args,
+            MUMU_MANAGER_CONTROL_TIMEOUT,
+        )?;
+        Ok(MumuControlOutput {
+            exit_code: output.status.code(),
+            status: output.status.to_string(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+
+    fn read_state(&mut self, instance_index: u16) -> DeviceResult<InstanceState> {
+        read_instance_state(self.mumu_manager_path, instance_index)
+    }
+
+    fn list_processes(&mut self, bound: Duration) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+        crate::discovery::system_processes_within(bound)
+    }
+
+    fn now(&mut self) -> Duration {
+        self.origin.elapsed()
+    }
+
+    fn sleep(&mut self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
+fn elapsed_ms_between(started: Duration, now: Duration) -> u64 {
+    u64::try_from(now.saturating_sub(started).as_millis()).unwrap_or(u64::MAX)
+}
+
+fn control_failure_context(error: DeviceError) -> DeviceError {
+    error.with_diagnostic_context_if_absent(
+        "mumu_manager",
+        "control_instance",
+        DeviceErrorSensitivity::Sensitive,
+    )
+}
+
 /// Dispatches `control -v <index> launch|shutdown|restart` once, bounded by
 /// `MUMU_MANAGER_CONTROL_TIMEOUT`, then polls `info -v <index>` every second (each poll bounded
 /// by `MUMU_MANAGER_COMMAND_TIMEOUT`) until the action's readiness criterion holds or `wait`
@@ -815,63 +935,70 @@ pub fn control_instance(
     action: EmulatorInstanceAction,
     wait: Duration,
 ) -> EmulatorControlResult<EmulatorControlOutcome> {
-    let started = Instant::now();
-    let index = instance_index.to_string();
-    let verb = mumu_control_verb(action);
-    let args = ["control", "-v", index.as_str(), verb];
-    let command = args.join(" ");
-    let elapsed_ms = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let typed = |error: DeviceError| {
-        error.with_diagnostic_context_if_absent(
-            "mumu_manager",
-            "control_instance",
-            DeviceErrorSensitivity::Sensitive,
-        )
-    };
+    let origin = Instant::now();
     let Some(path) = mumu_manager_path.to_str() else {
         return Err(EmulatorControlFailure::without_output(
-            typed(
+            control_failure_context(
                 DeviceError::fatal(format!(
                     "MuMuManager path is not valid UTF-8: {}",
                     mumu_manager_path.display()
                 ))
                 .with_diagnostic(DeviceErrorCategory::BackendLaunch, "mumu_manager.path"),
             ),
-            elapsed_ms(),
+            elapsed_ms_between(Duration::ZERO, origin.elapsed()),
         ));
     };
-    let output =
-        run_raw_with_timeout(
-            MUMU_MANAGER_PROGRAM,
-            path,
-            &args,
-            MUMU_MANAGER_CONTROL_TIMEOUT,
-        )
-        .map_err(|error| {
-            EmulatorControlFailure::without_output(
-                typed(error.with_diagnostic_if_absent(
+    let mut runner = SystemMumuManagerRunner {
+        mumu_manager_path,
+        path,
+        origin,
+    };
+    control_instance_with(&mut runner, instance_index, action, wait)
+}
+
+/// [`control_instance`] over an injected runner (Workflow #381 B, EXEC-I1).
+pub(crate) fn control_instance_with(
+    runner: &mut impl MumuManagerRunner,
+    instance_index: u16,
+    action: EmulatorInstanceAction,
+    wait: Duration,
+) -> EmulatorControlResult<EmulatorControlOutcome> {
+    let started = runner.now();
+    let index = instance_index.to_string();
+    let verb = mumu_control_verb(action);
+    let args = ["control", "-v", index.as_str(), verb];
+    let command = args.join(" ");
+    let output = match runner.control(&args) {
+        Ok(output) => output,
+        Err(error) => {
+            return Err(EmulatorControlFailure::without_output(
+                control_failure_context(error.with_diagnostic_if_absent(
                     DeviceErrorCategory::BackendLaunch,
                     "mumu_manager.run",
                 )),
-                elapsed_ms(),
-            )
-        })?;
-    let exit_code = output.status.code();
+                elapsed_ms_between(started, runner.now()),
+            ));
+        }
+    };
+    let exit_code = output.exit_code;
     let summary = control_output_summary(&output.stdout, &output.stderr);
     let envelope = serde_json::from_slice::<serde_json::Value>(trim_json_bytes(&output.stdout))
         .ok()
         .and_then(|value| value.as_object().and_then(errcode_envelope));
-    let failure =
-        |error: DeviceError, output_summary: String, last_state: Option<InstanceState>| {
-            Box::new(EmulatorControlFailure {
-                error: typed(error),
-                exit_code,
-                output_summary,
-                last_state,
-                elapsed_ms: elapsed_ms(),
-            })
-        };
-    if !output.status.success() {
+    let failure = |error: DeviceError,
+                   output_summary: String,
+                   last_state: Option<InstanceState>,
+                   elapsed_ms: u64| {
+        Box::new(EmulatorControlFailure {
+            error: control_failure_context(error),
+            exit_code,
+            output_summary,
+            last_state,
+            elapsed_ms,
+            device_process_present: None,
+        })
+    };
+    if exit_code != Some(0) {
         return Err(failure(
             DeviceError::fatal(format!(
                 "MuMuManager {command} failed with {} ({})",
@@ -881,6 +1008,7 @@ pub fn control_instance(
             .with_diagnostic(DeviceErrorCategory::ChildExit, "mumu_manager.control_exit"),
             summary,
             None,
+            elapsed_ms_between(started, runner.now()),
         ));
     }
     if let Some(envelope) = envelope {
@@ -894,13 +1022,14 @@ pub fn control_instance(
             ),
             summary,
             None,
+            elapsed_ms_between(started, runner.now()),
         ));
     }
-    let deadline = Instant::now() + wait;
+    let deadline = runner.now() + wait;
     let mut last_state: Option<InstanceState> = None;
     let mut expired_polls: u32 = 0;
     loop {
-        match read_instance_state(mumu_manager_path, instance_index) {
+        match runner.read_state(instance_index) {
             Ok(state) => {
                 if state.launch_err_code != 0 {
                     let summary =
@@ -913,6 +1042,7 @@ pub fn control_instance(
                         .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.launch_error"),
                         summary,
                         Some(state),
+                        elapsed_ms_between(started, runner.now()),
                     ));
                 }
                 if state.satisfies(action) {
@@ -924,7 +1054,8 @@ pub fn control_instance(
                         running: state.running(),
                         adb_port: state.adb_port,
                         player_state: state.player_state,
-                        elapsed_ms: elapsed_ms(),
+                        elapsed_ms: elapsed_ms_between(started, runner.now()),
+                        device_process_present: None,
                     });
                 }
                 last_state = Some(state);
@@ -937,9 +1068,16 @@ pub fn control_instance(
             {
                 expired_polls += 1;
             }
-            Err(error) => return Err(failure(error, summary, None)),
+            Err(error) => {
+                return Err(failure(
+                    error,
+                    summary,
+                    None,
+                    elapsed_ms_between(started, runner.now()),
+                ));
+            }
         }
-        if Instant::now() >= deadline {
+        if runner.now() >= deadline {
             let summary = bounded_control_summary(format!(
                 "{summary}\n{}",
                 last_state.as_ref().map_or_else(
@@ -964,9 +1102,10 @@ pub fn control_instance(
                 .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.wait_timeout"),
                 summary,
                 last_state,
+                elapsed_ms_between(started, runner.now()),
             ));
         }
-        thread::sleep(MUMU_MANAGER_STATE_POLL_INTERVAL);
+        runner.sleep(MUMU_MANAGER_STATE_POLL_INTERVAL);
     }
 }
 
@@ -980,11 +1119,23 @@ pub fn read_instance_state(
     let index = instance_index.to_string();
     let args = ["info", "-v", index.as_str()];
     let document = run_json(mumu_manager_path, &args)?;
+    parse_instance_document(&document, instance_index)
+}
+
+/// The `info -v <index>` document as [`read_instance_state`] reads it (Workflow #381 B, E-2):
+/// the flat shape or the map shape, an `{"errcode","errmsg"}` envelope with `errcode != 0` a
+/// typed failure.
+pub(crate) fn parse_instance_document(
+    document: &serde_json::Value,
+    instance_index: u16,
+) -> DeviceResult<InstanceState> {
+    let index = instance_index.to_string();
+    let args = ["info", "-v", index.as_str()];
     let Some(object) = document.as_object() else {
         return Err(shape_error(
             &args,
             "top-level instance object or a map keyed by instance index",
-            &document,
+            document,
         ));
     };
     if let Some(envelope) = errcode_envelope(object) {
@@ -1001,7 +1152,7 @@ pub fn read_instance_state(
             shape_error(
                 &args,
                 &format!("a flat instance object or a map holding entry {index:?}"),
-                &document,
+                document,
             )
         })?;
         let entry = value.as_object().ok_or_else(|| {

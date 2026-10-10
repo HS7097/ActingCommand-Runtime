@@ -325,6 +325,69 @@
       "description": "A frame moved into its kept folder, but the move counter kept/.moves (entry) could not be written, so other processes may find moved frames only at their next walk of the kept folders, within 60 s. Reported once per process.",
       "common_causes": "A folder or a read-only file where kept/.moves should be; access to the kept folder denied.",
       "handling": "Remove whatever occupies kept/.moves so that a file can be written there; the next move writes the counter again."
+    },
+    "emulator_restart_stop_failed": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "required",
+        "process_started": "optional",
+        "restart_phase": "required",
+        "start_dispatched": "required",
+        "start_elapsed_ms": "optional",
+        "stop_elapsed_ms": "required",
+        "stop_result": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
+      "handling": "TBD"
+    },
+    "emulator_restart_start_failed": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "required",
+        "process_started": "optional",
+        "restart_phase": "required",
+        "start_dispatched": "required",
+        "start_elapsed_ms": "required",
+        "stop_elapsed_ms": "required",
+        "stop_result": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "common_causes": "The instance did not boot within the start's readiness wait, or MuMuManager refused the launch.",
+      "handling": "TBD"
+    },
+    "emulator_stop_process_unverified": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_process_present": "required",
+        "instance_id": "required",
+        "stop_elapsed_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Stop was confirmed by MuMuManager info alone: the process listing that checks that no vendor device process of the instance is left failed or passed its bound, so device_process_present is unknown. Recorded once per Stop under the request's links (a stuck-recovery ladder's on its emulator-restart rung), before command.validated.",
+      "common_causes": "The process listing (PowerShell) did not answer within its bound under host load, or could not start.",
+      "handling": "TBD"
     }
   }
 }
