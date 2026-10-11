@@ -315,6 +315,25 @@ tests = [
 ]
 incident = ["#385 P-0"]
 
+# Frame cleaner rounds: at most 16 actions a round, each due frame once a sweep (#375 R5d)
+[[gate]]
+key = "38"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::gate_h5g14::gate_more_than_sixteen_due_frames_are_cleaned_in_rounds_of_at_most_sixteen_actions",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::gate_h5g14::gate_a_sweep_over_several_rounds_acts_on_each_due_frame_once",
+]
+incident = ["#382 H-5 G14"]
+
+# One unlinked Warning does not stop the frame cleaner (the 10-02 latch, #375 R5d)
+[[gate]]
+key = "39"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::gate_h5g13::gate_an_unlinked_warning_does_not_stop_the_cleaner_removing_due_frames",
+]
+incident = ["#382 H-5 G13"]
+
 # Coverage semantics of host metrics
 [[gate]]
 key = "41"
