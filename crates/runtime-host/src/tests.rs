@@ -107,6 +107,7 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+mod gate_369s5;
 mod gate_372k2;
 mod gate_375_r3;
 mod gate_381a;

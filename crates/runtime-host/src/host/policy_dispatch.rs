@@ -2184,11 +2184,24 @@ impl HostShared {
     /// once instead of at the next lazy open (ps2); a global resume reconnects nothing. With
     /// `expected` (Workflow #338 R4) the owner epoch and the scope's revision are compared first,
     /// under the same lock as the lift.
+    ///
+    /// Workflow #369 W-3: an instance resume checks those refusals before anything else, so a
+    /// resume they refuse takes no claim. Its reconnect's `ResumeReconnect` claim is then granted
+    /// before anything changes; it is an operator entry, so the closed gate does not hold it
+    /// back, while every routine entry stays held back. Not granted within
+    /// `CONNECTION_PREPARATION_CLAIM_WAIT_MS`, the resume is refused `lease_queue_expired` and
+    /// nothing has changed. Once granted, the gate is lifted as before (the refusals checked
+    /// again, since the pause can change while the claim waits; a refusal then releases the key
+    /// and lifts nothing), the preparation runs on the claim's key, and the key's release hands
+    /// it on, or pumps, so a claim the lift made eligible follows the reconnect. No dispatch can
+    /// reach the instance while the key is held.
     pub(super) fn resume_scheduling(
         &self,
+        original: &RuntimeRequest,
         request: &ValidatedRuntimeRequest<'_>,
         scope: &SchedulingPauseScope,
         expected: Option<&SchedulingPauseExpectation>,
+        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let SchedulingPauseScope::Instance { instance_alias } = scope else {
             let revision = {
@@ -2226,54 +2239,48 @@ impl HostShared {
             });
         };
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
-        // The admission guard spans the lift and the reconnect: a dispatch the lifted gate admits
-        // waits for the reconnect, so the self-check reports this resume's own opens.
-        let instance_guard = self.instance_guard(instance_id)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
-        let revision = {
+        self.resumable_instance_pauses(instance_alias, expected)?;
+        let token = self.await_preparation_claim(
+            original,
+            instance_alias,
+            connection_id,
+            ClaimKind::ResumeReconnect,
+        )?;
+        let lifted = (|| -> Result<u64, RequestFailure> {
             let _persist = lock(
                 &self.scheduling_pause_persist_gate,
                 "persist_instance_scheduling_resume",
             )?;
-            let mut prospective = {
-                let table = lock(&self.scheduling_pause, "resume_scheduling")?;
-                check_scheduling_pause_expectation(
-                    expected,
-                    self.owner_epoch,
-                    table
-                        .instance_revisions
-                        .get(instance_alias)
-                        .copied()
-                        .unwrap_or(0),
-                )?;
-                match table.instances.get(instance_alias).map(|state| state.stage) {
-                    None => {
-                        return Err(scheduling_pause_denied(
-                            "scheduling_not_paused",
-                            "resume_scheduling",
-                        ));
-                    }
-                    Some(InstancePauseStage::Draining) => {
-                        return Err(scheduling_pause_denied(
-                            "scheduling_pause_draining",
-                            "resume_scheduling",
-                        ));
-                    }
-                    Some(InstancePauseStage::Paused) => {
-                        return Err(scheduling_pause_denied(
-                            "scheduling_pause_releasing",
-                            "resume_scheduling",
-                        ));
-                    }
-                    Some(InstancePauseStage::Released) => table.clone(),
-                }
-            };
+            let mut prospective = self.resumable_instance_pauses(instance_alias, expected)?;
             prospective.lift_instance(instance_alias)?;
             self.persist_scheduling_pauses(&prospective)?;
-            lock(&self.scheduling_pause, "resume_scheduling")?.lift_instance(instance_alias)?
+            Ok(lock(&self.scheduling_pause, "resume_scheduling")?.lift_instance(instance_alias)?)
+        })();
+        let revision = match lifted {
+            Ok(revision) => revision,
+            Err(failure) => {
+                return Err(
+                    match self.release_lease(
+                        request,
+                        original.request_id(),
+                        &token,
+                        connection_id,
+                        None,
+                    ) {
+                        Ok(_) => failure,
+                        Err(release) => failure.replace_with_poison(*release.error),
+                    },
+                );
+            }
         };
-        let selfcheck =
-            self.reconnect_resumed_instance(request, instance_alias, instance_id, &admission)?;
+        let selfcheck = self.reconnect_resumed_instance(
+            request,
+            original.request_id(),
+            instance_alias,
+            instance_id,
+            &token,
+            connection_id,
+        )?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -2285,36 +2292,71 @@ impl HostShared {
         })
     }
 
+    /// The pause table an instance resume would lift: the expectation (Workflow #338 R4) holds
+    /// and the instance's pause is `Released`. Otherwise today's refusal:
+    /// `scheduling_not_paused`, `scheduling_pause_draining` or `scheduling_pause_releasing`.
+    fn resumable_instance_pauses(
+        &self,
+        instance_alias: &str,
+        expected: Option<&SchedulingPauseExpectation>,
+    ) -> Result<SchedulingPauseTable, RequestFailure> {
+        let table = lock(&self.scheduling_pause, "resume_scheduling")?;
+        check_scheduling_pause_expectation(
+            expected,
+            self.owner_epoch,
+            table
+                .instance_revisions
+                .get(instance_alias)
+                .copied()
+                .unwrap_or(0),
+        )?;
+        match table.instances.get(instance_alias).map(|state| state.stage) {
+            None => Err(scheduling_pause_denied(
+                "scheduling_not_paused",
+                "resume_scheduling",
+            )),
+            Some(InstancePauseStage::Draining) => Err(scheduling_pause_denied(
+                "scheduling_pause_draining",
+                "resume_scheduling",
+            )),
+            Some(InstancePauseStage::Paused) => Err(scheduling_pause_denied(
+                "scheduling_pause_releasing",
+                "resume_scheduling",
+            )),
+            Some(InstancePauseStage::Released) => Ok(table.clone()),
+        }
+    }
+
     /// Workflow #191 ps2: the reconnect of an instance resume, since Workflow #317 sc3 (c) the
-    /// instance's preparation phase (`prepare_instance_connection`): a dedicated preparation
-    /// lease; the close of a session the instance still holds (Workflow #191 h3: a reconnect is
-    /// a disconnect and a connect, and a failed close skips the opens); the opens of its input
-    /// and capture backends through `ExecutionKernel::open_instance_backends`, recorded as every
-    /// open is recorded (`backend.open_observed`, the `backend.selfcheck.*` facts,
-    /// `device.self_check` and the availability they gate); then the lease's release. The
-    /// opened session stays open for the instance's next leases (Workflow #191 H); a failed
-    /// open, or an instance outside the multi-Nemu gate, closes it before the release. A
-    /// failing step is reported in the self-check with its code and leaves the instance
-    /// unavailable; it never rolls the resume back and is not retried. Only a fatal failure (an
-    /// unconfirmed close, a failed record) fails the request.
+    /// instance's preparation phase, since Workflow #369 W-3 on the reconnect claim's key
+    /// (`prepare_on_operator_claim`): the close of a session the instance still holds
+    /// (Workflow #191 h3: a reconnect is a disconnect and a connect, and a failed close skips
+    /// the opens); the opens of its input and capture backends through
+    /// `ExecutionKernel::open_instance_backends`, recorded as every open is recorded
+    /// (`backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check` and the
+    /// availability they gate); then the key's release. The opened session stays open for the
+    /// instance's next leases (Workflow #191 H); a failed open, or an instance outside the
+    /// multi-Nemu gate, closes it before the release. A failing step is reported in the
+    /// self-check with its code and leaves the instance unavailable; it never rolls the resume
+    /// back and is not retried. Only a fatal failure (an unconfirmed close, a failed record)
+    /// fails the request.
     fn reconnect_resumed_instance(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
+        request_id: RequestId,
         instance_alias: &str,
         instance_id: InstanceId,
-        admission: &MutexGuard<'_, ()>,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
     ) -> Result<SchedulingResumeSelfCheck, RequestFailure> {
-        let links = self
-            .events
-            .request_links(request, Some(instance_id), None, None);
-        self.prepare_instance_connection(
+        self.prepare_on_operator_claim(
+            request,
+            request_id,
             instance_alias,
             instance_id,
-            links,
-            admission,
-            ClaimKind::ResumeReconnect,
+            token,
+            connection_id,
         )
-        .map_err(RequestFailure::poison_without_terminal)
     }
 
     /// Workflow #191 ps2: the client on `connection_id` owes `instance_alias` a reset after its

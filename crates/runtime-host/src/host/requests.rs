@@ -94,6 +94,14 @@ impl HostShared {
                 if failure.poison_runtime {
                     self.fatal.mark((*failure.error).clone())?;
                 }
+                #[cfg(test)]
+                if let Some(detail) = failure.error.native_detail() {
+                    lock(
+                        &self.failure_details_for_test,
+                        "record_failure_detail_for_test",
+                    )?
+                    .insert(request.request_id(), detail.to_owned());
+                }
                 let projection = failure
                     .error
                     .projection()
@@ -389,12 +397,12 @@ impl HostShared {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.resume_scheduling(validated, scope, expected.as_ref())
+                self.resume_scheduling(request, validated, scope, expected.as_ref(), connection_id)
             }
             // Workflow #317 sc3 (d): a manual reconnect and self-check of a physical instance.
             RuntimeOperation::SelfCheckInstance { instance_alias } => {
                 self.require_physical_instance_alias(instance_alias)?;
-                self.self_check_instance(validated, instance_alias)
+                self.self_check_instance(request, validated, instance_alias, connection_id)
             }
             RuntimeOperation::RunContainedTask {
                 instance_alias,

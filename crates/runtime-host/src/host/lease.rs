@@ -4,6 +4,7 @@ use super::host_claims::{HostClaimWork, HostKey};
 use super::recovery_ladder::{LADDER_CLAIM_TTL_MS, LadderTrigger, PendingRecoveryLadder};
 use super::resource_close::LeaseDeviceEnd;
 use super::*;
+use crate::codes::HostCode;
 
 #[cfg(test)]
 #[derive(Clone)]
@@ -155,13 +156,6 @@ pub(super) struct HostClaim<'a> {
 pub(super) enum HostClaimAdmission {
     Granted(LeaseToken),
     Queued {
-        #[cfg_attr(
-            not(test),
-            allow(
-                dead_code,
-                reason = "the #369 S5 operator waits name the queue position in their refusal"
-            )
-        )]
         status: QueuedLease,
         grant: Arc<ClaimGrantSlot>,
     },
@@ -1163,11 +1157,11 @@ impl HostShared {
         let gate = self.routine_gate(instance_id)?;
         let order_lock = self.queue_order_lock(instance_id)?;
         let _order = lock(&order_lock, "lock_instance_queue_order")?;
-        let preparation = {
+        let (preparation, holder_kind) = {
             let mut scheduler = lock(&self.scheduler, "prepare_lease")?;
             let now_monotonic_ms = self.monotonic_ms()?;
             let lease_ttl_ms = lease_ttl_ms.unwrap_or(scheduler.config().lease_ttl_ms);
-            scheduler.prepare_claim_acquire(
+            let preparation = scheduler.prepare_claim_acquire(
                 ClaimRequest {
                     request_id,
                     instance_id: resolved.instance_id(),
@@ -1179,12 +1173,29 @@ impl HostShared {
                 },
                 gate,
                 now_monotonic_ms,
-            )
+            );
+            // Workflow #369 Q-3 (5): the holder a Lab operation's busy refusal names, read under
+            // the scheduler lock that refused it.
+            let holder_kind = scheduler
+                .active_lease(instance_id)
+                .map(|lease| lease.kind());
+            (preparation, holder_kind)
         };
         let preparation = match preparation {
             Ok(preparation) => preparation,
             Err(error) => {
                 self.append_lease_requested(request, &resolved)?;
+                if kind == ClaimKind::LabOperation
+                    && let Some(busy) = lab_operation_busy(&error, holder_kind)
+                {
+                    return Err(self.scheduler_denied_error(
+                        request,
+                        Some(resolved.instance_id()),
+                        None,
+                        resolved.audit_endpoint(),
+                        busy,
+                    )?);
+                }
                 return Err(self.scheduler_denied(request, &resolved, None, error)?);
             }
         };
@@ -3564,6 +3575,91 @@ impl HostShared {
         })
     }
 
+    /// Workflow #369 Q-2, W-3: an operator claim (a direct task run, a safe reset or an
+    /// application lifecycle command, a self-check or an instance resume's reconnect) waits for
+    /// its turn in the instance's one queue on its own connection thread, for at most `cap_ms`.
+    /// A free instance with no eligible entry grants it at once; otherwise it is visible as a
+    /// waiting entry (`lease.requested` + `scheduler.queued`) and never preempts. At the cap the
+    /// waiting thread removes its own entry under the queue-order lock (Q-8): one
+    /// `scheduler.denied` `lease.queue_expired` under the request's links, and the request is
+    /// Denied `lease_queue_expired` with the tokens `timeout_ms=<cap>`,
+    /// `holder_kind=<the holder's kind>` when the instance has a holder, and
+    /// `queue_position=<the entry's position>`. When that removal finds the entry already
+    /// granted, the grant won and its token is returned: each request ends exactly once.
+    pub(super) fn await_operator_claim(
+        &self,
+        claim: HostClaim<'_>,
+        cap_ms: u64,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let connection_id = claim.connection_id;
+        let (status, grant) = match self.request_host_claim(claim)? {
+            HostClaimAdmission::Granted(token) => return Ok(token),
+            HostClaimAdmission::Queued { status, grant } => (status, grant),
+        };
+        if let Some(token) = grant.wait(Duration::from_millis(cap_ms))? {
+            return Ok(token);
+        }
+        let instance_id = status.instance_id();
+        let order_lock = self.queue_order_lock(instance_id)?;
+        let order = lock(&order_lock, "lock_instance_queue_order")?;
+        let (removed, holder_kind) = {
+            let mut scheduler = lock(&self.scheduler, "expire_operator_claim")?;
+            let removed = scheduler.cancel_queued(status.request_id(), connection_id);
+            let holder_kind = scheduler
+                .active_lease(instance_id)
+                .map(|lease| lease.kind());
+            (removed, holder_kind)
+        };
+        let removed = match removed {
+            Ok(removed) => removed,
+            Err(SchedulerError::QueueMissing) => {
+                drop(order);
+                // The grant happens under the queue-order lock, so it is in the slot by now.
+                if let Some(token) = grant.wait(Duration::ZERO)? {
+                    return Ok(token);
+                }
+                // An install drain cancelled the entry (`lease.queue_cancelled`) meanwhile.
+                let terminal = lock(&self.queue_terminals, "read_queue_terminal")?
+                    .entries
+                    .get(&status.request_id())
+                    .map(|record| record.terminal);
+                return Err(RequestFailure::request(
+                    RuntimeHostError::scheduler(
+                        "await_operator_claim",
+                        &SchedulerError::QueueMissing,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    terminal,
+                ));
+            }
+            Err(error) => {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::scheduler("expire_operator_claim", &error),
+                ));
+            }
+        };
+        let context = self.take_queued_context(&removed)?;
+        let event = self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueExpired)?;
+        drop(order);
+        // Q-4: a removed entry may leave an eligible one first on a free instance.
+        self.pump(instance_id)?;
+        let mut detail = format!("timeout_ms={cap_ms}");
+        if let Some(holder_kind) = holder_kind {
+            detail.push_str(&format!(" holder_kind={}", holder_kind.as_str()));
+        }
+        detail.push_str(&format!(" queue_position={}", removed.queued().position()));
+        Err(RequestFailure::request(
+            RuntimeHostError::request(
+                HostCode::LeaseQueueExpired.as_str(),
+                "await_operator_claim",
+                RuntimeErrorCode::QueueExpired,
+            )
+            .with_native_detail(detail),
+            RuntimeReceiptState::Denied,
+            Some(terminal(&event)),
+        ))
+    }
+
     /// Q-5: renews a Runtime-held lease to `lease_ttl_ms` with today's renew set
     /// (`scheduler.admitted`, `lease.transition_intent`, `lease.renewed`, all Info) under the
     /// holder's request links. It runs under the queue-order lock and never takes the admission
@@ -3688,6 +3784,35 @@ const ADMISSION_CONTENTION_POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// refused startup run did before.
 const fn waits_for_business_capacity(kind: ClaimKind) -> bool {
     !kind.skips_business_capacity() && !matches!(kind, ClaimKind::StartupPackage)
+}
+
+/// Workflow #369 Q-3 (5), §4.2: the `lease_busy` refusal of a Lab operation's immediate try
+/// names who is in the way: on a held instance `holder_kind=<the holder's kind>`; on a free
+/// instance with an eligible waiting entry `holder_kind=<its kind> queue_position=<its
+/// position>`. `None` for any other refusal, which keeps the scheduler's own code.
+fn lab_operation_busy(
+    error: &SchedulerError,
+    holder_kind: Option<ClaimKind>,
+) -> Option<RuntimeHostError> {
+    let detail = match error {
+        SchedulerError::Busy { .. } => {
+            holder_kind.map(|kind| format!("holder_kind={}", kind.as_str()))
+        }
+        SchedulerError::QueueAhead { kind, position } => Some(format!(
+            "holder_kind={} queue_position={position}",
+            kind.as_str()
+        )),
+        _ => return None,
+    };
+    let busy = RuntimeHostError::with_projection(
+        HostCode::LeaseBusy.as_str(),
+        "scheduler_admission",
+        error.projection(),
+    );
+    Some(match detail {
+        Some(detail) => busy.with_native_detail(detail),
+        None => busy,
+    })
 }
 
 /// Q-2a: a grant to a drain-capacity kind never meets business capacity.

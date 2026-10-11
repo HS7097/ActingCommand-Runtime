@@ -1462,6 +1462,8 @@ impl RuntimeHost {
             lease_expiry_scan_test_gate: Mutex::new(()),
             #[cfg(test)]
             lease_expiry_test_checkpoints: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            failure_details_for_test: Mutex::new(BTreeMap::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
@@ -2530,6 +2532,21 @@ impl RuntimeHost {
                 )
             })?
             .process_request(request, connection_id)
+    }
+
+    /// Workflow #369 S5: the native detail of a refused request (its `key=value` tokens).
+    #[cfg(test)]
+    pub(crate) fn failure_detail_for_test(
+        &self,
+        request_id: RequestId,
+    ) -> RuntimeHostResult<Option<String>> {
+        let shared = self.shared_ref("read_failure_detail_for_test")?;
+        Ok(lock(
+            &shared.failure_details_for_test,
+            "read_failure_detail_for_test",
+        )?
+        .get(&request_id)
+        .cloned())
     }
 
     #[cfg(test)]
@@ -3739,6 +3756,10 @@ struct HostShared {
     lease_expiry_scan_test_gate: Mutex<()>,
     #[cfg(test)]
     lease_expiry_test_checkpoints: Mutex<Vec<LeaseExpiryTestCheckpoint>>,
+    /// Workflow #369 S5: the native detail of each refused request, by request id; it carries
+    /// the refusal's `key=value` tokens, which no receipt carries until #378 A2/A3.
+    #[cfg(test)]
+    failure_details_for_test: Mutex<BTreeMap<RequestId, String>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.

@@ -3358,7 +3358,8 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
             io_timeout,
             backend_open_timeout,
         ),
-        Ok(backend_open_timeout * 2 + io_timeout)
+        // Workflow #369 W-3 (S5, D2): the reset first waits up to 3 s for its turn.
+        Ok(backend_open_timeout * 2 + io_timeout + Duration::from_secs(3))
     );
     assert_eq!(
         receipt_response_timeout(&RuntimeOperation::Health, io_timeout, backend_open_timeout),

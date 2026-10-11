@@ -62,6 +62,7 @@ outcome_keys! {
     first_run: boolean,
     count: integer,
     holder_kind: vocab(claim_kind),
+    queue_position: integer,
     limit_count: integer,
     used: integer,
     requested: integer,

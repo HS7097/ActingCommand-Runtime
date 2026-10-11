@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::lease::HostClaim;
 use super::*;
+use actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS;
 
 impl HostShared {
     pub(super) fn input(
@@ -792,25 +794,8 @@ impl HostShared {
             EventAction::InputReset,
             None,
         )?;
-        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
-            request,
-            request_id: original.request_id(),
-            instance_alias,
-            holder_id,
-            connection_id,
-            run_links: None,
-            lease_ttl_ms: None,
-            kind: ClaimKind::InputLifecycle,
-        })?;
-        let RuntimeResult::LeaseGranted { token } = acquired.result else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "safe_reset_lease_result_invalid",
-                    "execute_safe_reset",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        };
+        let token =
+            self.await_input_lifecycle_claim(original, instance_alias, holder_id, connection_id)?;
         let action = match self.input(
             request,
             &token,
@@ -945,25 +930,8 @@ impl HostShared {
             action.event_action(),
             None,
         )?;
-        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
-            request,
-            request_id: original.request_id(),
-            instance_alias,
-            holder_id,
-            connection_id,
-            run_links: None,
-            lease_ttl_ms: None,
-            kind: ClaimKind::InputLifecycle,
-        })?;
-        let RuntimeResult::LeaseGranted { token } = acquired.result else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "application_lifecycle_lease_result_invalid",
-                    "execute_application_lifecycle",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        };
+        let token =
+            self.await_input_lifecycle_claim(original, instance_alias, holder_id, connection_id)?;
         let executed = match self.application_control(request, &token, action, connection_id, None)
         {
             Ok(success) => success,
@@ -994,6 +962,35 @@ impl HostShared {
             terminal: released.terminal,
             result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
         })
+    }
+}
+
+impl HostShared {
+    /// Workflow #369 Q-2, W-3: the claim of a safe reset or an application lifecycle command
+    /// (`InputLifecycle`, with the scheduler's default lease TTL) waits at most
+    /// `INPUT_LIFECYCLE_CLAIM_WAIT_MS` for its turn in the instance's queue.
+    fn await_input_lifecycle_claim(
+        &self,
+        original: &RuntimeRequest,
+        instance_alias: &str,
+        holder_id: actingcommand_contract::HolderId,
+        connection_id: ConnectionId,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let lease_ttl_ms = lock(&self.scheduler, "read_input_lifecycle_claim_ttl")?
+            .config()
+            .lease_ttl_ms;
+        self.await_operator_claim(
+            HostClaim {
+                request: original,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::InputLifecycle,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            INPUT_LIFECYCLE_CLAIM_WAIT_MS,
+        )
     }
 }
 

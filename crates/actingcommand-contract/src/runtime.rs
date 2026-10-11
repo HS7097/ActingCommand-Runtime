@@ -88,6 +88,15 @@ pub const SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS: u64 = 30_000;
 /// capture prime): a client waits this long plus its IO timeout for the receipt of an instance
 /// `ResumeScheduling` or a `SelfCheckInstance` (Workflow #191 h2).
 pub const CONNECTION_PREPARATION_WAIT_MS: u64 = 30_000;
+/// Workflow #369 Q-2: how long the reconnect of an instance `ResumeScheduling`, and a
+/// `SelfCheckInstance`, wait for their turn in the instance's queue before the request is
+/// refused `lease_queue_expired`. A client adds it to `CONNECTION_PREPARATION_WAIT_MS` and its
+/// IO timeout for the receipt of either (W-3).
+pub const CONNECTION_PREPARATION_CLAIM_WAIT_MS: u64 = 3_000;
+/// Workflow #369 Q-2: how long a `SafeReset` or an `ApplicationLifecycle` command waits for its
+/// turn in the instance's queue before it is refused `lease_queue_expired`. A client adds it to
+/// the receipt wait of either (W-3).
+pub const INPUT_LIFECYCLE_CLAIM_WAIT_MS: u64 = 3_000;
 pub const RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION: &str =
     "actingcommand.runtime.planning-document.v1";
 pub const MAX_RUNTIME_PLANNING_DOCUMENT_BYTES: usize = 512 * 1024;

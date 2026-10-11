@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::*;
-use actingcommand_contract::SchedulingResumeSelfCheck;
+use actingcommand_contract::{CONNECTION_PREPARATION_CLAIM_WAIT_MS, SchedulingResumeSelfCheck};
 
 /// How a lease end treats the instance's device session (Workflow #191 H).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -605,7 +606,9 @@ impl HostShared {
     // `prepare_instance_connection` connects and self-checks one physical instance outside any
     // client lease: under the instance admission guard it takes a dedicated preparation lease (the
     // close-lease precedent: a resource-close-only lease of a fixed Runtime connection, granted
-    // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`), closes a session a
+    // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`; Workflow #369 W-3: a
+    // resume's reconnect and a self-check run on their operator claim's key instead, and a
+    // stuck-recovery ladder on its own key), closes a session a
     // lease-free path retained (a read-only observe keeps its capture open, sc2; Workflow #191
     // h3) through the fenced close path, opens the instance's input and capture backends through
     // `ExecutionKernel::open_instance_backends` (a Nemu pair once) so the opens cover every
@@ -706,26 +709,32 @@ impl HostShared {
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
     /// physical instance; the receipt carries the self-check in the resume receipt's shape.
+    /// Workflow #369 W-3: a `SelfCheck` claim waits at most
+    /// `CONNECTION_PREPARATION_CLAIM_WAIT_MS` for its turn, without the admission guard, and
+    /// the preparation runs on its key (`prepare_on_operator_claim`). Not granted in time, the
+    /// request is refused `lease_queue_expired` and no preparation runs.
     pub(super) fn self_check_instance(
         &self,
+        original: &RuntimeRequest,
         request: &ValidatedRuntimeRequest<'_>,
         instance_alias: &str,
+        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
-        let instance_guard = self.instance_guard(instance_id)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
-        let links = self
-            .events
-            .request_links(request, Some(instance_id), None, None);
-        let selfcheck = self
-            .prepare_instance_connection(
-                instance_alias,
-                instance_id,
-                links,
-                &admission,
-                ClaimKind::SelfCheck,
-            )
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let token = self.await_preparation_claim(
+            original,
+            instance_alias,
+            connection_id,
+            ClaimKind::SelfCheck,
+        )?;
+        let selfcheck = self.prepare_on_operator_claim(
+            request,
+            original.request_id(),
+            instance_alias,
+            instance_id,
+            &token,
+            connection_id,
+        )?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -736,11 +745,80 @@ impl HostShared {
         })
     }
 
+    /// Workflow #369 Q-2, Q-2a, W-3: the claim of a self-check or of an instance resume's
+    /// reconnect (`kind`): an operator claim with a minted holder, the scheduler's default lease
+    /// TTL and drain capacity, which skips the bound-endpoint and performance-control checks. It
+    /// waits at most `CONNECTION_PREPARATION_CLAIM_WAIT_MS` for its turn.
+    pub(super) fn await_preparation_claim(
+        &self,
+        original: &RuntimeRequest,
+        instance_alias: &str,
+        connection_id: ConnectionId,
+        kind: ClaimKind,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let holder_id = *self
+            .events
+            .issuer()
+            .mint_holder_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?
+            .transport();
+        let lease_ttl_ms = lock(&self.scheduler, "read_preparation_claim_ttl")?
+            .config()
+            .lease_ttl_ms;
+        self.await_operator_claim(
+            HostClaim {
+                request: original,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            CONNECTION_PREPARATION_CLAIM_WAIT_MS,
+        )
+    }
+
+    /// Workflow #369 W-3: the preparation phase of one physical instance on an operator claim's
+    /// key: the admission guard is taken for the preparation's device steps only, the
+    /// preparation takes no dedicated lease, and the key is released afterwards (the release
+    /// hands it on, or pumps). An unconfirmed close or a failed record fails the request and
+    /// leaves the key held, as a dedicated preparation lease is left then.
+    pub(super) fn prepare_on_operator_claim(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        request_id: RequestId,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> Result<SchedulingResumeSelfCheck, RequestFailure> {
+        let links = self
+            .events
+            .request_links(request, Some(instance_id), None, None);
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = self.lock_admission(&instance_guard, instance_id)?;
+        let prepared = self.prepare_instance_connection_with_cooldown(
+            instance_alias,
+            instance_id,
+            links,
+            &admission,
+            actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
+            PreparationLease::Held {
+                token,
+                connection_id,
+            },
+        );
+        drop(admission);
+        let (selfcheck, _, _, _) = prepared.map_err(RequestFailure::poison_without_terminal)?;
+        self.release_lease(request, request_id, token, connection_id, None)?;
+        Ok(selfcheck)
+    }
+
     /// The preparation phase of one physical instance; the caller holds its admission guard.
     /// The opens are recorded under `links` (which name the instance). `kind` names the
-    /// preparation lease's holder (Workflow #369 Q-2; review L2: emulator control, resume
-    /// reconnect or self-check). Returns the self-check projected from the opens it made, with
-    /// the code of the failing step, if any.
+    /// preparation lease's holder (Workflow #369 Q-2; review L2: emulator control). Returns the
+    /// self-check projected from the opens it made, with the code of the failing step, if any.
     pub(super) fn prepare_instance_connection(
         &self,
         instance_alias: &str,

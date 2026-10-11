@@ -139,5 +139,15 @@ actingcommand_contract::outcome_codes! {
         /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
         /// Workflow #372 K2).
         ClockSlotOwed => "clock_slot_owed": info,
+        /// Error. An operator request (a direct task run, a safe reset, an application
+        /// lifecycle command, a self-check or an instance resume's reconnect) waited its cap in
+        /// its instance's queue without a grant, and its entry was removed (Workflow #369 S5;
+        /// keys `timeout_ms`, and `holder_kind`, `queue_position` when known). The scheduler
+        /// spells it too until A2b moves its spellings into a registry.
+        LeaseQueueExpired => "lease_queue_expired": error,
+        /// Error. An immediate try met a holder or an eligible waiting entry; a Lab operation's
+        /// refusal names it (Workflow #369 S5; keys `holder_kind`, `queue_position`, both
+        /// optional). The scheduler spells it too until A2b moves its spellings into a registry.
+        LeaseBusy => "lease_busy": error,
     }
 }

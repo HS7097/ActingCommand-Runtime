@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::facts::FactPublicationPurpose;
+use super::lease::HostClaim;
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use actingcommand_contract::{
@@ -18,6 +19,21 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 pub(super) const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: &str = "settle_previous_epoch_contained_runs";
+/// Workflow #369 Q-2: the longest a direct task run (CLI, console, MCP `ac_run_pack`) waits in
+/// its instance's queue before it is refused `lease_queue_expired`.
+const DIRECT_TASK_RUN_CLAIM_WAIT_MS: u64 = 60_000;
+/// Workflow #369 Q-2, W-3: the run time a direct task run keeps after its wait; its wait cap is
+/// min(`DIRECT_TASK_RUN_CLAIM_WAIT_MS`, the run's remaining deadline minus this).
+const DIRECT_TASK_RUN_MINIMUM_RUN_MS: u64 = 30_000;
+
+/// Workflow #369 Q-2, W-3: a direct task run's wait cap at its enqueue: min(60 s, the receipt
+/// deadline's remaining time − the 30 s run budget). A remainder of 0 or less is a cap of 0.
+fn direct_task_run_claim_cap_ms(receipt_deadline_monotonic_ms: u64, now_monotonic_ms: u64) -> u64 {
+    receipt_deadline_monotonic_ms
+        .saturating_sub(now_monotonic_ms)
+        .saturating_sub(DIRECT_TASK_RUN_MINIMUM_RUN_MS)
+        .min(DIRECT_TASK_RUN_CLAIM_WAIT_MS)
+}
 
 /// Reads one original run identity without creating identifiers or producer authority.
 fn contained_task_recovery_identity(
@@ -4765,31 +4781,33 @@ impl HostShared {
             .mint_run_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
         let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
-        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
-            request,
-            request_id: original.request_id(),
-            instance_alias,
-            holder_id,
-            connection_id,
-            run_links: None,
-            lease_ttl_ms: Some(lease_ttl_ms),
-            kind: ClaimKind::DirectTaskRun,
-        })?;
-        let RuntimeResult::LeaseGranted { token } = acquired.result else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "contained_task_lease_result_invalid",
-                    "run_contained_task",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        };
-        let deadline_monotonic_ms = match self.contained_task_deadline(task_request, &token) {
-            Ok(deadline) => deadline,
-            Err(failure) => {
-                return Err(self.cleanup_composite_failure(token, connection_id, failure));
-            }
-        };
+        // Workflow #369 W-3: the run waits for its turn in the instance's queue; its deadline
+        // stays anchored at receipt, so the wait is taken from it.
+        let receipt_deadline_monotonic_ms = active_run.control.deadline();
+        let cap_ms = direct_task_run_claim_cap_ms(
+            receipt_deadline_monotonic_ms,
+            self.monotonic_ms()
+                .map_err(RequestFailure::poison_without_terminal)?,
+        );
+        let token = self.await_operator_claim(
+            HostClaim {
+                request: original,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::DirectTaskRun,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            cap_ms,
+        )?;
+        let deadline_monotonic_ms =
+            match self.contained_task_deadline_until(receipt_deadline_monotonic_ms, &token) {
+                Ok(deadline) => deadline,
+                Err(failure) => {
+                    return Err(self.cleanup_composite_failure(token, connection_id, failure));
+                }
+            };
         active_run
             .control
             .set_deadline(deadline_monotonic_ms)
@@ -4857,6 +4875,20 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
+        self.contained_task_deadline_until(requested, token)
+    }
+
+    /// The earlier of `requested` and the lease boundary; refused when it has passed. Workflow
+    /// #369 W-3: a direct run passes its receipt deadline, so its deadline stays anchored at
+    /// receipt however long it waited for its grant.
+    fn contained_task_deadline_until(
+        &self,
+        requested: u64,
+        token: &LeaseToken,
+    ) -> Result<u64, RequestFailure> {
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
         let reserve = lock(&self.scheduler, "read_contained_task_deadline_config")?
             .config()
             .maximum_client_heartbeat_interval_ms;

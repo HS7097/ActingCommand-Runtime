@@ -12,12 +12,15 @@ segmented gesture). The client uses these finite response wait allowances:
 | Operation | Response wait |
 | --- | --- |
 | Input, including tap, key, text and reset | `B + G + B + I` |
-| SafeReset, which includes input and resource release | `B + B + I` |
+| SafeReset, which includes input and resource release | `B + B + I + 3s` |
 | ReleaseLease | `B + I` |
 
 The first backend allowance covers opening the input backend. The second allows
 the input owner to settle a failure and close retained resources before returning
-the original error. ReleaseLease needs the close allowance and transport margin.
+the original error. SafeReset first waits for its turn in the instance's queue,
+at most `INPUT_LIFECYCLE_CLAIM_WAIT_MS` (`3_000` ms; Workflow #369 S5), which its
+wait adds; an ApplicationLifecycle request waits `I` plus that same `3s`.
+ReleaseLease needs the close allowance and transport margin.
 All duration sums are checked; overflow is a visible error before submission.
 With the existing defaults (`B = 60s`, `I = 5s`), tap waits at most 125s and
 ReleaseLease waits at most 65s for a response read. Explicit gesture duration is
