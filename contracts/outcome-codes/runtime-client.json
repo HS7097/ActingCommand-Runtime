@@ -1791,7 +1791,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A runtime client call failed: run summary package digest invalid. Removed by the package-digest (PKG) slices (option 3, board #336).",
+      "description": "A runtime client call failed: run summary package digest invalid. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1804,7 +1804,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A runtime client call failed: run summary package digest mismatch. Removed by the package-digest (PKG) slices (option 3, board #336).",
+      "description": "A runtime client call failed: run summary package digest mismatch. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

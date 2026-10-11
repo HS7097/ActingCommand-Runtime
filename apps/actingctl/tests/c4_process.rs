@@ -132,7 +132,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
         .output()
         .expect("request shutdown through ordinary CLI");
     assert!(!busy.status.success());
-    assert!(String::from_utf8_lossy(&busy.stderr).contains("RuntimeBusy"));
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("runtime_busy"));
     runtime.assert_alive();
     holder
         .release_lease(&token)

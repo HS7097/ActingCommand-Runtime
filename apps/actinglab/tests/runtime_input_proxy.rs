@@ -1401,11 +1401,11 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
     assert_eq!(busy_exit, 4);
     assert_eq!(busy["error"]["code"], "device_error");
     // Workflow #369 W-3 (S5): the command waits its cap in the instance's queue, then is
-    // refused `lease_queue_expired` (`QueueExpired`) instead of an immediate `LeaseBusy`.
+    // refused `lease_queue_expired` (`queue_expired`) instead of an immediate `lease_busy`.
     assert!(
         busy["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("QueueExpired"))
+            .is_some_and(|message| message.contains("queue_expired"))
     );
     assert_eq!(state.application_calls.load(Ordering::Acquire), 0);
     lease_client
@@ -2105,7 +2105,7 @@ fn runtime_owned_evidence_export_without_formal_summary_fails_closed() {
         .as_str()
         .expect("typed export failure message");
     assert!(message.contains("runtime_request_rejected"));
-    assert!(message.contains("EvidenceExportFailed"));
+    assert!(message.contains("evidence_export_failed"));
     assert!(!evidence.exists());
     assert_eq!(state.captures.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);

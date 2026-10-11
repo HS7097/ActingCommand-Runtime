@@ -7,7 +7,8 @@
 //!
 //! - G1 registries = catalog fragments, both ways (A1);
 //! - G2 string channels, G3 `json!` keys, G4 construction, G5 stray literals: every workspace
-//!   member starts on [`ALLOW_LIST`]; A2a-A2e remove members as they convert them;
+//!   member starts on [`ALLOW_LIST`]; A2a-A2e remove members as they convert them and name the
+//!   channels that stay strings as bridges;
 //! - G6 persisted prose (A3) and G10 review (A8) are not implemented yet;
 //! - G7 key table and vocabularies = catalog (A1);
 //! - G8 naming and prefixes (A1);
@@ -43,8 +44,10 @@ pub struct AllowEntry {
 const CHANNELS: &[Check] = &[Check::G2, Check::G3, Check::G4, Check::G5];
 
 /// The G2-G5 allow list. A1 seeds every workspace member; each A2 part removes the members the
-/// Owners line of model section 11 assigns to it when it converts them. The two tools and
-/// MCP's JSON-RPC `error_response` are standing entries (kept after B6).
+/// Owners line of model section 11 assigns to it when it converts them. A channel of a converted
+/// member that another owner's code fills, or that a later slice replaces, stays a string behind
+/// a bridge entry (a function or a field) whose reason names the slice that removes it. The two
+/// tools and MCP's JSON-RPC `error_response` are standing entries (kept after B6).
 pub const ALLOW_LIST: &[AllowEntry] = &[
     member("apps/actingctl", "A2a converts actingctl"),
     member("apps/actingd", "A2a converts actingd"),

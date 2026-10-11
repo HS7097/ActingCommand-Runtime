@@ -653,7 +653,7 @@ fn persist_outcome(
         .sanitize(fingerprinter)
         .map_err(|error| (CriticalOutcomeStage::Sanitize, error.code().as_str()))?;
     validate_outcome(operation, intent, &draft, role, effect)
-        .map_err(|error| (CriticalOutcomeStage::Validate, error.code().as_str()))?;
+        .map_err(|error| (CriticalOutcomeStage::Validate, error.code()))?;
     appender
         .append_durable(draft)
         .map_err(|error| (CriticalOutcomeStage::Append, error.code()))
