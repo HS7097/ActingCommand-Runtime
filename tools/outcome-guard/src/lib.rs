@@ -56,10 +56,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/vision-provider-check",
         "A2a converts the vision-provider-check tool",
     ),
-    member(
-        "crates/actingcommand-contract",
-        "A2a converts the contract crate",
-    ),
     member("crates/artifact-store", "A2c converts the artifact store"),
     member(
         "crates/device",
@@ -83,7 +79,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     member("crates/recognition", "A2d converts recognition"),
     member("crates/recognition-pack", "A2d converts recognition-pack"),
     member("crates/resource-tooling", "A2d converts resource-tooling"),
-    member("crates/runtime-client", "A2a converts the runtime client"),
     member(
         "crates/runtime-database",
         "A2c converts the runtime database",
