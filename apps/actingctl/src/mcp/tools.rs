@@ -12,6 +12,8 @@ use super::operator;
 use super::protocol::Era;
 use super::runs;
 use super::runtime::RuntimeAccess;
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Code;
 use serde_json::{Map, Value, json};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -147,28 +149,54 @@ pub(super) struct ToolError(Box<ToolErrorBody>);
 
 struct ToolErrorBody {
     class: &'static str,
-    code: String,
+    code: ToolCode,
     message: String,
     blocked_by: Option<String>,
     details: Map<String, Value>,
 }
 
+/// The code a tool error answers with.
+pub(super) enum ToolCode {
+    /// A code this server emits.
+    Emitted(Code),
+    /// A code passed on as another program or the Runtime reported it: actinglab's envelope
+    /// error, a job's stored error, the Runtime's material read failure, and the
+    /// `material_<state>` spelling of a material read without one. A5's `{class, outcome}`
+    /// relays these as links.
+    Relayed { relayed_code: String },
+}
+
+impl ToolCode {
+    /// The code's spelling.
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Emitted(code) => code.as_str(),
+            Self::Relayed { relayed_code } => relayed_code,
+        }
+    }
+}
+
 impl ToolError {
     pub(super) fn new(
         class: &'static str,
-        code: impl Into<String>,
+        code: impl Into<Code>,
         message: impl Into<String>,
     ) -> Self {
+        Self::coded(class, ToolCode::Emitted(code.into()), message)
+    }
+
+    /// An error with this code, emitted or relayed.
+    pub(super) fn coded(class: &'static str, code: ToolCode, message: impl Into<String>) -> Self {
         Self(Box::new(ToolErrorBody {
             class,
-            code: code.into(),
+            code,
             message: message.into(),
             blocked_by: None,
             details: Map::new(),
         }))
     }
 
-    pub(super) fn usage(code: &str, message: impl Into<String>) -> Self {
+    pub(super) fn usage(code: impl Into<Code>, message: impl Into<String>) -> Self {
         Self::new("usage", code, message)
     }
 
@@ -183,8 +211,17 @@ impl ToolError {
         self
     }
 
-    pub(super) fn code(&self) -> &str {
-        &self.0.code
+    /// The code this server emitted; `None` for a relayed one.
+    pub(super) fn code(&self) -> Option<Code> {
+        match &self.0.code {
+            ToolCode::Emitted(code) => Some(*code),
+            ToolCode::Relayed { .. } => None,
+        }
+    }
+
+    /// The spelling of the code, emitted or relayed, as the error's JSON carries it.
+    pub(super) fn code_spelling(&self) -> &str {
+        self.0.code.as_str()
     }
 
     /// One member of the details, when present.
@@ -196,7 +233,7 @@ impl ToolError {
     pub(super) fn to_value(&self) -> Value {
         json!({
             "class": self.0.class,
-            "code": self.0.code,
+            "code": self.0.code.as_str(),
             "message": self.0.message,
             "blocked_by": self.0.blocked_by,
             "details": self.0.details,
@@ -212,7 +249,7 @@ impl ToolError {
         let body = *self.0;
         json!({
             "class": body.class,
-            "code": body.code,
+            "code": body.code.as_str(),
             "message": body.message,
             "blocked_by": body.blocked_by,
             "details": body.details,
@@ -232,7 +269,7 @@ impl ToolError {
     pub(super) fn into_warning(self) -> Value {
         let body = *self.0;
         json!({
-            "code": body.code,
+            "code": body.code.as_str(),
             "message": body.message,
             "blocked_by": body.blocked_by,
             "details": body.details,
@@ -299,8 +336,11 @@ impl<'a> Arguments<'a> {
 }
 
 pub(super) fn invalid_argument(field: &str, reason: &str) -> ToolError {
-    ToolError::usage("arguments_invalid", format!("argument {field} {reason}"))
-        .with_detail("field", json!(field))
+    ToolError::usage(
+        ActingctlCode::ArgumentsInvalid,
+        format!("argument {field} {reason}"),
+    )
+    .with_detail("field", json!(field))
 }
 
 /// One row of the tool table.
@@ -720,7 +760,7 @@ pub(super) fn list_markdown() -> String {
 pub(super) fn tier_not_enabled(tool: &ToolDef) -> ToolError {
     ToolError::new(
         "safety",
-        "tier_not_enabled",
+        ActingctlCode::TierNotEnabled,
         format!(
             "{} belongs to tier {}, which this server was not started with",
             tool.name,
@@ -738,7 +778,7 @@ pub(super) fn call_result(outcome: ToolOutcome, era: Era) -> Value {
     if !fits(&structured) {
         let payload_bytes = structured.to_string().len();
         structured = envelope(Err(ToolError::usage(
-            "output_budget_exceeded",
+            ActingctlCode::OutputBudgetExceeded,
             "the result is larger than the 24 KiB tool output budget; narrow the request or lower limit",
         )
         .with_detail("payload_bytes", json!(payload_bytes))));

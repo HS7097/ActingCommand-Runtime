@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #378 A2a, part 2 (brief-a2a.md, test T1; test plan A-1, the registry half): every
-//! refusal of actingd's `ledger-maintenance` arguments and of its `--install-held` input carries
-//! an active registered code of category `error`.
+//! Workflow #378 A2a, part 2 (brief-a2a.md, tests T1 and T4): every refusal of actingd's
+//! `ledger-maintenance` arguments and of its `--install-held` input carries an active registered
+//! code of category `error` (test plan A-1, the registry half), and an ignored environment
+//! override is warned about as the fixed code `env_override_ignored` with the variable as a value
+//! (decision D6).
 
-use super::{ActingdError, ledger_maintenance, parse_install_held_arguments};
+use super::{ActingdError, config, ledger_maintenance, parse_install_held_arguments};
+use actingcommand_contract::outcome::Category;
 use actingcommand_contract::{
     IdentifierIssuer, InstallHeldStartup, InstallTransitionTicket, RuntimeShutdownTarget,
 };
-use std::ffi::OsString;
+use actingcommand_device::EnvOverrides;
+use std::ffi::{OsStr, OsString};
 
 fn arguments(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
@@ -99,6 +103,42 @@ fn gate_ledger_maintenance_and_install_held_refusals_carry_registered_error_code
         assert_registered_error(
             &format!("--install-held with {input}"),
             &refusal_code(&refused),
+        );
+    }
+}
+
+/// #378 A2a T4 (brief-a2a.md; M378:81, SPEC:54, decision D6).
+#[test]
+fn gate_an_ignored_env_override_is_warned_as_the_fixed_code_with_the_variable() {
+    let set = [EnvOverrides::VARIABLES[0], EnvOverrides::VARIABLES[3]];
+    let (_, ignored) = config::env_overrides(false, |name| {
+        set.iter()
+            .any(|variable| *variable == name)
+            .then(|| OsStr::new("configured").to_owned())
+    });
+    let warnings = config::env_override_warnings(&ignored);
+    assert_eq!(
+        warnings.len(),
+        set.len(),
+        "one warning per set and ignored variable"
+    );
+    let catalog =
+        actingcommand_contract::outcome::catalog_json().expect("the embedded catalog parses");
+    let entry = &catalog["codes"]["env_override_ignored"];
+    assert_eq!(entry["category"], "warning", "{entry}");
+    assert_eq!(entry["values"]["variable"], "required", "{entry}");
+    for (warning, variable) in warnings.iter().zip(set) {
+        assert_eq!(warning.code().as_str(), "env_override_ignored");
+        assert_eq!(warning.category(), Category::Warning);
+        assert_eq!(
+            warning
+                .value("variable")
+                .and_then(serde_json::Value::as_str),
+            Some(variable)
+        );
+        assert!(
+            !warning.code().as_str().contains(variable),
+            "the code spelling carries no variable"
         );
     }
 }

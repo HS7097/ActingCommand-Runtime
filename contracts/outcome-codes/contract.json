@@ -10418,6 +10418,32 @@
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): procedure manifest entry missing.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "not_implemented": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): not implemented.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "priority_offset_invalid": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): priority offset invalid.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

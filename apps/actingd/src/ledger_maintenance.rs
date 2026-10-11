@@ -5,7 +5,7 @@ use actingcommand_runtime_host::{LedgerMaintenanceOperation, LedgerMaintenanceRe
 
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     if arguments.len() < 4 || arguments.len() > 10 {
-        return Err(ActingdError::config("maintenance_usage_invalid"));
+        return Err(ActingdError::config(ActingdCode::MaintenanceUsageInvalid));
     }
     let operation = match arguments.get(1).and_then(|value| value.to_str()) {
         Some("dry-run") => LedgerMaintenanceOperation::DryRun,
@@ -13,7 +13,11 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         Some("verify") => LedgerMaintenanceOperation::Verify,
         Some("backup") => LedgerMaintenanceOperation::Backup,
         Some("restore") => LedgerMaintenanceOperation::Restore,
-        _ => return Err(ActingdError::config("maintenance_operation_invalid")),
+        _ => {
+            return Err(ActingdError::config(
+                ActingdCode::MaintenanceOperationInvalid,
+            ));
+        }
     };
     let mut config = None;
     let mut backup = None;
@@ -26,17 +30,18 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             Some("--backup") => &mut backup,
             Some("--target") => &mut target,
             Some("--artifact-root") => &mut artifact_root,
-            _ => return Err(ActingdError::config("maintenance_option_invalid")),
+            _ => return Err(ActingdError::config(ActingdCode::MaintenanceOptionInvalid)),
         };
         if slot.is_some() || pair[1].is_empty() {
-            return Err(ActingdError::config("maintenance_option_invalid"));
+            return Err(ActingdError::config(ActingdCode::MaintenanceOptionInvalid));
         }
         *slot = Some(PathBuf::from(&pair[1]));
     }
     if !remaining.is_empty() {
-        return Err(ActingdError::config("maintenance_option_invalid"));
+        return Err(ActingdError::config(ActingdCode::MaintenanceOptionInvalid));
     }
-    let config = config.ok_or_else(|| ActingdError::config("maintenance_config_missing"))?;
+    let config =
+        config.ok_or_else(|| ActingdError::config(ActingdCode::MaintenanceConfigMissing))?;
     let purpose = if matches!(operation, LedgerMaintenanceOperation::Verify) {
         actingcommand_contract::InstallConfigPurpose::CandidateCheck
     } else {
@@ -55,7 +60,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     match RuntimeHost::maintain_ledger(config, request) {
         Ok(receipt) => {
             let encoded = serde_json::to_string(&receipt)
-                .map_err(|_| ActingdError::process("maintenance_receipt_encode_failed"))?;
+                .map_err(|_| ActingdError::process(ActingdCode::MaintenanceReceiptEncodeFailed))?;
             println!("{encoded}");
             // Workflow #375 R5a: the referenced material a restore copied or skipped.
             if let Some(material) = receipt.restored_material {
@@ -67,7 +72,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             Ok(())
         }
         Err(error) => {
-            let encoded = serde_json::to_string(&serde_json::json!({ "schema_version": "actingcommand.ledger-maintenance.v1", "status": "failed", "error": &error, "activated": false })).map_err(|_| ActingdError::process("maintenance_receipt_encode_failed"))?;
+            let encoded = serde_json::to_string(&serde_json::json!({ "schema_version": "actingcommand.ledger-maintenance.v1", "status": "failed", "error": &error, "activated": false })).map_err(|_| ActingdError::process(ActingdCode::MaintenanceReceiptEncodeFailed))?;
             println!("{encoded}");
             Err(ActingdError::maintenance(error))
         }

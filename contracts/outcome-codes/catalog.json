@@ -4546,6 +4546,7 @@
       "execution-kernel"
     ],
     "config_": [
+      "actingctl",
       "actingd",
       "contract"
     ],
@@ -5496,6 +5497,7 @@
       "artifact-store"
     ],
     "not_": [
+      "actingctl",
       "actinglab",
       "contract",
       "execution-kernel",
@@ -5781,6 +5783,8 @@
       "runtime-host"
     ],
     "priority_": [
+      "actingctl",
+      "contract",
       "policy",
       "runtime-host"
     ],

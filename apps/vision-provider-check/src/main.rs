@@ -3,9 +3,10 @@
 //! Mechanical checks of vision inputs that never load ONNX Runtime or run a model: the model
 //! folders of a vision root (Workflow #360) and the provider startup facts in a Runtime ledger.
 
+use actingcommand_contract::outcome::Code;
 use actingcommand_vision_ffi::{
-    NnModelSpec, OcrModelSpec, VisionFfiError, VisionFfiResult, list_vision_models,
-    ppocr_model_set_sha256, sha256_file_hex,
+    NnModelSpec, OcrModelSpec, VisionFfiError, VisionFfiResult, VisionListingCode,
+    list_vision_models, ppocr_model_set_sha256, sha256_file_hex,
 };
 mod ledger;
 use serde::Serialize;
@@ -26,8 +27,11 @@ struct ModelFoldersReport {
     /// When `ok` is false: the code actingd's startup listing and `check-config` refuse this
     /// models root with (`vision_root_unavailable`, `vision_models_empty` or
     /// `vision_model_folder_invalid`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    code: Option<&'static str>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "registered_spelling"
+    )]
+    code: Option<Code>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     models_root: String,
@@ -153,7 +157,7 @@ fn model_folders_report(options: &CheckOptions) -> VisionFfiResult<ModelFoldersR
         Err(error) => {
             return Ok(ModelFoldersReport {
                 ok: false,
-                code: Some("vision_root_unavailable"),
+                code: Some(VisionListingCode::VisionRootUnavailable.code()),
                 message: Some(error.message().to_owned()),
                 models_root,
                 hashed: false,
@@ -166,7 +170,7 @@ fn model_folders_report(options: &CheckOptions) -> VisionFfiResult<ModelFoldersR
     if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
         return Ok(ModelFoldersReport {
             ok: false,
-            code: Some("vision_models_empty"),
+            code: Some(VisionListingCode::VisionModelsEmpty.code()),
             message: Some(format!("{models_root} holds no model folder")),
             models_root,
             hashed: false,
@@ -218,7 +222,9 @@ fn model_folders_report(options: &CheckOptions) -> VisionFfiResult<ModelFoldersR
     });
     Ok(ModelFoldersReport {
         ok: invalid.is_none(),
-        code: invalid.is_some().then_some("vision_model_folder_invalid"),
+        code: invalid
+            .is_some()
+            .then_some(VisionListingCode::VisionModelFolderInvalid.code()),
         message: invalid,
         models_root,
         hashed: options.hash,
@@ -226,6 +232,17 @@ fn model_folders_report(options: &CheckOptions) -> VisionFfiResult<ModelFoldersR
         nn_models,
         invalid_models,
     })
+}
+
+/// A registered code in the report as its spelling.
+fn registered_spelling<S: serde::Serializer>(
+    code: &Option<Code>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match code {
+        Some(code) => serializer.serialize_str(code.as_str()),
+        None => serializer.serialize_none(),
+    }
 }
 
 fn ocr_model_sha256(spec: &OcrModelSpec) -> VisionFfiResult<String> {

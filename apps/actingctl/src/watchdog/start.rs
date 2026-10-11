@@ -17,7 +17,9 @@
 use super::decide::{CLOCK_SLACK_MS, LiveOwner, OwnerLock, READY_TIMEOUT_MS};
 use super::observe::{self, Installation, RUNTIME_IMAGE};
 use super::powershell::{self, CREATE_NO_WINDOW};
+use crate::codes::ActingctlCode;
 use crate::process_probe::pid_alive;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV};
 use serde_json::Value;
 use std::fs::{File, OpenOptions};
@@ -38,7 +40,7 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const CMD_UNSAFE: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"'];
 
 pub(crate) struct StartError {
-    pub(crate) code: &'static str,
+    pub(crate) code: Code,
     pub(crate) detail: String,
 }
 
@@ -54,7 +56,7 @@ enum Started {
     Pid(u32),
 }
 
-fn failed(method: &'static str, code: &'static str, detail: String) -> Outcome {
+fn failed(method: &'static str, code: Code, detail: String) -> Outcome {
     Outcome {
         method,
         result: Err(StartError { code, detail }),
@@ -72,7 +74,7 @@ pub(crate) fn start(
         let method = if from_task { "breakaway" } else { "wmi" };
         return failed(
             method,
-            "entry_missing",
+            ActingctlCode::EntryMissing.code(),
             format!("{} is not a file", entry.display()),
         );
     }
@@ -81,7 +83,7 @@ pub(crate) fn start(
         Err(error) => {
             return failed(
                 if from_task { "breakaway" } else { "wmi" },
-                "log_create_failed",
+                ActingctlCode::LogCreateFailed.code(),
                 format!("{}: {error}", log.display()),
             );
         }
@@ -98,7 +100,7 @@ pub(crate) fn start(
             Err(error) => {
                 return failed(
                     "breakaway",
-                    "spawn_failed",
+                    ActingctlCode::SpawnFailed.code(),
                     format!("{}: {error}", entry.display()),
                 );
             }
@@ -159,7 +161,7 @@ fn spawn_wmi(installation: &Installation, entry: &Path, log: &Path) -> Result<u3
         .find(|(_, path)| path.to_string_lossy().contains(CMD_UNSAFE))
     {
         return Err(StartError {
-            code: "watchdog_wmi_path_unsafe",
+            code: ActingctlCode::WatchdogWmiPathUnsafe.code(),
             detail: format!(
                 "{} holds a cmd metacharacter ({}); start the Runtime formally",
                 unsafe_path.display(),
@@ -174,21 +176,21 @@ fn spawn_wmi(installation: &Installation, entry: &Path, log: &Path) -> Result<u3
     let output =
         powershell::run(SCRIPT, &environment, Duration::from_secs(60)).map_err(|detail| {
             StartError {
-                code: "wmi_start_failed",
+                code: ActingctlCode::WmiStartFailed.code(),
                 detail,
             }
         })?;
     let value: Value = serde_json::from_str(output.trim()).map_err(|error| StartError {
-        code: "wmi_start_failed",
+        code: ActingctlCode::WmiStartFailed.code(),
         detail: format!("unexpected output {output:?}: {error}"),
     })?;
     match (value["return_value"].as_i64(), value["pid"].as_u64()) {
         (Some(0), Some(pid)) if pid > 0 => u32::try_from(pid).map_err(|_| StartError {
-            code: "wmi_start_failed",
+            code: ActingctlCode::WmiStartFailed.code(),
             detail: format!("pid {pid} out of range"),
         }),
         _ => Err(StartError {
-            code: "wmi_start_failed",
+            code: ActingctlCode::WmiStartFailed.code(),
             detail: format!("Win32_Process.Create returned {value}"),
         }),
     }
@@ -221,7 +223,7 @@ fn wait_ready(
                 Ok(false) => Some(format!("cmd pid {pid} ended")),
                 Err(error) => {
                     return Err(StartError {
-                        code: "process_probe_failed",
+                        code: ActingctlCode::ProcessProbeFailed.code(),
                         detail: error,
                     });
                 }
@@ -229,13 +231,13 @@ fn wait_ready(
         };
         if let Some(exit) = exited {
             return Err(StartError {
-                code: "exited_during_startup",
+                code: ActingctlCode::ExitedDuringStartup.code(),
                 detail: format!("{exit}; {}", last_log_line(log)),
             });
         }
         if Instant::now() >= deadline {
             return Err(StartError {
-                code: "start_timeout",
+                code: ActingctlCode::StartTimeout.code(),
                 detail: format!(
                     "no answering owner within {} s; the process was left running; {}",
                     READY_TIMEOUT_MS / 1000,

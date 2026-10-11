@@ -161,7 +161,7 @@ fn bind_discovered_instances(
         },
     )?;
     if let Some((classification, failure)) = refusal {
-        return Err(startup.failed(backend, stage, classification, failure));
+        return Err(startup.failed(backend, stage, classification.as_str(), failure));
     }
     startup.record(backend, Observation::Completed { stage })?;
     Ok(resolved)
@@ -190,7 +190,7 @@ fn admit_capability_profile(
         startup.failed(
             backend,
             stage,
-            "emulator_capability_admission_refused",
+            ActingdCode::EmulatorCapabilityAdmissionRefused.as_str(),
             ProviderNativeFailure {
                 module: "actingcommand_runtime_host::emulator_control".into(),
                 code: error.code().into(),
@@ -242,7 +242,8 @@ fn render_discovered_instances(instances: &[&DiscoveredMumuInstance]) -> String 
     format!("[{}]", rendered.join(", "))
 }
 
-type DeferredRefusal = (&'static str, ProviderNativeFailure);
+/// A deferred instance's refusal: the startup failure code and the native failure it records.
+type DeferredRefusal = (Code, ProviderNativeFailure);
 
 /// Matches one deferred instance by index or exact name, cross-checks declared ADB values
 /// against the discovered ones and builds its device registration carrying the admitted
@@ -279,7 +280,7 @@ fn resolve_deferred_instance(
         [] => {
             let discovered = report.instances.iter().collect::<Vec<_>>();
             return Err((
-                "instance_discovery_no_match",
+                ActingdCode::InstanceDiscoveryNoMatch.code(),
                 failure(
                     "no_match",
                     format!(
@@ -292,7 +293,7 @@ fn resolve_deferred_instance(
         [instance] => *instance,
         _ => {
             return Err((
-                "instance_discovery_ambiguous",
+                ActingdCode::InstanceDiscoveryAmbiguous.code(),
                 failure(
                     "ambiguous",
                     format!("{facts}; matches={}", render_discovered_instances(&matches)),
@@ -334,9 +335,9 @@ fn resolve_deferred_instance(
             ),
         };
         return Err((
-            "instance_discovery_conflict",
+            ActingdCode::InstanceDiscoveryConflict.code(),
             failure(
-                "adb_path_conflict",
+                ActingdCode::AdbPathConflict.as_str(),
                 format!(
                     "{facts}; declared adb_path={declared:?}; {discovered}; accepted adb_path: {accepted}"
                 ),
@@ -347,9 +348,9 @@ fn resolve_deferred_instance(
         && declared.trim() != adb_host
     {
         return Err((
-            "instance_discovery_conflict",
+            ActingdCode::InstanceDiscoveryConflict.code(),
             failure(
-                "host_conflict",
+                ActingdCode::HostConflict.as_str(),
                 format!("{facts}; declared host={declared:?}; {discovered}"),
             ),
         ));
@@ -360,18 +361,18 @@ fn resolve_deferred_instance(
     match (config.port, instance.adb_port) {
         (Some(declared), Some(adb_port)) if declared != adb_port => {
             return Err((
-                "instance_discovery_conflict",
+                ActingdCode::InstanceDiscoveryConflict.code(),
                 failure(
-                    "port_conflict",
+                    ActingdCode::PortConflict.as_str(),
                     format!("{facts}; declared port={declared}; {discovered}"),
                 ),
             ));
         }
         (Some(declared), None) => {
             return Err((
-                "instance_discovery_conflict",
+                ActingdCode::InstanceDiscoveryConflict.code(),
                 failure(
-                    "port_unverifiable",
+                    ActingdCode::PortUnverifiable.as_str(),
                     format!(
                         "{facts}; declared port={declared}; {discovered}; the instance is stopped, so the declared port cannot be cross-checked: omit `port` to bind it pending"
                     ),
@@ -394,9 +395,9 @@ fn resolve_deferred_instance(
             .to_str()
             .ok_or_else(|| {
                 (
-                    "instance_discovery_unavailable",
+                    SharedCode::InstanceDiscoveryUnavailable.code(),
                     failure(
-                        "adb_path_encoding_invalid",
+                        ActingdCode::AdbPathEncodingInvalid.as_str(),
                         format!("{facts}; {discovered}"),
                     ),
                 )
@@ -412,7 +413,12 @@ fn resolve_deferred_instance(
     let adb_port = instance.adb_port;
     let registration = config
         .device_registration(adb_path, adb_host, adb_port)
-        .map_err(|code| (code, failure(code, format!("{facts}; {discovered}"))))?;
+        .map_err(|code| {
+            (
+                code,
+                failure(code.as_str(), format!("{facts}; {discovered}")),
+            )
+        })?;
     let registration = match adb_port {
         Some(_) => registration.with_discovered_binding(binding),
         None => registration.with_pending_discovered_binding(binding),
@@ -437,10 +443,10 @@ fn assemble_vision_provider(
         startup.failed(
             backend,
             stage,
-            refusal.code,
+            refusal.code.as_str(),
             ProviderNativeFailure {
                 module: "actingd.config".into(),
-                code: refusal.code.into(),
+                code: refusal.code.as_str().into(),
                 severity: "fatal".into(),
                 message: refusal.message,
             },
@@ -542,7 +548,7 @@ fn assemble_vision_provider(
         startup.failed(
             backend,
             stage,
-            "vision_provider_unavailable",
+            ActingdCode::VisionProviderUnavailable.as_str(),
             ProviderNativeFailure {
                 module: "execution-kernel".into(),
                 code: format!("{:?}", error.code()),
@@ -565,10 +571,10 @@ fn text(
         startup.failed(
             backend,
             Stage::PathBinding,
-            "vision_provider_path_encoding_invalid",
+            ActingdCode::VisionProviderPathEncodingInvalid.as_str(),
             ProviderNativeFailure {
                 module: "actingd.config".into(),
-                code: "path_encoding_invalid".into(),
+                code: ActingdCode::PathEncodingInvalid.as_str().into(),
                 severity: "fatal".into(),
                 message: format!("{value:?}"),
             },

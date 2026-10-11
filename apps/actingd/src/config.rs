@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::ActingdCode;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
@@ -29,8 +32,8 @@ use actingcommand_runtime_host::{
     RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
-    CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionModelListing,
-    VisionRuntimeSpec, list_vision_models,
+    CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionListingCode,
+    VisionModelListing, VisionRuntimeSpec, list_vision_models,
 };
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
@@ -181,39 +184,61 @@ struct PrerequisitePackageConfigFile {
 fn assemble_prerequisite_packages(
     configured: Vec<PrerequisitePackageConfigFile>,
     source_root: &Path,
-) -> Result<BTreeMap<String, ContainedTaskRecoveryBinding>, &'static str> {
+) -> Result<BTreeMap<String, ContainedTaskRecoveryBinding>, Code> {
     if configured.len() > MAX_TASKS {
-        return Err("prerequisite_packages_size_invalid");
+        return Err(ActingdCode::PrerequisitePackagesSizeInvalid.code());
     }
     let mut packages = BTreeMap::new();
     for entry in configured {
         if !prerequisite_package_id_valid(&entry.package_id) {
-            return Err("prerequisite_package_id_invalid");
+            return Err(ActingdCode::PrerequisitePackageIdInvalid.code());
         }
         let request =
             contained_task_request(source_root, &entry.package_digest, Some(entry.package_path))
-                .map_err(|code| match code {
-                    "procedure_package_unavailable" => "prerequisite_package_unavailable",
-                    "procedure_package_not_regular" => "prerequisite_package_not_regular",
-                    "procedure_package_container_unsupported" => {
-                        "prerequisite_package_container_unsupported"
-                    }
-                    "procedure_package_digest_invalid" => "prerequisite_package_digest_invalid",
-                    "procedure_task_request_invalid" | "procedure_package_path_missing" => {
-                        "prerequisite_package_request_invalid"
-                    }
-                    other => other,
-                })?;
+                .map_err(prerequisite_package_code)?;
         let binding = ContainedTaskRecoveryBinding::new(
             request.package_path(),
             request.expected_sha256().clone(),
         )
-        .map_err(|_| "prerequisite_package_request_invalid")?;
+        .map_err(|_| ActingdCode::PrerequisitePackageRequestInvalid.code())?;
         if packages.insert(entry.package_id, binding).is_some() {
-            return Err("prerequisite_package_duplicate");
+            return Err(ActingdCode::PrerequisitePackageDuplicate.code());
         }
     }
     Ok(packages)
+}
+
+/// A procedure package refusal under the `prerequisite_package_*` code it is reported as.
+fn prerequisite_package_code(code: Code) -> Code {
+    [
+        (
+            ActingdCode::ProcedurePackageUnavailable.code(),
+            ActingdCode::PrerequisitePackageUnavailable,
+        ),
+        (
+            ActingdCode::ProcedurePackageNotRegular.code(),
+            ActingdCode::PrerequisitePackageNotRegular,
+        ),
+        (
+            ActingdCode::ProcedurePackageContainerUnsupported.code(),
+            ActingdCode::PrerequisitePackageContainerUnsupported,
+        ),
+        (
+            SharedCode::ProcedurePackageDigestInvalid.code(),
+            ActingdCode::PrerequisitePackageDigestInvalid,
+        ),
+        (
+            ActingdCode::ProcedureTaskRequestInvalid.code(),
+            ActingdCode::PrerequisitePackageRequestInvalid,
+        ),
+        (
+            ActingdCode::ProcedurePackagePathMissing.code(),
+            ActingdCode::PrerequisitePackageRequestInvalid,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(procedure, prerequisite)| (procedure == code).then_some(prerequisite.code()))
+    .unwrap_or(code)
 }
 
 /// One `return_home_packages` entry (Workflow #336 L2c): a game and server and the package id
@@ -234,9 +259,9 @@ struct ReturnHomePackageConfigFile {
 fn assemble_return_home_packages(
     configured: Vec<ReturnHomePackageConfigFile>,
     prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
-) -> Result<BTreeMap<(String, String), String>, &'static str> {
+) -> Result<BTreeMap<(String, String), String>, Code> {
     if configured.len() > MAX_TASKS {
-        return Err("return_home_packages_size_invalid");
+        return Err(ActingdCode::ReturnHomePackagesSizeInvalid.code());
     }
     let key_valid = |value: &str| {
         !value.trim().is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
@@ -244,16 +269,16 @@ fn assemble_return_home_packages(
     let mut packages = BTreeMap::new();
     for entry in configured {
         if !key_valid(entry.game.as_str()) || !key_valid(entry.server.as_str()) {
-            return Err("return_home_package_key_invalid");
+            return Err(ActingdCode::ReturnHomePackageKeyInvalid.code());
         }
         if !prerequisite_packages.contains_key(&entry.package_id) {
-            return Err("return_home_package_unbound");
+            return Err(SharedCode::ReturnHomePackageUnbound.code());
         }
         if packages
             .insert((entry.game, entry.server), entry.package_id)
             .is_some()
         {
-            return Err("return_home_package_duplicate");
+            return Err(ActingdCode::ReturnHomePackageDuplicate.code());
         }
     }
     Ok(packages)
@@ -308,14 +333,14 @@ impl DevicePathsConfigFile {
     }
 
     /// A configured path must be absolute and exist; nothing is opened or resolved.
-    fn validate(&self) -> Result<(), &'static str> {
+    fn validate(&self) -> Result<(), Code> {
         for (_, path) in self.entries() {
             if let Some(path) = path
                 && (path.as_os_str().is_empty()
                     || !path.is_absolute()
                     || fs::metadata(path).is_err())
             {
-                return Err("device_path_invalid");
+                return Err(ActingdCode::DevicePathInvalid.code());
             }
         }
         Ok(())
@@ -333,16 +358,16 @@ struct GovernanceConfigFile {
 
 impl GovernanceConfigFile {
     /// The host policy: the named clients plus the daemon's own policy driver.
-    fn policy(&self) -> Result<GovernancePolicy, &'static str> {
+    fn policy(&self) -> Result<GovernancePolicy, Code> {
         let mut allowed = BTreeSet::new();
         if self.allowed_clients.len() > MAX_GOVERNANCE_ALLOWED_CLIENTS {
-            return Err("governance_allowed_clients_invalid");
+            return Err(ActingdCode::GovernanceAllowedClientsInvalid.code());
         }
         for client in &self.allowed_clients {
             if actingcommand_contract::validate_governance_client(client).is_err()
                 || !allowed.insert(client.clone())
             {
-                return Err("governance_allowed_clients_invalid");
+                return Err(ActingdCode::GovernanceAllowedClientsInvalid.code());
             }
         }
         allowed.insert(GOVERNANCE_POLICY_DRIVER_CLIENT.to_owned());
@@ -380,14 +405,16 @@ impl VisionConfigFile {
         self,
         source_root: &Path,
         install_root: Option<&Path>,
-    ) -> Result<ConfiguredVision, &'static str> {
+    ) -> Result<ConfiguredVision, Code> {
         match (self.execution_provider, &self.cuda_device) {
             (OnnxExecutionProvider::Cpu, None) => {}
             (OnnxExecutionProvider::Cuda, Some(selector)) if selector.validate().is_ok() => {}
-            _ => return Err("vision_config_invalid"),
+            _ => return Err(ActingdCode::VisionConfigInvalid.code()),
         }
         let (configured, base) = match self.root {
-            Some(root) if root.as_os_str().is_empty() => return Err("vision_config_invalid"),
+            Some(root) if root.as_os_str().is_empty() => {
+                return Err(ActingdCode::VisionConfigInvalid.code());
+            }
             Some(root) => (root, source_root.to_path_buf()),
             None => (
                 PathBuf::from(DEFAULT_VISION_ROOT),
@@ -430,7 +457,7 @@ pub(super) struct VisionInventory {
 
 /// Why a vision root cannot be used: the classification and its message.
 pub(super) struct VisionRefusal {
-    pub(super) code: &'static str,
+    pub(super) code: Code,
     pub(super) message: String,
 }
 
@@ -458,7 +485,7 @@ impl ConfiguredVision {
             self.base.join(&self.configured)
         };
         let root = fs::canonicalize(&configured).map_err(|error| VisionRefusal {
-            code: "vision_root_unavailable",
+            code: VisionListingCode::VisionRootUnavailable.code(),
             message: format!(
                 "vision root {} is unavailable: {error}",
                 configured.display()
@@ -470,7 +497,7 @@ impl ConfiguredVision {
                 .any(|slot| root.starts_with(install_root.join(slot)))
         {
             return Err(VisionRefusal {
-                code: "vision_root_in_program_slot",
+                code: ActingdCode::VisionRootInProgramSlot.code(),
                 message: format!(
                     "vision root {} lies inside a program slot of the install root {}; keep it outside A and B",
                     root.display(),
@@ -480,7 +507,7 @@ impl ConfiguredVision {
         }
         let models_dir = root.join(VISION_MODELS_DIRECTORY);
         let listing = list_vision_models(&models_dir).map_err(|error| VisionRefusal {
-            code: "vision_root_unavailable",
+            code: VisionListingCode::VisionRootUnavailable.code(),
             message: error.message().to_owned(),
         })?;
         let runtime = VisionRuntimeSpec::from_vision_root(
@@ -489,12 +516,12 @@ impl ConfiguredVision {
             self.cuda_device.clone(),
         )
         .map_err(|error| VisionRefusal {
-            code: "vision_runtime_unavailable",
+            code: ActingdCode::VisionRuntimeUnavailable.code(),
             message: error.message().to_owned(),
         })?;
         if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
             return Err(VisionRefusal {
-                code: "vision_models_empty",
+                code: VisionListingCode::VisionModelsEmpty.code(),
                 message: format!("{} holds no model folder", models_dir.display()),
             });
         }
@@ -541,9 +568,9 @@ struct CatalogTransitionConfigFile {
 }
 
 impl CatalogTransitionConfigFile {
-    fn request(&self) -> Result<CatalogTransitionRequest, &'static str> {
+    fn request(&self) -> Result<CatalogTransitionRequest, Code> {
         if self.kind != "replace" {
-            return Err("catalog_transition_kind_unknown");
+            return Err(ActingdCode::CatalogTransitionKindUnknown.code());
         }
         let canonical = self
             .expected_active_catalog_hash
@@ -555,7 +582,7 @@ impl CatalogTransitionConfigFile {
                         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             });
         if !canonical {
-            return Err("catalog_transition_invalid");
+            return Err(ActingdCode::CatalogTransitionInvalid.code());
         }
         Ok(CatalogTransitionRequest::replace(
             self.expected_active_catalog_hash.clone(),
@@ -661,14 +688,14 @@ struct StartupPackageConfigFile {
 }
 
 impl StartupPackageConfigFile {
-    fn request(self, source_root: &Path) -> Result<ContainedTaskRequest, &'static str> {
+    fn request(self, source_root: &Path) -> Result<ContainedTaskRequest, Code> {
         let path = if self.package.is_absolute() {
             self.package
         } else {
             source_root.join(self.package)
         };
         if !path.is_absolute() {
-            return Err("startup_package_path_invalid");
+            return Err(ActingdCode::StartupPackagePathInvalid.code());
         }
         let digest = if digest_named(&path) == Some(self.expected_sha256.as_str()) {
             PackageRef::ContentDirectory(ContentDirectory {
@@ -679,13 +706,13 @@ impl StartupPackageConfigFile {
             PackageRef::from(self.expected_sha256)
         };
         if digest.validate().is_err() {
-            return Err("startup_package_digest_invalid");
+            return Err(ActingdCode::StartupPackageDigestInvalid.code());
         }
         ContainedTaskRequest::new(path.to_string_lossy().into_owned(), digest)
             .and_then(|request| {
                 request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
             })
-            .map_err(|_| "startup_package_invalid")
+            .map_err(|_| ActingdCode::StartupPackageInvalid.code())
     }
 }
 
@@ -723,7 +750,7 @@ pub(super) struct RuntimeAssembly {
 /// A refused `resource_package`: the code, the offending instance and path and, for
 /// `resource_package_invalid`, the package loader's own code and message.
 pub(super) struct ResourcePackageRejection {
-    pub(super) code: &'static str,
+    pub(super) code: Code,
     alias: String,
     path: PathBuf,
     loader: Option<(&'static str, String)>,
@@ -773,12 +800,21 @@ pub(super) fn validate_resource_packages(
             path: path.to_path_buf(),
             loader,
         };
-        let path = std::path::absolute(configured_path)
-            .map_err(|_| rejected("resource_package_missing", configured_path, None))?;
-        let metadata =
-            fs::metadata(&path).map_err(|_| rejected("resource_package_missing", &path, None))?;
+        let path = std::path::absolute(configured_path).map_err(|_| {
+            rejected(
+                ActingdCode::ResourcePackageMissing.code(),
+                configured_path,
+                None,
+            )
+        })?;
+        let metadata = fs::metadata(&path)
+            .map_err(|_| rejected(ActingdCode::ResourcePackageMissing.code(), &path, None))?;
         let invalid = |code, message: String| {
-            rejected("resource_package_invalid", &path, Some((code, message)))
+            rejected(
+                ActingdCode::ResourcePackageInvalid.code(),
+                &path,
+                Some((code, message)),
+            )
         };
         let loader_refused = |error: actingcommand_execution_kernel::ContainedTaskError| {
             invalid(
@@ -805,15 +841,25 @@ pub(super) fn validate_resource_packages(
             }
             InstanceResourcePackageKind::Directory
         } else if metadata.is_file() {
-            let bytes = fs::read(&path)
-                .map_err(|error| invalid("package_read_failed", error.to_string()))?;
+            let bytes = fs::read(&path).map_err(|error| {
+                invalid(SharedCode::PackageReadFailed.as_str(), error.to_string())
+            })?;
             let expected =
                 ExternalExpectedSha256::parse_hex(&format!("{:x}", Sha256::digest(&bytes)))
-                    .map_err(|error| invalid("package_reference_invalid", error.to_string()))?;
+                    .map_err(|error| {
+                        invalid(
+                            SharedCode::PackageReferenceInvalid.as_str(),
+                            error.to_string(),
+                        )
+                    })?;
             PreparedContainedTask::load(alias, &bytes, expected).map_err(loader_refused)?;
             InstanceResourcePackageKind::File
         } else {
-            return Err(rejected("resource_package_invalid", &path, None));
+            return Err(rejected(
+                ActingdCode::ResourcePackageInvalid.code(),
+                &path,
+                None,
+            ));
         };
         admitted.insert(
             alias.clone(),
@@ -915,33 +961,31 @@ pub(super) struct ScheduledProcedureTask {
 type ConfiguredScheduledProcedureTask = (String, ScheduledProcedureTask);
 type AssembledProcedureBinding = (ProcedureBinding, Option<ConfiguredScheduledProcedureTask>);
 
-pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
+pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, Code> {
     load_for(path, actingcommand_contract::InstallConfigPurpose::Running)
 }
 
 pub(super) fn load_for(
     path: &Path,
     purpose: actingcommand_contract::InstallConfigPurpose,
-) -> Result<ActingdConfigFile, &'static str> {
-    let installation = actingcommand_contract::process_installation_for(purpose)
-        .map_err(|error| error.code().as_str())?;
+) -> Result<ActingdConfigFile, Code> {
+    let installation =
+        actingcommand_contract::process_installation_for(purpose).map_err(|error| error.code())?;
     let selected_path = installation
         .map(|selected| selected.resolve_config(path))
         .transpose()
-        .map_err(|error| error.code().as_str())?;
+        .map_err(|error| error.code())?;
     let path = selected_path.as_deref().unwrap_or(path);
-    let metadata = fs::metadata(path).map_err(|_| "config_unavailable")?;
+    let metadata = fs::metadata(path).map_err(|_| ActingdCode::ConfigUnavailable.code())?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_CONFIG_BYTES {
-        return Err("config_size_invalid");
+        return Err(ActingdCode::ConfigSizeInvalid.code());
     }
     let bytes = match installation {
-        Some(selected) => selected
-            .config_bytes()
-            .map_err(|error| error.code().as_str())?,
-        None => fs::read(path).map_err(|_| "config_read_failed")?,
+        Some(selected) => selected.config_bytes().map_err(|error| error.code())?,
+        None => fs::read(path).map_err(|_| ActingdCode::ConfigReadFailed.code())?,
     };
-    let mut config =
-        serde_json::from_slice::<ActingdConfigFile>(&bytes).map_err(|_| "config_decode_failed")?;
+    let mut config = serde_json::from_slice::<ActingdConfigFile>(&bytes)
+        .map_err(|_| ActingdCode::ConfigDecodeFailed.code())?;
     config.source_root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -950,26 +994,26 @@ pub(super) fn load_for(
     // Workflow #360: the vision provider is no installed file any more; a selection that
     // still names one predates the vision root and is refused.
     if installation.is_some_and(|selected| selected.selection().provider.is_some()) {
-        return Err("install_provider_retired");
+        return Err(ActingdCode::InstallProviderRetired.code());
     }
     // The install root a running daemon's selection names, or, for a candidate check, the
     // root its slot lock names (the same root).
     config.install_root = match installation {
         Some(selected) => Some(selected.root().to_path_buf()),
         None => actingcommand_contract::process_slot_lock()
-            .map_err(|error| error.code().as_str())?
+            .map_err(|error| error.code())?
             .map(|lock| lock.root().to_path_buf()),
     };
     Ok(config)
 }
 
 impl ActingdConfigFile {
-    pub(super) fn maintenance_config(self) -> Result<RuntimeHostConfig, &'static str> {
+    pub(super) fn maintenance_config(self) -> Result<RuntimeHostConfig, Code> {
         if self.schema_version != CONFIG_SCHEMA_VERSION
             || self.state_root.as_os_str().is_empty()
             || !(16..=1024).contains(&self.secret_fingerprint_salt.len())
         {
-            return Err("maintenance_config_invalid");
+            return Err(ActingdCode::MaintenanceConfigInvalid.code());
         }
         Ok(RuntimeHostConfig::new(
             self.state_root,
@@ -977,18 +1021,18 @@ impl ActingdConfigFile {
         ))
     }
 
-    pub(super) fn assemble(self) -> Result<RuntimeAssembly, &'static str> {
+    pub(super) fn assemble(self) -> Result<RuntimeAssembly, Code> {
         if self.governance_capability_retired {
-            return Err("governance_capability_retired");
+            return Err(ActingdCode::GovernanceCapabilityRetired.code());
         }
         if self.vision_provider_manifest_retired {
-            return Err("vision_provider_manifest_retired");
+            return Err(ActingdCode::VisionProviderManifestRetired.code());
         }
         if self.schema_version != CONFIG_SCHEMA_VERSION
             || self.state_root.as_os_str().is_empty()
             || !(16..=1024).contains(&self.secret_fingerprint_salt.len())
         {
-            return Err("config_invalid");
+            return Err(ActingdCode::ConfigInvalid.code());
         }
         let governance_policy = self
             .governance
@@ -999,16 +1043,16 @@ impl ActingdConfigFile {
         let bind_host = self
             .bind_host
             .parse::<IpAddr>()
-            .map_err(|_| "bind_host_invalid")?;
+            .map_err(|_| ActingdCode::BindHostInvalid.code())?;
         if !bind_host.is_loopback() {
-            return Err("bind_host_not_loopback");
+            return Err(ActingdCode::BindHostNotLoopback.code());
         }
         if self
             .mumu_root
             .as_ref()
             .is_some_and(|root| root.as_os_str().is_empty() || !root.is_absolute())
         {
-            return Err("mumu_root_invalid");
+            return Err(ActingdCode::MumuRootInvalid.code());
         }
         let defaults = actingcommand_contract::FailedRunRetentionPolicy::default();
         let failed_run_retention = actingcommand_contract::FailedRunRetentionPolicy {
@@ -1021,7 +1065,7 @@ impl ActingdConfigFile {
         };
         failed_run_retention
             .validate()
-            .map_err(|_| "invalid_failed_run_retention_policy")?;
+            .map_err(|_| SharedCode::InvalidFailedRunRetentionPolicy.code())?;
         let mut performance_monitor = PerformanceMonitorConfig::default();
         let (pressure_start_samples, pressure_end_samples) =
             self.performance
@@ -1037,7 +1081,7 @@ impl ActingdConfigFile {
             .flatten()
         {
             if !(1..=MAX_PRESSURE_STREAK_SAMPLES).contains(&samples) {
-                return Err("invalid_pressure_samples");
+                return Err(ActingdCode::InvalidPressureSamples.code());
             }
         }
         if let Some(samples) = pressure_start_samples {
@@ -1080,7 +1124,7 @@ impl ActingdConfigFile {
             };
             settings
                 .validate()
-                .map_err(|_| "stuck_recovery_cooldown_invalid")?;
+                .map_err(|_| ActingdCode::StuckRecoveryCooldownInvalid.code())?;
             stuck_recovery.insert(instance.alias.clone(), settings);
             instance_parameters.push(manifest::InstanceParameters {
                 instance_id: instance.instance_id,
@@ -1101,7 +1145,7 @@ impl ActingdConfigFile {
             }
             if let Some(startup_package) = instance.startup_package.take() {
                 if instance.fixture_backend.is_some() {
-                    return Err("instance_config_invalid");
+                    return Err(ActingdCode::InstanceConfigInvalid.code());
                 }
                 startup_packages.insert(
                     instance.alias.clone(),
@@ -1237,16 +1281,31 @@ impl ActingdConfigFile {
     }
 }
 
-/// The warning a set but ignored `ACTINGCOMMAND_*` variable produces (Workflow #318 cfg3),
-/// in `check-config`'s `warnings` and the `env_overrides` manifest subsystem reason.
-pub(super) fn env_override_warning(variable: &str) -> String {
-    format!("env_override_ignored:{variable}")
+/// The warnings the set but ignored `ACTINGCOMMAND_*` variables produce (Workflow #318 cfg3):
+/// one `env_override_ignored` with the variable's name as `variable` per variable (Workflow #378
+/// D6).
+pub(super) fn env_override_warnings(ignored: &[&str]) -> Vec<Outcome> {
+    ignored
+        .iter()
+        .map(|variable| Outcome::new(ActingdCode::EnvOverrideIgnored).variable(*variable))
+        .collect()
+}
+
+/// The text one env-override warning has in `check-config`'s v1 `warnings` and in the
+/// `env_overrides` manifest subsystem reason, `env_override_ignored:<VAR>`. The one boundary of
+/// that text: A3 and A6a replace both places with the outcome itself.
+pub(super) fn env_override_warning_v1(warning: &Outcome) -> String {
+    let variable = warning
+        .value("variable")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    format!("{}:{variable}", warning.code())
 }
 
 /// Workflow #318 (cfg3): the environment fallbacks `assemble` injects. Allowed, every
 /// `EnvOverrides::VARIABLES` entry is read through `lookup`; otherwise nothing is injected
 /// and every variable that is set is returned as ignored, so it is reported, not dropped.
-fn env_overrides(
+pub(super) fn env_overrides(
     allowed: bool,
     lookup: impl Fn(&str) -> Option<OsString>,
 ) -> (EnvOverrides, Vec<&'static str>) {
@@ -1272,9 +1331,9 @@ struct PolicyAssembly {
 }
 
 impl PolicyConfigFile {
-    fn assemble(self, source_root: &Path) -> Result<PolicyAssembly, &'static str> {
+    fn assemble(self, source_root: &Path) -> Result<PolicyAssembly, Code> {
         if self.procedure_manifest.is_empty() || self.procedure_manifest.len() > MAX_TASKS {
-            return Err("procedure_manifest_size_invalid");
+            return Err(ActingdCode::ProcedureManifestSizeInvalid.code());
         }
         let mut bindings = Vec::with_capacity(self.procedure_manifest.len());
         let mut scheduled_tasks = BTreeMap::new();
@@ -1283,14 +1342,15 @@ impl PolicyConfigFile {
             if let Some((procedure_ref, request)) = scheduled_task
                 && scheduled_tasks.insert(procedure_ref, request).is_some()
             {
-                return Err("procedure_task_duplicate");
+                return Err(ActingdCode::ProcedureTaskDuplicate.code());
             }
             bindings.push(binding);
         }
-        let procedure_manifest =
-            ProcedureManifest::new(bindings).map_err(|_| "procedure_manifest_invalid")?;
+        let procedure_manifest = ProcedureManifest::new(bindings)
+            .map_err(|_| ActingdCode::ProcedureManifestInvalid.code())?;
         let catalog = self.catalog.sources(source_root)?;
-        let compiled = compile_catalog(&catalog).map_err(|_| "policy_catalog_compile_failed")?;
+        let compiled =
+            compile_catalog(&catalog).map_err(|_| SharedCode::PolicyCatalogCompileFailed.code())?;
         let configured_approvals = self
             .catalog_approval_ids
             .iter()
@@ -1309,7 +1369,7 @@ impl PolicyConfigFile {
             || configured_approvals.len() != self.catalog_approval_ids.len()
             || configured_approvals != expected_approvals
         {
-            return Err("policy_catalog_approval_mismatch");
+            return Err(ActingdCode::PolicyCatalogApprovalMismatch.code());
         }
         // Workflow #361 C1: every configured id must be one the policy driver can record: the
         // approval decision record's own rule (`approval:` prefix, `[a-z0-9._:-]`), checked
@@ -1327,7 +1387,7 @@ impl PolicyConfigFile {
                         reason,
                     )
                 })
-                .map_err(|_| "policy_catalog_approval_invalid")?;
+                .map_err(|_| SharedCode::PolicyCatalogApprovalInvalid.code())?;
         }
         // Workflow #361 C1: every catalog task's procedure is bound by the manifest; evaluation
         // binding would otherwise refuse its first intent after activation.
@@ -1338,7 +1398,7 @@ impl PolicyConfigFile {
             .iter()
             .any(|task| procedure_manifest.binding(&task.procedure_ref).is_none())
         {
-            return Err("procedure_manifest_entry_missing");
+            return Err(SharedCode::ProcedureManifestEntryMissing.code());
         }
         // Workflow #361 A, C1: the transition's shape; whether it applies is decided against
         // the ledger at startup (and previewed by `check-config`).
@@ -1385,14 +1445,14 @@ impl PolicyAssembly {
     fn validate_instance_identities(
         &self,
         configured_aliases: &BTreeSet<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), Code> {
         let instances = &self.inputs.facts().instances;
         let policy_aliases = instances
             .iter()
             .map(|instance| instance.instance_id.clone())
             .collect::<BTreeSet<_>>();
         if policy_aliases != *configured_aliases {
-            return Err("policy_instance_set_mismatch");
+            return Err(ActingdCode::PolicyInstanceSetMismatch.code());
         }
         let hosts = self
             .inputs
@@ -1405,28 +1465,28 @@ impl PolicyAssembly {
             .iter()
             .any(|instance| !hosts.contains(instance.host_id.as_str()))
         {
-            return Err("policy_instance_host_unknown");
+            return Err(ActingdCode::PolicyInstanceHostUnknown.code());
         }
         Ok(())
     }
 
-    fn validate_registry_modes(&self, provider: &ConfiguredProvider) -> Result<(), &'static str> {
+    fn validate_registry_modes(&self, provider: &ConfiguredProvider) -> Result<(), Code> {
         for (procedure_ref, instance_alias) in &self.scheduled_instance_scopes {
             let scheduled = self
                 .scheduled_tasks
                 .get(procedure_ref)
-                .ok_or("scheduled_execution_binding_missing")?;
+                .ok_or(ActingdCode::ScheduledExecutionBindingMissing.code())?;
             let actual = provider
                 .mode_for_alias(instance_alias)
-                .ok_or("scheduled_execution_instance_unknown")?;
+                .ok_or(ActingdCode::ScheduledExecutionInstanceUnknown.code())?;
             if actual != scheduled.mode {
-                return Err("scheduled_execution_backend_mode_mismatch");
+                return Err(ActingdCode::ScheduledExecutionBackendModeMismatch.code());
             }
         }
         let modes = provider.modes();
         for scheduled in self.scheduled_tasks.values() {
             if !modes.values().any(|mode| mode == &scheduled.mode) {
-                return Err("scheduled_execution_backend_mode_unavailable");
+                return Err(ActingdCode::ScheduledExecutionBackendModeUnavailable.code());
             }
         }
         Ok(())
@@ -1434,7 +1494,7 @@ impl PolicyAssembly {
 }
 
 impl PolicyCatalogConfigFile {
-    fn sources(self, source_root: &Path) -> Result<CatalogSources, &'static str> {
+    fn sources(self, source_root: &Path) -> Result<CatalogSources, Code> {
         let sources = CatalogSources {
             tasks: read_catalog_document(source_root, &self.tasks)?,
             pools: read_catalog_document(source_root, &self.pools)?,
@@ -1452,9 +1512,9 @@ impl PolicyCatalogConfigFile {
         .try_fold(0_usize, |total, source| {
             total.checked_add(source.bytes.len())
         })
-        .ok_or("policy_catalog_size_invalid")?;
+        .ok_or(ActingdCode::PolicyCatalogSizeInvalid.code())?;
         if total_bytes > MAX_CATALOG_BYTES {
-            return Err("policy_catalog_size_invalid");
+            return Err(ActingdCode::PolicyCatalogSizeInvalid.code());
         }
         Ok(sources)
     }
@@ -1463,7 +1523,7 @@ impl PolicyCatalogConfigFile {
 fn procedure_binding(
     configured: ProcedureBindingConfigFile,
     source_root: &Path,
-) -> Result<AssembledProcedureBinding, &'static str> {
+) -> Result<AssembledProcedureBinding, Code> {
     let ProcedureBindingConfigFile {
         procedure_ref,
         package_digest,
@@ -1472,7 +1532,7 @@ fn procedure_binding(
         scheduled_execution,
     } = configured;
     if yield_points.len() > MAX_REFERENCES_PER_TASK {
-        return Err("procedure_binding_size_invalid");
+        return Err(ActingdCode::ProcedureBindingSizeInvalid.code());
     }
     let binding = ProcedureBinding::new(
         procedure_ref.clone(),
@@ -1480,7 +1540,7 @@ fn procedure_binding(
         operation_id,
         yield_points,
     )
-    .map_err(|_| "procedure_binding_invalid")?;
+    .map_err(|_| ActingdCode::ProcedureBindingInvalid.code())?;
     let scheduled_task = match scheduled_execution {
         None => None,
         Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => Some((
@@ -1505,8 +1565,8 @@ fn contained_task_request(
     source_root: &Path,
     package_digest: &actingcommand_contract::PackageRef,
     package_path: Option<PathBuf>,
-) -> Result<ContainedTaskRequest, &'static str> {
-    let package_path = package_path.ok_or("procedure_package_path_missing")?;
+) -> Result<ContainedTaskRequest, Code> {
+    let package_path = package_path.ok_or(ActingdCode::ProcedurePackagePathMissing.code())?;
     let path = if package_path.is_absolute() {
         package_path
     } else {
@@ -1515,7 +1575,7 @@ fn contained_task_request(
     // Preserve source locator components so containment can reject link ambiguity.
     let path = match package_digest {
         actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
-            fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?
+            fs::canonicalize(path).map_err(|_| ActingdCode::ProcedurePackageUnavailable.code())?
         }
         actingcommand_contract::PackageRef::GitSourceTree(_)
         | actingcommand_contract::PackageRef::ContentDirectory(_)
@@ -1525,10 +1585,11 @@ fn contained_task_request(
         }
         actingcommand_contract::PackageRef::GitSourceTree(_)
         | actingcommand_contract::PackageRef::ContentDirectory(_) => std::env::current_dir()
-            .map_err(|_| "procedure_package_unavailable")?
+            .map_err(|_| ActingdCode::ProcedurePackageUnavailable.code())?
             .join(path),
     };
-    let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
+    let metadata =
+        fs::metadata(&path).map_err(|_| ActingdCode::ProcedurePackageUnavailable.code())?;
     // Workflow #336: a content-directory package is a directory or a content container file
     // (`.zip` or `.json`, ASCII case-insensitive); containment reads and checks either.
     let container = || {
@@ -1540,16 +1601,16 @@ fn contained_task_request(
     };
     let refusal = match package_digest {
         actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
-            (!metadata.is_file()).then_some("procedure_package_not_regular")
+            (!metadata.is_file()).then_some(ActingdCode::ProcedurePackageNotRegular.code())
         }
         actingcommand_contract::PackageRef::GitSourceTree(_) => {
-            (!metadata.is_dir()).then_some("procedure_package_not_regular")
+            (!metadata.is_dir()).then_some(ActingdCode::ProcedurePackageNotRegular.code())
         }
         actingcommand_contract::PackageRef::ContentDirectory(_) if metadata.is_file() => {
-            (!container()).then_some("procedure_package_container_unsupported")
+            (!container()).then_some(ActingdCode::ProcedurePackageContainerUnsupported.code())
         }
         actingcommand_contract::PackageRef::ContentDirectory(_) => {
-            (!metadata.is_dir()).then_some("procedure_package_not_regular")
+            (!metadata.is_dir()).then_some(ActingdCode::ProcedurePackageNotRegular.code())
         }
     };
     if let Some(code) = refusal {
@@ -1557,31 +1618,31 @@ fn contained_task_request(
     }
     package_digest
         .validate()
-        .map_err(|_| "procedure_package_digest_invalid")?;
+        .map_err(|_| SharedCode::ProcedurePackageDigestInvalid.code())?;
     ContainedTaskRequest::new(path.to_string_lossy().into_owned(), package_digest.clone())
         .and_then(|request| {
             request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
         })
-        .map_err(|_| "procedure_task_request_invalid")
+        .map_err(|_| ActingdCode::ProcedureTaskRequestInvalid.code())
 }
 
 fn read_catalog_document(
     source_root: &Path,
     configured_path: &Path,
-) -> Result<CatalogDocumentSource, &'static str> {
+) -> Result<CatalogDocumentSource, Code> {
     if configured_path.as_os_str().is_empty() {
-        return Err("policy_catalog_path_invalid");
+        return Err(ActingdCode::PolicyCatalogPathInvalid.code());
     }
     let path = if configured_path.is_absolute() {
         configured_path.to_path_buf()
     } else {
         source_root.join(configured_path)
     };
-    let metadata = fs::metadata(&path).map_err(|_| "policy_catalog_unavailable")?;
+    let metadata = fs::metadata(&path).map_err(|_| SharedCode::PolicyCatalogUnavailable.code())?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_DOCUMENT_BYTES as u64 {
-        return Err("policy_catalog_document_size_invalid");
+        return Err(ActingdCode::PolicyCatalogDocumentSizeInvalid.code());
     }
-    let bytes = fs::read(&path).map_err(|_| "policy_catalog_read_failed")?;
+    let bytes = fs::read(&path).map_err(|_| ActingdCode::PolicyCatalogReadFailed.code())?;
     Ok(CatalogDocumentSource::new(
         format!("file://{}", path.to_string_lossy().replace('\\', "/")),
         bytes,
@@ -1589,18 +1650,18 @@ fn read_catalog_document(
 }
 
 impl AgentDispatcherConfigFile {
-    fn runtime_config(self) -> Result<AgentDispatcherConfig, &'static str> {
+    fn runtime_config(self) -> Result<AgentDispatcherConfig, Code> {
         AgentDispatcherConfig::new(
             self.max_attempts,
             self.max_session_ms,
             self.max_projection_events,
         )
-        .map_err(|_| "agent_dispatcher_config_invalid")
+        .map_err(|_| SharedCode::AgentDispatcherConfigInvalid.code())
     }
 }
 
 impl InstanceConfig {
-    fn backend(self) -> Result<ConfiguredInstance, &'static str> {
+    fn backend(self) -> Result<ConfiguredInstance, Code> {
         if self.fixture_backend.is_some() {
             self.fixture_backend().map(ConfiguredInstance::Spec)
         } else if let Some(key) = self.binding_key()? {
@@ -1610,17 +1671,17 @@ impl InstanceConfig {
         }
     }
 
-    fn binding_key(&self) -> Result<Option<InstanceBindingKey>, &'static str> {
+    fn binding_key(&self) -> Result<Option<InstanceBindingKey>, Code> {
         match (self.instance_index, self.instance_name.as_deref()) {
             (None, None) => Ok(None),
-            (Some(_), Some(_)) => Err("instance_binding_key_invalid"),
+            (Some(_), Some(_)) => Err(ActingdCode::InstanceBindingKeyInvalid.code()),
             (Some(index), None) => Ok(Some(InstanceBindingKey::Index(index))),
             (None, Some(name)) => {
                 if name.trim().is_empty()
                     || name.len() > actingcommand_device::MAX_MUMU_INSTANCE_NAME_BYTES
                     || name.chars().any(char::is_control)
                 {
-                    return Err("instance_binding_key_invalid");
+                    return Err(ActingdCode::InstanceBindingKeyInvalid.code());
                 }
                 Ok(Some(InstanceBindingKey::Name(name.to_owned())))
             }
@@ -1631,9 +1692,9 @@ impl InstanceConfig {
     /// Declared `adb_path`/`host`/`port` stay declared values to be cross-checked; no default
     /// host or port applies to a discovery-bound instance. An `adb_path` that is absent or
     /// names the install root's adb selects that adb instead (Workflow #337).
-    fn deferred_backend(self, key: InstanceBindingKey) -> Result<ConfiguredInstance, &'static str> {
+    fn deferred_backend(self, key: InstanceBindingKey) -> Result<ConfiguredInstance, Code> {
         if self.serial.is_some() {
-            return Err("instance_binding_key_invalid");
+            return Err(ActingdCode::InstanceBindingKeyInvalid.code());
         }
         if self
             .adb_path
@@ -1645,12 +1706,12 @@ impl InstanceConfig {
                 .is_some_and(|value| value.trim().is_empty())
             || self.port == Some(0)
         {
-            return Err("instance_config_invalid");
+            return Err(ActingdCode::InstanceConfigInvalid.code());
         }
         self.application_id
             .as_ref()
             .filter(|value| !value.trim().is_empty())
-            .ok_or("application_identity_missing")?;
+            .ok_or(ActingdCode::ApplicationIdentityMissing.code())?;
         self.backend_choices()?;
         for timeout in [
             self.command_timeout_ms,
@@ -1678,42 +1739,42 @@ impl InstanceConfig {
         })))
     }
 
-    fn backend_choices(&self) -> Result<(TouchBackendChoice, CaptureBackendChoice), &'static str> {
+    fn backend_choices(&self) -> Result<(TouchBackendChoice, CaptureBackendChoice), Code> {
         let touch_backend = self
             .touch_backend
             .as_deref()
-            .ok_or("touch_backend_invalid")?;
+            .ok_or(ActingdCode::TouchBackendInvalid.code())?;
         let capture_backend = self
             .capture_backend
             .as_deref()
-            .ok_or("capture_backend_invalid")?;
-        let requested =
-            TouchBackendChoice::parse(touch_backend).map_err(|_| "touch_backend_invalid")?;
+            .ok_or(ActingdCode::CaptureBackendInvalid.code())?;
+        let requested = TouchBackendChoice::parse(touch_backend)
+            .map_err(|_| ActingdCode::TouchBackendInvalid.code())?;
         if matches!(
             requested,
             TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
         ) {
-            return Err("touch_backend_must_be_explicit");
+            return Err(ActingdCode::TouchBackendMustBeExplicit.code());
         }
-        let capture_requested =
-            CaptureBackendChoice::parse(capture_backend).map_err(|_| "capture_backend_invalid")?;
+        let capture_requested = CaptureBackendChoice::parse(capture_backend)
+            .map_err(|_| ActingdCode::CaptureBackendInvalid.code())?;
         if matches!(
             capture_requested,
             CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
         ) {
-            return Err("capture_backend_must_be_explicit");
+            return Err(ActingdCode::CaptureBackendMustBeExplicit.code());
         }
         Ok((requested, capture_requested))
     }
 
-    fn device_backend(self) -> Result<InstanceSpec, &'static str> {
+    fn device_backend(self) -> Result<InstanceSpec, Code> {
         // Workflow #337 (A4): an absent `adb_path` takes the install root's adb, checked by
         // `ac_adb::require`; outside an install root it is still refused.
         let adb_path = self
             .adb_path
             .clone()
             .or_else(|| self.adb.selected().map(ac_adb::InstalledAdb::path_string))
-            .ok_or("instance_config_invalid")?;
+            .ok_or(ActingdCode::InstanceConfigInvalid.code())?;
         let host = self.host.clone().unwrap_or_else(default_device_host);
         let port = self.port.unwrap_or_else(default_device_port);
         self.device_registration(adb_path, host, Some(port))
@@ -1729,7 +1790,7 @@ impl InstanceConfig {
         adb_path: String,
         host: String,
         port: Option<u16>,
-    ) -> Result<ExecutionBackendRegistration, &'static str> {
+    ) -> Result<ExecutionBackendRegistration, Code> {
         let connect = self.connect.unwrap_or_else(enabled);
         if adb_path.trim().is_empty()
             || host.trim().is_empty()
@@ -1739,7 +1800,7 @@ impl InstanceConfig {
                 .as_ref()
                 .is_some_and(|value| value.trim().is_empty())
         {
-            return Err("instance_config_invalid");
+            return Err(ActingdCode::InstanceConfigInvalid.code());
         }
         let (requested, capture_requested) = self.backend_choices()?;
         let nemu_app_index = match (requested, self.nemu_app_index) {
@@ -1748,19 +1809,19 @@ impl InstanceConfig {
             {
                 Some(
                     actingcommand_device::NemuAppIndex::try_from(index)
-                        .map_err(|_| "nemu_app_index_invalid")?,
+                        .map_err(|_| ActingdCode::NemuAppIndexInvalid.code())?,
                 )
             }
             (TouchBackendChoice::NemuIpc, _) => {
-                return Err("nemu_paired_input_configuration_missing");
+                return Err(ActingdCode::NemuPairedInputConfigurationMissing.code());
             }
-            (_, Some(_)) => return Err("nemu_app_index_requires_paired_input"),
+            (_, Some(_)) => return Err(SharedCode::NemuAppIndexRequiresPairedInput.code()),
             (_, None) => None,
         };
         let application_id = self
             .application_id
             .filter(|value| !value.trim().is_empty())
-            .ok_or("application_identity_missing")?;
+            .ok_or(ActingdCode::ApplicationIdentityMissing.code())?;
         let mut adb = AdbConfig {
             adb_path,
             ..AdbConfig::default()
@@ -1835,10 +1896,10 @@ impl InstanceConfig {
             Some(index) => registration.with_nemu_app_index(index),
             None => Ok(registration),
         })
-        .map_err(|_| "instance_registration_invalid")
+        .map_err(|_| ActingdCode::InstanceRegistrationInvalid.code())
     }
 
-    fn fixture_backend(self) -> Result<InstanceSpec, &'static str> {
+    fn fixture_backend(self) -> Result<InstanceSpec, Code> {
         if self.application_id.is_some()
             || self.startup_package.is_some()
             || self.nemu_app_index.is_some()
@@ -1859,15 +1920,17 @@ impl InstanceConfig {
             || self.shutdown_timeout_ms.is_some()
             || self.tap_hold_ms.is_some()
         {
-            return Err("fixture_device_fields_forbidden");
+            return Err(ActingdCode::FixtureDeviceFieldsForbidden.code());
         }
-        let configured = self.fixture_backend.ok_or("fixture_backend_missing")?;
+        let configured = self
+            .fixture_backend
+            .ok_or(ActingdCode::FixtureBackendMissing.code())?;
         if actingcommand_contract::validate_instance_alias(&self.alias).is_err()
             || configured.frames.is_empty()
             || configured.frames.len() > MAX_FIXTURE_FRAMES
             || configured.max_inputs > MAX_FIXTURE_INPUTS
         {
-            return Err("fixture_backend_invalid");
+            return Err(ActingdCode::FixtureBackendInvalid.code());
         }
         let mut resident_bytes = 0_usize;
         let frames = configured
@@ -1882,18 +1945,18 @@ impl InstanceConfig {
                             .and_then(|height| width.checked_mul(height))
                     })
                     .and_then(|pixels| pixels.checked_mul(3))
-                    .ok_or("fixture_frame_size_invalid")?;
+                    .ok_or(ActingdCode::FixtureFrameSizeInvalid.code())?;
                 if expected_bytes == 0
                     || expected_bytes > MAX_FIXTURE_FRAME_BYTES
                     || frame.rgb.len() != expected_bytes
                 {
-                    return Err("fixture_frame_size_invalid");
+                    return Err(ActingdCode::FixtureFrameSizeInvalid.code());
                 }
                 resident_bytes = resident_bytes
                     .checked_add(expected_bytes)
-                    .ok_or("fixture_resident_size_invalid")?;
+                    .ok_or(ActingdCode::FixtureResidentSizeInvalid.code())?;
                 if resident_bytes > MAX_FIXTURE_RESIDENT_BYTES {
-                    return Err("fixture_resident_size_invalid");
+                    return Err(ActingdCode::FixtureResidentSizeInvalid.code());
                 }
                 Frame::from_pixels(
                     frame.width,
@@ -1902,7 +1965,7 @@ impl InstanceConfig {
                     PixelFormat::Rgb8,
                     CaptureBackendName::FixtureSimulation,
                 )
-                .map_err(|_| "fixture_frame_invalid")
+                .map_err(|_| ActingdCode::FixtureFrameInvalid.code())
             })
             .collect::<Result<Vec<_>, _>>()?;
         InstanceSpec::fixture(
@@ -1910,7 +1973,7 @@ impl InstanceConfig {
             self.instance_id,
             FixtureInstanceSpec::new(frames, configured.max_inputs),
         )
-        .map_err(|_| "fixture_backend_invalid")
+        .map_err(|_| ActingdCode::FixtureBackendInvalid.code())
     }
 }
 
@@ -2031,9 +2094,11 @@ fn spec_mode(spec: &InstanceSpec) -> ScheduledExecutionMode {
     }
 }
 
-fn bounded_duration(value: Option<u64>) -> Result<Option<Duration>, &'static str> {
+fn bounded_duration(value: Option<u64>) -> Result<Option<Duration>, Code> {
     match value {
-        Some(value) if value == 0 || value > MAX_TIMEOUT_MS => Err("timeout_invalid"),
+        Some(value) if value == 0 || value > MAX_TIMEOUT_MS => {
+            Err(ActingdCode::TimeoutInvalid.code())
+        }
         Some(value) => Ok(Some(Duration::from_millis(value))),
         None => Ok(None),
     }
@@ -2452,7 +2517,7 @@ mod tests {
             value[key] = json!(invalid);
             let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
             assert!(matches!(
-                config.assemble(),
+                config.assemble().map_err(Code::as_str),
                 Err("invalid_failed_run_retention_policy")
             ));
         }
@@ -2483,7 +2548,7 @@ mod tests {
             let mut value = value.clone();
             value[section] = invalid;
             let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
-            assert_eq!(config.assemble().err(), Some(code));
+            assert_eq!(config.assemble().err().map(Code::as_str), Some(code));
         }
     }
 
@@ -2509,7 +2574,7 @@ mod tests {
         });
         let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
         assert_eq!(
-            config.assemble().err(),
+            config.assemble().err().map(Code::as_str),
             Some("application_identity_missing")
         );
     }
@@ -2549,7 +2614,7 @@ mod tests {
         });
         let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
         assert_eq!(
-            config.assemble().err(),
+            config.assemble().err().map(Code::as_str),
             Some("touch_backend_must_be_explicit")
         );
     }
@@ -2576,7 +2641,7 @@ mod tests {
         });
         let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
         assert_eq!(
-            config.assemble().err(),
+            config.assemble().err().map(Code::as_str),
             Some("capture_backend_must_be_explicit")
         );
     }
@@ -2622,7 +2687,10 @@ mod tests {
 
         let config = serde_json::from_value::<ActingdConfigFile>(fixture(MAX_FIXTURE_INPUTS + 1))
             .expect("typed fixture config");
-        assert_eq!(config.assemble().err(), Some("fixture_backend_invalid"));
+        assert_eq!(
+            config.assemble().err().map(Code::as_str),
+            Some("fixture_backend_invalid")
+        );
     }
 
     #[test]
@@ -2809,7 +2877,7 @@ mod tests {
         });
         let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
         assert_eq!(
-            config.assemble().err(),
+            config.assemble().err().map(Code::as_str),
             Some("fixture_device_fields_forbidden")
         );
     }
@@ -2931,7 +2999,7 @@ mod tests {
         invalid["agent_dispatcher"]["max_attempts"] = json!(0);
         let config = serde_json::from_value::<ActingdConfigFile>(invalid).expect("typed config");
         assert_eq!(
-            config.assemble().err(),
+            config.assemble().err().map(Code::as_str),
             Some("agent_dispatcher_config_invalid")
         );
     }

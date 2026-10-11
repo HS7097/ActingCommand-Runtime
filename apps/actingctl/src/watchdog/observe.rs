@@ -8,6 +8,7 @@
 use super::Failure;
 use super::decide::{Fatal, Journal, LiveOwner, Observed, OwnerLock, OwnerRecord, RuntimeProcess};
 use super::powershell;
+use crate::codes::ActingctlCode;
 use actingcommand_contract::{
     EventActor, EventSource, InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE,
 };
@@ -54,7 +55,7 @@ impl Installation {
     pub(crate) fn resolve(root_argument: &Path) -> Result<Self, Failure> {
         let root = fs::canonicalize(root_argument).map_err(|error| {
             Failure::misconfigured(
-                "watchdog_root_unavailable",
+                ActingctlCode::WatchdogRootUnavailable,
                 format!("{}: {error}", root_argument.display()),
             )
         })?;
@@ -68,7 +69,7 @@ impl Installation {
             Some(selected) if selected.root() == root => selected.clone(),
             Some(selected) => {
                 return Err(Failure::misconfigured(
-                    "watchdog_root_mismatch",
+                    ActingctlCode::WatchdogRootMismatch,
                     format!(
                         "this actingctl belongs to {}, not {}",
                         plain_path(selected.root()).display(),
@@ -80,7 +81,7 @@ impl Installation {
                 Ok(Some(selected)) => selected,
                 Ok(None) => {
                     return Err(Failure::misconfigured(
-                        "watchdog_layout_unknown",
+                        ActingctlCode::WatchdogLayoutUnknown,
                         format!(
                             "{} has no install\\active.json; the watchdog supervises A/B installs only",
                             plain_path(&root).display()
@@ -128,9 +129,10 @@ impl Installation {
 fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Failure> {
     let bytes = selected
         .config_bytes()
-        .map_err(|error| Failure::misconfigured(error.code().as_str(), "the selected config"))?;
-    let document: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| Failure::misconfigured("watchdog_config_unreadable", error.to_string()))?;
+        .map_err(|error| Failure::misconfigured(error.code(), "the selected config"))?;
+    let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        Failure::misconfigured(ActingctlCode::WatchdogConfigUnreadable, error.to_string())
+    })?;
     let state_root = document
         .get("state_root")
         .and_then(Value::as_str)
@@ -138,7 +140,7 @@ fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Failure> 
         .filter(|path| path.is_absolute())
         .ok_or_else(|| {
             Failure::misconfigured(
-                "watchdog_state_root_invalid",
+                ActingctlCode::WatchdogStateRootInvalid,
                 "the selected config's state_root must be an absolute path",
             )
         })?;
@@ -181,7 +183,7 @@ fn read_owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal, Vec<u8>)
     let path = state_root.join(OWNER_JOURNAL_FILE);
     let unreadable = |detail: String| {
         Failure::misconfigured(
-            "watchdog_journal_unreadable",
+            ActingctlCode::WatchdogJournalUnreadable,
             format!("{}: {detail}", path.display()),
         )
     };
@@ -296,7 +298,7 @@ fn earlier_owner_fatal(
         {
             let tail = read_tail(path).map_err(|error| {
                 Failure::misconfigured(
-                    "watchdog_log_unreadable",
+                    ActingctlCode::WatchdogLogUnreadable,
                     format!("{}: {error}", path.display()),
                 )
             })?;
@@ -376,7 +378,7 @@ pub(crate) fn observe_owner(
             } else {
                 let owners = owner_blocks(&bytes).map_err(|detail| {
                     Failure::misconfigured(
-                        "watchdog_journal_unrecognised",
+                        ActingctlCode::WatchdogJournalUnrecognised,
                         format!(
                             "{}: {detail}",
                             state_root.join(OWNER_JOURNAL_FILE).display()
@@ -441,7 +443,7 @@ fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Failur
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(Failure::misconfigured(
-                    "watchdog_log_directory_unreadable",
+                    ActingctlCode::WatchdogLogDirectoryUnreadable,
                     format!("{}: {error}", directory.display()),
                 ));
             }
@@ -477,7 +479,7 @@ pub(crate) fn fatal_after(
         }
         let tail = read_tail(&path).map_err(|error| {
             Failure::misconfigured(
-                "watchdog_log_unreadable",
+                ActingctlCode::WatchdogLogUnreadable,
                 format!("{}: {error}", path.display()),
             )
         })?;
@@ -520,7 +522,8 @@ pub(crate) fn fatal_line(tail: &str) -> Option<String> {
         let line = line.trim_start();
         line.starts_with("FATAL actingd:") || line.starts_with("FATAL acforward:")
     })?;
-    (!line.contains("owner_conflict")).then(|| line.trim().to_owned())
+    (!line.contains(actingcommand_contract::RuntimeErrorCode::OwnerConflict.as_str()))
+        .then(|| line.trim().to_owned())
 }
 
 /// W, probed only when a start is considered. A free lock is returned held shared, so acsetup
@@ -537,7 +540,7 @@ pub(crate) fn writer_lock(root: &Path) -> Result<WriterProbe, Failure> {
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(WriterProbe::Free(None)),
         Err(error) => {
             return Err(Failure::misconfigured(
-                "watchdog_writer_lock_failed",
+                ActingctlCode::WatchdogWriterLockFailed,
                 format!("{}: {error}", path.display()),
             ));
         }
@@ -546,7 +549,7 @@ pub(crate) fn writer_lock(root: &Path) -> Result<WriterProbe, Failure> {
         Ok(()) => Ok(WriterProbe::Free(Some(file))),
         Err(std::fs::TryLockError::WouldBlock) => Ok(WriterProbe::Busy),
         Err(std::fs::TryLockError::Error(error)) => Err(Failure::misconfigured(
-            "watchdog_writer_lock_failed",
+            ActingctlCode::WatchdogWriterLockFailed,
             format!("{}: {error}", path.display()),
         )),
     }
