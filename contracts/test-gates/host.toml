@@ -196,6 +196,23 @@ tests = [
 ]
 incident = []
 
+# No silent skip: a due clock slot that is not dispatched leaves one record
+[[gate]]
+key = "31"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_first_run_is_owed_and_a_spent_slot_is_refused_once",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_daily_displacement_is_owed_then_refused_and_a_follower_only_owed",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_operator_pause_is_deferred_once_and_a_short_unavailability_is_silent",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_a_hold_is_traced_only_once_it_outlasts_the_window",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_classes_keep_their_order_per_occurrence",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_a_pair_waiting_in_the_round_leaves_no_record",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_every_token_passes_the_planning_signal_validation",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_signal_id_matches_its_golden_digest",
+    "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_records_round_trip_through_ledger_and_projection",
+]
+incident = ["#372"]
+
 # Catalog approval lineage and rollback
 [[gate]]
 key = "32"
