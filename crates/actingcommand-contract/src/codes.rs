@@ -307,6 +307,7 @@ crate::outcome_codes! {
         RuntimeLabArtifactEventDuplicate => "runtime_lab_artifact_event_duplicate": error,
         RuntimeLabArtifactHashMismatch => "runtime_lab_artifact_hash_mismatch": error,
         RuntimeNotRunning => "runtime_not_running": error,
+        ScheduledContainedTaskNotClientCancellable => "scheduled_contained_task_not_client_cancellable": error,
         ScheduledRecoveryDraftInvalid => "scheduled_recovery_draft_invalid": error,
         SemanticActionRequiresDestructiveOptIn => "semantic_action_requires_destructive_opt_in": error,
         SerializationFailed => "serialization_failed": error,

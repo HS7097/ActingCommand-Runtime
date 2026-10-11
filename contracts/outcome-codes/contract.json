@@ -10444,6 +10444,19 @@
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): priority offset invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "scheduled_contained_task_not_client_cancellable": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

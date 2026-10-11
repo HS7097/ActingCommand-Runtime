@@ -161,8 +161,9 @@ scanned. An unparsable registry macro fails G1.
 
 The G2-G5 allow list (`ALLOW_LIST` in the guard) starts with every workspace member, one reason
 each; each A2 part removes the members it converts. Standing entries, kept after B6: wire
-decoders, MCP's JSON-RPC `error_response`, `tools/actinglab-architecture` and
-`tools/outcome-guard`.
+decoders, MCP's JSON-RPC `error_response`, `tools/actinglab-architecture`,
+`tools/outcome-guard`, and G5 for the configuration manifest's subsystem names (vocabulary
+tokens; `runtime_fact_snapshot` equals a runtime-client location).
 
 An entry names a whole member (`item: None`), or one item of one file: a function, which covers
 the findings inside it and in its signature, or a struct or variant field, named `Type.field` or

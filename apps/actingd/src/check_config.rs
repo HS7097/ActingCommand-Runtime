@@ -120,7 +120,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             config::validate_resource_packages(&resource_packages).map_err(|refused| {
                 let code = refused.code;
                 rejection = Some(Rejection::ResourcePackage(refused));
-                registered(code, ActingdLocation::ConfigResourcePackage)
+                registered(code, ActingdLocation::ResourcePackage)
             })?;
         let checked = CheckedAssembly {
             host,
@@ -149,7 +149,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 .map_or(&[][..], |policy| policy.catalog_approval_ids.as_slice()),
         })
         .map_err(|refused| {
-            let failure = host_refusal(&refused, ActingdLocation::ConfigPolicyState);
+            let failure = host_refusal(&refused, ActingdLocation::PolicyState);
             let elapsed_ms = u64::try_from(previewing.elapsed().as_millis()).unwrap_or(u64::MAX);
             rejection = Some(Rejection::PolicyState(Box::new(refused), elapsed_ms));
             failure

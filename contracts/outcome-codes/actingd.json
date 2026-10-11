@@ -1766,21 +1766,21 @@
       "since": "0.12.0",
       "description": "check-config stage: validating the assembled host configuration (v1 token validate)."
     },
-    "config_resource_package": {
+    "resource_package": {
       "owner": "actingd",
       "layer": "config",
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: admitting the resource packages (v1 token resource_package)."
+      "description": "check-config stage: admitting the resource packages."
     },
-    "config_policy_state": {
+    "policy_state": {
       "owner": "actingd",
       "layer": "config",
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: previewing the catalog plan against the ledger (v1 token policy_state)."
+      "description": "check-config stage: previewing the catalog plan against the ledger."
     },
     "policy_initialization": {
       "owner": "actingd",

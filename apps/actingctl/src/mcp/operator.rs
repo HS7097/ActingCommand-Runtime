@@ -440,7 +440,7 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
 /// A scheduled run cannot be stopped by a client; an instance pause drains it.
 fn stop_error(error: &actingcommand_runtime_client::RuntimeClientError) -> ToolError {
     let mapped = client_error(error);
-    if mapped.host_code() == Some("scheduled_contained_task_not_client_cancellable") {
+    if mapped.host_code() == Some(SharedCode::ScheduledContainedTaskNotClientCancellable.as_str()) {
         return mapped.blocked_by(
             "ac_pause: an instance pause drains the instance and, when its drain times out, stops its in-flight runs",
         );

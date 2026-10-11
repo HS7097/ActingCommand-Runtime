@@ -48,7 +48,8 @@ const CHANNELS: &[Check] = &[Check::G2, Check::G3, Check::G4, Check::G5];
 /// Owners line of model section 11 assigns to it when it converts them. A channel of a converted
 /// member that another owner's code fills, or that a later slice replaces, stays a string behind
 /// a bridge entry (a function or a field) whose reason names the slice that removes it. The two
-/// tools and MCP's JSON-RPC `error_response` are standing entries (kept after B6).
+/// tools, MCP's JSON-RPC `error_response` and the configuration manifest's subsystem names
+/// (`apps/actingd/src/config/manifest.rs` `build`, G5) are standing entries (kept after B6).
 pub const ALLOW_LIST: &[AllowEntry] = &[
     member(
         "apps/actinglab",
@@ -770,6 +771,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A6a: check-config v1 mumu_root_unresolved, with the provider native failure family <category>.<stage> and its fallback device_error (decision D6); A6a removes it",
     ),
     bridge(
+        "apps/actingd/src/check_config.rs",
+        "summarize",
+        &[Check::G5],
+        "A6a: check-config v1's instance key resource_package equals the check-config stage of that spelling (decision D12); A6a rewrites this v1 report builder for check-config v2 and removes the entry",
+    ),
+    bridge(
         "apps/actingd/src/config.rs",
         "ResourcePackageRejection::detail",
         &[Check::G3],
@@ -780,12 +787,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "pinned_binaries",
         &[Check::G2],
         "A6a: prose about the embedded pin, reported only through check-config v1 and the FATAL line",
-    ),
-    bridge(
-        "apps/actingd/src/config/manifest.rs",
-        "build",
-        &[Check::G5],
-        "B1: the manifest subsystem name runtime_fact_snapshot equals the runtime client's operation of that spelling; it names a subsystem, not a code, and B1 settles one of the two",
     ),
     bridge(
         "apps/actingd/src/config/manifest.rs",
@@ -941,7 +942,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/actingctl/src/mcp/tools.rs",
         "ToolCode::Relayed.relayed_code",
         &[Check::G2],
-        "A5: a code relayed from actinglab, a job's stored error or the Runtime's material read; A5 relays them as outcome links",
+        "A5: a code relayed from actinglab, a job's stored error or the Runtime's material read failure, which A5 relays as outcome links; and actingctl's own dynamic family material_<state> (a code carrying the read state, not listed in decision D6), which A5 splits into one fixed code with a material_state value instead of relaying it",
     ),
     bridge(
         "apps/actingctl/src/mcp/tools.rs",
@@ -1104,6 +1105,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         item: Some("error_response"),
         checks: &[Check::G3],
         reason: "standing: JSON-RPC requires error.code and error.message (model section 7.3)",
+    },
+    AllowEntry {
+        path: "apps/actingd/src/config/manifest.rs",
+        item: Some("build"),
+        checks: &[Check::G5],
+        reason: "standing: the configuration manifest's subsystem names are vocabulary tokens, not codes or locations (model section 2.1); the subsystem runtime_fact_snapshot equals the runtime client's location of that spelling",
     },
 ];
 

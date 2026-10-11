@@ -1620,8 +1620,6 @@ fn v1_stage_token(stage: Location) -> &'static str {
         (ActingdLocation::ConfigAssemble, "assemble"),
         (ActingdLocation::ConfigVision, "vision"),
         (ActingdLocation::ConfigValidate, "validate"),
-        (ActingdLocation::ConfigResourcePackage, "resource_package"),
-        (ActingdLocation::ConfigPolicyState, "policy_state"),
         (ActingdLocation::PolicyCloseoutDriver, "driver"),
         (ActingdLocation::PolicyCloseoutMonitor, "monitor"),
         (ActingdLocation::PolicyCloseoutShutdown, "shutdown"),

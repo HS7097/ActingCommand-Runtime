@@ -749,7 +749,8 @@ fn material_export(
 }
 
 /// The Runtime answered the read without the material: its state, limit and typed failure
-/// are passed on as they are.
+/// are passed on as they are. Without a failure the code is `material_<state>`, actingctl's own
+/// dynamic family, which A5 splits into one fixed code with a `material_state` value.
 fn material_unavailable(
     state: RuntimeMaterialReadState,
     limit: Option<RuntimeMaterialReadLimit>,

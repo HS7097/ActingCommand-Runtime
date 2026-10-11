@@ -146,15 +146,16 @@ actingcommand_contract::outcome_codes! {
 }
 
 actingcommand_contract::outcome_locations! {
-    /// actingd's stages: the check-config stages (decision D12; check-config v1 prints their old
-    /// tokens) and the stages of an actingd error's FATAL line.
+    /// actingd's stages: the check-config stages (decision D12: the four one-word v1 stages are
+    /// registered as `config_*`, and check-config v1 prints their old tokens) and the stages of an
+    /// actingd error's FATAL line.
     pub enum ActingdLocation {
         ConfigLoad => "config_load",
         ConfigAssemble => "config_assemble",
         ConfigVision => "config_vision",
         ConfigValidate => "config_validate",
-        ConfigResourcePackage => "config_resource_package",
-        ConfigPolicyState => "config_policy_state",
+        ResourcePackage => "resource_package",
+        PolicyState => "policy_state",
         PolicyInitialization => "policy_initialization",
         PolicyBootstrap => "policy_bootstrap",
         PolicyMonitorSetup => "policy_monitor_setup",

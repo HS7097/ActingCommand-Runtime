@@ -160,9 +160,11 @@ pub(super) enum ToolCode {
     /// A code this server emits.
     Emitted(Code),
     /// A code passed on as another program or the Runtime reported it: actinglab's envelope
-    /// error, a job's stored error, the Runtime's material read failure, and the
-    /// `material_<state>` spelling of a material read without one. A5's `{class, outcome}`
-    /// relays these as links.
+    /// error, a job's stored error and the Runtime's material read failure, which A5's
+    /// `{class, outcome}` relays as links. It also carries actingctl's own dynamic family
+    /// `material_<state>` (a material read without a failure): a code that carries the read
+    /// state, which A5 splits into one fixed code with a `material_state` value instead of
+    /// relaying it.
     Relayed { relayed_code: String },
 }
 
