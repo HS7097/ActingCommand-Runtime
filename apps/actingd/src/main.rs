@@ -8,6 +8,7 @@ mod check_config;
 mod codes;
 mod config;
 mod ledger_maintenance;
+mod monitor_retry;
 mod owner_unlock;
 mod suspended;
 
@@ -19,6 +20,9 @@ mod c4_support;
 // Test-only: Workflow #381 A, the FATAL line of a stopped held start (test plan A-2 G3b).
 #[cfg(test)]
 mod gate_381a;
+// Test-only: Workflow #397 MON-1, a receipt-header timeout of the policy monitor's own request.
+#[cfg(test)]
+mod gate_397;
 // Test-only: Workflow #378 A2a, registered refusal codes and the env-override warning.
 #[cfg(test)]
 mod gate_a2a;

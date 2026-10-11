@@ -34,6 +34,18 @@ tests = [
 ]
 incident = []
 
+# Policy monitor: waits through an install drain, retries a transient receipt-header timeout of
+# its own request with a warning up to its bound, otherwise fails loud
+[[gate]]
+key = "4"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::policy_monitor_waits_through_an_install_drain_and_otherwise_fails_loud",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_397::gate_receipt_header_timeouts_under_the_bound_are_warnings_and_the_monitor_goes_on",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_397::gate_past_the_bound_or_after_an_owner_change_the_monitor_still_ends",
+]
+incident = ["#397"]
+
 # Resident driver wakes
 [[gate]]
 key = "5"
