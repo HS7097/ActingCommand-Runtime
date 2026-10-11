@@ -86,8 +86,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::policy_admission::a_held_instance_defers_its_candidates_while_another_instance_dispatches",
     "actingcommand-runtime-host::lib::tests::policy_admission::an_admission_that_meets_a_holder_is_rejected_held_at_info",
     "actingcommand-runtime-host::lib::tests::policy_admission::a_takeover_cooldown_defers_candidates_with_a_wake_at_its_end",
+    "actingcommand-runtime-host::lib::tests::gate_369s5::gate_a_direct_run_behind_a_hold_runs_after_the_release",
+    "actingcommand-runtime-host::lib::tests::gate_369s5::gate_a_direct_run_whose_wait_expires_is_denied_without_task_events",
+    "actingcommand-runtime-host::lib::tests::gate_369s5::gate_a_self_check_behind_a_holder_expires_without_preparation_or_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_369s5::gate_a_resume_reconnects_on_its_claim_granted_before_the_lift",
 ]
-incident = []
+incident = ["#369 S5"]
 
 # Admission revalidates pins and trusted context and replays without side effects
 [[gate]]
