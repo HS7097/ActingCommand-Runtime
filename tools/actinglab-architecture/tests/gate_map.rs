@@ -641,14 +641,23 @@ const CLOCK_IMPORTS: &[&str] = &["sleep", "now"];
 /// Bounded waits; their duration is the last argument and must be `GATE_WAIT`.
 const BOUNDED_WAITS: &[&str] = &["recv_timeout", "wait_timeout"];
 const GATE_WAIT: &str = "GATE_WAIT";
-/// `(file, enclosing function, token)`: each entry allows exactly one finding. The only entry is
+/// `(file, enclosing function, token)`: each entry allows exactly one finding. The first entry is
 /// the ruling of the #672 acceptance (Workflow #381 comment 6084712633, point 2): this
-/// `Instant::now` only anchors the expected deadline and measures nothing.
-const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[(
-    "apps/actingctl/src/gate_381a.rs",
-    "gate_the_run_client_carries_one_deadline_from_the_runs_start",
-    "Instant::now",
-)];
+/// `Instant::now` only anchors the expected deadline and measures nothing. The second is the
+/// same form for Workflow #382 MCP-T1 (coordinator answer CD-27, D2 (a)): the deadline that
+/// `Job::wait_until` takes and no test reaches.
+const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[
+    (
+        "apps/actingctl/src/gate_381a.rs",
+        "gate_the_run_client_carries_one_deadline_from_the_runs_start",
+        "Instant::now",
+    ),
+    (
+        "apps/actingctl/src/mcp/tests/gate_mcpt1.rs",
+        "unreached_deadline",
+        "Instant::now",
+    ),
+];
 
 /// Test plan v2.2 §2.1 guard 3: gate files are deterministic by construction. They call no
 /// `thread::sleep`, `Instant::now` or `SystemTime::now` (also not through an import of `sleep` or
