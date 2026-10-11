@@ -822,7 +822,7 @@ impl HostShared {
             };
             invalidation.validate().map_err(|error| {
                 RuntimeHostError::request(
-                    error.code(),
+                    error.code().as_str(),
                     "invalidate_runtime_fact",
                     RuntimeErrorCode::InvalidRequest,
                 )
@@ -887,7 +887,7 @@ impl HostShared {
             for part in &parts {
                 part.validate_for_append().map_err(|error| {
                     RuntimeHostError::fatal(
-                        error.code(),
+                        error.code().as_str(),
                         "append_runtime_fact_snapshot",
                         RuntimeErrorCode::RuntimeFatal,
                     )
@@ -1061,7 +1061,10 @@ impl SnapshotEventsNewestFirst<'_> {
         snapshot.validate().map_err(|error| {
             runtime_fact_replay_failed(
                 sequence,
-                &RuntimeFactError::Invalid { code: error.code() }.to_string(),
+                &RuntimeFactError::Invalid {
+                    code: error.code().as_str(),
+                }
+                .to_string(),
             )
         })?;
         self.floor = if snapshot.part > 1 {
@@ -1278,7 +1281,9 @@ fn precheck_runtime_fact(
 ) -> RuntimeHostResult<Option<RuntimeFactChange>> {
     record.validate().map_err(|error| {
         runtime_fact_rejection(
-            &RuntimeFactError::Invalid { code: error.code() },
+            &RuntimeFactError::Invalid {
+                code: error.code().as_str(),
+            },
             "record_runtime_fact",
         )
     })?;

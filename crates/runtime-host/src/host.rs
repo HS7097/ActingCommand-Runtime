@@ -862,7 +862,7 @@ impl RuntimeHostConfig {
                     "validate_runtime_config",
                     RuntimeErrorCode::RuntimeFatal,
                 )
-                .with_native_detail(error.code().to_owned())
+                .with_native_detail(error.code().as_str().to_owned())
             })?;
         }
         for (alias, request) in &self.startup_packages {

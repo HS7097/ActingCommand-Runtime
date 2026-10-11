@@ -83,7 +83,7 @@ impl FrozenLedgerSource {
         };
         record
             .validate()
-            .map_err(|error| failure(error.code(), "validate_migration_record"))?;
+            .map_err(|error| failure(error.code().as_str(), "validate_migration_record"))?;
         Ok(record)
     }
 }

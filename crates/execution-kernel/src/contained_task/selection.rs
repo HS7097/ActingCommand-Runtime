@@ -794,7 +794,10 @@ impl PreparedContainedTask {
         let run_ending = matches!(result, Err(ContainedTaskRunError::Boundary(_)));
         if !run_ending {
             record.validate_for_append().map_err(|error| {
-                ContainedTaskError::with_detail(error.code(), format!("field={}", error.field()))
+                ContainedTaskError::with_detail(
+                    error.code().as_str(),
+                    format!("field={}", error.field()),
+                )
             })?;
         }
         let recorded = runtime.record(ContainedTaskTrace::SelectionEvaluated {

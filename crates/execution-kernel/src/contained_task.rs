@@ -1087,7 +1087,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                                 if reason == OcrFieldReason::UnknownEntry
                                     && let Some(rule) = &field.text_extraction
                                     && let Some(extraction) = rule.extract(&normalized)
-                                        .map_err(ContainedTaskError::new)?
+                                        .map_err(|code| ContainedTaskError::new(code.as_str()))?
                                 {
                                     (value, reason) = parse_ocr_field(
                                         &field.value,
@@ -4729,7 +4729,7 @@ impl TaskProgram {
             if self.scheduling_outcome.is_none() {
                 return Err(invalid("scheduling_outcome_missing"));
             }
-            validate_resource_readings(readings).map_err(invalid)?;
+            validate_resource_readings(readings).map_err(|code| invalid(code.as_str()))?;
         }
         if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
             || self.phases != control.phases
@@ -4762,7 +4762,7 @@ impl TaskProgram {
                     &target_pages,
                     scheduling,
                 )
-                .map_err(ContainedTaskError::new)?;
+                .map_err(|code| ContainedTaskError::new(code.as_str()))?;
         }
         validate_page_references(&control.game, &target_pages, detector)?;
         validate_page_references(&control.game, &self.error_pages, detector)?;
@@ -4840,7 +4840,7 @@ impl TaskProgram {
                     .map(|operation| operation.id.as_str())
                     .collect::<Vec<_>>(),
             )
-            .map_err(ContainedTaskError::new)?;
+            .map_err(|code| ContainedTaskError::new(code.as_str()))?;
             if control.execution_mode != "navigable_route"
                 || !control.stop_on_confirmation.unwrap_or(true)
                 || self.entry_page.is_none()
@@ -4925,7 +4925,7 @@ impl TaskProgram {
                 &operations,
                 self.scheduling_outcome.as_ref().unwrap(),
             )
-            .map_err(ContainedTaskError::new)?;
+            .map_err(|code| ContainedTaskError::new(code.as_str()))?;
         }
         self.validate_recovery(bundle)?;
         Ok(())
@@ -5148,7 +5148,9 @@ impl TaskProgram {
                 .ok_or_else(|| ContainedTaskError::new("ocr_fields_declaration_missing"))?,
         )
         .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
-        declaration.validate().map_err(ContainedTaskError::new)?;
+        declaration
+            .validate()
+            .map_err(|code| ContainedTaskError::new(code.as_str()))?;
         if let Some(metadata) = bundle.projection_metadata() {
             for field in &mut declaration.fields {
                 if metadata.target_privacy(&field.target_id)
@@ -5212,7 +5214,7 @@ impl TaskProgram {
                     .map_err(|_| ContainedTaskError::new("ocr_fields_dictionary_invalid"))?;
                 parsed
                     .validate(&declaration.limits)
-                    .map_err(ContainedTaskError::new)?;
+                    .map_err(|code| ContainedTaskError::new(code.as_str()))?;
                 dictionaries.insert(field.id.clone(), parsed);
             }
         }
@@ -7490,7 +7492,7 @@ mod post_admission_ocr_tests {
                 canonical: "TokenB".into(),
             });
         assert_eq!(
-            ambiguous.validate(&limits),
+            ambiguous.validate(&limits).map_err(|code| code.as_str()),
             Err("ocr_fields_dictionary_ambiguous")
         );
         assert_eq!(
@@ -10437,7 +10439,8 @@ mod retry_wiring_tests {
                 &["home".to_owned()],
                 &graph,
                 &declaration
-            ),
+            )
+            .map_err(|code| code.as_str()),
             Err("task_phases_designated_effect_repeated")
         );
         let mut runtime = ScriptedRuntime::new("home");

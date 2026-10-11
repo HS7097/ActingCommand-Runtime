@@ -41,7 +41,7 @@ impl LifecycleAdmission {
     pub(super) fn new(held: Option<InstallHeldStartup>) -> RuntimeHostResult<Self> {
         if let Some(held) = &held {
             held.validate()
-                .map_err(|error| install_error(error.code()))?;
+                .map_err(|error| install_error(error.code().as_str()))?;
         }
         Ok(Self {
             closed: true,
@@ -360,7 +360,7 @@ impl HostShared {
     ) -> RuntimeHostResult<Option<EventId>> {
         status
             .validate()
-            .map_err(|error| install_error(error.code()))?;
+            .map_err(|error| install_error(error.code().as_str()))?;
         let mut row = BTreeMap::from([
             (
                 "owner_epoch".to_owned(),
@@ -1109,7 +1109,7 @@ impl HostShared {
                     };
                     pause
                         .validate()
-                        .map_err(|error| install_error(error.code()))?;
+                        .map_err(|error| install_error(error.code().as_str()))?;
                     if global.replace(pause).is_some() {
                         return Err(install_error("install_previous_pauses_invalid"));
                     }
@@ -1128,7 +1128,7 @@ impl HostShared {
                     };
                     pause
                         .validate()
-                        .map_err(|error| install_error(error.code()))?;
+                        .map_err(|error| install_error(error.code().as_str()))?;
                     if instances
                         .insert(row_string(row, "instance_alias")?.to_owned(), pause)
                         .is_some()

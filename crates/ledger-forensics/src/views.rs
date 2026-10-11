@@ -104,14 +104,14 @@ impl ForensicViewRequest {
         }
         query.validate().map_err(|error| {
             ForensicError::new(
-                error.code(),
+                error.code().as_str(),
                 "validate_view_request",
                 "invalid query bounds",
             )
         })?;
         page.validate().map_err(|error| {
             ForensicError::new(
-                error.code(),
+                error.code().as_str(),
                 "validate_view_request",
                 "invalid page or snapshot",
             )

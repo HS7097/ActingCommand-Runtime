@@ -4251,6 +4251,53 @@ fn token_paths(flat: &[TokenTree]) -> Vec<(Vec<String>, Span)> {
     paths
 }
 
+/// The registered spelling a registry constant names (Workflow #378): `Family::Variant` where
+/// `Family` is an `outcome_codes!` or `outcome_locations!` enum (its name ends in `Code` or
+/// `Location`), optionally read through `.code()`, `.location()` or `.as_str()`. A registry
+/// variant is the PascalCase form of its spelling, so the spelling is its snake_case form.
+fn registry_spelling(expression: &Expr) -> Option<String> {
+    let mut expression = expression;
+    while let Expr::Reference(value) = expression {
+        expression = &value.expr;
+    }
+    if let Expr::MethodCall(call) = expression
+        && call.args.is_empty()
+        && matches!(
+            call.method.to_string().as_str(),
+            "code" | "location" | "as_str"
+        )
+    {
+        return registry_spelling(&call.receiver);
+    }
+    let Expr::Path(value) = expression else {
+        return None;
+    };
+    registry_path_spelling(&path_names(&value.path))
+}
+
+fn registry_path_spelling(names: &[String]) -> Option<String> {
+    let [.., family, variant] = names else {
+        return None;
+    };
+    if !(family.ends_with("Code") || family.ends_with("Location"))
+        || !variant.starts_with(|character: char| character.is_ascii_uppercase())
+    {
+        return None;
+    }
+    let mut spelling = String::new();
+    for (index, character) in variant.chars().enumerate() {
+        if character.is_ascii_uppercase() {
+            if index > 0 {
+                spelling.push('_');
+            }
+            spelling.push(character.to_ascii_lowercase());
+        } else {
+            spelling.push(character);
+        }
+    }
+    Some(spelling)
+}
+
 fn path_names(path: &syn::Path) -> Vec<String> {
     path.segments
         .iter()
@@ -4782,12 +4829,21 @@ impl<'ast> Visit<'ast> for RefusalCodeVisitor {
             && let [.., owner, constructor] = path_names(&function.path).as_slice()
             && owner.ends_with("Error")
             && matches!(constructor.as_str(), "new" | "request" | "fatal")
-            && let Some(Expr::Lit(syn::ExprLit {
-                lit: Lit::Str(code),
-                ..
-            })) = call.args.first()
+            && let Some(argument) = call.args.first()
         {
-            self.codes.insert(code.value());
+            match argument {
+                Expr::Lit(syn::ExprLit {
+                    lit: Lit::Str(code),
+                    ..
+                }) => {
+                    self.codes.insert(code.value());
+                }
+                argument => {
+                    if let Some(code) = registry_spelling(argument) {
+                        self.codes.insert(code);
+                    }
+                }
+            }
         }
         syn::visit::visit_expr_call(self, call);
     }
@@ -6144,6 +6200,9 @@ impl<'ast> Visit<'ast> for FactsVisitor<'_> {
                     .segments
                     .first()
                     .map_or_else(Span::call_site, |segment| segment.ident.span());
+                if let Some(spelling) = registry_path_spelling(&names) {
+                    self.record(FunctionReference::Literal(spelling), span);
+                }
                 self.record(FunctionReference::Value(names), span);
             }
         }
@@ -6867,6 +6926,9 @@ pub fn inspect_envelope_sites(
     }
     impl EnvelopeVisitor<'_> {
         fn render(&self, argument: &Expr) -> (String, bool) {
+            if let Some(spelling) = registry_spelling(argument) {
+                return (format!("{spelling:?}"), false);
+            }
             let mut argument = argument;
             while let Expr::Reference(value) = argument {
                 argument = &value.expr;

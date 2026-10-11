@@ -40,7 +40,7 @@ impl HostShared {
             Ok(validated) => validated,
             Err(error) => {
                 if let RuntimeOperation::InstallTransition { action, .. } = request.operation() {
-                    let failure = self.invalid_install_request(action, error.code())?;
+                    let failure = self.invalid_install_request(action, error.code().as_str())?;
                     return runtime_error_receipt(
                         request,
                         failure.state,
