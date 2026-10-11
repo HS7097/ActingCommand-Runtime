@@ -18,6 +18,9 @@ mod c4_support;
 // Test-only: Workflow #381 A, the FATAL line of a stopped held start (test plan A-2 G3b).
 #[cfg(test)]
 mod gate_381a;
+// Test-only: Workflow #378 A2a, registered refusal codes and the env-override warning.
+#[cfg(test)]
+mod gate_a2a;
 
 use actingcommand_contract::{
     EventActor, EventFamily, EventQuery, EventSource, EventType, GovernanceIdentityCard,
