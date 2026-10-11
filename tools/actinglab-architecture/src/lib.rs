@@ -4252,9 +4252,8 @@ fn token_paths(flat: &[TokenTree]) -> Vec<(Vec<String>, Span)> {
 }
 
 /// The registered spelling a registry constant names (Workflow #378): `Family::Variant` where
-/// `Family` is an `outcome_codes!` or `outcome_locations!` enum (its name ends in `Code` or
-/// `Location`), optionally read through `.code()`, `.location()` or `.as_str()`. A registry
-/// variant is the PascalCase form of its spelling, so the spelling is its snake_case form.
+/// `Family` is an `outcome_codes!` or `outcome_locations!` enum of the workspace, optionally read
+/// through `.code()`, `.location()` or `.as_str()`.
 fn registry_spelling(expression: &Expr) -> Option<String> {
     let mut expression = expression;
     while let Expr::Reference(value) = expression {
@@ -4275,27 +4274,98 @@ fn registry_spelling(expression: &Expr) -> Option<String> {
     registry_path_spelling(&path_names(&value.path))
 }
 
+/// The spelling of `Family::Variant` when `Family` is a registry the workspace declares. The
+/// spelling is read from the registry entry (`Variant => "spelling"`), never derived from the
+/// variant's name, so a path into any other enum (for example `DiagnosticCode`) is no spelling.
 fn registry_path_spelling(names: &[String]) -> Option<String> {
     let [.., family, variant] = names else {
         return None;
     };
-    if !(family.ends_with("Code") || family.ends_with("Location"))
-        || !variant.starts_with(|character: char| character.is_ascii_uppercase())
-    {
-        return None;
-    }
-    let mut spelling = String::new();
-    for (index, character) in variant.chars().enumerate() {
-        if character.is_ascii_uppercase() {
-            if index > 0 {
-                spelling.push('_');
+    registry_spellings()
+        .get(&(family.clone(), variant.clone()))
+        .cloned()
+}
+
+/// Every `outcome_codes!` and `outcome_locations!` entry of the workspace's `src/codes.rs`
+/// files, by `(enum, variant)`. A registry file that exists but cannot be read stops the guard.
+fn registry_spellings() -> &'static BTreeMap<(String, String), String> {
+    static SPELLINGS: std::sync::OnceLock<BTreeMap<(String, String), String>> =
+        std::sync::OnceLock::new();
+    SPELLINGS.get_or_init(|| {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("the architecture tool sits two levels below the workspace root")
+            .to_path_buf();
+        let mut spellings = BTreeMap::new();
+        for group in ["apps", "crates", "providers", "tools"] {
+            let Ok(entries) = std::fs::read_dir(root.join(group)) else {
+                continue;
+            };
+            let mut members = entries
+                .map(|entry| entry.expect("read a workspace member directory").path())
+                .collect::<Vec<_>>();
+            members.sort();
+            for member in members {
+                let path = member.join("src").join("codes.rs");
+                if !path.is_file() {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                    panic!("registry file {} cannot be read: {error}", path.display())
+                });
+                registry_entries(&source, &mut spellings);
             }
-            spelling.push(character.to_ascii_lowercase());
-        } else {
-            spelling.push(character);
+        }
+        spellings
+    })
+}
+
+/// The `Variant => "spelling"` entries of each `outcome_codes!`/`outcome_locations!` enum, read
+/// line by line from a formatted registry file.
+fn registry_entries(source: &str, spellings: &mut BTreeMap<(String, String), String>) {
+    let mut in_registry = false;
+    let mut family: Option<String> = None;
+    for line in source.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        if line.contains("outcome_codes!") || line.contains("outcome_locations!") {
+            in_registry = true;
+            family = None;
+            continue;
+        }
+        if !in_registry {
+            continue;
+        }
+        if family.is_none() {
+            if let Some((_, after)) = line.split_once("enum ") {
+                family = Some(
+                    after
+                        .chars()
+                        .take_while(|character| {
+                            character.is_ascii_alphanumeric() || *character == '_'
+                        })
+                        .collect(),
+                );
+            }
+            continue;
+        }
+        if line.starts_with('}') {
+            in_registry = false;
+            family = None;
+            continue;
+        }
+        if let (Some(family), Some((variant, value))) = (&family, line.split_once("=>"))
+            && let Some(spelling) = value.split('"').nth(1)
+        {
+            spellings.insert(
+                (family.clone(), variant.trim().to_owned()),
+                spelling.to_owned(),
+            );
         }
     }
-    Some(spelling)
 }
 
 fn path_names(path: &syn::Path) -> Vec<String> {
