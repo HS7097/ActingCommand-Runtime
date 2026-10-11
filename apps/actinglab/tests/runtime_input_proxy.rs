@@ -1408,7 +1408,7 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
     assert!(
         busy["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("queue_expired"))
+            .is_some_and(|message| message.contains("runtime code queue_expired"))
     );
     assert_eq!(state.application_calls.load(Ordering::Acquire), 0);
     lease_client

@@ -41,9 +41,9 @@ intersects the query's inclusive range. Existing `--wait-ms`, `--max-events`,
 idle response and next-cursor semantics remain the subscription owner's contract.
 
 ```text
-actinglab lab watch --origin-module capture --diagnostic-code capture.failed --after 0 --max-events 64
+actinglab lab watch --origin-module capture --diagnostic-code capture_failed --after 0 --max-events 64
 actinglab lab watch --req <correlation-id> --after <sequence> --wait-ms 1000
-actingledger --state-root <root> events --origin-module capture --diagnostic-code capture.failed --severity error --after 0 --through <sequence> --limit 64
+actingledger --state-root <root> events --origin-module capture --diagnostic-code capture_failed --severity error --after 0 --through <sequence> --limit 64
 actingledger --state-root <root> events --exclude-event-type perf.summary --exclude-event-type monitor.probe_completed --after 0 --limit 64
 ```
 
