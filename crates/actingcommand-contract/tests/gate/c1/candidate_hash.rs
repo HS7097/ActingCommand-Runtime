@@ -125,10 +125,13 @@ fn gate_candidate_hash_ignores_confidence_and_frame_identity() {
     );
 }
 
+/// One change to a copy of the candidate.
+type Change = fn(&mut ProjectedCandidate);
+
 #[test]
 fn gate_candidate_hash_covers_geometry_and_feature_values() {
     let base = projection(candidate());
-    let changes: [(&str, fn(&mut ProjectedCandidate)); 10] = [
+    let changes: [(&str, Change); 10] = [
         ("rect.x", |candidate: &mut ProjectedCandidate| {
             candidate.rect.x += 1
         }),
