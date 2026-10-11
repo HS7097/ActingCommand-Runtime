@@ -5,7 +5,7 @@
 // the payload validation share.
 
 use super::{RuntimeLifecyclePhase, SanitizationError, validate_diagnostic_detail_token};
-use crate::codes::{DeviceSelfCheckFailure, SanitizationCode};
+use crate::codes::{DeviceSelfCheckFailure, SanitizationCode, SharedCode};
 use crate::{RunId, TaskId, TerminalEvent};
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// `contained_task_page_unknown`, any `contained_task_recovery_*` code or any
 /// `contained_task_home_recovery_*` (entry recovery / return home) code.
 pub fn is_stuck_recovery_trigger(failure_code: &str) -> bool {
-    failure_code == "contained_task_page_unknown"
+    failure_code == SharedCode::ContainedTaskPageUnknown.as_str()
         || failure_code.starts_with("contained_task_recovery_")
         || failure_code.starts_with("contained_task_home_recovery_")
 }
@@ -27,7 +27,7 @@ pub fn is_preparation_recovery_trigger(failure_code: &str) -> bool {
     ]
     .iter()
     .any(|code| code.as_str() == failure_code)
-        || failure_code == "capture_backend_operation_failed"
+        || failure_code == SharedCode::CaptureBackendOperationFailed.as_str()
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

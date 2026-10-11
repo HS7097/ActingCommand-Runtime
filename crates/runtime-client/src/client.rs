@@ -966,7 +966,7 @@ impl RuntimeClient {
         let expected = action.clone();
         let receipt = self
             .execute_receipt(
-                ClientLocation::InstallTransition.location(),
+                ContractLocation::InstallTransition.location(),
                 RuntimeOperation::InstallTransition { target, action },
                 None,
             )
@@ -976,7 +976,7 @@ impl RuntimeClient {
                 } else {
                     RuntimeClientError::fatal(
                         ClientCode::InstallTransitionReceiptUnconfirmed,
-                        ClientLocation::InstallTransition.location(),
+                        ContractLocation::InstallTransition.location(),
                     )
                     .with_related(error)
                 }
@@ -1009,7 +1009,7 @@ impl RuntimeClient {
             _ => false,
         };
         if !matches {
-            return Err(self.unexpected_result(ClientLocation::InstallTransition.location()));
+            return Err(self.unexpected_result(ContractLocation::InstallTransition.location()));
         }
         Ok(receipt)
     }
@@ -1159,9 +1159,9 @@ impl RuntimeClient {
         action: EmulatorInstanceAction,
     ) -> RuntimeClientResult<RuntimeResult> {
         let correlation =
-            self.issue_correlation(ClientLocation::ControlEmulatorInstance.location())?;
+            self.issue_correlation(ContractLocation::ControlEmulatorInstance.location())?;
         let receipt = self.execute_receipt_with_correlation(
-            ClientLocation::ControlEmulatorInstance.location(),
+            ContractLocation::ControlEmulatorInstance.location(),
             RuntimeOperation::ControlEmulatorInstance {
                 instance_alias: instance_alias.to_string(),
                 action,
@@ -1179,7 +1179,7 @@ impl RuntimeClient {
             ) if completed_alias == instance_alias && *completed_action == action => {
                 Ok(result.clone())
             }
-            _ => Err(self.unexpected_result(ClientLocation::ControlEmulatorInstance.location())),
+            _ => Err(self.unexpected_result(ContractLocation::ControlEmulatorInstance.location())),
         }
     }
 
@@ -1317,7 +1317,7 @@ impl RuntimeClient {
         &self,
         instance_alias: &str,
     ) -> RuntimeClientResult<actingcommand_contract::ResourceTargetView> {
-        const OPERATION: Location = ClientLocation::ResourceTargetView.location();
+        const OPERATION: Location = ContractLocation::ResourceTargetView.location();
         match self.send_or_dropped(
             OPERATION,
             RuntimeOperation::ResourceTargetView {
@@ -4410,7 +4410,7 @@ fn official_ocr_marker_expected(
             ..
         } = payload.fact()
         {
-            expected |= code == "contained_task_ocr_fields_unresolved";
+            expected |= code == SharedCode::ContainedTaskOcrFieldsUnresolved.as_str();
         }
     }
     Ok(expected)
@@ -5476,7 +5476,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         }
         return Ok(json!({
             "schema_version": "actingcommand.run-summary.v1",
-            "status": "policy_settlement_interrupted",
+            "status": SharedCode::PolicySettlementInterrupted.as_str(),
             "run_id": run_id,
             "task_id": task_id,
             "correlation_id": correlation_id,
@@ -5500,7 +5500,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
                 "release_sequence": release_event.sequence
             },
             "outcome": {
-                "kind": "policy_settlement_interrupted",
+                "kind": SharedCode::PolicySettlementInterrupted.as_str(),
                 "policy": execution.outcome(),
                 "result": "original_cause_unavailable",
                 "original_cause": "unavailable"
@@ -5671,7 +5671,7 @@ fn is_policy_settlement_interrupted(execution: &PolicyExecutionOutcome) -> bool 
     matches!(
         execution,
         PolicyExecutionOutcome::Failed { failure }
-            if failure.error_code == "policy_settlement_interrupted"
+            if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
                 && failure.original_class == PolicyFailureClass::Severe
                 && failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition == PolicyFailureDisposition::PausedTask

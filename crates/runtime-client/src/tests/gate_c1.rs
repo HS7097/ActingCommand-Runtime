@@ -117,7 +117,7 @@ fn gate_failures_after_send_without_a_projection_are_uncertain() {
         // The receipt was not read or not confirmed.
         (
             crate::ClientCode::RuntimeReceiptHeaderFailed.code(),
-            crate::ClientLocation::InstallTransition.location(),
+            actingcommand_contract::codes::ContractLocation::InstallTransition.location(),
         ),
         (
             crate::ClientCode::RuntimeReceiptReadFailed.code(),
@@ -125,7 +125,7 @@ fn gate_failures_after_send_without_a_projection_are_uncertain() {
         ),
         (
             crate::ClientCode::InstallTransitionReceiptUnconfirmed.code(),
-            crate::ClientLocation::InstallTransition.location(),
+            actingcommand_contract::codes::ContractLocation::InstallTransition.location(),
         ),
         (
             crate::ClientCode::RuntimeShutdownReceiptUnconfirmed.code(),

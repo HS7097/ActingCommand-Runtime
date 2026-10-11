@@ -2803,14 +2803,6 @@
       "since": "0.12.0",
       "description": "A runtime client operation: runtime status."
     },
-    "install_transition": {
-      "owner": "runtime-client",
-      "layer": "client",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client operation: install transition."
-    },
     "runtime_fact_snapshot": {
       "owner": "runtime-client",
       "layer": "client",
@@ -2850,14 +2842,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: runtime monitor clear."
-    },
-    "control_emulator_instance": {
-      "owner": "runtime-client",
-      "layer": "client",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client operation: control emulator instance."
     },
     "self_check_instance": {
       "owner": "runtime-client",
@@ -3090,14 +3074,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: verify contained page observation."
-    },
-    "resource_target_view": {
-      "owner": "runtime-client",
-      "layer": "client",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client operation: resource target view."
     },
     "cancel_contained_task_and_reset": {
       "owner": "runtime-client",

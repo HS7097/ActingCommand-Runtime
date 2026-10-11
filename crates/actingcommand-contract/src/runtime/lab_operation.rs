@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::codes::RuntimeContractCode;
+use crate::codes::{RuntimeContractCode, SharedCode};
 use crate::page_projection::{Geometry, PageProjection, Point, Rect};
 
 pub const LAB_OPERATION_PREPARED_SCHEMA: &str = "actingcommand.runtime.lab-operation-prepared.v1";
@@ -535,7 +535,7 @@ impl ContainedLabOperationResult {
                         && arrival.samples.len() < MAX_LAB_ARRIVAL_FRAMES)
                     || record.failure.as_ref().is_none_or(|failure| {
                         failure.stage != LabOperationStage::Arrival
-                            || failure.code != "lab_arrival_timeout"
+                            || failure.code != SharedCode::LabArrivalTimeout.as_str()
                     })
                 {
                     return Err(invalid());
