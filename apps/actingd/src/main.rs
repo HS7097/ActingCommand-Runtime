@@ -1642,13 +1642,13 @@ struct ActingdError {
     client: Option<Box<RuntimeClientError>>,
     maintenance: Option<Box<actingcommand_runtime_host::LedgerMaintenanceFailure>>,
     /// What a configuration code refers to, such as the refused resource package path.
-    detail: Option<String>,
+    detail: Option<Box<str>>,
     recorded: std::sync::atomic::AtomicBool,
 }
 
 impl ActingdError {
     fn with_detail(mut self, detail: String) -> Self {
-        self.detail = Some(detail);
+        self.detail = Some(detail.into_boxed_str());
         self
     }
 

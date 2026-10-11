@@ -112,8 +112,7 @@ fn gate_ledger_maintenance_and_install_held_refusals_carry_registered_error_code
 fn gate_an_ignored_env_override_is_warned_as_the_fixed_code_with_the_variable() {
     let set = [EnvOverrides::VARIABLES[0], EnvOverrides::VARIABLES[3]];
     let (_, ignored) = config::env_overrides(false, |name| {
-        set.iter()
-            .any(|variable| *variable == name)
+        set.contains(&name)
             .then(|| OsStr::new("configured").to_owned())
     });
     let warnings = config::env_override_warnings(&ignored);
