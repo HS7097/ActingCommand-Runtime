@@ -4,9 +4,13 @@
 //! crate, one module per work item).
 
 #[allow(dead_code)]
+#[path = "../../../../tests/support/emulator_controller.rs"]
+mod emulator_controller;
+#[allow(dead_code)]
 #[path = "../../../../tests/support/held_runtime.rs"]
 mod held_runtime;
 
+mod emulator_restart;
 mod install_transition;
 mod mcp_instance_alias;
 

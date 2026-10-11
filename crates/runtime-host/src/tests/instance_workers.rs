@@ -32,7 +32,7 @@ fn all_events(host: &RuntimeHost) -> Vec<PersistedEvent> {
         .expect("ledger events")
 }
 
-fn phases(events: &[PersistedEvent]) -> Vec<(&PersistedEvent, RuntimeLifecyclePhase)> {
+pub(super) fn phases(events: &[PersistedEvent]) -> Vec<(&PersistedEvent, RuntimeLifecyclePhase)> {
     events
         .iter()
         .filter_map(|event| match event.payload() {
@@ -58,7 +58,7 @@ fn ladder_finished(
         })
 }
 
-fn rung_outcomes(
+pub(super) fn rung_outcomes(
     events: &[PersistedEvent],
 ) -> Vec<(RecoveryRung, RecoveryRungOutcome, Option<String>)> {
     phases(events)
@@ -114,12 +114,12 @@ fn wait_for_rung_run(host: &RuntimeHost, instance_alias: &str) {
     });
 }
 
-struct LadderRun {
-    root: TempDir,
+pub(super) struct LadderRun {
+    pub(super) root: TempDir,
     config: RuntimeHostConfig,
     instance_id: InstanceId,
-    host: RuntimeHost,
-    state: Arc<FakeState>,
+    pub(super) host: RuntimeHost,
+    pub(super) state: Arc<FakeState>,
     context: Box<PolicyRunContext>,
     request: ContainedTaskRequest,
 }
@@ -233,7 +233,7 @@ fn admit_ladder_run(host: &RuntimeHost, request: &ContainedTaskRequest) -> Box<P
 
 impl LadderRun {
     /// Runs the scheduled task; its failure hands the key to the ladder.
-    fn fail_scheduled_run(&self) {
+    pub(super) fn fail_scheduled_run(&self) {
         let error = self
             .host
             .run_scheduled_contained_task(&self.context, &self.request)
@@ -524,7 +524,7 @@ fn a_pause_during_a_rung_run_ends_the_climb_at_warning_and_completes() {
 /// binding, so rung 3 runs its Stop and Start on the ladder's key and then the readiness wait
 /// (R4). With `hold_android_boot`, Android reports no foreground activity after the Start, so
 /// R4 keeps polling.
-fn emulator_ladder_fixture(capture_delay_ms: u64, hold_android_boot: bool) -> LadderRun {
+pub(super) fn emulator_ladder_fixture(capture_delay_ms: u64, hold_android_boot: bool) -> LadderRun {
     ladder_fixture_with(capture_delay_ms, |host, registered, state| {
         state
             .hold_android_boot
@@ -1443,7 +1443,7 @@ fn a_worker_panic_is_recorded_and_the_rebuilt_worker_runs_the_next_payload() {
 }
 
 /// The events of a closed or crashed host's ledger, its artifacts verified.
-fn closed_ledger_events(root: &Path) -> Vec<PersistedEvent> {
+pub(super) fn closed_ledger_events(root: &Path) -> Vec<PersistedEvent> {
     let artifacts = ArtifactStore::open(root).expect("open the artifact store");
     GlobalLedger::open_evidence(
         actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root),

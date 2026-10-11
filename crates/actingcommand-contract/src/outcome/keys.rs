@@ -319,4 +319,14 @@ outcome_keys! {
     unanswered: integer,
     unproved_by: vocab(unproved_by),
     with_console: boolean,
+    // Workflow #381 B: an operator emulator restart's failure and a Stop's process check.
+    restart_phase: vocab(emulator_restart_phase),
+    stop_result: vocab(emulator_stop_result),
+    stop_elapsed_ms: duration_ms,
+    start_elapsed_ms: duration_ms,
+    start_dispatched: boolean,
+    process_started: boolean,
+    android_started: boolean,
+    adb_port_present: boolean,
+    device_process_present: vocab(device_process_presence),
 }

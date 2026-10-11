@@ -4,6 +4,8 @@ use super::*;
 
 // Workflow #381 A: the session deadline of a run (#672 review M3).
 mod gate_381a;
+// Workflow #381 B: the emulator control receipt wait (test plan C-3).
+mod gate_381b;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,

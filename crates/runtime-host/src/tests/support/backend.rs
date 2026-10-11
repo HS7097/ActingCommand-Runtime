@@ -56,7 +56,8 @@ pub(super) struct FakeState {
     // pending, and Start binds it again. With `hold_android_boot`, Android reports no foreground
     // activity after a Start (not booted) until the flag is cleared. A Start notes
     // `emulator_start_entered`, waits while `block_emulator_start` is set, and with
-    // `fail_emulator_start` ends as the vendor's readiness wait timing out.
+    // `fail_emulator_start` ends as the vendor's readiness wait timing out. Workflow #381 B: every
+    // other result, the state reads and the binding come from the scripted controller (HOST-I1).
     emulator_control: AtomicBool,
     emulator_stopped: AtomicBool,
     hold_android_boot: AtomicBool,
@@ -65,6 +66,7 @@ pub(super) struct FakeState {
     block_emulator_start: AtomicBool,
     fail_emulator_start: AtomicBool,
     emulator_actions: std::sync::Mutex<Vec<actingcommand_contract::EmulatorInstanceAction>>,
+    emulator: emulator_controller::FakeEmulatorController,
     // Workflow #369 (verify-666 L6): opens report a passed native open, so a preparation's
     // self-check passes (`fake_opened_backend`).
     observed_open: AtomicBool,
@@ -446,9 +448,12 @@ struct FakeEntry {
 const FAKE_EMULATOR_INDEX: u16 = 0;
 const FAKE_EMULATOR_ADB_PORT: u16 = 16384;
 
-/// Workflow #369 review C-2: the discovery-bound fake instance, bound while running and
-/// pending while stopped.
-fn fake_discovered_instance(instance_id: InstanceId, stopped: bool) -> ResolvedExecutionInstance {
+/// Workflow #369 review C-2: the discovery-bound fake instance, bound to `adb_port` while
+/// running and pending while stopped (`None`).
+fn fake_discovered_instance(
+    instance_id: InstanceId,
+    adb_port: Option<u16>,
+) -> ResolvedExecutionInstance {
     let binding = actingcommand_execution_kernel::DiscoveredInstanceBinding::new(
         FAKE_EMULATOR_INDEX,
         "fixture",
@@ -456,20 +461,14 @@ fn fake_discovered_instance(instance_id: InstanceId, stopped: bool) -> ResolvedE
         "C:/fixture/MuMuManager.exe",
     );
     let resolved = ResolvedExecutionInstance::new(instance_id, "127.0.0.1:16384");
-    if stopped {
-        resolved.with_pending_endpoint(actingcommand_execution_kernel::PendingAdbEndpoint::new(
-            "127.0.0.1",
-            binding,
-        ))
-    } else {
-        resolved.with_adb_endpoint(
-            actingcommand_execution_kernel::ResolvedAdbEndpoint::new(
-                "127.0.0.1",
-                FAKE_EMULATOR_ADB_PORT,
-                false,
-            )
-            .with_discovered_binding(binding),
-        )
+    match adb_port {
+        None => resolved.with_pending_endpoint(
+            actingcommand_execution_kernel::PendingAdbEndpoint::new("127.0.0.1", binding),
+        ),
+        Some(adb_port) => resolved.with_adb_endpoint(
+            actingcommand_execution_kernel::ResolvedAdbEndpoint::new("127.0.0.1", adb_port, false)
+                .with_discovered_binding(binding),
+        ),
     }
 }
 
@@ -484,7 +483,7 @@ fn bind_fake_emulator(
     state.emulator_control.store(true, Ordering::Release);
     host.replace_instance_endpoint_for_test(
         instance_alias,
-        fake_discovered_instance(instance_id, false)
+        fake_discovered_instance(instance_id, Some(FAKE_EMULATOR_ADB_PORT))
             .adb_endpoint()
             .cloned(),
     )
@@ -597,7 +596,7 @@ impl ExecutionBackendProvider for FakeProvider {
         if entry.state.emulator_control.load(Ordering::Acquire) {
             return Some(fake_discovered_instance(
                 entry.instance_id,
-                entry.state.emulator_stopped.load(Ordering::Acquire),
+                entry.state.emulator.bound_port(),
             ));
         }
         if let Some(resolved) = &self.resolved_override {
@@ -751,6 +750,16 @@ impl ExecutionBackendProvider for FakeProvider {
         &self,
         instance_alias: &str,
     ) -> DeviceResult<crate::ForegroundApplicationObservation> {
+        if let Some(entry) = self
+            .entries
+            .get(instance_alias)
+            .filter(|entry| entry.state.emulator_control.load(Ordering::Acquire))
+        {
+            entry
+                .state
+                .emulator
+                .note(emulator_controller::EmulatorCall::ObserveForeground);
+        }
         let android_down = self
             .entries
             .get(instance_alias)
@@ -762,7 +771,8 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     /// Workflow #369 review C-2: Stop and Start of a fake bound with `bind_fake_emulator`; any
-    /// other instance keeps the provider's typed refusal.
+    /// other instance keeps the provider's typed refusal. Workflow #381 B: the result comes from
+    /// the scripted controller (HOST-I1) unless `fail_emulator_start` fails the Start.
     fn control_instance(
         &self,
         instance_alias: &str,
@@ -801,6 +811,10 @@ impl ExecutionBackendProvider for FakeProvider {
                 thread::sleep(Duration::from_millis(5));
             }
             if entry.state.fail_emulator_start.load(Ordering::Acquire) {
+                entry
+                    .state
+                    .emulator
+                    .note(emulator_controller::EmulatorCall::Control(action));
                 return Err(
                     actingcommand_device::EmulatorControlFailure::without_output(
                         DeviceError::fatal("fixture emulator readiness wait timed out")
@@ -813,20 +827,29 @@ impl ExecutionBackendProvider for FakeProvider {
                 );
             }
         }
+        let outcome = entry.state.emulator.control(FAKE_EMULATOR_INDEX, action)?;
         entry.state.android_down.store(
-            !running || entry.state.hold_android_boot.load(Ordering::Acquire),
+            !outcome.running || entry.state.hold_android_boot.load(Ordering::Acquire),
             Ordering::Release,
         );
-        Ok(actingcommand_device::EmulatorControlOutcome {
-            exit_code: Some(0),
-            output_summary: "fixture emulator control".to_owned(),
-            instance_index: FAKE_EMULATOR_INDEX,
-            process_started: running,
-            running,
-            adb_port: running.then_some(FAKE_EMULATOR_ADB_PORT),
-            player_state: None,
-            elapsed_ms: 0,
-        })
+        Ok(outcome)
+    }
+
+    /// Workflow #381 B (review M3): the state read of a fake bound with `bind_fake_emulator`
+    /// comes from the scripted controller; any other instance keeps the typed refusal.
+    fn read_instance_state(&self, instance_alias: &str) -> DeviceResult<crate::InstanceState> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .filter(|entry| entry.state.emulator_control.load(Ordering::Acquire))
+            .ok_or_else(|| {
+                DeviceError::fatal("emulator state read unsupported by this provider")
+                    .with_diagnostic(
+                        DeviceErrorCategory::Protocol,
+                        "emulator_control.unsupported",
+                    )
+            })?;
+        entry.state.emulator.read_state()
     }
 
     /// Workflow #369 review C-2: `Some(port)` binds the fake's discovered endpoint again,
@@ -850,6 +873,7 @@ impl ExecutionBackendProvider for FakeProvider {
             .state
             .emulator_stopped
             .store(adb_port.is_none(), Ordering::Release);
+        entry.state.emulator.rebind(adb_port);
         Ok(())
     }
 
