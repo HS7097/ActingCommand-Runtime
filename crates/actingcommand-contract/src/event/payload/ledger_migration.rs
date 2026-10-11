@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::SanitizationCode;
 
 /// The imported prefix is immutable; the completion itself is the next Ledger fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +57,7 @@ impl LedgerMigrationRecord {
             || self.source_last_sequence.checked_add(1) != Some(self.cutover_sequence)
         {
             return Err(SanitizationError::new(
-                "invalid_ledger_migration",
+                SanitizationCode::InvalidLedgerMigration,
                 "ledger_migration",
             ));
         }

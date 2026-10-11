@@ -384,7 +384,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             catalog_hash: format!("sha256:{}", "d".repeat(64)),
             catalog_version: 1,
         },
-        "user_confirmed",
+        crate::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
     )
     .expect("approval");
     let capture_artifact = artifact(b"capture-summary-frame");
@@ -1028,7 +1028,7 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     assert_eq!(detail.category(), "native");
     assert_eq!(detail.stage(), "device_registry.input.operation");
     assert_eq!(detail.backend(), "adb_shell_input");
-    assert_eq!(detail.operation(), "tap");
+    assert_eq!(detail.operation().as_str(), "tap");
     assert_eq!(detail.message(), "bounded native failure");
     assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
 
@@ -1212,7 +1212,8 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
         invalid_stored
             .validate()
             .expect_err("stored detail validation")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_diagnostic_detail_stage"
     );
 }
@@ -1288,7 +1289,7 @@ fn machine_path_audit_retains_basename_and_full_path_sha256_without_parent_path(
             )
             .into(),
         );
-        assert_eq!(error.code(), "invalid_machine_path");
+        assert_eq!(error.code().as_str(), "invalid_machine_path");
     }
 
     let sanitized = sanitize(
@@ -1314,7 +1315,8 @@ fn machine_path_audit_retains_basename_and_full_path_sha256_without_parent_path(
         noncanonical
             .validate()
             .expect_err("reject noncanonical stored audit")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_sanitized_payload"
     );
 }
@@ -1418,7 +1420,7 @@ fn hash_shaped_original_cannot_survive_as_fingerprint() {
         let error = draft
             .sanitize(&MaliciousEchoFingerprinter)
             .expect_err("hash echo must fail");
-        assert_eq!(error.code(), "invalid_fingerprint");
+        assert_eq!(error.code().as_str(), "invalid_fingerprint");
         assert!(!error.to_string().contains(&original));
     }
 }
@@ -1442,7 +1444,7 @@ fn runtime_values_cannot_enter_origin_action_or_diagnostic_codes() {
     assert_eq!(OriginModule::Actingctl.to_string(), "actingctl");
     assert_eq!(
         DiagnosticCode::RuntimeDiagnostic.to_string(),
-        "runtime.diagnostic"
+        "runtime_diagnostic"
     );
 }
 
@@ -1566,7 +1568,11 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
         let wrong_owner: EventPayload =
             serde_json::from_value(wrong_owner).expect("diagnostic wire shape");
         assert_eq!(
-            wrong_owner.validate().expect_err("failure owner").code(),
+            wrong_owner
+                .validate()
+                .expect_err("failure owner")
+                .code()
+                .as_str(),
             "invalid_artifact_failure_owner"
         );
     }
@@ -1768,7 +1774,8 @@ fn event_v2_round_trips_every_c1_payload_variant() {
         wrong_input_owner
             .validate()
             .expect_err("touch response scope")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_touch_response_scope"
     );
     let mut wrong_capture_owner = capture_json;
@@ -1779,7 +1786,8 @@ fn event_v2_round_trips_every_c1_payload_variant() {
         wrong_capture_owner
             .validate()
             .expect_err("capture acquire scope")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_capture_acquire_scope"
     );
 
@@ -1907,7 +1915,7 @@ fn client_and_approval_public_projections_keep_values_private() {
                     catalog_hash: format!("sha256:{}", "a".repeat(64)),
                     catalog_version: 3,
                 },
-                "user_confirmed",
+                crate::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
             )
             .expect("approval"),
             AuditInput::new(),
@@ -1962,7 +1970,7 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
                 assert_eq!(json["payload"]["data"]["instance_id"], alias);
             } else {
                 assert_eq!(
-                    sanitize_error(payload.into()).code(),
+                    sanitize_error(payload.into()).code().as_str(),
                     "invalid_policy_token"
                 );
             }
@@ -2000,7 +2008,7 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
     let mut severe_retry = base.clone();
     severe_retry.effective_class = PolicyFailureClass::Severe;
     assert_eq!(
-        sanitize_error(event(severe_retry)).code(),
+        sanitize_error(event(severe_retry)).code().as_str(),
         "invalid_policy_failure_record"
     );
 
@@ -2008,7 +2016,7 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
     hidden_retry_attempt.disposition = PolicyFailureDisposition::Continue;
     hidden_retry_attempt.retry_at_unix_ms = None;
     assert_eq!(
-        sanitize_error(event(hidden_retry_attempt)).code(),
+        sanitize_error(event(hidden_retry_attempt)).code().as_str(),
         "invalid_policy_failure_record"
     );
 
@@ -2016,14 +2024,14 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
     unsupported_exemption.performance_tax_exempt = true;
     unsupported_exemption.escalation_streak = 0;
     assert_eq!(
-        sanitize_error(event(unsupported_exemption)).code(),
+        sanitize_error(event(unsupported_exemption)).code().as_str(),
         "invalid_policy_failure_record"
     );
 
     let mut past_retry = base;
     past_retry.retry_at_unix_ms = Some(1_752_147_201_000);
     assert_eq!(
-        sanitize_error(event(past_retry)).code(),
+        sanitize_error(event(past_retry)).code().as_str(),
         "invalid_policy_failure_record"
     );
 }
@@ -2068,7 +2076,7 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
     )
     .into();
     assert_eq!(
-        sanitize_error(fake_health).code(),
+        sanitize_error(fake_health).code().as_str(),
         "invalid_performance_monitor_state"
     );
 
@@ -2085,7 +2093,7 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
     )
     .into();
     assert_eq!(
-        sanitize_error(invalid_stutter).code(),
+        sanitize_error(invalid_stutter).code().as_str(),
         "invalid_performance_stutter"
     );
 
@@ -2106,7 +2114,7 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
     )
     .into();
     assert_eq!(
-        sanitize_error(invalid_control).code(),
+        sanitize_error(invalid_control).code().as_str(),
         "invalid_performance_control_transition"
     );
 }
@@ -2856,7 +2864,10 @@ fn capture_summary_contract_is_strict_bounded_and_preserves_pin_pairs() {
         vec![pins[0].clone(), pins[0].clone()],
     )
     .expect_err("duplicate frame/reason pair must fail");
-    assert_eq!(duplicate_pin.code(), "capture_summary_pin_conflict");
+    assert_eq!(
+        duplicate_pin.code().as_str(),
+        "capture_summary_pin_conflict"
+    );
 
     let invalid_counts = CaptureSummaryRecord::new(
         1,
@@ -2868,7 +2879,10 @@ fn capture_summary_contract_is_strict_bounded_and_preserves_pin_pairs() {
         Vec::new(),
     )
     .expect_err("capture accounting above captured must fail");
-    assert_eq!(invalid_counts.code(), "capture_summary_count_mismatch");
+    assert_eq!(
+        invalid_counts.code().as_str(),
+        "capture_summary_count_mismatch"
+    );
 
     let missing_pin = CaptureSummaryRecord::new(
         1,
@@ -2898,7 +2912,10 @@ fn capture_summary_contract_is_strict_bounded_and_preserves_pin_pairs() {
         Vec::new(),
     )
     .expect_err("summary count bound must fail");
-    assert_eq!(wrong_completeness.code(), "capture_summary_bound_exceeded");
+    assert_eq!(
+        wrong_completeness.code().as_str(),
+        "capture_summary_bound_exceeded"
+    );
 }
 
 #[test]
@@ -3055,7 +3072,7 @@ fn c3b_queue_preemption_and_transfer_facts_are_typed_and_strict() {
     )
     .sanitize(&SpyFingerprinter::new())
     .expect_err("zero queue position");
-    assert_eq!(error.code(), "invalid_scheduler_queue");
+    assert_eq!(error.code().as_str(), "invalid_scheduler_queue");
 
     let invalid_transfer = LeasePayloadDraft::transferred(
         EventAction::LeaseAcquire,
@@ -3078,5 +3095,5 @@ fn c3b_queue_preemption_and_transfer_facts_are_typed_and_strict() {
     )
     .sanitize(&SpyFingerprinter::new())
     .expect_err("same lease transfer");
-    assert_eq!(error.code(), "invalid_lease_transfer");
+    assert_eq!(error.code().as_str(), "invalid_lease_transfer");
 }

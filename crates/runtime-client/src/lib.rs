@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod client;
+mod codes;
 mod error;
 mod input;
 mod ipc;
@@ -16,6 +17,7 @@ mod ipc;
 mod test_observation;
 
 pub use client::*;
+pub use codes::*;
 pub use error::*;
 pub use input::*;
 

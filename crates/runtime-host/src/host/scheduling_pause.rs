@@ -10,7 +10,7 @@
 use super::policy_dispatch::SchedulingPauseTable;
 use super::*;
 use actingcommand_contract::{
-    InstancePauseStage, InstancePauseState, OwnerEpoch, SchedulingPauseState,
+    InstancePauseStage, InstancePauseState, OwnerEpoch, SchedulingPauseReason, SchedulingPauseState,
 };
 
 /// The runtime fact holding the operator's scheduling pauses.
@@ -35,11 +35,11 @@ impl PauseOrigin {
 }
 
 /// One persisted row: `scope` (`global` or `instance`), `instance_alias` (instance rows),
-/// `reason_code`, `since_unix_ms`, `set_in_owner_epoch` and, on a restored row,
+/// `pause_reason`, `since_unix_ms`, `set_in_owner_epoch` and, on a restored row,
 /// `restored_from_owner_epoch`.
 pub(super) fn pause_row(
     instance_alias: Option<&str>,
-    reason_code: &str,
+    pause_reason: &str,
     since_unix_ms: u64,
     origin: &PauseOrigin,
 ) -> BTreeMap<String, FactScalar> {
@@ -51,8 +51,8 @@ pub(super) fn pause_row(
     let mut row = BTreeMap::from([
         ("scope".to_owned(), FactScalar::String(scope.to_owned())),
         (
-            "reason_code".to_owned(),
-            FactScalar::String(reason_code.to_owned()),
+            "pause_reason".to_owned(),
+            FactScalar::String(pause_reason.to_owned()),
         ),
         (
             "since_unix_ms".to_owned(),
@@ -162,13 +162,13 @@ impl HostShared {
         })
     }
 
-    /// Workflow #369 E3 (#670 safety net): holds a pause of `instance_alias` with `reason_code`
+    /// Workflow #369 E3 (#670 safety net): holds a pause of `instance_alias` with `pause_reason`
     /// at start, after the persisted pauses are restored and before any instance is prepared,
     /// unless the instance is paused already (that pause stays as it is). Records the pauses.
     pub(super) fn hold_instance_pause_at_start(
         &self,
         instance_alias: &str,
-        reason_code: &str,
+        pause_reason: &str,
     ) -> RuntimeHostResult<()> {
         let _persist = lock(
             &self.scheduling_pause_persist_gate,
@@ -178,7 +178,7 @@ impl HostShared {
         let since_unix_ms = self.clock.sample()?.unix_ms;
         if !prospective.hold_instance_at_start(
             instance_alias,
-            reason_code,
+            pause_reason,
             since_unix_ms,
             PauseOrigin::set_in(self.owner_epoch)?,
         )? {
@@ -262,7 +262,8 @@ impl HostShared {
         let mut table = lock(&self.scheduling_pause, "read_scheduling_pause_table")?.clone();
         let mut lines = Vec::with_capacity(rows.len());
         for row in rows {
-            let reason_code = row_text(row, "reason_code")?.to_owned();
+            let pause_reason = SchedulingPauseReason::new(row_text(row, "pause_reason")?)
+                .map_err(|_| restore_invalid("scheduling_pause_fact_invalid"))?;
             let since_unix_ms = match row.get("since_unix_ms") {
                 Some(FactScalar::TimestampMs(value)) => *value,
                 _ => return Err(restore_invalid("scheduling_pause_fact_invalid")),
@@ -278,7 +279,7 @@ impl HostShared {
                     }
                     let state = SchedulingPauseState {
                         revision: 1,
-                        reason_code,
+                        pause_reason,
                         since_unix_ms,
                     };
                     state
@@ -302,7 +303,7 @@ impl HostShared {
                     }
                     let state = InstancePauseState {
                         revision: 1,
-                        reason_code,
+                        pause_reason,
                         since_unix_ms,
                         stage: InstancePauseStage::Released,
                     };

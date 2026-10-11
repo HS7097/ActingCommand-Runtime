@@ -352,7 +352,8 @@ impl Slots {
             scope: SchedulingPauseScope::Instance {
                 instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
             },
-            reason_code: "slot_gate_pause".to_owned(),
+            pause_reason: actingcommand_contract::SchedulingPauseReason::new("slot_gate_pause")
+                .expect("pause reason"),
             drain_timeout_ms: 1_000,
         });
     }

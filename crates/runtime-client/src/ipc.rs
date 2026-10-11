@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{ClientCode, ClientLocation};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::RuntimeRequest;
+use actingcommand_contract::outcome::Code;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::io::{ErrorKind, Read, Write};
@@ -19,22 +21,22 @@ pub(crate) const DEFAULT_RUNTIME_MAX_FRAME_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Copy)]
 pub(crate) struct ReceiptReadDeadline {
     deadline: Instant,
-    timeout_code: &'static str,
+    timeout_code: Code,
 }
 
 impl ReceiptReadDeadline {
-    pub(crate) fn after(timeout: Duration, timeout_code: &'static str) -> Self {
+    pub(crate) fn after(timeout: Duration, timeout_code: impl Into<Code>) -> Self {
         Self {
             deadline: Instant::now() + timeout,
-            timeout_code,
+            timeout_code: timeout_code.into(),
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn at(deadline: Instant, timeout_code: &'static str) -> Self {
+    pub(crate) fn at(deadline: Instant, timeout_code: impl Into<Code>) -> Self {
         Self {
             deadline,
-            timeout_code,
+            timeout_code: timeout_code.into(),
         }
     }
 
@@ -56,12 +58,15 @@ where
     Response: DeserializeOwned,
 {
     let body = serde_json::to_vec(request).map_err(|_| {
-        RuntimeClientError::fatal("runtime_request_encode_failed", "exchange_runtime_request")
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeRequestEncodeFailed,
+            ClientLocation::ExchangeRuntimeRequest.location(),
+        )
     })?;
     if body.is_empty() || body.len() > maximum_frame_bytes || body.len() > u32::MAX as usize {
         return Err(RuntimeClientError::fatal(
-            "runtime_request_frame_invalid",
-            "exchange_runtime_request",
+            ClientCode::RuntimeRequestFrameInvalid,
+            ClientLocation::ExchangeRuntimeRequest.location(),
         ));
     }
     let mut frame = Vec::with_capacity(4 + body.len());
@@ -89,8 +94,8 @@ where
             None,
         );
         return Err(RuntimeClientError::fatal(
-            "runtime_request_write_failed",
-            "exchange_runtime_request",
+            ClientCode::RuntimeRequestWriteFailed,
+            ClientLocation::ExchangeRuntimeRequest.location(),
         ));
     }
     if stream.flush().is_err() {
@@ -105,8 +110,8 @@ where
             None,
         );
         return Err(RuntimeClientError::fatal(
-            "runtime_request_flush_failed",
-            "exchange_runtime_request",
+            ClientCode::RuntimeRequestFlushFailed,
+            ClientLocation::ExchangeRuntimeRequest.location(),
         ));
     }
     #[cfg(feature = "test-observation")]
@@ -144,7 +149,7 @@ where
         );
         return Err(receipt_read_error(
             error,
-            "runtime_receipt_header_failed",
+            ClientCode::RuntimeReceiptHeaderFailed,
             receipt_deadline,
         ));
     }
@@ -164,8 +169,8 @@ where
         .min(maximum_frame_bytes);
     if length == 0 || length > response_limit {
         return Err(RuntimeClientError::fatal(
-            "runtime_receipt_frame_invalid",
-            "exchange_runtime_request",
+            ClientCode::RuntimeReceiptFrameInvalid,
+            ClientLocation::ExchangeRuntimeRequest.location(),
         ));
     }
     let mut response = vec![0_u8; length];
@@ -192,7 +197,7 @@ where
         );
         return Err(receipt_read_error(
             error,
-            "runtime_receipt_read_failed",
+            ClientCode::RuntimeReceiptReadFailed,
             receipt_deadline,
         ));
     }
@@ -207,7 +212,10 @@ where
         None,
     );
     serde_json::from_slice(&response).map_err(|_| {
-        RuntimeClientError::fatal("runtime_receipt_decode_failed", "exchange_runtime_request")
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeReceiptDecodeFailed,
+            ClientLocation::ExchangeRuntimeRequest.location(),
+        )
     })
 }
 
@@ -222,9 +230,10 @@ fn observation_error_outcome(error: &std::io::Error) -> ObservationOutcome {
 
 fn receipt_read_error(
     error: std::io::Error,
-    fallback_code: &'static str,
+    fallback_code: impl Into<Code>,
     receipt_deadline: Option<ReceiptReadDeadline>,
 ) -> RuntimeClientError {
+    let fallback_code = fallback_code.into();
     let code = match receipt_deadline {
         Some(deadline)
             if matches!(
@@ -242,8 +251,9 @@ fn receipt_read_error(
         }
         _ => fallback_code,
     };
-    let failure = RuntimeClientError::fatal(code, "exchange_runtime_request");
-    if fallback_code == "runtime_receipt_header_failed" {
+    let failure =
+        RuntimeClientError::fatal(code, ClientLocation::ExchangeRuntimeRequest.location());
+    if fallback_code == ClientCode::RuntimeReceiptHeaderFailed.code() {
         failure.with_receipt_header_io(&error)
     } else {
         failure

@@ -2,6 +2,7 @@
 
 //! Rust mainline boundary for low-level device, capture, recognition, and input primitives.
 
+use crate::outcome::OutcomeEnvelope;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
@@ -153,7 +154,7 @@ pub struct OcrResult {
     pub blocks: Vec<OcrBlock>,
     pub confidence: Option<f64>,
     pub observed_at: Timestamp,
-    pub warnings: Vec<RuntimeError>,
+    pub warnings: Vec<OutcomeEnvelope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -214,7 +215,7 @@ pub struct WaitForResult {
 pub struct ActionResult {
     pub ok: bool,
     pub observed_at: Timestamp,
-    pub error: Option<RuntimeError>,
+    pub error: Option<OutcomeEnvelope>,
     pub metadata: Metadata,
 }
 

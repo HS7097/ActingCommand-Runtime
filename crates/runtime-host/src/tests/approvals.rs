@@ -47,7 +47,8 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
                 catalog_hash: format!("sha256:{}", "f".repeat(64)),
                 catalog_version: 1,
             },
-            "user_confirmed",
+            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                .expect("approval reason"),
         )
         .expect("conflicting approval"),
     });
@@ -136,7 +137,8 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
                 approval_id,
                 ApprovalDisposition::Rejected,
                 target.clone(),
-                "history_compaction",
+                actingcommand_contract::ApprovalReasonCode::new("history_compaction")
+                    .expect("approval reason"),
             )
             .expect("approval decision"),
         });
@@ -200,7 +202,8 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
                 catalog_hash: format!("sha256:{}", "b".repeat(64)),
                 catalog_version: 1,
             },
-            "conflicting_target",
+            actingcommand_contract::ApprovalReasonCode::new("conflicting_target")
+                .expect("approval reason"),
         )
         .expect("conflicting approval"),
     });
@@ -231,7 +234,8 @@ fn governance_authority_requires_an_accepted_identity_card_and_is_connection_bou
             "approval:governance-boundary",
             disposition,
             target.clone(),
-            "user_confirmed",
+            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                .expect("approval reason"),
         )
         .expect("approval decision")
     };
@@ -357,7 +361,8 @@ fn historical_agent_approval_poisoning_is_fatal_during_recovery() {
                 catalog_hash: format!("sha256:{}", "a".repeat(64)),
                 catalog_version: 1,
             },
-            "agent_claimed_approval",
+            actingcommand_contract::ApprovalReasonCode::new("agent_claimed_approval")
+                .expect("approval reason"),
         )
         .expect("approval decision"),
     )
@@ -573,7 +578,8 @@ fn catalog_lineage_switch_and_rollbacks_replay_with_reapprovals() {
                 catalog_hash: generation_b.catalog_hash().to_owned(),
                 catalog_version: generation_b.catalog_version(),
             },
-            "user_revoked",
+            actingcommand_contract::ApprovalReasonCode::new("user_revoked")
+                .expect("approval reason"),
         )
         .expect("revocation by a person"),
     });

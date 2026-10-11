@@ -1657,9 +1657,9 @@ fn is_hold_interruption(reason: &str) -> bool {
             | "recovery_admission_denied"
             | "contained_task_paused"
     ) || [
-        HostCode::RecoveryLadderKeyLost,
-        HostCode::LeaseExpired,
-        HostCode::LeaseMissing,
+        HostCode::RecoveryLadderKeyLost.code(),
+        actingcommand_contract::RuntimeErrorCode::LeaseExpired.code(),
+        actingcommand_contract::RuntimeErrorCode::LeaseMissing.code(),
     ]
     .into_iter()
     .any(|code| code.as_str() == reason)

@@ -318,7 +318,7 @@ impl ProjectionMetadata {
                 };
                 return Err(LabError::new(
                     crate::LabErrorClass::UsageValidation,
-                    "resource_declaration_invalid",
+                    crate::codes::SharedCode::ResourceDeclarationInvalid.as_str(),
                     format!(
                         "{} contains an unknown declaration field {}",
                         path, issue.field_path

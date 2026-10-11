@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::RuntimeContractCode;
 use crate::page_projection::{Geometry, PageProjection, Point, Rect};
 
 pub const LAB_OPERATION_PREPARED_SCHEMA: &str = "actingcommand.runtime.lab-operation-prepared.v1";
@@ -23,7 +24,9 @@ impl LabArrivalCondition {
             || !self.page_id.contains('/')
             || !(100..=10_000).contains(&self.timeout_ms)
         {
-            return Err(RuntimeContractError::new("invalid_lab_arrival_condition"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLabArrivalCondition,
+            ));
         }
         Ok(())
     }
@@ -45,7 +48,9 @@ impl LabOperationSelection {
             Self::Coordinates {
                 action: action @ (InputAction::Tap { .. } | InputAction::Swipe { .. }),
             } => action.validate(),
-            _ => Err(RuntimeContractError::new("invalid_lab_operation_selection")),
+            _ => Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLabOperationSelection,
+            )),
         }
     }
 
@@ -55,7 +60,7 @@ impl LabOperationSelection {
         projection: &PageProjection,
     ) -> RuntimeContractResult<(Option<serde_json::Value>, Geometry, InputAction)> {
         self.validate()?;
-        let invalid = || RuntimeContractError::new("lab_element_unavailable");
+        let invalid = || RuntimeContractError::new(RuntimeContractCode::LabElementUnavailable);
         let (element, geometry) = match self {
             Self::Element { id } => {
                 let mut matches = projection
@@ -73,10 +78,12 @@ impl LabOperationSelection {
             }
             Self::Coordinates { action } => {
                 let point = |x: i32, y: i32| -> RuntimeContractResult<(Rect, Point)> {
-                    let x = u32::try_from(x)
-                        .map_err(|_| RuntimeContractError::new("lab_coordinates_out_of_frame"))?;
-                    let y = u32::try_from(y)
-                        .map_err(|_| RuntimeContractError::new("lab_coordinates_out_of_frame"))?;
+                    let x = u32::try_from(x).map_err(|_| {
+                        RuntimeContractError::new(RuntimeContractCode::LabCoordinatesOutOfFrame)
+                    })?;
+                    let y = u32::try_from(y).map_err(|_| {
+                        RuntimeContractError::new(RuntimeContractCode::LabCoordinatesOutOfFrame)
+                    })?;
                     Ok((
                         Rect {
                             x,
@@ -109,17 +116,24 @@ impl LabOperationSelection {
                             duration_ms,
                         }
                     }
-                    _ => return Err(RuntimeContractError::new("invalid_lab_operation_selection")),
+                    _ => {
+                        return Err(RuntimeContractError::new(
+                            RuntimeContractCode::InvalidLabOperationSelection,
+                        ));
+                    }
                 };
                 (None, geometry)
             }
         };
         geometry
             .validate(projection.frame.width, projection.frame.height)
-            .map_err(|_| RuntimeContractError::new("lab_coordinates_out_of_frame"))?;
+            .map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::LabCoordinatesOutOfFrame)
+            })?;
         let coordinate = |value| {
-            i32::try_from(value)
-                .map_err(|_| RuntimeContractError::new("lab_coordinates_out_of_frame"))
+            i32::try_from(value).map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::LabCoordinatesOutOfFrame)
+            })
         };
         let action = match geometry {
             Geometry::Tap { point, .. } => InputAction::Tap {
@@ -176,7 +190,9 @@ impl ContainedLabOperationRequest {
             after.validate()?;
         }
         if self.projection_hint.sequence == Some(0) {
-            return Err(RuntimeContractError::new("invalid_lab_projection_hint"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLabProjectionHint,
+            ));
         }
         if let Some(hash) = &self.projection_hint.content_sha256 {
             validate_sha256_hex(hash)?;
@@ -194,14 +210,16 @@ pub struct LabEvidenceReference {
 
 impl LabEvidenceReference {
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        self.artifact
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_lab_evidence_artifact"))?;
+        self.artifact.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidLabEvidenceArtifact)
+        })?;
         if self.verified.sequence == 0
             || self.artifact.kind != ArtifactKind::DiagnosticJson
             || self.artifact.byte_count > MAX_OBSERVATION_ARTIFACT_BYTES as u64
         {
-            return Err(RuntimeContractError::new("invalid_lab_evidence_reference"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLabEvidenceReference,
+            ));
         }
         Ok(())
     }
@@ -363,7 +381,9 @@ impl ContainedLabOperationResult {
             || (prepared.selected_element.is_some() && prepared.action.is_none())
             || prepared.projection_hint.sequence == Some(0)
         {
-            return Err(RuntimeContractError::new("invalid_lab_operation_record"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLabOperationRecord,
+            ));
         }
         if let Some(hash) = &prepared.projection_hint.content_sha256 {
             validate_sha256_hex(hash)?;
@@ -375,7 +395,9 @@ impl ContainedLabOperationResult {
             if let Some(frame) = frame {
                 frame.observation.validate()?;
                 if frame.verified.sequence == 0 || prepared.lease_id.is_none() {
-                    return Err(RuntimeContractError::new("invalid_lab_operation_frame"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidLabOperationFrame,
+                    ));
                 }
             }
             if let Some(projection) = projection {
@@ -387,23 +409,26 @@ impl ContainedLabOperationResult {
                     || projection.expected_package_sha256 != prepared.expected_package_sha256
                 {
                     return Err(RuntimeContractError::new(
-                        "invalid_lab_operation_projection",
+                        RuntimeContractCode::InvalidLabOperationProjection,
                     ));
                 }
             }
         }
         if let Some(action) = &prepared.action {
             action.validate()?;
-            let frame = prepared
-                .before_frame
-                .as_ref()
-                .ok_or_else(|| RuntimeContractError::new("lab_action_without_frame"))?;
+            let frame = prepared.before_frame.as_ref().ok_or_else(|| {
+                RuntimeContractError::new(RuntimeContractCode::LabActionWithoutFrame)
+            })?;
             prepared
                 .geometry
                 .as_ref()
-                .ok_or_else(|| RuntimeContractError::new("lab_action_without_geometry"))?
+                .ok_or_else(|| {
+                    RuntimeContractError::new(RuntimeContractCode::LabActionWithoutGeometry)
+                })?
                 .validate(frame.observation.width(), frame.observation.height())
-                .map_err(|_| RuntimeContractError::new("invalid_lab_action_geometry"))?;
+                .map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidLabActionGeometry)
+                })?;
         }
         if record.failure.is_none()
             && (record.input_event.is_none()
@@ -420,7 +445,7 @@ impl ContainedLabOperationResult {
                 || record.after_projection.is_none())
         {
             return Err(RuntimeContractError::new(
-                "incomplete_lab_operation_success",
+                RuntimeContractCode::IncompleteLabOperationSuccess,
             ));
         }
         self.validate_arrival()?;
@@ -429,7 +454,7 @@ impl ContainedLabOperationResult {
 
     fn validate_arrival(&self) -> RuntimeContractResult<()> {
         let record = &self.record;
-        let invalid = || RuntimeContractError::new("invalid_lab_arrival_record");
+        let invalid = || RuntimeContractError::new(RuntimeContractCode::InvalidLabArrivalRecord);
         let (condition, arrival) = match (&record.prepared.after, &record.arrival) {
             (None, None) => return Ok(()),
             (Some(condition), Some(arrival)) => (condition, arrival),

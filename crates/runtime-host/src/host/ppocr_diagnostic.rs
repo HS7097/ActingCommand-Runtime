@@ -232,7 +232,7 @@ impl HostShared {
                         "archive_ppocr_diagnostic",
                         RuntimeErrorCode::RuntimeFatal,
                     )
-                    .with_native_detail(message)
+                    .with_native_detail(message.to_string())
                 })?;
                 let timestamp = unix_ms_now()?;
                 let mut write_context = ArtifactWriteContext::new(

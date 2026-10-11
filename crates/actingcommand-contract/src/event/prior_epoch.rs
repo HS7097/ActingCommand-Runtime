@@ -3,6 +3,7 @@
 use super::{
     CorrelationId, InstanceId, LeaseId, OwnerEpoch, OwnerResourceDisposition, RequestId, RunId,
 };
+use crate::codes::SanitizationCode;
 use crate::{SanitizationError, TerminalEvent};
 use serde::{Deserialize, Serialize};
 
@@ -80,8 +81,12 @@ pub struct OwnerEpochCloseEvidence {
 
 impl OwnerEpochCloseEvidence {
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        let invalid =
-            || SanitizationError::new("invalid_owner_close_evidence", "prior_epoch_close");
+        let invalid = || {
+            SanitizationError::new(
+                SanitizationCode::InvalidOwnerCloseEvidence,
+                "prior_epoch_close",
+            )
+        };
         if self.schema_version != OWNER_JOURNAL_SCHEMA
             || self.pid == 0
             || self.started_at_unix_ms == 0
@@ -132,8 +137,12 @@ impl OwnerEpochCloseEvidence {
 
     /// The observation form recorded by an unproven import: never a positive close.
     pub fn validate_unproven(&self) -> Result<(), SanitizationError> {
-        let invalid =
-            || SanitizationError::new("invalid_owner_close_observation", "prior_epoch_close");
+        let invalid = || {
+            SanitizationError::new(
+                SanitizationCode::InvalidOwnerCloseObservation,
+                "prior_epoch_close",
+            )
+        };
         let block = self.observed_block();
         if self.schema_version != OWNER_JOURNAL_SCHEMA
             || self.confirmed_revision != 0
@@ -218,7 +227,12 @@ impl PriorEpochCloseFact {
     }
 
     pub fn validate(&self, writer: OwnerEpoch) -> Result<(), SanitizationError> {
-        let invalid = || SanitizationError::new("invalid_prior_epoch_close", "prior_epoch_close");
+        let invalid = || {
+            SanitizationError::new(
+                SanitizationCode::InvalidPriorEpochClose,
+                "prior_epoch_close",
+            )
+        };
         let (subject, through, upper) = match self {
             Self::OwnerImported(record) => {
                 match record.basis {

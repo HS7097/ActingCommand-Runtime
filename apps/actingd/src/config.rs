@@ -1313,16 +1313,19 @@ impl PolicyConfigFile {
         // approval decision record's own rule (`approval:` prefix, `[a-z0-9._:-]`), checked
         // here so a refused id stops before the catalog is activated.
         for approval_id in &self.catalog_approval_ids {
-            ApprovalDecisionRecord::new(
-                approval_id.clone(),
-                ApprovalDisposition::Approved,
-                ApprovalTarget::Catalog {
-                    catalog_hash: compiled.catalog_hash().to_owned(),
-                    catalog_version: compiled.summary().catalog_version,
-                },
-                "configured_catalog_approval",
-            )
-            .map_err(|_| "policy_catalog_approval_invalid")?;
+            actingcommand_contract::ApprovalReasonCode::new("configured_catalog_approval")
+                .and_then(|reason| {
+                    ApprovalDecisionRecord::new(
+                        approval_id.clone(),
+                        ApprovalDisposition::Approved,
+                        ApprovalTarget::Catalog {
+                            catalog_hash: compiled.catalog_hash().to_owned(),
+                            catalog_version: compiled.summary().catalog_version,
+                        },
+                        reason,
+                    )
+                })
+                .map_err(|_| "policy_catalog_approval_invalid")?;
         }
         // Workflow #361 C1: every catalog task's procedure is bound by the manifest; evaluation
         // binding would otherwise refuse its first intent after activation.

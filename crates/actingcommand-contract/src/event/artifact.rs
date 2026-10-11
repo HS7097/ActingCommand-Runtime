@@ -5,6 +5,7 @@ use super::{
     SanitizationError, Sensitivity,
 };
 use super::{IdentifierIssuanceError, IdentifierIssuer};
+use crate::codes::{SanitizationCode, SharedCode};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
@@ -973,7 +974,7 @@ impl ArtifactStoreIssuer {
             ArtifactIssueInput::Bytes(bytes) => {
                 let mut material = ArtifactMaterialAccumulator::default();
                 material.update(bytes).map_err(|_| {
-                    SanitizationError::new("invalid_artifact_byte_count", "byte_count")
+                    SanitizationError::new(SanitizationCode::InvalidArtifactByteCount, "byte_count")
                 })?;
                 material.finish()
             }
@@ -981,20 +982,22 @@ impl ArtifactStoreIssuer {
         };
         if material.byte_count == 0 {
             return Err(SanitizationError::new(
-                "invalid_artifact_byte_count",
+                SanitizationCode::InvalidArtifactByteCount,
                 "byte_count",
             ));
         }
         if created_at_unix_ms == 0 {
             return Err(SanitizationError::new(
-                "invalid_artifact_timestamp",
+                SharedCode::InvalidArtifactTimestamp,
                 "created_at_unix_ms",
             ));
         }
         let artifact_id = self
             .identifiers
             .mint_artifact_id()
-            .map_err(|_| SanitizationError::new("artifact_id_issuance_failed", "artifact_id"))?
+            .map_err(|_| {
+                SanitizationError::new(SanitizationCode::ArtifactIdIssuanceFailed, "artifact_id")
+            })?
             .into_transport();
         let ArtifactMaterial { byte_count, sha256 } = material;
         let object_key = object_key_for(&artifact_id, kind, &sha256);
@@ -1025,8 +1028,9 @@ impl ArtifactStoreIssuer {
         bytes: &[u8],
     ) -> Result<VerifiedArtifactReference, SanitizationError> {
         let material = ArtifactMaterial {
-            byte_count: u64::try_from(bytes.len())
-                .map_err(|_| SanitizationError::new("invalid_artifact_byte_count", "byte_count"))?,
+            byte_count: u64::try_from(bytes.len()).map_err(|_| {
+                SanitizationError::new(SanitizationCode::InvalidArtifactByteCount, "byte_count")
+            })?,
             sha256: canonical_sha256(bytes),
         };
         self.verify_existing_material(projected, material)
@@ -1038,12 +1042,12 @@ impl ArtifactStoreIssuer {
         material: ArtifactMaterial,
     ) -> Result<VerifiedArtifactReference, SanitizationError> {
         projected.validate()?;
-        let object_key = projected
-            .object_key
-            .ok_or_else(|| SanitizationError::new("invalid_artifact_reference", "object_key"))?;
+        let object_key = projected.object_key.ok_or_else(|| {
+            SanitizationError::new(SharedCode::InvalidArtifactReference, "object_key")
+        })?;
         if material.byte_count != projected.byte_count || material.sha256 != projected.sha256 {
             return Err(SanitizationError::new(
-                "artifact_verification_failed",
+                SanitizationCode::ArtifactVerificationFailed,
                 "artifact",
             ));
         }
@@ -1232,7 +1236,7 @@ impl ArtifactReference {
             Ok(())
         } else {
             Err(SanitizationError::new(
-                "invalid_artifact_reference",
+                SharedCode::InvalidArtifactReference,
                 "artifact",
             ))
         }
@@ -1310,7 +1314,7 @@ impl ProjectedArtifactReference {
             Ok(())
         } else {
             Err(SanitizationError::new(
-                "invalid_projected_artifact_reference",
+                SanitizationCode::InvalidProjectedArtifactReference,
                 "artifact",
             ))
         }

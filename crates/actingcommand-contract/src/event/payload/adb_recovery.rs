@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{LifecycleNativeDetail, SanitizationError};
+use crate::codes::SanitizationCode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,14 +71,14 @@ impl AdbTargetRecovery {
             || (self.recovered && self.final_state != AdbTransportState::Device)
         {
             return Err(SanitizationError::new(
-                "invalid_adb_target_recovery",
+                SanitizationCode::InvalidAdbTargetRecovery,
                 "adb_recovery",
             ));
         }
         for step in &self.steps {
             if step.attempt == 0 || step.attempt > 2 {
                 return Err(SanitizationError::new(
-                    "invalid_adb_recovery_attempt",
+                    SanitizationCode::InvalidAdbRecoveryAttempt,
                     "adb_recovery",
                 ));
             }

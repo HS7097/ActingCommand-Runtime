@@ -651,7 +651,8 @@ fn runtime_request_rejects_unknown_fields_schema_origin_and_alias() {
         wrong_schema
             .validate()
             .expect_err("schema must fail")
-            .code(),
+            .code()
+            .as_str(),
         "unsupported_request_schema"
     );
 
@@ -663,7 +664,8 @@ fn runtime_request_rejects_unknown_fields_schema_origin_and_alias() {
         wrong_origin
             .validate()
             .expect_err("origin must fail")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_client_origin"
     );
 
@@ -678,7 +680,7 @@ fn runtime_request_rejects_unknown_fields_schema_origin_and_alias() {
         RuntimeOperation::acquire_lease("", ids.mint_holder_id().expect("holder")),
     );
     assert_eq!(
-        bad_alias.expect_err("alias must fail").code(),
+        bad_alias.expect_err("alias must fail").code().as_str(),
         "invalid_instance_alias"
     );
     for (alias, valid) in [
@@ -984,18 +986,20 @@ fn package_debug_contract_is_lab_only_bounded_and_redacted() {
         },
     )
     .expect_err("non-Lab package debug must fail");
-    assert_eq!(wrong_origin.code(), "invalid_runtime_debug_origin");
+    assert_eq!(wrong_origin.code().as_str(), "invalid_runtime_debug_origin");
 
     assert_eq!(
         PackageDebugRequest::new(private_path, "A".repeat(64))
             .expect_err("uppercase hash")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_debug_package_hash"
     );
     assert_eq!(
         PackageDebugRequest::new("", &expected)
             .expect_err("empty path")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_debug_package_path"
     );
 }
@@ -1012,7 +1016,8 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
         invalid_progress
             .validate()
             .expect_err("only Lab run can report progress")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_runtime_debug_event"
     );
 
@@ -1026,7 +1031,8 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
         invalid_effect
             .validate()
             .expect_err("request cannot claim an effect")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_runtime_debug_event"
     );
 
@@ -1046,7 +1052,7 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
         },
     )
     .expect_err("non-Lab debug event must fail");
-    assert_eq!(wrong_origin.code(), "invalid_runtime_debug_origin");
+    assert_eq!(wrong_origin.code().as_str(), "invalid_runtime_debug_origin");
     let target = crate::LabPinReleaseTarget {
         artifact_id: *ids.mint_artifact_id().expect("artifact").transport(),
         pin: TerminalEvent {
@@ -1076,7 +1082,7 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
             decoded.validate().expect("valid typed Lab request");
         } else {
             assert_eq!(
-                request.expect_err("Lab-only unpin").code(),
+                request.expect_err("Lab-only unpin").code().as_str(),
                 "invalid_runtime_debug_origin"
             );
         }
@@ -1156,11 +1162,12 @@ fn evidence_export_request_is_lab_only_bounded_redacted_and_closed() {
         RuntimeOperation::ExportEvidence { request: export },
     )
     .expect_err("non-Lab evidence export must fail");
-    assert_eq!(wrong_origin.code(), "invalid_runtime_debug_origin");
+    assert_eq!(wrong_origin.code().as_str(), "invalid_runtime_debug_origin");
     assert_eq!(
         RuntimeEvidenceExportRequest::new("", TaskOutcome::Success)
             .expect_err("empty path")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_evidence_output_path"
     );
 }
@@ -1197,7 +1204,8 @@ fn every_input_variant_validates_bounds_and_maps_to_a_schema_action() {
         InputAction::Tap { x: -1, y: 0 }
             .validate()
             .expect_err("negative coordinate")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_input_coordinate"
     );
     assert_eq!(
@@ -1208,7 +1216,8 @@ fn every_input_variant_validates_bounds_and_maps_to_a_schema_action() {
         }
         .validate()
         .expect_err("zero duration")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_input_duration"
     );
     assert_eq!(
@@ -1217,7 +1226,8 @@ fn every_input_variant_validates_bounds_and_maps_to_a_schema_action() {
         }
         .validate()
         .expect_err("nul text")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_input_text"
     );
 }
@@ -1235,7 +1245,7 @@ fn lease_token_binds_all_fencing_fields_and_rejects_zero_expiry() {
     invalid["expires_at_monotonic_ms"] = serde_json::json!(0);
     let invalid: LeaseToken = serde_json::from_value(invalid).expect("wire token");
     assert_eq!(
-        invalid.validate().expect_err("zero expiry").code(),
+        invalid.validate().expect_err("zero expiry").code().as_str(),
         "invalid_lease_expiry"
     );
 }
@@ -1248,13 +1258,15 @@ fn c3b_queue_policy_and_status_are_closed_bounded_and_strict() {
     assert_eq!(
         LeaseQueuePolicy::new(LeasePriority::Normal, 0)
             .expect_err("zero timeout")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_lease_queue_timeout"
     );
     assert_eq!(
         LeaseQueuePolicy::new(LeasePriority::Normal, MAX_LEASE_QUEUE_TIMEOUT_MS + 1)
             .expect_err("unbounded timeout")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_lease_queue_timeout"
     );
 
@@ -1286,7 +1298,8 @@ fn c3b_queue_policy_and_status_are_closed_bounded_and_strict() {
             false,
         )
         .expect_err("zero queue position")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_lease_queue_status"
     );
     assert!(serde_json::from_str::<LeasePriority>("\"urgent\"").is_err());
@@ -1454,7 +1467,8 @@ fn runtime_status_is_sorted_strict_and_state_aware() {
             false,
         )
         .expect_err("destructive state without lease")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_runtime_instance_status"
     );
 }
@@ -1530,7 +1544,11 @@ fn receipt_requires_exactly_one_typed_outcome() {
     invalid["state"] = serde_json::json!("failed");
     let invalid: RuntimeReceipt = serde_json::from_value(invalid).expect("wire receipt");
     assert_eq!(
-        invalid.validate().expect_err("outcome mismatch").code(),
+        invalid
+            .validate()
+            .expect_err("outcome mismatch")
+            .code()
+            .as_str(),
         "invalid_receipt_outcome"
     );
 }
@@ -1567,7 +1585,11 @@ fn queued_receipt_is_successful_but_distinct_from_granted_authority() {
     invalid["result"]["status"]["position"] = serde_json::json!(0);
     let invalid: RuntimeReceipt = serde_json::from_value(invalid).expect("wire receipt");
     assert_eq!(
-        invalid.validate().expect_err("invalid queue status").code(),
+        invalid
+            .validate()
+            .expect_err("invalid queue status")
+            .code()
+            .as_str(),
         "invalid_lease_queue_status"
     );
 }
@@ -1617,7 +1639,8 @@ fn runtime_info_accepts_only_live_loopback_shape() {
     assert_eq!(
         RuntimeInfo::new(1, "0.0.0.0", 48761, epoch, 1)
             .expect_err("non-loopback host")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_runtime_info"
     );
 }
@@ -1694,7 +1717,8 @@ fn readonly_observation_is_closed_typed_and_nonzero() {
             artifact.clone(),
         )
         .expect_err("zero width")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_observation_dimensions"
     );
 
@@ -1709,7 +1733,8 @@ fn readonly_observation_is_closed_typed_and_nonzero() {
             missing_object,
         )
         .expect_err("missing artifact object key")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_observation_artifact"
     );
 
@@ -1724,7 +1749,8 @@ fn readonly_observation_is_closed_typed_and_nonzero() {
     assert_eq!(
         ReadonlyFrame::new(1280, 0)
             .expect_err("zero frame height")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_frame_dimensions"
     );
 
@@ -1747,7 +1773,8 @@ fn readonly_observation_is_closed_typed_and_nonzero() {
         }
         .validate()
         .expect_err("capture failure cannot claim a frame")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_observation_failure_context"
     );
     assert_eq!(
@@ -1757,7 +1784,8 @@ fn readonly_observation_is_closed_typed_and_nonzero() {
         }
         .validate()
         .expect_err("recognition failure requires captured frame")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_observation_failure_context"
     );
 }
@@ -1823,13 +1851,15 @@ fn capture_sequence_contract_is_bounded_exact_and_strict() {
     assert_eq!(
         CaptureSequence::new(pair_spec, vec![first.clone()])
             .expect_err("exact observation count")
-            .code(),
+            .code()
+            .as_str(),
         "invalid_capture_sequence_observation_count"
     );
     assert_eq!(
         CaptureSequence::new(pair_spec, vec![first.clone(), first])
             .expect_err("duplicate artifact identity")
-            .code(),
+            .code()
+            .as_str(),
         "duplicate_capture_sequence_artifact_identity"
     );
 
@@ -1909,7 +1939,7 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
             catalog_hash: format!("sha256:{}", "a".repeat(64)),
             catalog_version: 1,
         },
-        "user_confirmed",
+        crate::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
     )
     .expect("approval");
     for request in [
@@ -1954,7 +1984,10 @@ fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card(
         operation,
     );
     assert_eq!(
-        rejected.expect_err("agent governance request").code(),
+        rejected
+            .expect_err("agent governance request")
+            .code()
+            .as_str(),
         "invalid_governance_origin"
     );
     for (invalid, code) in [
@@ -1996,7 +2029,7 @@ fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card(
             catalog_hash: format!("sha256:{}", "a".repeat(64)),
             catalog_version: 1,
         },
-        "agent_claimed_approval",
+        crate::ApprovalReasonCode::new("agent_claimed_approval").expect("approval reason"),
     )
     .expect("approval fixture");
     let ids = issuer();
@@ -2010,7 +2043,7 @@ fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card(
         RuntimeOperation::RecordApprovalDecision { decision: approval },
     );
     assert_eq!(
-        rejected.expect_err("agent self-approval").code(),
+        rejected.expect_err("agent self-approval").code().as_str(),
         "invalid_governance_origin"
     );
 }
@@ -2043,7 +2076,7 @@ fn agent_dispatcher_operations_require_agent_adapter_origin() {
         operation,
     )
     .expect_err("CLI cannot claim an agent session");
-    assert_eq!(error.code(), "invalid_agent_dispatcher_origin");
+    assert_eq!(error.code().as_str(), "invalid_agent_dispatcher_origin");
 }
 
 #[test]
@@ -2144,7 +2177,8 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
             older
                 .validate()
                 .expect_err("older schema must fail loud")
-                .code(),
+                .code()
+                .as_str(),
             "unsupported_request_schema"
         );
     }
@@ -2183,7 +2217,8 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
         }
         .validate()
         .expect_err("zero policy input position must fail loud")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_policy_input_position"
     );
 
@@ -2204,7 +2239,8 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
                 operation.clone(),
             )
             .expect_err("only Agent/Adapter may publish facts")
-            .code(),
+            .code()
+            .as_str(),
             "invalid_agent_dispatcher_origin"
         );
         let ids = issuer();
@@ -2219,7 +2255,8 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
                 identity_operation.clone(),
             )
             .expect_err("only Agent/Adapter may project policy input identity")
-            .code(),
+            .code()
+            .as_str(),
             "invalid_agent_dispatcher_origin"
         );
     }
@@ -2232,7 +2269,8 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
         }
         .validate()
         .expect_err("FactRecord validation must be delegated")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_fact_key"
     );
 
@@ -2281,7 +2319,11 @@ fn planning_document_is_bounded_content_addressed_and_typed() {
     tampered["document"]["unix_ms"] = serde_json::json!(11);
     let tampered: RuntimePlanningDocument = serde_json::from_value(tampered).expect("wire shape");
     assert_eq!(
-        tampered.validate().expect_err("hash mismatch").code(),
+        tampered
+            .validate()
+            .expect_err("hash mismatch")
+            .code()
+            .as_str(),
         "planning_document_hash_mismatch"
     );
 
@@ -2291,7 +2333,8 @@ fn planning_document_is_bounded_content_addressed_and_typed() {
         wrong_kind
             .decode::<serde_json::Value>(RuntimePlanningDocumentKind::EvaluationFacts)
             .expect_err("kind mismatch")
-            .code(),
+            .code()
+            .as_str(),
         "planning_document_kind_mismatch"
     );
 
@@ -2301,7 +2344,8 @@ fn planning_document_is_bounded_content_addressed_and_typed() {
             &vec![1_u8, 2, 3],
         )
         .expect_err("array documents are not allowed")
-        .code(),
+        .code()
+        .as_str(),
         "planning_document_not_object"
     );
     assert_eq!(
@@ -2310,7 +2354,8 @@ fn planning_document_is_bounded_content_addressed_and_typed() {
             &serde_json::json!({"padding": "x".repeat(MAX_RUNTIME_PLANNING_DOCUMENT_BYTES)}),
         )
         .expect_err("oversized document")
-        .code(),
+        .code()
+        .as_str(),
         "planning_document_size_invalid"
     );
 }
@@ -2352,7 +2397,8 @@ fn planning_operations_are_strict_and_require_agent_adapter_origin() {
             operation,
         )
         .expect_err("CLI cannot invoke planning authority")
-        .code(),
+        .code()
+        .as_str(),
         "invalid_agent_dispatcher_origin"
     );
 
@@ -2609,7 +2655,10 @@ fn resource_authoring_event_is_strict_and_requires_lab_origin() {
         Ok(_) => panic!("CLI cannot record authoring events"),
         Err(error) => error,
     };
-    assert_eq!(wrong_origin.code(), "invalid_resource_authoring_origin");
+    assert_eq!(
+        wrong_origin.code().as_str(),
+        "invalid_resource_authoring_origin"
+    );
 }
 
 #[test]
@@ -2628,7 +2677,11 @@ fn resource_authoring_event_revalidates_deserialized_fields_and_receipt_phase() 
     let forged: ResourceAuthoringEvent =
         serde_json::from_value(forged).expect("transport shape remains valid");
     assert_eq!(
-        forged.validate().expect_err("path escape must fail").code(),
+        forged
+            .validate()
+            .expect_err("path escape must fail")
+            .code()
+            .as_str(),
         "invalid_resource_authoring_event"
     );
 
@@ -2735,7 +2788,7 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             assert_eq!(detail.category(), "runtime_connection");
             assert_eq!(detail.stage(), "runtime.ipc.receipt_write");
             assert_eq!(detail.backend(), "local_ipc");
-            assert_eq!(detail.operation(), "runtime_local_ipc");
+            assert_eq!(detail.operation().as_str(), "runtime_local_ipc");
             assert_eq!(detail.declared_sensitivity(), crate::Sensitivity::Internal);
             assert_eq!(
                 detail.message(),

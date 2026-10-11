@@ -1964,7 +1964,7 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "--req",
             correlation_id,
             "--diagnostic-code",
-            "runtime.owner_conflict",
+            "owner_conflict",
             "--from-sequence",
             &sequence,
             "--to-sequence",

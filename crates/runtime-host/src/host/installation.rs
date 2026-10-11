@@ -925,7 +925,7 @@ impl HostShared {
             pause_fields(
                 &mut row,
                 pause.revision,
-                &pause.reason_code,
+                pause.pause_reason.as_str(),
                 pause.since_unix_ms,
             );
             rows.push(row);
@@ -951,7 +951,7 @@ impl HostShared {
                 pause_fields(
                     &mut row,
                     pause.revision,
-                    &pause.reason_code,
+                    pause.pause_reason.as_str(),
                     pause.since_unix_ms,
                 );
                 rows.push(row);
@@ -1091,7 +1091,11 @@ impl HostShared {
             let revision = row_string(row, "revision")?
                 .parse::<u64>()
                 .map_err(|_| install_error("install_previous_pause_revision_invalid"))?;
-            let reason_code = row_string(row, "reason_code")?.to_owned();
+            let pause_reason = actingcommand_contract::SchedulingPauseReason::new(row_string(
+                row,
+                "pause_reason",
+            )?)
+            .map_err(|error| install_error(error.code().as_str()))?;
             let since_unix_ms = match row.get("since_unix_ms") {
                 Some(FactScalar::TimestampMs(value)) => *value,
                 _ => return Err(install_error("install_previous_pause_time_invalid")),
@@ -1100,7 +1104,7 @@ impl HostShared {
                 "global" => {
                     let pause = actingcommand_contract::SchedulingPauseState {
                         revision,
-                        reason_code,
+                        pause_reason,
                         since_unix_ms,
                     };
                     pause
@@ -1118,7 +1122,7 @@ impl HostShared {
                     };
                     let pause = actingcommand_contract::InstancePauseState {
                         revision,
-                        reason_code,
+                        pause_reason,
                         since_unix_ms,
                         stage,
                     };
@@ -1169,7 +1173,7 @@ fn pause_fields(row: &mut BTreeMap<String, FactScalar>, revision: u64, reason: &
         FactScalar::String(revision.to_string()),
     );
     row.insert(
-        "reason_code".to_owned(),
+        "pause_reason".to_owned(),
         FactScalar::String(reason.to_owned()),
     );
     row.insert("since_unix_ms".to_owned(), FactScalar::TimestampMs(since));

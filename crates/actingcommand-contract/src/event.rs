@@ -117,6 +117,7 @@ mod retention;
 mod timing;
 mod views;
 
+use crate::codes::{RuntimeContractCode, SanitizationCode};
 pub use artifact::*;
 pub use codes::*;
 pub use envelope::*;
@@ -682,7 +683,7 @@ impl EventQuery {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.instance_id.is_some() && !self.instance_ids.is_empty() {
             return Err(SanitizationError::new(
-                "invalid_event_query_instance_filter",
+                SanitizationCode::InvalidEventQueryInstanceFilter,
                 "query",
             ));
         }
@@ -697,7 +698,7 @@ impl EventQuery {
                 .any(|(index, event_type)| excluded[..index].contains(event_type))
         {
             return Err(SanitizationError::new(
-                "invalid_event_query_event_type_filter",
+                SanitizationCode::InvalidEventQueryEventTypeFilter,
                 "query",
             ));
         }
@@ -711,7 +712,7 @@ impl EventQuery {
                 .is_some_and(|(minimum, maximum)| minimum > maximum)
         {
             return Err(SanitizationError::new(
-                "invalid_event_query_bounds",
+                RuntimeContractCode::InvalidEventQueryBounds,
                 "query",
             ));
         }
@@ -760,16 +761,19 @@ pub struct ProjectedEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SanitizationError {
-    code: &'static str,
+    code: crate::outcome::Code,
     field: &'static str,
 }
 
 impl SanitizationError {
-    pub(crate) const fn new(code: &'static str, field: &'static str) -> Self {
-        Self { code, field }
+    pub(crate) fn new(code: impl Into<crate::outcome::Code>, field: &'static str) -> Self {
+        Self {
+            code: code.into(),
+            field,
+        }
     }
 
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> crate::outcome::Code {
         self.code
     }
 
@@ -779,7 +783,7 @@ impl SanitizationError {
     }
 
     pub fn fingerprinter_failure() -> Self {
-        Self::new("fingerprinter_failed", "fingerprinter")
+        Self::new(SanitizationCode::FingerprinterFailed, "fingerprinter")
     }
 }
 

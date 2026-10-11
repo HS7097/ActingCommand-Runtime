@@ -4,6 +4,7 @@ use super::{
     CorrelationId, FrameId, RecognitionId, RequestId, RunId, SanitizationError, TaskId,
     TaskTimingFailure, TaskTimingScope, TaskTimingStage,
 };
+use crate::codes::SanitizationCode;
 use serde::{Deserialize, Serialize};
 
 mod boundaries;
@@ -487,7 +488,7 @@ impl TaskTimingObservations {
                     .is_some_and(|value| !value.is_valid())
             {
                 return Err(SanitizationError::new(
-                    "invalid_task_timing_observations",
+                    SanitizationCode::InvalidTaskTimingObservations,
                     "task_timing",
                 ));
             }
@@ -498,7 +499,7 @@ impl TaskTimingObservations {
                     || failure.timing.stage != TaskTimingStage::Postcondition)
         }) {
             return Err(SanitizationError::new(
-                "invalid_task_timing_observations",
+                SanitizationCode::InvalidTaskTimingObservations,
                 "task_timing",
             ));
         }
@@ -508,7 +509,7 @@ impl TaskTimingObservations {
             .is_some_and(|value| !value.is_valid())
         {
             return Err(SanitizationError::new(
-                "invalid_task_timing_observations",
+                SanitizationCode::InvalidTaskTimingObservations,
                 "task_timing",
             ));
         }

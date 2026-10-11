@@ -4045,6 +4045,9 @@
       "runtime-host"
     ],
     "material_read_": [
+      "contract",
+      "ledger-forensics",
+      "runtime-client",
       "runtime-host"
     ],
     "proposal_report_": [
@@ -4060,9 +4063,14 @@
       "runtime-host"
     ],
     "release_": [
-      "runtime-host"
+      "artifact-store",
+      "contract",
+      "ledger",
+      "runtime-host",
+      "runtime-state"
     ],
     "frame_retention_": [
+      "ledger",
       "runtime-host"
     ],
     "fact_refresh_": [
@@ -4084,7 +4092,11 @@
       "contract"
     ],
     "ledger_": [
-      "ledger"
+      "actingd",
+      "actingledger",
+      "contract",
+      "ledger",
+      "runtime-host"
     ],
     "setup_": [
       "ui"
@@ -4093,7 +4105,10 @@
       "ui"
     ],
     "lease_": [
-      "runtime-host"
+      "actinglab",
+      "contract",
+      "runtime-host",
+      "scheduler"
     ],
     "recovery_ladder_key_": [
       "runtime-host"
@@ -4115,6 +4130,1812 @@
     ],
     "clock_slot_": [
       "runtime-host"
+    ],
+    "accept_": [
+      "runtime-host"
+    ],
+    "access_": [
+      "runtime-client",
+      "runtime-host"
+    ],
+    "acknowledge_": [
+      "runtime-host"
+    ],
+    "acquire_": [
+      "contract",
+      "ledger",
+      "runtime-host"
+    ],
+    "actinglab_": [
+      "actinglab"
+    ],
+    "action_": [
+      "execution-kernel",
+      "lab",
+      "runtime-host"
+    ],
+    "activate_": [
+      "runtime-host"
+    ],
+    "active_": [
+      "runtime-host"
+    ],
+    "adb_": [
+      "actingd",
+      "device",
+      "runtime-host"
+    ],
+    "admit_": [
+      "artifact-store",
+      "contract",
+      "execution-kernel",
+      "ledger",
+      "runtime-host"
+    ],
+    "adopt_": [
+      "runtime-host"
+    ],
+    "advance_": [
+      "runtime-host"
+    ],
+    "agent_": [
+      "actingd",
+      "contract",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "all_": [
+      "pack-containment"
+    ],
+    "allocate_": [
+      "artifact-store"
+    ],
+    "anchor_": [
+      "pack-containment"
+    ],
+    "answer_": [
+      "actingctl"
+    ],
+    "any_": [
+      "execution-kernel",
+      "pack-containment"
+    ],
+    "append_": [
+      "artifact-store",
+      "ledger",
+      "runtime-host"
+    ],
+    "application_": [
+      "contract",
+      "execution-kernel",
+      "lab",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "apply_": [
+      "contract",
+      "ledger",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "approval_": [
+      "contract",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "arbitrate_": [
+      "runtime-host"
+    ],
+    "archive_": [
+      "runtime-host"
+    ],
+    "arguments_": [
+      "actingctl"
+    ],
+    "arrival_": [
+      "lab"
+    ],
+    "artifact_": [
+      "artifact-store",
+      "contract",
+      "ledger",
+      "ledger-forensics",
+      "runtime-host"
+    ],
+    "assemble_": [
+      "runtime-host"
+    ],
+    "assess_": [
+      "contract",
+      "runtime-host"
+    ],
+    "authoring_": [
+      "resource-tooling"
+    ],
+    "authorize_": [
+      "runtime-host",
+      "runtime-state"
+    ],
+    "await_": [
+      "runtime-host"
+    ],
+    "backend_": [
+      "contract",
+      "runtime-host"
+    ],
+    "backup_": [
+      "runtime-database",
+      "runtime-host"
+    ],
+    "begin_": [
+      "artifact-store",
+      "ledger",
+      "runtime-client",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "bind_": [
+      "actingd",
+      "runtime-host"
+    ],
+    "binding_": [
+      "actingctl"
+    ],
+    "bound_": [
+      "ledger",
+      "ledger-forensics",
+      "runtime-database"
+    ],
+    "bounds_": [
+      "device"
+    ],
+    "build_": [
+      "artifact-store",
+      "ledger",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "bundle_": [
+      "contract",
+      "execution-kernel"
+    ],
+    "c4_": [
+      "runtime-host"
+    ],
+    "cache_": [
+      "runtime-host"
+    ],
+    "call_": [
+      "actingctl"
+    ],
+    "cancel_": [
+      "contract",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "candidate_": [
+      "contract",
+      "execution-kernel",
+      "ledger",
+      "recognition-pack",
+      "runtime-host"
+    ],
+    "canonicalize_": [
+      "artifact-store",
+      "host-metrics",
+      "ledger"
+    ],
+    "capability_": [
+      "actinglab"
+    ],
+    "capacity_": [
+      "artifact-store",
+      "contract",
+      "runtime-host"
+    ],
+    "capture_": [
+      "actingd",
+      "artifact-store",
+      "contract",
+      "device",
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "card_": [
+      "actingctl"
+    ],
+    "catalog_": [
+      "actingd",
+      "contract",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "change_": [
+      "runtime-host"
+    ],
+    "check_": [
+      "actingctl",
+      "actingd",
+      "lab",
+      "runtime-host"
+    ],
+    "classify_": [
+      "runtime-host"
+    ],
+    "cleanup_": [
+      "artifact-store",
+      "runtime-host"
+    ],
+    "clear_": [
+      "runtime-host"
+    ],
+    "client_": [
+      "actingctl",
+      "actinglab",
+      "contract",
+      "runtime-host"
+    ],
+    "clock_": [
+      "actingctl",
+      "ledger"
+    ],
+    "close_": [
+      "ledger",
+      "runtime-client",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "command_": [
+      "contract"
+    ],
+    "commit_": [
+      "ledger",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "committed_": [
+      "runtime-host"
+    ],
+    "compact_": [
+      "runtime-host"
+    ],
+    "compare_": [
+      "runtime-host"
+    ],
+    "compile_": [
+      "contract",
+      "runtime-host"
+    ],
+    "complete_": [
+      "artifact-store",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "confidence_": [
+      "execution-kernel"
+    ],
+    "config_": [
+      "actingd",
+      "contract"
+    ],
+    "configure_": [
+      "ledger",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "confirm_": [
+      "ledger"
+    ],
+    "connect_": [
+      "runtime-client"
+    ],
+    "connection_": [
+      "contract",
+      "runtime-client",
+      "runtime-host",
+      "scheduler"
+    ],
+    "contained_": [
+      "contract",
+      "execution-kernel",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "container_": [
+      "lab"
+    ],
+    "content_": [
+      "pack-containment"
+    ],
+    "control_": [
+      "contract",
+      "device",
+      "execution-kernel",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "convert_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "coordinate_": [
+      "runtime-host"
+    ],
+    "copy_": [
+      "runtime-database"
+    ],
+    "corrupt_": [
+      "ledger"
+    ],
+    "count_": [
+      "artifact-store",
+      "ledger",
+      "runtime-database"
+    ],
+    "create_": [
+      "artifact-store",
+      "ledger",
+      "runtime-client",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "critical_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "cross_": [
+      "lab"
+    ],
+    "cuda_": [
+      "vision-ffi"
+    ],
+    "current_": [
+      "actinglab",
+      "contract",
+      "execution-kernel",
+      "lab"
+    ],
+    "cursor_": [
+      "actingctl"
+    ],
+    "database_": [
+      "runtime-database"
+    ],
+    "deadline_": [
+      "actingctl"
+    ],
+    "debug_": [
+      "contract",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "declare_": [
+      "contract",
+      "runtime-host"
+    ],
+    "decode_": [
+      "execution-kernel",
+      "ledger",
+      "runtime-host"
+    ],
+    "deferred_": [
+      "ledger"
+    ],
+    "degrade_": [
+      "runtime-host"
+    ],
+    "deliver_": [
+      "ledger"
+    ],
+    "derive_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "destructive_": [
+      "actinglab",
+      "runtime-host",
+      "scheduler"
+    ],
+    "detect_": [
+      "actinglab",
+      "execution-kernel"
+    ],
+    "detector_": [
+      "execution-kernel",
+      "lab"
+    ],
+    "device_": [
+      "actingd",
+      "contract",
+      "device",
+      "runtime-host"
+    ],
+    "diagnostic_": [
+      "contract",
+      "ledger",
+      "ledger-forensics",
+      "runtime-host"
+    ],
+    "discover_": [
+      "contract",
+      "device",
+      "execution-kernel",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "drain_": [
+      "runtime-host"
+    ],
+    "drive_": [
+      "execution-kernel"
+    ],
+    "duplicate_": [
+      "artifact-store",
+      "contract",
+      "ledger",
+      "runtime-host"
+    ],
+    "earlier_": [
+      "execution-kernel"
+    ],
+    "effect_": [
+      "actinglab"
+    ],
+    "effective_": [
+      "ledger-forensics",
+      "runtime-host"
+    ],
+    "emit_": [
+      "artifact-store"
+    ],
+    "empty_": [
+      "contract",
+      "runtime-host"
+    ],
+    "emulator_": [
+      "actingd",
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "encode_": [
+      "execution-kernel",
+      "ledger",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "end_": [
+      "runtime-host"
+    ],
+    "enqueue_": [
+      "runtime-host"
+    ],
+    "ensure_": [
+      "device"
+    ],
+    "entry_": [
+      "actingctl",
+      "execution-kernel",
+      "lab"
+    ],
+    "env_": [
+      "actingd",
+      "actinglab",
+      "lab"
+    ],
+    "errors_": [
+      "actingctl"
+    ],
+    "evaluate_": [
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "event_": [
+      "artifact-store",
+      "contract",
+      "ledger",
+      "runtime-host"
+    ],
+    "evidence_": [
+      "artifact-store",
+      "contract",
+      "runtime-host"
+    ],
+    "exchange_": [
+      "runtime-client"
+    ],
+    "exclude_": [
+      "pack-containment"
+    ],
+    "execute_": [
+      "runtime-host"
+    ],
+    "execution_": [
+      "execution-kernel",
+      "policy",
+      "runtime-host"
+    ],
+    "exited_": [
+      "actingctl"
+    ],
+    "expected_": [
+      "actingctl",
+      "actinglab",
+      "pack-containment"
+    ],
+    "expire_": [
+      "runtime-host"
+    ],
+    "expired_": [
+      "runtime-host"
+    ],
+    "explicit_": [
+      "actinglab"
+    ],
+    "export_": [
+      "actingctl",
+      "actingledger",
+      "artifact-store",
+      "contract",
+      "runtime-host"
+    ],
+    "fact_": [
+      "contract",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "fail_": [
+      "runtime-host"
+    ],
+    "fastdeploy_": [
+      "vision-ffi"
+    ],
+    "fatal_": [
+      "runtime-host"
+    ],
+    "fence_": [
+      "runtime-host"
+    ],
+    "fenced_": [
+      "runtime-host"
+    ],
+    "finalize_": [
+      "runtime-host"
+    ],
+    "fingerprinter_": [
+      "contract"
+    ],
+    "finish_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "first_": [
+      "lab"
+    ],
+    "fixture_": [
+      "actingd",
+      "runtime-host"
+    ],
+    "flush_": [
+      "artifact-store"
+    ],
+    "forbidden_": [
+      "ledger"
+    ],
+    "forget_": [
+      "runtime-host"
+    ],
+    "format_": [
+      "artifact-store"
+    ],
+    "forward_": [
+      "policy",
+      "runtime-client"
+    ],
+    "frame_": [
+      "actingd",
+      "actinglab",
+      "artifact-store",
+      "device",
+      "runtime-host"
+    ],
+    "freeze_": [
+      "ledger"
+    ],
+    "gate_": [
+      "runtime-host"
+    ],
+    "governance_": [
+      "actingctl",
+      "actingd",
+      "contract",
+      "runtime-host"
+    ],
+    "guard_": [
+      "ledger"
+    ],
+    "hand_": [
+      "runtime-host"
+    ],
+    "handle_": [
+      "actingctl"
+    ],
+    "hash_": [
+      "artifact-store",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "hold_": [
+      "runtime-host"
+    ],
+    "holder_": [
+      "contract",
+      "scheduler"
+    ],
+    "host_": [
+      "actingctl",
+      "actingd",
+      "runtime-host"
+    ],
+    "identifier_": [
+      "contract",
+      "scheduler"
+    ],
+    "identify_": [
+      "host-metrics"
+    ],
+    "identity_": [
+      "recognition-pack"
+    ],
+    "import_": [
+      "contract",
+      "ledger",
+      "runtime-host"
+    ],
+    "incomplete_": [
+      "contract"
+    ],
+    "inconsistent_": [
+      "contract"
+    ],
+    "increment_": [
+      "ledger"
+    ],
+    "ingest_": [
+      "runtime-host"
+    ],
+    "ingress_": [
+      "ledger"
+    ],
+    "initialize_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "input_": [
+      "contract",
+      "device",
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "insert_": [
+      "ledger"
+    ],
+    "inspect_": [
+      "ledger",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "install_": [
+      "actingctl",
+      "actingd",
+      "artifact-store",
+      "contract",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "installation_": [
+      "device"
+    ],
+    "instance_": [
+      "actingctl",
+      "actingd",
+      "contract",
+      "execution-kernel",
+      "lab",
+      "ledger-forensics",
+      "policy",
+      "runtime-host",
+      "scheduler"
+    ],
+    "instantiate_": [
+      "runtime-host"
+    ],
+    "invalid_": [
+      "actingd",
+      "actingledger",
+      "artifact-store",
+      "contract",
+      "execution-kernel",
+      "ledger",
+      "ledger-forensics",
+      "runtime-host",
+      "scheduler"
+    ],
+    "invalidate_": [
+      "runtime-host"
+    ],
+    "is_": [
+      "execution-kernel"
+    ],
+    "issue_": [
+      "ledger",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "job_": [
+      "actingctl"
+    ],
+    "join_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "joint_": [
+      "ledger"
+    ],
+    "lab_": [
+      "actingctl",
+      "actinglab",
+      "contract",
+      "lab",
+      "ledger",
+      "runtime-host"
+    ],
+    "last_": [
+      "actinglab"
+    ],
+    "latest_": [
+      "ledger"
+    ],
+    "launch_": [
+      "device"
+    ],
+    "layout_": [
+      "pack-containment",
+      "recognition-pack"
+    ],
+    "legacy_": [
+      "actinglab",
+      "ledger-forensics"
+    ],
+    "lift_": [
+      "runtime-host"
+    ],
+    "list_": [
+      "ledger",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "load_": [
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "local_": [
+      "actinglab",
+      "runtime-host"
+    ],
+    "locate_": [
+      "ledger"
+    ],
+    "lock_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "log_": [
+      "actingctl"
+    ],
+    "low_": [
+      "execution-kernel",
+      "lab",
+      "ledger"
+    ],
+    "maatouch_": [
+      "device"
+    ],
+    "maintain_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "maintenance_": [
+      "actingd",
+      "runtime-client",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "malformed_": [
+      "ledger",
+      "policy"
+    ],
+    "map_": [
+      "runtime-host"
+    ],
+    "mark_": [
+      "artifact-store",
+      "lab",
+      "ledger",
+      "runtime-host"
+    ],
+    "marks_": [
+      "lab"
+    ],
+    "match_": [
+      "runtime-client"
+    ],
+    "material_": [
+      "actingctl",
+      "actinglab",
+      "ledger-forensics",
+      "runtime-host"
+    ],
+    "max_": [
+      "actingctl",
+      "execution-kernel",
+      "pack-containment"
+    ],
+    "mcp_": [
+      "actingctl"
+    ],
+    "measure_": [
+      "runtime-host"
+    ],
+    "migrate_": [
+      "runtime-host",
+      "runtime-state"
+    ],
+    "migration_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "minimum_": [
+      "pack-containment"
+    ],
+    "minitouch_": [
+      "device"
+    ],
+    "missing_": [
+      "artifact-store",
+      "contract",
+      "execution-kernel",
+      "lab"
+    ],
+    "monitor_": [
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "monotonic_": [
+      "runtime-host"
+    ],
+    "mumu_": [
+      "actingd",
+      "device",
+      "runtime-host"
+    ],
+    "native_": [
+      "actinglab"
+    ],
+    "navigation_": [
+      "actinglab",
+      "contract",
+      "execution-kernel",
+      "lab",
+      "pack-containment"
+    ],
+    "negotiate_": [
+      "runtime-host"
+    ],
+    "nemu_": [
+      "actingd",
+      "contract",
+      "device",
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "no_": [
+      "actingd",
+      "lab",
+      "policy"
+    ],
+    "non_": [
+      "actinglab"
+    ],
+    "nonfatal_": [
+      "runtime-host"
+    ],
+    "normalize_": [
+      "artifact-store"
+    ],
+    "not_": [
+      "actinglab",
+      "lab",
+      "resource-tooling"
+    ],
+    "note_": [
+      "runtime-host"
+    ],
+    "observation_": [
+      "contract",
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "observe_": [
+      "actinglab",
+      "contract",
+      "execution-kernel",
+      "runtime-client",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "ocr_": [
+      "contract",
+      "execution-kernel",
+      "pack-containment",
+      "resource-tooling",
+      "vision-ffi"
+    ],
+    "offline_": [
+      "actinglab",
+      "execution-kernel"
+    ],
+    "oldest_": [
+      "actingctl"
+    ],
+    "onnxruntime_": [
+      "vision-ffi"
+    ],
+    "open_": [
+      "artifact-store",
+      "contract",
+      "ledger",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "operation_": [
+      "execution-kernel"
+    ],
+    "optional_": [
+      "execution-kernel",
+      "lab"
+    ],
+    "outcome_": [
+      "contract",
+      "ledger",
+      "pack-containment",
+      "runtime-host"
+    ],
+    "output_": [
+      "actingctl",
+      "actingledger"
+    ],
+    "owner_": [
+      "contract",
+      "ledger",
+      "runtime-host"
+    ],
+    "package_": [
+      "actingctl",
+      "actingd",
+      "contract",
+      "pack-containment",
+      "resource-tooling",
+      "runtime-host"
+    ],
+    "page_": [
+      "execution-kernel",
+      "lab",
+      "pack-containment"
+    ],
+    "paired_": [
+      "contract",
+      "execution-kernel"
+    ],
+    "parent_": [
+      "lab"
+    ],
+    "parse_": [
+      "actingledger",
+      "artifact-store",
+      "ledger",
+      "ledger-forensics"
+    ],
+    "path_": [
+      "actinglab"
+    ],
+    "pause_": [
+      "contract",
+      "runtime-host"
+    ],
+    "payload_": [
+      "actingctl",
+      "ledger"
+    ],
+    "performance_": [
+      "contract",
+      "host-metrics",
+      "runtime-host"
+    ],
+    "persist_": [
+      "artifact-store",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "pin_": [
+      "artifact-store",
+      "runtime-host"
+    ],
+    "pinned_": [
+      "policy"
+    ],
+    "plan_": [
+      "runtime-host"
+    ],
+    "planning_": [
+      "contract",
+      "ledger",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "player_": [
+      "device"
+    ],
+    "png_": [
+      "execution-kernel"
+    ],
+    "policy_": [
+      "actingd",
+      "contract",
+      "policy",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "poll_": [
+      "contract",
+      "runtime-host"
+    ],
+    "port_": [
+      "actingd"
+    ],
+    "post_": [
+      "runtime-host"
+    ],
+    "ppocr_": [
+      "contract",
+      "runtime-host"
+    ],
+    "predictive_": [
+      "runtime-client"
+    ],
+    "preempted_": [
+      "runtime-host"
+    ],
+    "preemption_": [
+      "runtime-host"
+    ],
+    "preflight_": [
+      "actingctl"
+    ],
+    "preparation_": [
+      "execution-kernel"
+    ],
+    "prepare_": [
+      "contract",
+      "ledger",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "prerequisite_": [
+      "actingd",
+      "contract",
+      "execution-kernel",
+      "lab"
+    ],
+    "preview_": [
+      "runtime-state"
+    ],
+    "previous_": [
+      "lab"
+    ],
+    "prior_": [
+      "ledger"
+    ],
+    "priority_": [
+      "runtime-host"
+    ],
+    "probe_": [
+      "device"
+    ],
+    "procedure_": [
+      "actingd",
+      "runtime-host"
+    ],
+    "process_": [
+      "actingctl"
+    ],
+    "project_": [
+      "contract",
+      "execution-kernel",
+      "ledger",
+      "ledger-forensics",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "projection_": [
+      "runtime-state"
+    ],
+    "promote_": [
+      "contract",
+      "runtime-host"
+    ],
+    "proposal_": [
+      "contract",
+      "runtime-host"
+    ],
+    "protocol_": [
+      "contract"
+    ],
+    "provider_": [
+      "actingd",
+      "contract",
+      "recognition-pack"
+    ],
+    "proxy_": [
+      "runtime-client"
+    ],
+    "publish_": [
+      "artifact-store",
+      "contract",
+      "runtime-host"
+    ],
+    "pump_": [
+      "runtime-host"
+    ],
+    "query_": [
+      "contract",
+      "ledger",
+      "runtime-client",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "queue_": [
+      "actinglab",
+      "contract",
+      "runtime-host"
+    ],
+    "queued_": [
+      "runtime-host"
+    ],
+    "read_": [
+      "actingledger",
+      "artifact-store",
+      "contract",
+      "execution-kernel",
+      "ledger",
+      "ledger-forensics",
+      "runtime-client",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "readonly_": [
+      "contract",
+      "runtime-host"
+    ],
+    "rebind_": [
+      "contract",
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "rebuild_": [
+      "runtime-host"
+    ],
+    "receive_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "recent_": [
+      "runtime-client"
+    ],
+    "recognition_": [
+      "actinglab",
+      "contract",
+      "execution-kernel"
+    ],
+    "recognize_": [
+      "contract",
+      "runtime-host"
+    ],
+    "reconcile_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "record_": [
+      "actingctl",
+      "actinglab",
+      "artifact-store",
+      "contract",
+      "lab",
+      "ledger",
+      "resource-tooling",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "recover_": [
+      "artifact-store",
+      "contract",
+      "ledger",
+      "runtime-client",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "recovery_": [
+      "actingctl",
+      "actinglab",
+      "ledger",
+      "runtime-host"
+    ],
+    "refuse_": [
+      "runtime-host"
+    ],
+    "region_": [
+      "lab"
+    ],
+    "register_": [
+      "contract",
+      "runtime-host"
+    ],
+    "reject_": [
+      "runtime-host"
+    ],
+    "remove_": [
+      "runtime-host"
+    ],
+    "render_": [
+      "ledger-forensics"
+    ],
+    "renew_": [
+      "contract",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "repair_": [
+      "ledger"
+    ],
+    "replay_": [
+      "actingledger",
+      "ledger",
+      "runtime-host"
+    ],
+    "report_": [
+      "actingctl",
+      "ledger-forensics"
+    ],
+    "req_": [
+      "actingctl"
+    ],
+    "request_": [
+      "actinglab",
+      "contract",
+      "runtime-host"
+    ],
+    "require_": [
+      "runtime-host"
+    ],
+    "requires_": [
+      "actinglab",
+      "lab"
+    ],
+    "reserve_": [
+      "runtime-host"
+    ],
+    "resolve_": [
+      "artifact-store",
+      "host-metrics",
+      "ledger",
+      "ledger-forensics",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "resource_": [
+      "actingctl",
+      "actingd",
+      "actinglab",
+      "contract",
+      "execution-kernel",
+      "lab",
+      "pack-containment",
+      "runtime-client",
+      "runtime-host",
+      "scheduler"
+    ],
+    "restore_": [
+      "artifact-store",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "restored_": [
+      "runtime-database",
+      "runtime-host"
+    ],
+    "resume_": [
+      "contract",
+      "runtime-host"
+    ],
+    "retain_": [
+      "runtime-host"
+    ],
+    "retention_": [
+      "ledger"
+    ],
+    "retire_": [
+      "contract",
+      "runtime-host"
+    ],
+    "return_": [
+      "actingd",
+      "contract",
+      "runtime-host"
+    ],
+    "reuse_": [
+      "lab"
+    ],
+    "rewind_": [
+      "artifact-store"
+    ],
+    "rollback_": [
+      "ledger",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "run_": [
+      "actingctl",
+      "contract",
+      "execution-kernel",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "runtime_": [
+      "actingctl",
+      "actingd",
+      "actinglab",
+      "contract",
+      "ledger",
+      "ledger-forensics",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "safe_": [
+      "runtime-client",
+      "runtime-host"
+    ],
+    "sample_": [
+      "contract",
+      "host-metrics",
+      "ledger",
+      "runtime-host"
+    ],
+    "sanitize_": [
+      "ledger"
+    ],
+    "saved_": [
+      "runtime-host"
+    ],
+    "scan_": [
+      "runtime-host"
+    ],
+    "schedule_": [
+      "runtime-host"
+    ],
+    "scheduled_": [
+      "actingd",
+      "contract",
+      "ledger",
+      "runtime-host"
+    ],
+    "scheduler_": [
+      "actinglab",
+      "runtime-host"
+    ],
+    "scheduling_": [
+      "execution-kernel",
+      "lab",
+      "runtime-host"
+    ],
+    "schema_": [
+      "execution-kernel",
+      "lab"
+    ],
+    "scope_": [
+      "execution-kernel",
+      "lab"
+    ],
+    "score_": [
+      "policy"
+    ],
+    "screen_": [
+      "device"
+    ],
+    "screenshot_": [
+      "artifact-store"
+    ],
+    "seal_": [
+      "artifact-store"
+    ],
+    "search_": [
+      "lab"
+    ],
+    "seed_": [
+      "runtime-host"
+    ],
+    "seek_": [
+      "artifact-store",
+      "ledger"
+    ],
+    "segment_": [
+      "ledger"
+    ],
+    "segmented_": [
+      "device"
+    ],
+    "select_": [
+      "runtime-host"
+    ],
+    "selection_": [
+      "contract",
+      "policy",
+      "resource-tooling"
+    ],
+    "self_": [
+      "lab",
+      "runtime-client"
+    ],
+    "semantic_": [
+      "actinglab",
+      "contract",
+      "execution-kernel"
+    ],
+    "sequence_": [
+      "ledger"
+    ],
+    "serialization_": [
+      "actingledger",
+      "contract",
+      "ledger-forensics"
+    ],
+    "serialize_": [
+      "actingledger",
+      "artifact-store",
+      "ledger",
+      "ledger-forensics"
+    ],
+    "serve_": [
+      "runtime-host"
+    ],
+    "set_": [
+      "runtime-host"
+    ],
+    "settle_": [
+      "pack-containment",
+      "runtime-host"
+    ],
+    "sha256_": [
+      "artifact-store"
+    ],
+    "shutdown_": [
+      "actingctl",
+      "ledger"
+    ],
+    "signature_": [
+      "actinglab",
+      "actingledger",
+      "contract",
+      "ledger"
+    ],
+    "since_": [
+      "actingctl"
+    ],
+    "single_": [
+      "device"
+    ],
+    "snapshot_": [
+      "runtime-host",
+      "runtime-state"
+    ],
+    "source_": [
+      "ledger",
+      "pack-containment"
+    ],
+    "spawn_": [
+      "actingctl",
+      "ledger",
+      "runtime-host"
+    ],
+    "stability_": [
+      "actingledger",
+      "ledger-forensics"
+    ],
+    "stable_": [
+      "actinglab"
+    ],
+    "stage_": [
+      "runtime-host",
+      "runtime-state"
+    ],
+    "stale_": [
+      "actinglab",
+      "contract",
+      "lab",
+      "ledger",
+      "scheduler"
+    ],
+    "start_": [
+      "actingctl",
+      "contract",
+      "ledger",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "startup_": [
+      "actingd",
+      "actinglab",
+      "runtime-host"
+    ],
+    "stat_": [
+      "ledger"
+    ],
+    "state_": [
+      "contract",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "static_": [
+      "actinglab"
+    ],
+    "stderr_": [
+      "actingctl"
+    ],
+    "step_": [
+      "lab",
+      "runtime-database"
+    ],
+    "stop_": [
+      "runtime-host"
+    ],
+    "store_": [
+      "artifact-store",
+      "runtime-host"
+    ],
+    "strategic_": [
+      "contract",
+      "runtime-client",
+      "runtime-host"
+    ],
+    "strategy_": [
+      "policy",
+      "runtime-host"
+    ],
+    "stuck_": [
+      "runtime-host"
+    ],
+    "subscribe_": [
+      "contract",
+      "ledger",
+      "runtime-host"
+    ],
+    "subscription_": [
+      "ledger"
+    ],
+    "summarize_": [
+      "runtime-client"
+    ],
+    "supersede_": [
+      "runtime-host"
+    ],
+    "suspend_": [
+      "runtime-host"
+    ],
+    "suspended_": [
+      "actingctl",
+      "actingd",
+      "runtime-host"
+    ],
+    "switch_": [
+      "runtime-host"
+    ],
+    "sync_": [
+      "artifact-store",
+      "ledger",
+      "runtime-database",
+      "runtime-host"
+    ],
+    "synchronize_": [
+      "runtime-host"
+    ],
+    "synthetic_": [
+      "runtime-host"
+    ],
+    "system_": [
+      "actingd",
+      "contract",
+      "runtime-host"
+    ],
+    "take_": [
+      "runtime-host"
+    ],
+    "takeover_": [
+      "runtime-host"
+    ],
+    "tap_": [
+      "lab"
+    ],
+    "target_": [
+      "actinglab",
+      "contract",
+      "device",
+      "execution-kernel",
+      "lab",
+      "pack-containment"
+    ],
+    "task_": [
+      "actingledger",
+      "contract",
+      "lab",
+      "ledger-forensics",
+      "runtime-host"
+    ],
+    "terminal_": [
+      "execution-kernel",
+      "pack-containment"
+    ],
+    "test_": [
+      "runtime-client"
+    ],
+    "text_": [
+      "pack-containment"
+    ],
+    "tier_": [
+      "actingctl"
+    ],
+    "timeout_": [
+      "actingd"
+    ],
+    "to_": [
+      "execution-kernel"
+    ],
+    "total_": [
+      "actingctl"
+    ],
+    "touch_": [
+      "actingd",
+      "actinglab"
+    ],
+    "transfer_": [
+      "contract"
+    ],
+    "transition_": [
+      "execution-kernel",
+      "runtime-host"
+    ],
+    "truncate_": [
+      "ledger"
+    ],
+    "trusted_": [
+      "actinglab"
+    ],
+    "truth_": [
+      "pack-containment"
+    ],
+    "try_": [
+      "runtime-host"
+    ],
+    "unallowed_": [
+      "execution-kernel",
+      "lab"
+    ],
+    "undeclared_": [
+      "execution-kernel"
+    ],
+    "unexpected_": [
+      "contract"
+    ],
+    "unguarded_": [
+      "pack-containment"
+    ],
+    "unknown_": [
+      "runtime-host"
+    ],
+    "unlock_": [
+      "actingd",
+      "ledger"
+    ],
+    "unresolved_": [
+      "actinglab"
+    ],
+    "unsafe_": [
+      "contract",
+      "execution-kernel",
+      "lab"
+    ],
+    "unsupported_": [
+      "contract",
+      "ledger",
+      "policy"
+    ],
+    "update_": [
+      "ledger",
+      "runtime-host"
+    ],
+    "upgrade_": [
+      "ledger"
+    ],
+    "usage_": [
+      "actingd"
+    ],
+    "validate_": [
+      "artifact-store",
+      "ledger",
+      "ledger-forensics",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "validation_": [
+      "actinglab",
+      "contract",
+      "lab"
+    ],
+    "vendor_": [
+      "contract"
+    ],
+    "verify_": [
+      "artifact-store",
+      "ledger",
+      "runtime-client",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "vision_": [
+      "actingd",
+      "vision-ffi",
+      "vision-provider-check"
+    ],
+    "wait_": [
+      "runtime-host"
+    ],
+    "wake_": [
+      "actinglab"
+    ],
+    "watchdog_": [
+      "actingctl"
+    ],
+    "withhold_": [
+      "runtime-host"
+    ],
+    "wmi_": [
+      "actingctl"
+    ],
+    "write_": [
+      "actingledger",
+      "artifact-store",
+      "contract",
+      "ledger",
+      "runtime-database",
+      "runtime-host",
+      "runtime-state"
+    ],
+    "writer_": [
+      "ledger"
     ]
   },
   "fragments": {

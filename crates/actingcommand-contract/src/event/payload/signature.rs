@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{is_sha256, validate_diagnostic_detail_stage, validate_diagnostic_detail_token};
+use crate::codes::SanitizationCode;
 use crate::{
     DiagnosticCode, EventId, EventSeverity, EventType, LifecycleFailurePhase, OriginModule,
     ResourceQuiescence, RuntimeResourceClosePhase, RuntimeResourceKind, SanitizationError,
@@ -392,7 +393,7 @@ impl LedgerSignatureEvent {
 }
 
 fn invalid(field: &'static str) -> SanitizationError {
-    SanitizationError::new("invalid_diagnostic_signature", field)
+    SanitizationError::new(SanitizationCode::InvalidDiagnosticSignature, field)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

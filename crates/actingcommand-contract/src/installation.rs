@@ -4,6 +4,7 @@
 //! Only acsetup commits the selection. Running processes retain the selection they started
 //! with; these documents contain no Runtime state and are never a substitute for the ledger.
 
+use crate::codes::{InstallationCode, RuntimeContractCode, SharedCode};
 use crate::{RequestId, RuntimeContractError, RuntimeContractResult, RuntimeShutdownTarget};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -43,7 +44,7 @@ impl InstallSlotLock {
 
     fn acquire(root: &Path, slot: InstallSlot, exclusive: bool) -> RuntimeContractResult<Self> {
         let root = std::fs::canonicalize(root)
-            .map_err(|_| RuntimeContractError::new("install_root_unavailable"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallRootUnavailable))?;
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(exclusive);
         #[cfg(windows)]
@@ -71,11 +72,13 @@ impl InstallSlotLock {
                 std::fs::TryLockError::Error(_) => "install_slot_lock_failed",
             })
         })?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| RuntimeContractError::new("install_slot_lock_metadata_failed"))?;
+        let metadata = file.metadata().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InstallSlotLockMetadataFailed)
+        })?;
         if !metadata.is_file() || metadata.len() != 0 {
-            return Err(RuntimeContractError::new("install_slot_lock_not_empty"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InstallSlotLockNotEmpty,
+            ));
         }
         Ok(Self { file, root, slot })
     }
@@ -92,18 +95,19 @@ impl InstallSlotLock {
     pub fn release(self) -> RuntimeContractResult<()> {
         self.file
             .unlock()
-            .map_err(|_| RuntimeContractError::new("install_slot_unlock_failed"))
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallSlotUnlockFailed))
     }
 }
 
 /// Pins the direct executable's slot before any slot material is read. Static candidate
 /// checks use this occupancy without selecting the running installation's configuration.
 pub fn process_slot_lock() -> RuntimeContractResult<Option<&'static InstallSlotLock>> {
-    static SLOT: OnceLock<Result<Option<InstallSlotLock>, &'static str>> = OnceLock::new();
+    static SLOT: OnceLock<Result<Option<InstallSlotLock>, crate::outcome::Code>> = OnceLock::new();
     SLOT.get_or_init(|| {
-        let executable = std::env::current_exe().map_err(|_| "install_executable_unavailable")?;
-        let executable =
-            std::fs::canonicalize(executable).map_err(|_| "install_executable_unavailable")?;
+        let executable = std::env::current_exe()
+            .map_err(|_| InstallationCode::InstallExecutableUnavailable.code())?;
+        let executable = std::fs::canonicalize(executable)
+            .map_err(|_| InstallationCode::InstallExecutableUnavailable.code())?;
         let Some(directory) = executable.parent().filter(|path| {
             matches!(
                 path.file_name().and_then(|name| name.to_str()),
@@ -120,14 +124,16 @@ pub fn process_slot_lock() -> RuntimeContractResult<Option<&'static InstallSlotL
             Some("B") => InstallSlot::B,
             _ => return Ok(None),
         };
-        let root = program_root.parent().ok_or("install_root_unavailable")?;
+        let root = program_root
+            .parent()
+            .ok_or(RuntimeContractCode::InstallRootUnavailable.code())?;
         InstallSlotLock::try_shared(root, slot)
             .map(Some)
             .map_err(|error| error.code())
     })
     .as_ref()
     .map(Option::as_ref)
-    .map_err(|code| RuntimeContractError::new(code))
+    .map_err(|code| RuntimeContractError::new(*code))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,28 +169,36 @@ impl InstalledProcess {
     /// lifetime. With no inherited snapshot, read the active selection once at startup.
     pub fn read(root: &Path) -> RuntimeContractResult<Option<Self>> {
         let root = std::fs::canonicalize(root)
-            .map_err(|_| RuntimeContractError::new("install_root_unavailable"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallRootUnavailable))?;
         let environment_root = std::env::var_os(INSTALL_ROOT_ENV);
         let environment_selection = std::env::var_os(INSTALL_SELECTION_ENV);
         let bytes = match (environment_root, environment_selection) {
             (Some(environment_root), Some(selection)) => {
                 let environment_root = std::fs::canonicalize(environment_root).map_err(|_| {
-                    RuntimeContractError::new("install_environment_root_unavailable")
+                    RuntimeContractError::new(
+                        RuntimeContractCode::InstallEnvironmentRootUnavailable,
+                    )
                 })?;
                 if environment_root != root {
                     return Err(RuntimeContractError::new(
-                        "install_environment_root_mismatch",
+                        RuntimeContractCode::InstallEnvironmentRootMismatch,
                     ));
                 }
                 selection
                     .into_string()
                     .map_err(|_| {
-                        RuntimeContractError::new("install_environment_selection_invalid")
+                        RuntimeContractError::new(
+                            RuntimeContractCode::InstallEnvironmentSelectionInvalid,
+                        )
                     })?
                     .into_bytes()
             }
             (None, None) => return Self::read_active(&root),
-            _ => return Err(RuntimeContractError::new("install_environment_incomplete")),
+            _ => {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InstallEnvironmentIncomplete,
+                ));
+            }
         };
         Self::from_selection_bytes(&root, &bytes).map(Some)
     }
@@ -193,11 +207,15 @@ impl InstalledProcess {
     /// process inputs. Running UI/MCP/Tools consumers keep their original `read` result.
     pub fn read_active(root: &Path) -> RuntimeContractResult<Option<Self>> {
         let root = std::fs::canonicalize(root)
-            .map_err(|_| RuntimeContractError::new("install_root_unavailable"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallRootUnavailable))?;
         let file = match std::fs::File::open(root.join(INSTALL_SELECTION_PATH)) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(RuntimeContractError::new("install_selection_unavailable")),
+            Err(_) => {
+                return Err(RuntimeContractError::new(
+                    SharedCode::InstallSelectionUnavailable,
+                ));
+            }
         };
         let bytes = read_install_input(file, MAX_INSTALL_SELECTION_BYTES)?;
         Self::from_selection_bytes(&root, &bytes).map(Some)
@@ -208,11 +226,12 @@ impl InstalledProcess {
     /// acquisition, then retains this object through candidate checking and commit.
     pub fn from_selection_bytes(root: &Path, bytes: &[u8]) -> RuntimeContractResult<Self> {
         let root = std::fs::canonicalize(root)
-            .map_err(|_| RuntimeContractError::new("install_root_unavailable"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallRootUnavailable))?;
         let selection = InstallSelection::from_json(bytes)?;
         let slot_lock = Arc::new(InstallSlotLock::try_shared(&root, selection.slot)?);
-        let selection_json = std::str::from_utf8(bytes)
-            .map_err(|_| RuntimeContractError::new("install_selection_json_invalid"))?;
+        let selection_json = std::str::from_utf8(bytes).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InstallSelectionJsonInvalid)
+        })?;
         let selected = Self {
             root,
             selection,
@@ -248,8 +267,9 @@ impl InstalledProcess {
     }
 
     pub fn resolve_config(&self, requested: &Path) -> RuntimeContractResult<PathBuf> {
-        let requested = std::path::absolute(requested)
-            .map_err(|_| RuntimeContractError::new("install_config_path_invalid"))?;
+        let requested = std::path::absolute(requested).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InstallConfigPathInvalid)
+        })?;
         let selected = self.config_path();
         let root_alias = requested
             .file_name()
@@ -259,15 +279,16 @@ impl InstalledProcess {
                 .and_then(|parent| std::fs::canonicalize(parent).ok())
                 .as_ref()
                 == Some(&self.root);
-        let selected_canonical = std::fs::canonicalize(&selected)
-            .map_err(|_| RuntimeContractError::new("install_config_unavailable"))?;
+        let selected_canonical = std::fs::canonicalize(&selected).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InstallConfigUnavailable)
+        })?;
         if root_alias
             || std::fs::canonicalize(&requested).ok().as_ref() == Some(&selected_canonical)
         {
             Ok(selected)
         } else {
             Err(RuntimeContractError::new(
-                "install_config_selection_mismatch",
+                RuntimeContractCode::InstallConfigSelectionMismatch,
             ))
         }
     }
@@ -278,15 +299,19 @@ impl InstalledProcess {
         limit: usize,
     ) -> RuntimeContractResult<Vec<u8>> {
         let path = std::fs::canonicalize(reference.resolve(&self.root)?)
-            .map_err(|_| RuntimeContractError::new("install_input_unavailable"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallInputUnavailable))?;
         if !path.starts_with(&self.root) {
-            return Err(RuntimeContractError::new("install_input_outside_root"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InstallInputOutsideRoot,
+            ));
         }
         let file = std::fs::File::open(path)
-            .map_err(|_| RuntimeContractError::new("install_input_unavailable"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallInputUnavailable))?;
         let bytes = read_install_input(file, limit)?;
         if format!("{:x}", Sha256::digest(&bytes)) != reference.sha256 {
-            return Err(RuntimeContractError::new("install_input_hash_mismatch"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InstallInputHashMismatch,
+            ));
         }
         Ok(bytes)
     }
@@ -296,9 +321,11 @@ fn read_install_input(file: std::fs::File, limit: usize) -> RuntimeContractResul
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| RuntimeContractError::new("install_input_read_failed"))?;
+        .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InstallInputReadFailed))?;
     if bytes.is_empty() || bytes.len() > limit {
-        return Err(RuntimeContractError::new("install_input_size_invalid"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InstallInputSizeInvalid,
+        ));
     }
     Ok(bytes)
 }
@@ -306,19 +333,20 @@ fn read_install_input(file: std::fs::File, limit: usize) -> RuntimeContractResul
 /// Reads the launcher snapshot (or direct executable's installation selection) once.
 /// Reconnection and child calls retain it for this process's entire lifetime.
 pub fn process_installation() -> RuntimeContractResult<Option<&'static InstalledProcess>> {
-    static PIN: OnceLock<Result<Option<InstalledProcess>, &'static str>> = OnceLock::new();
+    static PIN: OnceLock<Result<Option<InstalledProcess>, crate::outcome::Code>> = OnceLock::new();
     PIN.get_or_init(|| {
         let own_slot = process_slot_lock().map_err(|error| error.code())?;
-        let executable = std::env::current_exe().map_err(|_| "install_executable_unavailable")?;
-        let executable =
-            std::fs::canonicalize(executable).map_err(|_| "install_executable_unavailable")?;
+        let executable = std::env::current_exe()
+            .map_err(|_| InstallationCode::InstallExecutableUnavailable.code())?;
+        let executable = std::fs::canonicalize(executable)
+            .map_err(|_| InstallationCode::InstallExecutableUnavailable.code())?;
         let program_root = executable.parent().and_then(Path::parent);
         let inherited_root = std::env::var_os(INSTALL_ROOT_ENV);
         let inherited = inherited_root.is_some();
         let root = if let Some(root) = inherited_root {
             Some(PathBuf::from(root))
         } else if std::env::var_os(INSTALL_SELECTION_ENV).is_some() {
-            return Err("install_environment_incomplete");
+            return Err(RuntimeContractCode::InstallEnvironmentIncomplete.code());
         } else if let Some(slot) = own_slot {
             Some(slot.root().to_path_buf())
         } else if let Some(program_root) =
@@ -340,7 +368,7 @@ pub fn process_installation() -> RuntimeContractResult<Option<&'static Installed
         };
         let selected = InstalledProcess::read(&root).map_err(|error| error.code())?;
         if own_slot.is_some() && selected.is_none() {
-            return Err("install_selection_unavailable");
+            return Err(SharedCode::InstallSelectionUnavailable.code());
         }
         // Workflow #359: the tools sit beside the slots in `<root>\tools`, admitted with an
         // inherited selection only. Started directly they find no selection, unless
@@ -349,13 +377,13 @@ pub fn process_installation() -> RuntimeContractResult<Option<&'static Installed
             && !executable.starts_with(selected.program_root())
             && !(inherited && executable.starts_with(selected.root().join("tools")))
         {
-            return Err("install_process_slot_mismatch");
+            return Err(InstallationCode::InstallProcessSlotMismatch.code());
         }
         Ok(selected)
     })
     .as_ref()
     .map(Option::as_ref)
-    .map_err(|code| RuntimeContractError::new(code))
+    .map_err(|code| RuntimeContractError::new(*code))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,7 +425,9 @@ impl InstallFileReference {
                 .all(|part| matches!(part, Component::Normal(_)))
             || !canonical_sha256(&self.sha256)
         {
-            return Err(RuntimeContractError::new("invalid_install_file_reference"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidInstallFileReference,
+            ));
         }
         Ok(())
     }
@@ -424,24 +454,28 @@ pub struct InstallSelection {
 impl InstallSelection {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.schema_version != INSTALL_SELECTION_SCHEMA || self.generation == 0 {
-            return Err(RuntimeContractError::new("invalid_install_selection"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidInstallSelection,
+            ));
         }
         self.members.validate()?;
         self.config.validate()?;
         if self.members.path != format!("{}/MEMBERS.json", self.slot.as_str()) {
-            return Err(RuntimeContractError::new("install_members_slot_mismatch"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InstallMembersSlotMismatch,
+            ));
         }
         let generation = format!("install/generations/{}/", self.generation);
         if !self.config.path.starts_with(&generation) {
             return Err(RuntimeContractError::new(
-                "install_config_generation_mismatch",
+                RuntimeContractCode::InstallConfigGenerationMismatch,
             ));
         }
         if let Some(provider) = &self.provider {
             provider.validate()?;
             if !provider.path.starts_with(&generation) || provider.path == self.config.path {
                 return Err(RuntimeContractError::new(
-                    "install_provider_generation_mismatch",
+                    RuntimeContractCode::InstallProviderGenerationMismatch,
                 ));
             }
         }
@@ -450,10 +484,13 @@ impl InstallSelection {
 
     pub fn from_json(bytes: &[u8]) -> RuntimeContractResult<Self> {
         if bytes.is_empty() || bytes.len() > MAX_INSTALL_SELECTION_BYTES {
-            return Err(RuntimeContractError::new("install_selection_size_invalid"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InstallSelectionSizeInvalid,
+            ));
         }
-        let selection: Self = serde_json::from_slice(bytes)
-            .map_err(|_| RuntimeContractError::new("install_selection_json_invalid"))?;
+        let selection: Self = serde_json::from_slice(bytes).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InstallSelectionJsonInvalid)
+        })?;
         selection.validate()?;
         Ok(selection)
     }
@@ -547,7 +584,7 @@ impl InstallHeldStartup {
             previous.validate()?;
             if previous.transition_id != self.transition_id {
                 return Err(RuntimeContractError::new(
-                    "install_previous_transition_mismatch",
+                    RuntimeContractCode::InstallPreviousTransitionMismatch,
                 ));
             }
         }
@@ -611,7 +648,7 @@ impl InstallTransitionStatus {
             })
         {
             return Err(RuntimeContractError::new(
-                "invalid_install_transition_status",
+                RuntimeContractCode::InvalidInstallTransitionStatus,
             ));
         }
         Ok(())
@@ -620,7 +657,9 @@ impl InstallTransitionStatus {
 
 pub fn validate_install_timeout(timeout_ms: u64) -> RuntimeContractResult<()> {
     if timeout_ms == 0 || timeout_ms > MAX_INSTALL_TIMEOUT_MS {
-        return Err(RuntimeContractError::new("invalid_install_timeout"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidInstallTimeout,
+        ));
     }
     Ok(())
 }
@@ -636,7 +675,9 @@ fn validate_transition_id(value: &str) -> RuntimeContractResult<()> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err(RuntimeContractError::new("invalid_install_transition_id"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidInstallTransitionId,
+        ));
     }
     Ok(())
 }

@@ -285,13 +285,17 @@ pub(crate) fn plan_catalog_approvals(
     let restorable = lineage.contains(generation.catalog_hash());
     let mut plan = CatalogApprovalPlan::default();
     for approval_id in approval_ids {
-        let decision = ApprovalDecisionRecord::new(
-            approval_id.clone(),
-            ApprovalDisposition::Approved,
-            target.clone(),
-            CONFIGURED_CATALOG_APPROVAL_REASON,
-        )
-        .map_err(|_| refused("policy_catalog_approval_invalid"))?;
+        let decision =
+            actingcommand_contract::ApprovalReasonCode::new(CONFIGURED_CATALOG_APPROVAL_REASON)
+                .and_then(|reason| {
+                    ApprovalDecisionRecord::new(
+                        approval_id.clone(),
+                        ApprovalDisposition::Approved,
+                        target.clone(),
+                        reason,
+                    )
+                })
+                .map_err(|_| refused("policy_catalog_approval_invalid"))?;
         let latest = match approvals {
             Some(approvals) => approvals.latest_decision(approval_id)?,
             None => None,
@@ -302,7 +306,7 @@ pub(crate) fn plan_catalog_approvals(
             Some(existing)
                 if restorable
                     && existing.disposition() == ApprovalDisposition::Revoked
-                    && existing.reason_code() == CATALOG_SUPERSEDED_REASON
+                    && existing.reason_code().as_str() == CATALOG_SUPERSEDED_REASON
                     && existing.target() == decision.target() =>
             {
                 plan.reapprove.push(decision);
@@ -316,13 +320,16 @@ pub(crate) fn plan_catalog_approvals(
         .unwrap_or_default();
     for superseded in superseded {
         plan.revoke.push(
-            ApprovalDecisionRecord::new(
-                superseded.approval_id(),
-                ApprovalDisposition::Revoked,
-                superseded.target().clone(),
-                CATALOG_SUPERSEDED_REASON,
-            )
-            .map_err(|_| refused("policy_catalog_revocation_invalid"))?,
+            actingcommand_contract::ApprovalReasonCode::new(CATALOG_SUPERSEDED_REASON)
+                .and_then(|reason| {
+                    ApprovalDecisionRecord::new(
+                        superseded.approval_id(),
+                        ApprovalDisposition::Revoked,
+                        superseded.target().clone(),
+                        reason,
+                    )
+                })
+                .map_err(|_| refused("policy_catalog_revocation_invalid"))?,
         );
     }
     Ok(plan)

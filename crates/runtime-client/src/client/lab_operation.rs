@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{ClientCode, ClientLocation};
 use actingcommand_artifact_store::read_projected_verified;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, LabOperationEvidence,
     MAX_INPUT_DURATION_MS, verify_lab_operation_evidence,
@@ -36,19 +38,21 @@ impl RuntimeDebugSession {
     ) -> RuntimeClientResult<VerifiedLabOperation> {
         request
             .validate()
-            .map_err(|_| lab_error("runtime_lab_operation_request_invalid"))?;
+            .map_err(|_| lab_error(ClientCode::RuntimeLabOperationRequestInvalid))?;
         let registry = self.client.status()?;
         let instance = registry
             .instances()
             .iter()
             .find(|instance| instance.instance_alias() == instance_alias)
-            .ok_or_else(|| lab_error("runtime_lab_operation_instance_unknown"))?
+            .ok_or_else(|| lab_error(ClientCode::RuntimeLabOperationInstanceUnknown))?
             .instance_id();
-        let connection = self.client.connection("run_contained_lab_operation")?;
+        let connection = self
+            .client
+            .connection(ClientLocation::RunContainedLabOperation.location())?;
         let holder = connection
             .ids
             .mint_holder_id()
-            .map_err(|_| lab_error("runtime_lab_holder_issue_failed"))?;
+            .map_err(|_| lab_error(ClientCode::RuntimeLabHolderIssueFailed))?;
         let timeout = connection
             .backend_open_timeout
             .checked_mul(if request.after.is_some() { 23 } else { 4 })
@@ -59,10 +63,10 @@ impl RuntimeDebugSession {
                 ))
             })
             .and_then(|timeout| timeout.checked_add(connection.io_timeout))
-            .ok_or_else(|| lab_error("runtime_lab_operation_timeout_overflow"))?;
+            .ok_or_else(|| lab_error(ClientCode::RuntimeLabOperationTimeoutOverflow))?;
         drop(connection);
         let receipt = self.client.execute_receipt_with_correlation(
-            "run_contained_lab_operation",
+            ClientLocation::RunContainedLabOperation.location(),
             RuntimeOperation::RunContainedLabOperation {
                 instance_alias: instance_alias.to_string(),
                 holder_id: *holder.transport(),
@@ -73,7 +77,7 @@ impl RuntimeDebugSession {
         )?;
         let verification = (|| {
             let Some(RuntimeResult::ContainedLabOperation { operation }) = receipt.result() else {
-                return Err(lab_error("runtime_lab_operation_result_unexpected"));
+                return Err(lab_error(ClientCode::RuntimeLabOperationResultUnexpected));
             };
             let prepared = &operation.record.prepared;
             if prepared.instance_id != instance
@@ -82,7 +86,7 @@ impl RuntimeDebugSession {
                 || prepared.projection_hint != request.projection_hint
                 || prepared.after != request.after
             {
-                return Err(lab_error("runtime_lab_operation_request_mismatch"));
+                return Err(lab_error(ClientCode::RuntimeLabOperationRequestMismatch));
             }
             let events = self.client.query_events(
                 EventQuery {
@@ -126,17 +130,20 @@ impl RuntimeDebugSession {
                 receipt: receipt.clone(),
             })
         })();
-        verification.map_err(
-            |error| match self.client.connection("verify_lab_operation") {
+        verification.map_err(|error| {
+            match self
+                .client
+                .connection(ClientLocation::VerifyLabOperation.location())
+            {
                 Ok(mut connection) => connection.latch(error),
                 Err(error) => error,
-            },
-        )
+            }
+        })
     }
 }
 
-fn lab_error(code: &'static str) -> RuntimeClientError {
-    RuntimeClientError::fatal(code, "verify_contained_lab_operation")
+fn lab_error(code: impl Into<Code>) -> RuntimeClientError {
+    RuntimeClientError::fatal(code, ClientLocation::VerifyContainedLabOperation.location())
 }
 
 fn verify_lab_operation(
@@ -148,9 +155,9 @@ fn verify_lab_operation(
 ) -> RuntimeClientResult<()> {
     receipt
         .validate()
-        .map_err(|_| lab_error("runtime_lab_receipt_invalid"))?;
+        .map_err(|_| lab_error(ClientCode::RuntimeLabReceiptInvalid))?;
     let Some(RuntimeResult::ContainedLabOperation { operation }) = receipt.result() else {
-        return Err(lab_error("runtime_lab_result_missing"));
+        return Err(lab_error(ClientCode::RuntimeLabResultMissing));
     };
     let mut artifacts = std::collections::BTreeMap::new();
     for reference in events
@@ -159,16 +166,16 @@ fn verify_lab_operation(
         .flat_map(|event| &event.artifacts)
     {
         let bytes = read_projected_verified(root, reference)
-            .map_err(|_| lab_error("runtime_lab_artifact_hash_mismatch"))?;
+            .map_err(|_| lab_error(SharedCode::RuntimeLabArtifactHashMismatch))?;
         if artifacts.insert(reference.artifact_id, bytes).is_some() {
-            return Err(lab_error("runtime_lab_artifact_event_duplicate"));
+            return Err(lab_error(SharedCode::RuntimeLabArtifactEventDuplicate));
         }
     }
     let evidence = LabOperationEvidence {
         operation: operation.as_ref().clone(),
         terminal: receipt
             .terminal()
-            .ok_or_else(|| lab_error("runtime_lab_terminal_missing"))?,
+            .ok_or_else(|| lab_error(ClientCode::RuntimeLabTerminalMissing))?,
         events: events.to_vec(),
         lease_events: lease_events.to_vec(),
         action_events: action_events.to_vec(),

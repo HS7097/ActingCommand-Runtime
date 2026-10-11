@@ -366,13 +366,13 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         ),
         // Workflow #191 ps1: without --instance the pause / resume is global.
         Command::Pause {
-            reason_code,
+            pause_reason,
             drain_timeout_ms,
         } => serde_json::to_value(
             client
                 .pause_scheduling(
                     pause_scope(optional_instance),
-                    &reason_code,
+                    pause_reason,
                     drain_timeout_ms,
                 )
                 .map_err(ActingctlError::runtime)?,
@@ -504,7 +504,7 @@ enum Command {
     EmulatorDiscover,
     /// `pause [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]`.
     Pause {
-        reason_code: String,
+        pause_reason: actingcommand_contract::SchedulingPauseReason,
         drain_timeout_ms: u64,
     },
     /// `resume [--instance <alias>]`.
@@ -627,9 +627,10 @@ impl Invocation {
                 }
                 "--reason" if command == "pause" && pause_reason.is_none() => {
                     let reason = require_text(&arguments, &mut index)?;
-                    actingcommand_contract::validate_scheduling_pause_reason(&reason)
-                        .map_err(|_| ActingctlError::Usage)?;
-                    pause_reason = Some(reason);
+                    pause_reason = Some(
+                        actingcommand_contract::SchedulingPauseReason::new(reason)
+                            .map_err(|_| ActingctlError::Usage)?,
+                    );
                 }
                 "--drain-timeout-ms" if command == "pause" && drain_timeout_ms.is_none() => {
                     let timeout = require_u64(&arguments, &mut index)?;
@@ -783,7 +784,13 @@ impl Invocation {
                 _ => return Err(ActingctlError::Usage),
             },
             "pause" => Command::Pause {
-                reason_code: pause_reason.unwrap_or_else(|| DEFAULT_PAUSE_REASON.to_owned()),
+                pause_reason: match pause_reason {
+                    Some(reason) => reason,
+                    None => {
+                        actingcommand_contract::SchedulingPauseReason::new(DEFAULT_PAUSE_REASON)
+                            .map_err(|_| ActingctlError::Usage)?
+                    }
+                },
                 drain_timeout_ms: drain_timeout_ms.unwrap_or(DEFAULT_PAUSE_DRAIN_TIMEOUT_MS),
             },
             "resume" => Command::Resume,

@@ -162,7 +162,7 @@ fn instance_row(
             json!({
                 "revision": pause.revision,
                 "stage": pause.stage,
-                "reason_code": pause.reason_code,
+                "pause_reason": pause.pause_reason,
             }),
         );
     }

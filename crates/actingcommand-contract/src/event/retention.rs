@@ -4,6 +4,7 @@ use super::{
     ArtifactKind, CorrelationId, InstanceId, LeaseId, OwnerEpoch, ProjectedArtifactReference,
     RequestId, RunId, SanitizationError,
 };
+use crate::codes::SanitizationCode;
 use crate::{TaskOutcome, TerminalEvent};
 use serde::{Deserialize, Serialize};
 
@@ -427,5 +428,5 @@ fn event(value: &TerminalEvent) -> Result<(), SanitizationError> {
 }
 
 fn invalid(field: &'static str) -> SanitizationError {
-    SanitizationError::new("invalid_artifact_retention", field)
+    SanitizationError::new(SanitizationCode::InvalidArtifactRetention, field)
 }

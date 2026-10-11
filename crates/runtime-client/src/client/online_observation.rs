@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{ClientCode, ClientLocation};
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     ContainedObservationEvidence, ContainedObservationRequest, ContainedPageObservation,
@@ -39,21 +40,21 @@ impl RuntimeDebugSession {
     ) -> RuntimeClientResult<VerifiedPageObservation> {
         request
             .validate()
-            .map_err(|_| observation_error("runtime_observation_request_invalid"))?;
+            .map_err(|_| observation_error(ClientCode::RuntimeObservationRequestInvalid))?;
         let registry = self.client.status()?;
         let instance = registry
             .instances()
             .iter()
             .find(|instance| instance.instance_alias() == instance_alias)
-            .ok_or_else(|| observation_error("runtime_observation_instance_unknown"))?
+            .ok_or_else(|| observation_error(ClientCode::RuntimeObservationInstanceUnknown))?
             .instance_id();
         let expected = request.expected_sha256().clone();
         let timeout = self
             .client
-            .connection("observe_contained_page")?
+            .connection(ClientLocation::ObserveContainedPage.location())?
             .backend_open_timeout;
         let receipt = self.client.execute_receipt_with_correlation(
-            "observe_contained_page",
+            ClientLocation::ObserveContainedPage.location(),
             RuntimeOperation::ObserveContainedPage {
                 instance_alias: instance_alias.to_string(),
                 request,
@@ -78,7 +79,10 @@ impl RuntimeDebugSession {
             &events,
         )
         .map_err(|error| {
-            match self.client.connection("verify_contained_page_observation") {
+            match self
+                .client
+                .connection(ClientLocation::VerifyContainedPageObservation.location())
+            {
                 Ok(mut connection) => connection.latch(error),
                 Err(error) => error,
             }
@@ -86,8 +90,11 @@ impl RuntimeDebugSession {
     }
 }
 
-fn observation_error(code: &'static str) -> RuntimeClientError {
-    RuntimeClientError::fatal(code, "verify_contained_page_observation")
+fn observation_error(code: impl Into<Code>) -> RuntimeClientError {
+    RuntimeClientError::fatal(
+        code,
+        ClientLocation::VerifyContainedPageObservation.location(),
+    )
 }
 
 fn verify_observation(
@@ -100,19 +107,23 @@ fn verify_observation(
 ) -> RuntimeClientResult<VerifiedPageObservation> {
     receipt
         .validate()
-        .map_err(|_| observation_error("runtime_observation_receipt_invalid"))?;
+        .map_err(|_| observation_error(ClientCode::RuntimeObservationReceiptInvalid))?;
     let Some(RuntimeResult::ContainedPageObserved { observation }) = receipt.result() else {
-        return Err(observation_error("runtime_observation_result_unexpected"));
+        return Err(observation_error(
+            ClientCode::RuntimeObservationResultUnexpected,
+        ));
     };
     if receipt.correlation_id() != correlation
         || observation.instance_id != instance
         || &observation.expected_package_sha256 != expected
     {
-        return Err(observation_error("runtime_observation_identity_mismatch"));
+        return Err(observation_error(
+            ClientCode::RuntimeObservationIdentityMismatch,
+        ));
     }
     let terminal = receipt
         .terminal()
-        .ok_or_else(|| observation_error("runtime_observation_terminal_missing"))?;
+        .ok_or_else(|| observation_error(ClientCode::RuntimeObservationTerminalMissing))?;
     let frame = observation.frame.artifact();
     let identity = |event: &ProjectedEvent| {
         event.links.request_id() == Some(&receipt.request_id())
@@ -133,21 +144,21 @@ fn verify_observation(
             )
     }) {
         return Err(observation_error(
-            "runtime_observation_write_authority_present",
+            ClientCode::RuntimeObservationWriteAuthorityPresent,
         ));
     }
     let lifecycle = |reference: &ProjectedArtifactReference| -> RuntimeClientResult<(&ProjectedEvent, &ProjectedEvent)> {
-        if reference.correlation_id != Some(correlation) || reference.frame_id != frame.frame_id { return Err(observation_error("runtime_observation_artifact_identity_mismatch")); }
+        if reference.correlation_id != Some(correlation) || reference.frame_id != frame.frame_id { return Err(observation_error(ClientCode::RuntimeObservationArtifactIdentityMismatch)); }
         let mut created = None;
         let mut verified = None;
         for event in events.iter().filter(|event| event.artifacts.iter().any(|artifact| artifact.artifact_id == reference.artifact_id)) {
-            if !identity(event) || event.artifacts != [reference.clone()] { return Err(observation_error("runtime_observation_artifact_lifecycle_conflict")); }
-            let slot = match event.event_type { EventType::ArtifactCreated => &mut created, EventType::ArtifactVerified => &mut verified, _ => return Err(observation_error("runtime_observation_artifact_lifecycle_invalid")) };
-            if slot.replace(event).is_some() { return Err(observation_error("runtime_observation_artifact_lifecycle_duplicate")); }
+            if !identity(event) || event.artifacts != [reference.clone()] { return Err(observation_error(ClientCode::RuntimeObservationArtifactLifecycleConflict)); }
+            let slot = match event.event_type { EventType::ArtifactCreated => &mut created, EventType::ArtifactVerified => &mut verified, _ => return Err(observation_error(ClientCode::RuntimeObservationArtifactLifecycleInvalid)) };
+            if slot.replace(event).is_some() { return Err(observation_error(ClientCode::RuntimeObservationArtifactLifecycleDuplicate)); }
         }
         match (created, verified) {
             (Some(created), Some(verified)) if created.sequence < verified.sequence && verified.sequence < terminal.sequence => Ok((created, verified)),
-            _ => Err(observation_error("runtime_observation_artifact_lifecycle_incomplete")),
+            _ => Err(observation_error(ClientCode::RuntimeObservationArtifactLifecycleIncomplete)),
         }
     };
     let (_, frame_verified) = lifecycle(frame)?;
@@ -160,7 +171,7 @@ fn verify_observation(
         || observation.artifact.redaction_state != ArtifactRedactionState::Pending
     {
         return Err(observation_error(
-            "runtime_observation_projection_sequence_mismatch",
+            ClientCode::RuntimeObservationProjectionSequenceMismatch,
         ));
     }
     let decoded = events.iter().filter(|event| identity(event) && matches!(&event.payload,
@@ -171,7 +182,7 @@ fn verify_observation(
         || decoded[0].sequence >= projection_created.sequence
     {
         return Err(observation_error(
-            "runtime_observation_frame_lifecycle_mismatch",
+            ClientCode::RuntimeObservationFrameLifecycleMismatch,
         ));
     }
     let final_events = events
@@ -183,7 +194,9 @@ fn verify_observation(
         })
         .collect::<Vec<_>>();
     let [final_event] = final_events.as_slice() else {
-        return Err(observation_error("runtime_observation_terminal_mismatch"));
+        return Err(observation_error(
+            ClientCode::RuntimeObservationTerminalMismatch,
+        ));
     };
     let requested = events
         .iter()
@@ -201,7 +214,7 @@ fn verify_observation(
         || final_event.links.recognition_id() != projection_verified.links.recognition_id()
     {
         return Err(observation_error(
-            "runtime_observation_recognition_lifecycle_mismatch",
+            ClientCode::RuntimeObservationRecognitionLifecycleMismatch,
         ));
     }
     let valid_terminal = match (&final_event.payload, observation.status) {
@@ -223,17 +236,17 @@ fn verify_observation(
     };
     if !valid_terminal {
         return Err(observation_error(
-            "runtime_observation_terminal_outcome_mismatch",
+            ClientCode::RuntimeObservationTerminalOutcomeMismatch,
         ));
     }
     let bytes = read_projected_verified(root, &observation.artifact)
-        .map_err(|_| observation_error("runtime_observation_artifact_verification_failed"))?;
+        .map_err(|_| observation_error(ClientCode::RuntimeObservationArtifactVerificationFailed))?;
     let evidence: ContainedObservationEvidence = serde_json::from_slice(&bytes)
-        .map_err(|_| observation_error("runtime_observation_artifact_decode_failed"))?;
+        .map_err(|_| observation_error(ClientCode::RuntimeObservationArtifactDecodeFailed))?;
     evidence
         .private_facts
         .validate()
-        .map_err(|_| observation_error("runtime_observation_private_facts_invalid"))?;
+        .map_err(|_| observation_error(ClientCode::RuntimeObservationPrivateFactsInvalid))?;
     if evidence.schema_version != ONLINE_OBSERVATION_SCHEMA
         || evidence.request_id != receipt.request_id()
         || evidence.correlation_id != correlation
@@ -251,11 +264,11 @@ fn verify_observation(
             .all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(observation_error(
-            "runtime_observation_artifact_receipt_mismatch",
+            ClientCode::RuntimeObservationArtifactReceiptMismatch,
         ));
     }
     let png = read_projected_verified(root, frame)
-        .map_err(|_| observation_error("runtime_observation_frame_verification_failed"))?;
+        .map_err(|_| observation_error(ClientCode::RuntimeObservationFrameVerificationFailed))?;
     let observation = observation.as_ref().clone();
     Ok(VerifiedPageObservation {
         receipt,

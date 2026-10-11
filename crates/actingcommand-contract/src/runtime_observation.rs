@@ -2,6 +2,7 @@
 
 //! Typed state facts committed by the existing Runtime and monitor owners.
 
+use crate::codes::SanitizationCode;
 use crate::{
     EventId, OwnerEpoch, RuntimeControlPlaneStatus, RuntimeDiscoveredInstance,
     RuntimeInstanceDiscovery, RuntimeMonitorInstanceStatus, RuntimeMonitorRegistryStatus,
@@ -260,5 +261,5 @@ fn validate_interval(started: u64, completed: u64) -> Result<(), SanitizationErr
 }
 
 fn invalid(field: &'static str) -> SanitizationError {
-    SanitizationError::new("invalid_runtime_state_fact", field)
+    SanitizationError::new(SanitizationCode::InvalidRuntimeStateFact, field)
 }

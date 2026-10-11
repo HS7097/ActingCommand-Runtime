@@ -4,7 +4,6 @@ use super::host_claims::{HostClaimWork, HostKey};
 use super::recovery_ladder::{LADDER_CLAIM_TTL_MS, LadderTrigger, PendingRecoveryLadder};
 use super::resource_close::LeaseDeviceEnd;
 use super::*;
-use crate::codes::HostCode;
 
 #[cfg(test)]
 #[derive(Clone)]
@@ -3650,7 +3649,7 @@ impl HostShared {
         detail.push_str(&format!(" queue_position={}", removed.queued().position()));
         Err(RequestFailure::request(
             RuntimeHostError::request(
-                HostCode::LeaseQueueExpired.as_str(),
+                actingcommand_contract::codes::SharedCode::LeaseQueueExpired.as_str(),
                 "await_operator_claim",
                 RuntimeErrorCode::QueueExpired,
             )
@@ -3805,7 +3804,7 @@ fn lab_operation_busy(
         _ => return None,
     };
     let busy = RuntimeHostError::with_projection(
-        HostCode::LeaseBusy.as_str(),
+        actingcommand_contract::RuntimeErrorCode::LeaseBusy.as_str(),
         "scheduler_admission",
         error.projection(),
     );

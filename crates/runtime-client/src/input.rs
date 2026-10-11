@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{ClientCode, ClientLocation};
 use crate::{RuntimeClient, RuntimeClientError, RuntimeClientResult, RuntimeDebugSession};
 use actingcommand_contract::{InputAction, InputFrameReference, LeaseToken, RuntimeReceipt};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -113,8 +114,8 @@ impl RuntimeInputProxy {
     ) -> RuntimeClientResult<Self> {
         if heartbeat_interval.is_zero() || heartbeat_interval > MAX_RUNTIME_HEARTBEAT_INTERVAL {
             return Err(RuntimeClientError::fatal(
-                "runtime_input_proxy_heartbeat_interval_invalid",
-                "connect_runtime_input_proxy",
+                ClientCode::RuntimeInputProxyHeartbeatIntervalInvalid,
+                ClientLocation::ConnectRuntimeInputProxy.location(),
             ));
         }
         #[cfg(feature = "test-observation")]
@@ -183,8 +184,8 @@ impl RuntimeInputProxy {
                         Err(poisoned) => poisoned.into_inner(),
                     };
                     state.heartbeat_failure = Some(RuntimeClientError::fatal(
-                        "runtime_heartbeat_panicked",
-                        "renew_runtime_lease",
+                        ClientCode::RuntimeHeartbeatPanicked,
+                        ClientLocation::RenewRuntimeLease.location(),
                     ));
                 }
             });
@@ -192,8 +193,8 @@ impl RuntimeInputProxy {
             Ok(heartbeat) => heartbeat,
             Err(_) => {
                 let spawn_error = RuntimeClientError::fatal(
-                    "runtime_input_proxy_heartbeat_spawn_failed",
-                    "start_runtime_heartbeat",
+                    ClientCode::RuntimeInputProxyHeartbeatSpawnFailed,
+                    ClientLocation::StartRuntimeHeartbeat.location(),
                 );
                 return Err(match authority.release_lease(&lock_proxy(&state)?.token) {
                     Ok(()) => spawn_error,
@@ -221,8 +222,8 @@ impl RuntimeInputProxy {
     ) -> RuntimeClientResult<RuntimeReceipt> {
         if self.closed {
             return Err(RuntimeClientError::fatal(
-                "runtime_input_proxy_closed",
-                "proxy_input",
+                ClientCode::RuntimeInputProxyClosed,
+                ClientLocation::ProxyInput.location(),
             ));
         }
         let heartbeat_finished = self.heartbeat.as_ref().is_none_or(JoinHandle::is_finished);
@@ -232,8 +233,8 @@ impl RuntimeInputProxy {
         }
         if heartbeat_finished {
             return Err(RuntimeClientError::fatal(
-                "runtime_input_proxy_heartbeat_stopped",
-                "proxy_input",
+                ClientCode::RuntimeInputProxyHeartbeatStopped,
+                ClientLocation::ProxyInput.location(),
             ));
         }
         #[cfg(feature = "test-observation")]
@@ -294,8 +295,8 @@ impl RuntimeInputProxy {
                 merge_failure(
                     &mut failure,
                     RuntimeClientError::fatal(
-                        "runtime_input_proxy_heartbeat_stop_failed",
-                        "close_runtime_input_proxy",
+                        ClientCode::RuntimeInputProxyHeartbeatStopFailed,
+                        ClientLocation::CloseRuntimeInputProxy.location(),
                     ),
                 );
             }
@@ -330,8 +331,8 @@ impl RuntimeInputProxy {
                 merge_failure(
                     &mut failure,
                     RuntimeClientError::fatal(
-                        "runtime_input_proxy_heartbeat_join_failed",
-                        "close_runtime_input_proxy",
+                        ClientCode::RuntimeInputProxyHeartbeatJoinFailed,
+                        ClientLocation::CloseRuntimeInputProxy.location(),
                     ),
                 );
             }
@@ -483,8 +484,8 @@ fn heartbeat_loop(
 fn lock_proxy(state: &Mutex<ProxyState>) -> RuntimeClientResult<MutexGuard<'_, ProxyState>> {
     state.lock().map_err(|_| {
         RuntimeClientError::fatal(
-            "runtime_input_proxy_state_poisoned",
-            "access_runtime_input_proxy",
+            ClientCode::RuntimeInputProxyStatePoisoned,
+            ClientLocation::AccessRuntimeInputProxy.location(),
         )
     })
 }

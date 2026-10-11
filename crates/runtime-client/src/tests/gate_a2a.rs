@@ -3,7 +3,7 @@
 //! Workflow #378 A2a, part 1 (brief-a2a.md, test T5): the client error text names the Runtime's
 //! code and the receipt state by their registered spellings, never by their Rust names.
 
-use crate::RuntimeClientError;
+use crate::{ClientLocation, RuntimeClientError};
 use actingcommand_contract::{
     EventActor, EventSource, IdentifierIssuer, RuntimeErrorCode, RuntimeErrorProjection,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
@@ -33,8 +33,8 @@ fn gate_client_error_text_names_the_runtime_code_and_receipt_state_by_registered
         projection.clone(),
     )
     .expect("failed receipt");
-    let error =
-        RuntimeClientError::rejected("runtime_health", projection).with_received_receipt(receipt);
+    let error = RuntimeClientError::rejected(ClientLocation::RuntimeHealth, projection)
+        .with_received_receipt(receipt);
     let text = error.to_string();
     assert!(text.contains("runtime code lease_busy"), "{text}");
     assert!(text.contains("state=failed"), "{text}");

@@ -763,7 +763,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
 
     let shared_filter = filter(
         Some("runtime"),
-        Some("command.rejected"),
+        Some("command_rejected"),
         None,
         Some(&correlation_a_text),
     );
@@ -801,7 +801,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     );
     assert_eq!(
         page(
-            filter(None, Some("command.rejected"), None, None),
+            filter(None, Some("command_rejected"), None, None),
             0,
             Some(6),
             10,
@@ -837,7 +837,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         page(
             filter(
                 Some("runtime"),
-                Some("command.rejected"),
+                Some("command_rejected"),
                 Some("error"),
                 Some(&correlation_a_text),
             ),
@@ -852,7 +852,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         vec![3]
     );
 
-    let pagination_filter = filter(Some("runtime"), Some("command.rejected"), None, None);
+    let pagination_filter = filter(Some("runtime"), Some("command_rejected"), None, None);
     let first = page(pagination_filter.clone(), 0, None, 2);
     assert_eq!(first.after_sequence, 0);
     assert_eq!(first.through_sequence, 6);

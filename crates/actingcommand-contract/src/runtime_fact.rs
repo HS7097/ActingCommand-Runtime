@@ -14,6 +14,7 @@
 //! is appended as an event before it enters memory, and the whole store is
 //! sealed periodically as a set of [`RuntimeFactSnapshot`] parts (iron rule 13).
 
+use crate::codes::{SanitizationCode, SharedCode};
 use crate::event::{InstanceId, OriginModule, SanitizationError};
 use crate::fact::{FactScalar, FactValue};
 use serde::{Deserialize, Serialize};
@@ -73,13 +74,19 @@ pub fn validate_runtime_fact_key(key: &str) -> Result<(), SanitizationError> {
             .chars()
             .any(|character| character.is_control() || character.is_whitespace())
     {
-        return Err(SanitizationError::new("invalid_runtime_fact_key", "key"));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidRuntimeFactKey,
+            "key",
+        ));
     }
     if !RUNTIME_FACT_FAMILIES
         .iter()
         .any(|family| key.starts_with(family))
     {
-        return Err(SanitizationError::new("runtime_fact_family_unknown", "key"));
+        return Err(SanitizationError::new(
+            SanitizationCode::RuntimeFactFamilyUnknown,
+            "key",
+        ));
     }
     Ok(())
 }
@@ -122,12 +129,15 @@ impl RuntimeFactRecord {
                     .any(|record| record.len() > MAX_RUNTIME_FACT_RECORD_FIELDS))
         {
             return Err(SanitizationError::new(
-                "runtime_fact_record_list_too_large",
+                SanitizationCode::RuntimeFactRecordListTooLarge,
                 "value",
             ));
         }
         if self.ttl_ms == Some(0) {
-            return Err(SanitizationError::new("invalid_runtime_fact_ttl", "ttl_ms"));
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidRuntimeFactTtl,
+                "ttl_ms",
+            ));
         }
         Ok(())
     }
@@ -204,26 +214,26 @@ impl RuntimeConfigManifest {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.subsystems.len() > MAX_CONFIG_MANIFEST_SUBSYSTEMS {
             return Err(SanitizationError::new(
-                "config_manifest_subsystems_too_many",
+                SanitizationCode::ConfigManifestSubsystemsTooMany,
                 "subsystems",
             ));
         }
         if self.parameters.len() > MAX_CONFIG_MANIFEST_PARAMETERS {
             return Err(SanitizationError::new(
-                "config_manifest_parameters_too_many",
+                SanitizationCode::ConfigManifestParametersTooMany,
                 "parameters",
             ));
         }
         for subsystem in &self.subsystems {
             if !manifest_text_ok(&subsystem.name, MAX_CONFIG_MANIFEST_NAME_BYTES) {
                 return Err(SanitizationError::new(
-                    "invalid_config_subsystem_name",
+                    SanitizationCode::InvalidConfigSubsystemName,
                     "subsystems",
                 ));
             }
             if !manifest_text_ok(&subsystem.reason, MAX_CONFIG_MANIFEST_REASON_BYTES) {
                 return Err(SanitizationError::new(
-                    "invalid_config_subsystem_reason",
+                    SanitizationCode::InvalidConfigSubsystemReason,
                     "subsystems",
                 ));
             }
@@ -231,7 +241,7 @@ impl RuntimeConfigManifest {
         for parameter in &self.parameters {
             if !manifest_text_ok(&parameter.key, MAX_CONFIG_MANIFEST_NAME_BYTES) {
                 return Err(SanitizationError::new(
-                    "invalid_config_parameter_key",
+                    SanitizationCode::InvalidConfigParameterKey,
                     "parameters",
                 ));
             }
@@ -371,25 +381,25 @@ impl RuntimeFactSnapshot {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.schema_version != RUNTIME_FACT_SCHEMA_VERSION {
             return Err(SanitizationError::new(
-                "runtime_fact_schema_version_mismatch",
+                SanitizationCode::RuntimeFactSchemaVersionMismatch,
                 "schema_version",
             ));
         }
         if self.ledger_position == 0 {
             return Err(SanitizationError::new(
-                "runtime_fact_ledger_position_invalid",
+                SharedCode::RuntimeFactLedgerPositionInvalid,
                 "ledger_position",
             ));
         }
         if self.part == 0 || self.part > self.parts {
             return Err(SanitizationError::new(
-                "runtime_fact_snapshot_part_invalid",
+                SanitizationCode::RuntimeFactSnapshotPartInvalid,
                 "part",
             ));
         }
         if self.records.len() > MAX_RUNTIME_FACTS {
             return Err(SanitizationError::new(
-                "runtime_fact_snapshot_too_large",
+                SanitizationCode::RuntimeFactSnapshotTooLarge,
                 "records",
             ));
         }
@@ -404,12 +414,12 @@ impl RuntimeFactSnapshot {
     pub fn validate_for_append(&self) -> Result<(), SanitizationError> {
         self.validate()?;
         if serde_json::to_vec(self)
-            .map_err(|_| SanitizationError::new("invalid_runtime_fact_snapshot", "records"))?
+            .map_err(|_| SanitizationError::new(SharedCode::InvalidRuntimeFactSnapshot, "records"))?
             .len()
             > MAX_RUNTIME_FACT_SNAPSHOT_BYTES
         {
             return Err(SanitizationError::new(
-                "runtime_fact_snapshot_payload_too_large",
+                SharedCode::RuntimeFactSnapshotPayloadTooLarge,
                 "records",
             ));
         }
