@@ -1582,3 +1582,9 @@ pub(super) fn record_stop_input() -> Value {
 pub(super) fn record_status_input() -> Value {
     input_schema(&RECORD_STATUS)
 }
+
+// Test-only: Workflow #382 MCP-T1 (test plan A-5a), the Lab overflow rule gate.
+#[cfg(test)]
+mod tests {
+    mod gate_mcpt1;
+}

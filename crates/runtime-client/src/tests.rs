@@ -8,6 +8,8 @@ mod gate_381a;
 mod gate_381b;
 // Workflow #378 A2a: the client error text names registered spellings (brief-a2a.md T5).
 mod gate_a2a;
+// #382 C-1: the R6 result classes and the receipt waits of existing operations (test plan C-1).
+mod gate_c1;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,

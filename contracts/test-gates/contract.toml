@@ -61,6 +61,27 @@ tests = [
 ]
 incident = []
 
+# Install-control inputs: selection slot, generation and provider; admission per phase; the 600 s bound
+[[gate]]
+key = "K8"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::c1::install_control::gate_install_selection_refuses_a_slot_generation_or_provider_mismatch",
+    "actingcommand-contract::gate::c1::install_control::gate_install_status_admission_is_closed_except_when_released_or_aborted",
+    "actingcommand-contract::gate::c1::install_control::gate_install_timeouts_accept_600000_ms_and_refuse_600001_ms",
+]
+incident = ["#382 C-1"]
+
+# The prior-epoch close basis: its wire values and the import validation per basis
+[[gate]]
+key = "K9"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::c1::prior_epoch_basis::gate_prior_epoch_basis_values_round_trip_their_wire_form",
+    "actingcommand-contract::gate::c1::prior_epoch_basis::gate_prior_epoch_import_validation_follows_its_basis",
+]
+incident = ["#382 C-1"]
+
 # The monitor schedule advances only from due completed runs
 [[gate]]
 key = "K11"
@@ -69,6 +90,25 @@ tests = [
     "actingcommand-contract::lib::monitor::tests::runtime_monitor_state_advances_only_from_due_completed_runs",
 ]
 incident = []
+
+# Outcome envelope: code and category, links, raw_text, unknown codes, fatal links, required keys, catalog, budget
+[[gate]]
+key = "K12"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::outcome::tests::a_full_envelope_carries_values_and_links_and_round_trips",
+    "actingcommand-contract::lib::outcome::tests::codes_mode_keeps_only_registered_names",
+    "actingcommand-contract::lib::outcome::tests::links_are_cut_to_thirty_two_and_to_depth_eight",
+    "actingcommand-contract::lib::outcome::tests::raw_text_is_cut_at_its_bound_and_the_full_text_goes_to_the_sink",
+    "actingcommand-contract::lib::outcome::tests::a_received_envelope_with_an_unknown_code_stays_readable",
+    "actingcommand-contract::lib::outcome::tests::the_embedded_catalog_is_the_merged_file",
+    "actingcommand-contract::lib::outcome::tests::a_fatal_link_needs_a_fatal_top",
+    "actingcommand-contract::lib::outcome::tests::a_missing_required_key_fails_in_debug_builds",
+    "actingcommand-contract::gate::c1::outcome_budget::gate_a_list_value_keeps_64_items_and_records_its_total",
+    "actingcommand-contract::gate::c1::outcome_budget::gate_an_oversized_chain_loses_raw_text_from_the_deepest_link_first",
+    "actingcommand-contract::gate::c1::outcome_budget::gate_an_oversized_tree_drops_its_deepest_links_after_every_raw_text_is_cut",
+]
+incident = ["#382 C-1"]
 
 # OCR numeric parsing
 [[gate]]
@@ -81,6 +121,16 @@ tests = [
     "actingcommand-contract::lib::tests::declared_suffix_extraction_preserves_exact_dictionary_input",
 ]
 incident = []
+
+# The candidate-set hash ignores confidence and frame identity and covers geometry and values
+[[gate]]
+key = "K15"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::c1::candidate_hash::gate_candidate_hash_ignores_confidence_and_frame_identity",
+    "actingcommand-contract::gate::c1::candidate_hash::gate_candidate_hash_covers_geometry_and_feature_values",
+]
+incident = ["#382 C-1"]
 
 # Facts, project interface, page projection, agent, release identity, proposals, client actions
 [[gate]]
@@ -113,6 +163,32 @@ tests = [
     "actingcommand-contract::lib::interaction::tests::approval_is_bound_to_a_typed_target",
 ]
 incident = []
+
+# Per-operation receipt waits by their contract values
+[[gate]]
+key = "R1"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::receipt_timeout_selector_preserves_existing_operation_budgets",
+    "actingcommand-runtime-client::lib::tests::gate_381b::gate_the_emulator_control_receipt_wait_is_440_s_for_a_restart_and_230_s_otherwise",
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_documented_operations_wait_their_contract_receipt_budget",
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_instance_discovery_waits_25_s_for_its_receipt",
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_a_contained_task_receipt_wait_covers_its_deadline",
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_a_pause_waits_its_drain_plus_30_s_grace_plus_io",
+]
+incident = ["#382 C-1"]
+
+# The result class of a failed client call (#338 R6): every code, after send, chains, settled
+[[gate]]
+key = "R3"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_every_runtime_error_code_has_its_r6_disposition",
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_failures_after_send_without_a_projection_are_uncertain",
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_a_failure_chained_to_an_after_send_failure_is_uncertain",
+    "actingcommand-runtime-client::lib::tests::gate_c1::gate_settled_failures_are_not_uncertain",
+]
+incident = ["#382 C-1"]
 
 # A contained-task deadline outlives the IO budget; typed timeout; EOF before it stays a receipt failure
 [[gate]]

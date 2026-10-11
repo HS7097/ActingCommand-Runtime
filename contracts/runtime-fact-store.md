@@ -469,7 +469,7 @@ the backend self-check facts (source `device-proxy` or `capture`).
 
 - `host.scheduling_pause` (Workflow #361 B1) — runtime scope, `record_list`,
   no lifetime: the operator's held scheduling pauses, one row per pause
-  (`scope`, `instance_alias`, `reason_code`, `since_unix_ms`,
+  (`scope`, `instance_alias`, `pause_reason`, `since_unix_ms`,
   `set_in_owner_epoch`, `restored_from_owner_epoch`), recorded before every
   pause or resume changes the gate and again by the start that restores them
   (`contracts/scheduling-pause.md`, "Persistence, no expiry").

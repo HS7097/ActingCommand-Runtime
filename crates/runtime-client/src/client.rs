@@ -94,7 +94,7 @@ pub(crate) fn emulator_control_response_timeout(action: EmulatorInstanceAction) 
 /// Receipt wait for `DiscoverInstances`: the provider runs two vendor commands (`version`,
 /// then `info -v all`), each bounded at 10 s (`MUMU_MANAGER_COMMAND_TIMEOUT`); 25 s covers
 /// both plus the IO margin.
-const INSTANCE_DISCOVERY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(25);
+pub(crate) const INSTANCE_DISCOVERY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(25);
 const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1196,15 +1196,7 @@ impl RuntimeClient {
         let io_timeout = self
             .connection(ContractLocation::PauseScheduling.location())?
             .io_timeout;
-        let response_timeout = Duration::from_millis(drain_timeout_ms)
-            .checked_add(Duration::from_millis(SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS))
-            .and_then(|timeout| timeout.checked_add(io_timeout))
-            .ok_or_else(|| {
-                RuntimeClientError::fatal(
-                    ClientCode::RuntimeReceiptTimeoutOverflow,
-                    ContractLocation::PauseScheduling.location(),
-                )
-            })?;
+        let response_timeout = pause_scheduling_response_timeout(drain_timeout_ms, io_timeout)?;
         let result = self.execute_with_timeout(
             ContractLocation::PauseScheduling.location(),
             RuntimeOperation::PauseScheduling {
@@ -6067,7 +6059,25 @@ fn dropped_before_receipt(error: &RuntimeClientError, request_id: RequestId) -> 
         })
 }
 
-fn contained_task_response_timeout(
+/// The receipt wait of `pause_scheduling`: an instance pause answers only once its in-flight
+/// runs drained, so the wait is `drain_timeout_ms` plus the host's checkpoint grace
+/// (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) plus the IO margin.
+pub(crate) fn pause_scheduling_response_timeout(
+    drain_timeout_ms: u64,
+    io_timeout: Duration,
+) -> RuntimeClientResult<Duration> {
+    Duration::from_millis(drain_timeout_ms)
+        .checked_add(Duration::from_millis(SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS))
+        .and_then(|timeout| timeout.checked_add(io_timeout))
+        .ok_or_else(|| {
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeReceiptTimeoutOverflow,
+                ContractLocation::PauseScheduling.location(),
+            )
+        })
+}
+
+pub(crate) fn contained_task_response_timeout(
     io_timeout: Duration,
     configured_task_timeout: Duration,
 ) -> RuntimeClientResult<Duration> {
