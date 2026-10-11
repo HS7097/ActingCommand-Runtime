@@ -30,7 +30,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// One allow-list entry for G2-G5. A member entry (`item: None`) covers a whole workspace
-/// member; an item entry covers one function of one file.
+/// member; an item entry covers one function of one file, or one struct or variant field of one
+/// file, named `Type.field` or `Enum::Variant.field` (a bridge that a later slice removes).
 #[derive(Debug, Clone, Copy)]
 pub struct AllowEntry {
     pub path: &'static str,

@@ -75,7 +75,8 @@ pub enum Check {
 pub struct Finding {
     pub check: Check,
     pub line: usize,
-    /// The enclosing function, if any.
+    /// For a struct or variant field, the field as `Type.field` or `Enum::Variant.field`;
+    /// otherwise the enclosing function, if any.
     pub item: Option<String>,
     pub detail: String,
 }
@@ -129,6 +130,7 @@ pub fn scan_file(source: &str, channels: Option<ChannelScope<'_>>) -> Result<Fil
                 registered: scope.registered,
                 outcome_module: scope.outcome_module,
                 functions: Vec::new(),
+                types: Vec::new(),
                 findings: Vec::new(),
             };
             visitor.visit_file(&file);
@@ -586,6 +588,8 @@ struct ChannelVisitor<'a> {
     registered: &'a BTreeSet<String>,
     outcome_module: bool,
     functions: Vec<String>,
+    /// The enclosing struct or enum, then `Enum::Variant` inside a variant.
+    types: Vec<String>,
     findings: Vec<Finding>,
 }
 
@@ -732,11 +736,44 @@ impl<'ast> Visit<'ast> for ChannelVisitor<'_> {
         visit::visit_item_type(self, node);
     }
 
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        self.types.push(node.ident.to_string());
+        visit::visit_item_struct(self, node);
+        self.types.pop();
+    }
+
+    fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
+        self.types.push(node.ident.to_string());
+        visit::visit_item_enum(self, node);
+        self.types.pop();
+    }
+
+    fn visit_variant(&mut self, node: &'ast syn::Variant) {
+        let qualified = match self.types.last() {
+            Some(owner) => format!("{owner}::{}", node.ident),
+            None => node.ident.to_string(),
+        };
+        self.types.push(qualified);
+        visit::visit_variant(self, node);
+        self.types.pop();
+    }
+
     fn visit_field(&mut self, node: &'ast syn::Field) {
         if let Some(name) = &node.ident {
             let field = name.to_string();
             if carries_code_name(&field) && is_string_type(&node.ty) {
-                self.report(Check::G2, name.span(), format!("field {field} is a string"));
+                // A field finding names its field, so a bridge entry can allow exactly it.
+                let item = self
+                    .types
+                    .last()
+                    .map(|owner| format!("{owner}.{field}"))
+                    .or_else(|| self.functions.last().cloned());
+                self.findings.push(Finding {
+                    check: Check::G2,
+                    line: line_of(name.span()),
+                    item,
+                    detail: format!("field {field} is a string"),
+                });
             }
         }
         visit::visit_field(self, node);
