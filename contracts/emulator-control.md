@@ -124,7 +124,7 @@ of its shell was lost when that shell's own shutdown hung, and the instance stay
   the ADB baseline) fails the restart with its own code, as for `start` and `stop`.
 - Bounds: a Stop phase takes at most 200 s, 210 s when it fails (the state read below); a Start
   phase at most 220 s on success (with the 30 s ADB baseline), 200 s on failure. The client
-  waits 440 s for a restart's receipt ("Client and CLI").
+  waits 445 s for a restart's receipt ("Client and CLI").
 
 ### Observed on MuMuManager 6.5.7.0 (acceptance run of #437; observations, not vendor guarantees)
 
@@ -564,13 +564,15 @@ that is not registered with `stuck_recovery_instance_unknown` (both fatal).
 explicit receipt wait (`emulator_control_response_timeout(action)`) and returns the
 `EmulatorInstanceControlled` result verbatim:
 
-- start and stop: 230 s (`EMULATOR_CONTROL_RESPONSE_TIMEOUT`). A start takes 60 s tool bound +
+- start and stop: 235 s (`EMULATOR_CONTROL_RESPONSE_TIMEOUT`). A start takes 60 s tool bound +
   120 s readiness wait + one 10 s poll that may straddle the deadline + the 30 s ADB baseline
   = 220 s; a stop 60 + 120 + 10 s + one 10 s process listing that may straddle the deadline,
-  + the 10 s state read after a failure = 210 s; plus the IO margin.
-- restart: 440 s (`EMULATOR_RESTART_RESPONSE_TIMEOUT`, Workflow #381 B, coordinator answer
+  + the 10 s state read after a failure = 210 s; plus the IO margin (230 s), plus at most 5 s
+  for the emulator-control claim's turn in the instance's queue (Workflow #369 Q-2, W-3, S5).
+- restart: 445 s (`EMULATOR_RESTART_RESPONSE_TIMEOUT`, Workflow #381 B, coordinator answer
   D3): a Stop phase of at most 210 s and a Start phase of at most 220 s, plus the 10 s IO
-  margin. MCP `ac_emulator` states both figures.
+  margin (440 s), plus the claim's 5 s wait for its turn once, since a restart is one
+  emulator-control claim (Workflow #369 S5, D1). MCP `ac_emulator` states both figures.
 
 ```
 actingctl emulator status  --state-root <state-root> --instance <alias>

@@ -70,12 +70,14 @@ const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 /// for the ADB baseline (#316-B3): 60 + 120 + 10 + 30 = 220 s. A stop's last process listing
 /// may straddle the deadline by its own 10 s bound and a failure adds one 10 s state read
 /// (Workflow #381 B F2, review M3): 60 + 120 + 10 + 10 + 10 = 210 s. 230 s covers either plus
-/// the IO margin.
-const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(230);
+/// the IO margin; the emulator-control claim's wait for its turn in the instance's queue
+/// (at most 5 s, Workflow #369 Q-2, W-3) adds to it: 230 + 5 = 235 s.
+const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(235);
 /// Receipt wait for a `ControlEmulatorInstance` restart (Workflow #381 B F1′, coordinator
 /// answer D3): a Stop phase (at most 210 s) and then a Start phase (at most 220 s), plus the IO
-/// margin: 210 + 220 + 10 = 440 s.
-const EMULATOR_RESTART_RESPONSE_TIMEOUT: Duration = Duration::from_secs(440);
+/// margin: 210 + 220 + 10 = 440 s; the restart is one emulator-control claim, whose wait for
+/// its turn (at most 5 s, Workflow #369 Q-2, W-3, S5 D1) is added once: 440 + 5 = 445 s.
+const EMULATOR_RESTART_RESPONSE_TIMEOUT: Duration = Duration::from_secs(445);
 
 /// The receipt wait of one `ControlEmulatorInstance` action (Workflow #381 B, test plan C-3).
 pub(crate) fn emulator_control_response_timeout(action: EmulatorInstanceAction) -> Duration {

@@ -11,9 +11,9 @@ use std::time::Duration;
 #[test]
 fn gate_the_emulator_control_receipt_wait_is_440_s_for_a_restart_and_230_s_otherwise() {
     for (action, seconds) in [
-        (EmulatorInstanceAction::Restart, 440),
-        (EmulatorInstanceAction::Start, 230),
-        (EmulatorInstanceAction::Stop, 230),
+        (EmulatorInstanceAction::Restart, 445),
+        (EmulatorInstanceAction::Start, 235),
+        (EmulatorInstanceAction::Stop, 235),
     ] {
         assert_eq!(
             emulator_control_response_timeout(action),
