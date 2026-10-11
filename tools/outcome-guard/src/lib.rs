@@ -31,8 +31,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// One allow-list entry for G2-G5. A member entry (`item: None`) covers a whole workspace
-/// member; an item entry covers one function of one file, or one struct or variant field of one
-/// file, named `Type.field` or `Enum::Variant.field` (a bridge that a later slice removes).
+/// member; an item entry covers one function of one file (a method named `Type::method` or
+/// `Trait::method`, a free function by its name), or one struct or variant field of one file,
+/// named `Type.field` or `Enum::Variant.field` (a bridge that a later slice removes).
 #[derive(Debug, Clone, Copy)]
 pub struct AllowEntry {
     pub path: &'static str,
@@ -114,13 +115,13 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/agent.rs",
-        "code",
+        "AgentSessionResponse::code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/agent.rs",
-        "new",
+        "AgentSessionResponse::new",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
@@ -360,49 +361,121 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "code",
+        "CleanupCauseDraft::code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "event",
+        "CleanupCauseRecord::code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "fact_code",
+        "LifecycleCauseRecord::code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "failure_code",
+        "RuntimeLifecycleFailureRecord::code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "new",
+        "ResourceAuthoringPayloadDraft::event",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "operation",
+        "PolicyPlanningSignalPayload::fact_code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "policy_signal_fact_code",
+        "PerformanceMonitorStatePayload::failure_code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "stage",
+        "ResourceAuthoringPayload::failure_code",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "PublicPayload::failure_code",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "DiagnosticDetailDraft::new",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "CleanupCauseDraft::new",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "LifecycleCauseDraft::new",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "RuntimeLifecycleFailureDraft::new",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "DiagnosticDetailDraft::operation",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "DiagnosticDetailRecord::operation",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "RuntimeLifecycleFailureRecord::operation",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "PublicPayload::policy_signal_fact_code",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "DiagnosticDetailDraft::stage",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "DiagnosticDetailRecord::stage",
+        &[Check::G2],
+        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "RuntimeLifecycleFailureRecord::stage",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
@@ -420,7 +493,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "with_operation",
+        "RuntimeLifecycleFailureDraft::with_operation",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
@@ -516,31 +589,31 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
-        "new",
+        "LabError::new",
         &[Check::G2],
         "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
-        "not_implemented",
+        "LabError::not_implemented",
         &[Check::G2],
         "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
-        "safety_blocked",
+        "LabError::safety_blocked",
         &[Check::G2],
         "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
-        "skipped",
+        "LedgerProjection::skipped",
         &[Check::G2],
         "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
-        "unresolved_environment",
+        "NeedsDetection::unresolved_environment",
         &[Check::G2],
         "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
     ),
@@ -548,7 +621,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/page_projection.rs",
         "project_observation",
         &[Check::G3],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: the Lab page projection's json keys blocked_reason and reason hold registered PageProjectionCode spellings; B4 converts the Lab sites",
     ),
     bridge(
         "crates/actingcommand-contract/src/performance.rs",
@@ -624,31 +697,31 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "failure_code",
+        "ResourceAuthoringEvent::failure_code",
         &[Check::G2],
         "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "from_failure_code",
+        "ContainedTaskCancellationReason::from_failure_code",
         &[Check::G2],
         "A2b: carries the host's code; A2b registers it and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "host_code",
+        "RuntimeErrorProjection::host_code",
         &[Check::G2],
         "A4: receipt projection; receipt v2 carries the outcome (host_code becomes the top code)",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "new",
+        "ResourceAuthoringEvent::new",
         &[Check::G2],
         "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "with_host_failure",
+        "RuntimeErrorProjection::with_host_failure",
         &[Check::G2],
         "A4: receipt projection; receipt v2 carries the outcome (host_code becomes the top code)",
     ),
@@ -690,8 +763,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     },
 ];
 
-/// One bridge: a function, or a struct or variant field (`Type.field`, `Enum::Variant.field`),
-/// whose channel stays a string until the slice its reason names converts it.
+/// One bridge: a function (`Type::method`, `Trait::method` or a free function's name), or a
+/// struct or variant field (`Type.field`, `Enum::Variant.field`), whose channel stays a string
+/// until the slice its reason names converts it.
 const fn bridge(
     path: &'static str,
     item: &'static str,

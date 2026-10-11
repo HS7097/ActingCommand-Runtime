@@ -76,7 +76,8 @@ pub struct Finding {
     pub check: Check,
     pub line: usize,
     /// For a struct or variant field, the field as `Type.field` or `Enum::Variant.field`;
-    /// otherwise the enclosing function, if any.
+    /// otherwise the enclosing function, if any: a method as `Type::method` (its impl's self
+    /// type) or `Trait::method`, a free or nested function by its bare name.
     pub item: Option<String>,
     pub detail: String,
 }
@@ -130,6 +131,7 @@ pub fn scan_file(source: &str, channels: Option<ChannelScope<'_>>) -> Result<Fil
                 registered: scope.registered,
                 outcome_module: scope.outcome_module,
                 functions: Vec::new(),
+                owners: Vec::new(),
                 types: Vec::new(),
                 findings: Vec::new(),
             };
@@ -587,13 +589,27 @@ pub fn inspect_channels(source: &str, scope: ChannelScope<'_>) -> Result<Vec<Fin
 struct ChannelVisitor<'a> {
     registered: &'a BTreeSet<String>,
     outcome_module: bool,
+    /// The enclosing functions: a free or nested function by its name, a method by its impl's
+    /// self type or its trait, as `Type::method` or `Trait::method`.
     functions: Vec<String>,
+    /// The self type of each enclosing impl block, or the trait of a trait block (`None` when
+    /// the self type is not a path).
+    owners: Vec<Option<String>>,
     /// The enclosing struct or enum, then `Enum::Variant` inside a variant.
     types: Vec<String>,
     findings: Vec<Finding>,
 }
 
 impl ChannelVisitor<'_> {
+    /// A method's item name: `Type::method` inside `impl Type` or `impl Trait for Type`,
+    /// `Trait::method` inside `trait Trait`, else the bare name.
+    fn method_item(&self, name: &Ident) -> String {
+        match self.owners.last() {
+            Some(Some(owner)) => format!("{owner}::{name}"),
+            _ => name.to_string(),
+        }
+    }
+
     fn report(&mut self, check: Check, span: Span, detail: String) {
         self.findings.push(Finding {
             check,
@@ -702,14 +718,16 @@ impl<'ast> Visit<'ast> for ChannelVisitor<'_> {
         if is_test_item(&node.attrs) {
             return;
         }
-        self.functions.push(node.sig.ident.to_string());
+        let item = self.method_item(&node.sig.ident);
+        self.functions.push(item);
         self.signature(&node.sig);
         visit::visit_impl_item_fn(self, node);
         self.functions.pop();
     }
 
     fn visit_trait_item_fn(&mut self, node: &'ast syn::TraitItemFn) {
-        self.functions.push(node.sig.ident.to_string());
+        let item = self.method_item(&node.sig.ident);
+        self.functions.push(item);
         self.signature(&node.sig);
         visit::visit_trait_item_fn(self, node);
         self.functions.pop();
@@ -722,7 +740,15 @@ impl<'ast> Visit<'ast> for ChannelVisitor<'_> {
         if !self.outcome_module {
             self.construction(node);
         }
+        self.owners.push(type_name(&node.self_ty));
         visit::visit_item_impl(self, node);
+        self.owners.pop();
+    }
+
+    fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+        self.owners.push(Some(node.ident.to_string()));
+        visit::visit_item_trait(self, node);
+        self.owners.pop();
     }
 
     fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
