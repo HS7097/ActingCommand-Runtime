@@ -12,8 +12,10 @@ tests = [
     "actingcommand-contract::lib::event::tests::tagged_payload_and_projection_layers_reject_unknown_fields",
     "actingcommand-contract::lib::event::tests::event_v2_round_trips_every_c1_payload_variant",
     "actingcommand-contract::lib::runtime::tests::runtime_request_rejects_unknown_fields_schema_origin_and_alias",
+    "actingcommand-contract::gate::a2a::gate_diagnostic_codes_travel_as_registered_contract_codes_without_an_alias",
+    "actingcommand-contract::gate::a2a::gate_scheduling_pause_reason_travels_as_pause_reason",
 ]
-incident = []
+incident = ["#378 A2a"]
 
 # Redaction is schema-owned
 [[gate]]
@@ -180,6 +182,15 @@ tests = [
 ]
 incident = []
 
+# Client error text names registered spellings
+[[gate]]
+key = "R13"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_a2a::gate_client_error_text_names_the_runtime_code_and_receipt_state_by_registered_spelling",
+]
+incident = ["#378 A2a"]
+
 # Outcome guard G1
 [[gate]]
 key = "O1"
@@ -187,8 +198,9 @@ coverage = "Y"
 tests = [
     "actingcommand-outcome-guard::guard::g1_registries_equal_the_catalog_fragments",
     "actingcommand-outcome-guard::guard::g1_reports_a_registry_entry_the_fragments_lack",
+    "actingcommand-outcome-guard::guard::gate_g1_reports_a_registry_invocation_that_does_not_parse",
 ]
-incident = []
+incident = ["#378 A2a"]
 
 # Outcome guard G9
 [[gate]]
@@ -212,8 +224,9 @@ tests = [
     "actingcommand-outcome-guard::guard::each_string_channel_is_caught",
     "actingcommand-outcome-guard::guard::g7_reports_a_retyped_key_and_a_token_the_enum_lacks",
     "actingcommand-outcome-guard::guard::g8_reports_an_unowned_prefix_and_a_reserved_prefix",
+    "actingcommand-outcome-guard::guard::gate_g2_reports_string_tuple_and_array_errors_and_a_non_test_include",
 ]
-incident = []
+incident = ["#378 A2a"]
 
 # Dependency law
 [[gate]]
