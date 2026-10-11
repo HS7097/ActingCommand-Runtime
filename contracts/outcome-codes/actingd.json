@@ -1731,6 +1731,71 @@
       "description": "A policy driver deadline overflowed.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "policy_monitor_request_retried": {
+      "category": "warning",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "io_kind": "required",
+        "limit_count": "required",
+        "operation": "required",
+        "os_error": "optional",
+        "retry_after_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A request of actingd's policy monitor to its own Runtime got no receipt header within policy.monitor.io_timeout_ms (io_kind timed_out, or would_block); the monitor sends it again on a fresh connection after retry_after_ms. attempts counts the failures in a row, limit_count is policy.monitor.retry_limit.",
+      "common_causes": "The host is overloaded (CPU near 100 %) or the Runtime's ledger writer stalls longer than the monitor's I/O timeout.",
+      "handling": "None while the failures stay under the limit. If it recurs, lower the host load or raise policy.monitor.io_timeout_ms."
+    },
+    "policy_monitor_retries_exhausted": {
+      "category": "error",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "io_kind": "required",
+        "limit_count": "required",
+        "operation": "required",
+        "os_error": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd's policy monitor gave up: after limit_count retries in a row (policy.monitor.retry_limit), one more request to its own Runtime got no receipt header in time. actingd then stops with that request's failure.",
+      "common_causes": "The Runtime did not answer its local IPC for longer than the retries cover: a sustained host overload, or a Runtime that hangs.",
+      "handling": "Check the host load and the Runtime's ledger writer, then start the Runtime again. If the host is expected to stall this long, raise policy.monitor.retry_limit, retry_backoff_max_ms or io_timeout_ms."
+    },
+    "policy_monitor_runtime_identity_changed": {
+      "category": "error",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The policy monitor's connection reached a Runtime other than the one actingd hosts: the Runtime info file names another owner epoch or process id. actingd stops.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "policy_monitor_config_invalid": {
+      "category": "error",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused its configuration file: a policy.monitor value is outside its range.",
+      "common_causes": "TBD",
+      "handling": "Correct policy.monitor as contracts/actingd-check-config.md describes it."
     }
   },
   "locations": {

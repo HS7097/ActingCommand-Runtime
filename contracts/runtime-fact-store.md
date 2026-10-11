@@ -465,7 +465,10 @@ the backend self-check facts (source `device-proxy` or `capture`).
     reports whether the `ACTINGCOMMAND_*` environment fallbacks are read; the
     `env_overrides` subsystem's reason names every set but ignored variable as
     `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`,
-    "Environment overrides").
+    "Environment overrides"). With a `policy` section, Workflow #397 adds
+    `policy.monitor.io_timeout_ms`, `policy.monitor.retry_limit`,
+    `policy.monitor.retry_backoff_ms` and `policy.monitor.retry_backoff_max_ms`, actingd's own
+    policy monitor settings as assembly resolved them, each `explicit` when the file named it.
 
 - `host.scheduling_pause` (Workflow #361 B1) — runtime scope, `record_list`,
   no lifetime: the operator's held scheduling pauses, one row per pause

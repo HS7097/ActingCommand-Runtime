@@ -83,6 +83,49 @@ a version of that id that was active, and `catalog_activation_not_newer` without
 When present, the manifest carries `policy.catalog_transition.kind` and
 `policy.catalog_transition.expected_active_catalog_hash` (`explicit`).
 
+The optional `policy.monitor` (Workflow #397) sets the policy monitor's own connection to its
+Runtime: the subscription through which the daemon learns of new ledger events and wakes its
+policy driver.
+
+```json
+{"policy":{"monitor":{"io_timeout_ms":15000,"retry_limit":5,"retry_backoff_ms":1000,"retry_backoff_max_ms":30000}}}
+```
+
+- `io_timeout_ms` (default `15000`, range `1000..=60000`): the I/O timeout of that connection
+  (connect, request, receipt). The subscription is answered at once, so the timeout only
+  matters while the host is slow to answer; the former 5 s did not cover a host at 100 % CPU.
+- `retry_limit` (default `5`, range `0..=100`): how many transient failures in a row the
+  monitor retries. A transient failure is a receipt header that did not arrive within
+  `io_timeout_ms` (`runtime_receipt_header_failed` with I/O kind `timed_out`, or
+  `would_block`) for a request sent to this Runtime. Each retry writes the warning
+  `policy_monitor_request_retried` (values `attempts`, `limit_count`, `io_kind`,
+  `operation`, `retry_after_ms`, `os_error` when the OS gave one) as a `WARN actingd:` line
+  and an `OUTCOME actingd:` line on stderr, waits, and sends the request again on a fresh
+  connection from the same cursor, so no event is missed. A request that succeeds starts the
+  count again. One failure more than `retry_limit` in a row writes
+  `policy_monitor_retries_exhausted` (error, the same values without `retry_after_ms`) and
+  stops the daemon with that request's failure, as before: `runtime.failed` at stage
+  `runtime.lifecycle.policy_monitor` and the `FATAL actingd: monitor:` line. `0` retries
+  nothing.
+- `retry_backoff_ms` (default `1000`, range `1..=600000`) and `retry_backoff_max_ms` (default
+  `30000`, range `retry_backoff_ms..=600000`; when absent, at least `retry_backoff_ms`): the
+  wait after the first failure in a row, doubled after each further one, at most
+  `retry_backoff_max_ms`. The daemon keeps checking for a fatal error, a shutdown, its driver
+  and an install drain while it waits.
+
+Every other failure of the monitor's request stops the daemon at once, as before, and so does
+a connection that reaches a Runtime other than the one the daemon hosts (another owner epoch
+or process id in the runtime info file): `policy_monitor_runtime_identity_changed`. Dropping
+the timed-out connection may make the Runtime record its own `runtime.failed` (stage
+`runtime.ipc.request_read`) when its late answer finds the connection closed. A value outside
+its range fails with `policy_monitor_config_invalid`, stage `assemble`; unknown fields are
+refused as everywhere else. With a `policy` section the manifest carries
+`policy.monitor.io_timeout_ms`, `policy.monitor.retry_limit`,
+`policy.monitor.retry_backoff_ms` and `policy.monitor.retry_backoff_max_ms`, each `explicit`
+when the file named it. `policy.monitor` is actingd-config revision 5
+(`contracts/component-interfaces.md`): an earlier Runtime refuses a file that names it, and a
+file without it keeps its revision.
+
 ## Result
 
 Exactly one JSON object is written to stdout on both outcomes.
@@ -231,7 +274,8 @@ revision.
     the per-instance keys below, the
     `capacity_thresholds.*` bytes, the performance monitor's
     `performance_monitor.pressure_start_samples` /
-    `performance_monitor.pressure_end_samples` and, when the section is
+    `performance_monitor.pressure_end_samples`, with a `policy` section the
+    `policy.monitor.*` settings (Workflow #397, described above) and, when the section is
     present, the `agent_dispatcher.*` budget; plus the values the daemon
     applies without a file field: `scheduler.*`, `policy_cadence.*`,
     `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.*`,
