@@ -6,6 +6,9 @@
 #![forbid(unsafe_code)]
 
 mod error;
+#[cfg(test)]
+#[path = "tests/gate_l1.rs"]
+mod gate_l1;
 mod maintenance;
 pub use maintenance::*;
 
@@ -32,6 +35,14 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum CommitSync {
     Full,
     Normal,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test plan v2.2 fake I2: a `synchronous` readback that the next `Full` call of
+    /// `set_commit_sync` on this thread uses instead of the connection's (L-1 G7 gate test).
+    pub(crate) static FULL_SYNC_READBACK_HOOK: std::cell::Cell<Option<i64>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// One physical connection shared by Runtime-owned typed facades.
@@ -381,6 +392,11 @@ impl RuntimeDatabase {
         let observed = connection
             .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))
             .map_err(sync_failure)?;
+        #[cfg(test)]
+        let observed = match sync {
+            CommitSync::Full => FULL_SYNC_READBACK_HOOK.take().unwrap_or(observed),
+            CommitSync::Normal => observed,
+        };
         if observed != expected {
             return Err(failure("state_database_sync_config_failed", OPERATION)
                 .with_detail(format!("readback={observed}")));

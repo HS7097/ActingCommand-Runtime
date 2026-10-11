@@ -17,6 +17,9 @@ mod codes;
 pub mod critical;
 mod durability;
 mod fact;
+#[cfg(test)]
+#[path = "tests/gate_l1.rs"]
+mod gate_l1;
 pub mod global;
 pub mod local_time;
 pub mod owner_journal;

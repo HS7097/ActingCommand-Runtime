@@ -27,6 +27,18 @@ tests = [
 ]
 incident = []
 
+# Durability class per payload
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::gate_l1::gate_durability_classes_match_the_contract_table",
+    "actingcommand-ledger::gate::durability::gate_append_durable_refuses_an_observational_draft",
+    "actingcommand-ledger::gate::durability::gate_observational_append_restores_full_sync",
+    "actingcommand-runtime-database::lib::gate_l1::gate_failed_sync_restore_refuses_every_later_user",
+]
+incident = ["#382 L-1"]
+
 # Critical intent, then action, then outcome (C1)
 [[gate]]
 key = "5"
@@ -302,8 +314,20 @@ tests = [
     "actingcommand-runtime-state::lib::store::tests::release_pointer_transaction_rolls_back_at_each_sqlite_write_boundary",
     "actingcommand-runtime-state::lib::store::tests::release_staging_requires_complete_matching_artifacts",
     "actingcommand-runtime-state::lib::store::tests::stale_transition_preview_cannot_replace_a_new_pointer",
+    "actingcommand-runtime-state::gate::release_receipt::gate_lost_release_commit_receipt_is_recovered_and_resubmission_is_idempotent",
 ]
-incident = []
+incident = ["#382 L-1"]
+
+# Maintenance limits, disjoint backup paths, relative destinations
+[[gate]]
+key = "33"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-database::gate::maintenance::gate_maintenance_limits_accept_defaults_and_caps_and_refuse_zero_and_over_cap",
+    "actingcommand-runtime-database::gate::maintenance::gate_maintenance_backup_path_must_be_disjoint_from_the_source",
+    "actingcommand-runtime-database::gate::maintenance::gate_relative_maintenance_destination_resolves_against_the_working_directory",
+]
+incident = ["#382 L-1"]
 
 # Read-only forensic commands never write
 [[gate]]
