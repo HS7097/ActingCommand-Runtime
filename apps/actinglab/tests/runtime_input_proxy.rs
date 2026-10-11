@@ -319,7 +319,10 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
             )
             .unwrap()[0] ^= 1;
         assert_eq!(
-            verify_lab_operation_evidence(&corrupt).unwrap_err().code(),
+            verify_lab_operation_evidence(&corrupt)
+                .unwrap_err()
+                .code()
+                .as_str(),
             "runtime_lab_artifact_hash_mismatch"
         );
         if complete {
@@ -2193,8 +2196,8 @@ fn runtime_debug_session_export_without_formal_summary_fails_closed() {
             .expect("evidence request"),
         )
         .expect_err("missing formal capture summary must fail closed");
-    assert_eq!(error.code(), "runtime_request_rejected");
-    assert_eq!(error.operation(), "export_evidence");
+    assert_eq!(error.code().as_str(), "runtime_request_rejected");
+    assert_eq!(error.operation().as_str(), "export_evidence");
     assert_eq!(
         error.projection().expect("typed export projection").code,
         RuntimeErrorCode::EvidenceExportFailed

@@ -554,7 +554,7 @@ pub(crate) fn record_active(
 }
 
 #[cfg(test)]
-fn clear_active(recorder: &TestObservationRecorder) -> Result<(), Code> {
+fn clear_active(recorder: &TestObservationRecorder) -> Result<(), &'static str> {
     let mut active = ACTIVE_RECORDER
         .lock()
         .map_err(|_| "test_observation_active_lock_poisoned")?;

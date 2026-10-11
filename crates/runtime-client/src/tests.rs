@@ -2302,7 +2302,7 @@ fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_ove
             &mut None,
         )
         .expect_err("invalid OCR evidence must fail loud");
-        assert_eq!(error.code(), expected_code);
+        assert_eq!(error.code().as_str(), expected_code);
     }
 }
 

@@ -673,7 +673,7 @@ fn monitor_policy(
                 // the same client subscribes again after a wait or a retry.
                 match refusals.failed(
                     shutdown_requested,
-                    is_admission_refusal(error.code(), error.projection()),
+                    is_admission_refusal(error.code().as_str(), error.projection()),
                     draining,
                 ) {
                     PolicySubscriptionFailureAction::End => break Ok(()),
