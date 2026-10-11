@@ -1790,7 +1790,9 @@ impl SeedScheduler {
         if lease.destructive_step.is_some() {
             return Ok(TransferPreparation::Deferred);
         }
-        if gate == ClaimGate::RoutineHeld && claim.kind.gated_by_pause() {
+        // One-off red proof for P-1 G1 (mutation 4): the hand-off bypass is removed, so no claim
+        // receives a lease end by hand-off.
+        if gate == ClaimGate::RoutineHeld || claim.lease_ttl_ms > 0 {
             return Ok(TransferPreparation::NoCandidate);
         }
         if self.instances.values().any(|state| {
