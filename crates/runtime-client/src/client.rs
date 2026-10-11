@@ -91,7 +91,7 @@ pub(crate) fn emulator_control_response_timeout(action: EmulatorInstanceAction) 
 /// Receipt wait for `DiscoverInstances`: the provider runs two vendor commands (`version`,
 /// then `info -v all`), each bounded at 10 s (`MUMU_MANAGER_COMMAND_TIMEOUT`); 25 s covers
 /// both plus the IO margin.
-const INSTANCE_DISCOVERY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(25);
+pub(crate) const INSTANCE_DISCOVERY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(25);
 const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -5832,7 +5832,7 @@ pub(crate) fn pause_scheduling_response_timeout(
         })
 }
 
-fn contained_task_response_timeout(
+pub(crate) fn contained_task_response_timeout(
     io_timeout: Duration,
     configured_task_timeout: Duration,
 ) -> RuntimeClientResult<Duration> {
