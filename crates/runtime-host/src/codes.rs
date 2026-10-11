@@ -103,6 +103,42 @@ actingcommand_contract::outcome_codes! {
         /// links). The start carries on: the dispatch stays open, out of the active workloads,
         /// and the run's instance is paused with this code as its reason.
         PolicySettlementDispatchUnsettled => "policy_settlement_dispatch_unsettled": error,
+        /// Error. An operator emulator restart whose Stop phase was not confirmed; after a
+        /// Stop whose readiness wait expired its Start still ran (Workflow #381 B F3). The
+        /// request's one failure record (keys `restart_phase`, `stop_result`,
+        /// `stop_elapsed_ms`, `start_dispatched`, `device_process_present`, and
+        /// `start_elapsed_ms`, `process_started`, `android_started`, `adb_port_present` when
+        /// known). Until A2 makes it a `caused_by` link, the Stop's control failure travels as
+        /// the token `cause=<code>` (`emulator_control_wait_timeout` or
+        /// `emulator_control_failed`).
+        EmulatorRestartStopFailed => "emulator_restart_stop_failed": error,
+        /// Error. An operator emulator restart whose Stop phase was confirmed and whose Start
+        /// phase failed (Workflow #381 B F4); same keys, `start_elapsed_ms` always present, and
+        /// the Start's control failure as the token `cause=<code>`.
+        EmulatorRestartStartFailed => "emulator_restart_start_failed": error,
+        /// Warning. A Stop confirmed by `info` alone because its process listing failed
+        /// (Workflow #381 B F2, D6): once per Stop under the request's links, before
+        /// `command.validated` (keys `instance_id`, `device_process_present`, and
+        /// `stop_elapsed_ms`).
+        EmulatorStopProcessUnverified => "emulator_stop_process_unverified": warning,
+        /// Warning. A persistent gate (a budget, a closed activity window, a task paused by
+        /// failure suspension, or the configuration) refused a due clock slot; recorded once
+        /// per (task, instance, occurrence) as a `goal_missed` planning signal (keys `task_id`,
+        /// `alias`, `gate_code`, `occurrence_unix_ms`, and `budget_dimension`,
+        /// `window_end_unix_ms`, `next_eligible_unix_ms`, `next_occurrence_unix_ms` when known;
+        /// Workflow #372 K2).
+        ClockSlotRefused => "clock_slot_refused": warning,
+        /// Info. A transient gate held a due clock slot back: an operator pause at first sight,
+        /// a queue wait or an unavailable instance only once the pair's activity window has
+        /// closed; recorded once per (task, instance, occurrence) as a `goal_missed` planning
+        /// signal (same keys as `clock_slot_refused`; Workflow #372 K2).
+        ClockSlotDeferred => "clock_slot_deferred": info,
+        /// Info. A selected dispatch serves a clock occurrence from before its activity window
+        /// opened; recorded once at the first cycle that selects it, as a `goal_missed`
+        /// planning signal (keys `task_id`, `alias`, `occurrence_unix_ms`,
+        /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
+        /// Workflow #372 K2).
+        ClockSlotOwed => "clock_slot_owed": info,
         /// Error. An operator request (a direct task run, a safe reset, an application
         /// lifecycle command, a self-check or an instance resume's reconnect) waited its cap in
         /// its instance's queue without a grant, and its entry was removed (Workflow #369 S5;

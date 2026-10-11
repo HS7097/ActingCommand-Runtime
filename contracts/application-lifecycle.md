@@ -215,10 +215,17 @@ release, `runtime.failed` on the cleanup path).
 
 ## Expected ledger sequence (one `emulator restart` with a startup package)
 
+A restart is a Stop phase and then a Start phase under the restart's links (Workflow #381 B,
+`emulator-control.md` "Restart"); the sequence below changed with it, its records did not.
+
 ```
 client.cli_command / command.received          emulator.instance.restart
+command.received                                emulator.instance.stop (the Stop phase)
 runtime.lifecycle_observed ...                  (resource close of a retained session, if any)
-command.validated (performed)                  receipt terminal
+command.validated (performed)                  emulator.instance.stop
+runtime.fact_recorded / runtime.fact_invalidated  device.connected = false, then device_closed
+command.received                                emulator.instance.start (the Start phase)
+command.validated (performed)                  emulator.instance.start, receipt terminal
 runtime.instance_bound                          adb_host + adb_port
 runtime.fact_recorded                           device.connected = true
 runtime.lifecycle_observed                      startup_package_scheduled, causation C

@@ -2,8 +2,10 @@
 
 Runtime slice #316-B. `RuntimeOperation::ControlEmulatorInstance { instance_alias, action }`
 starts, stops or restarts the emulator instance itself through the provider that discovered it.
-It is the only path that dispatches the vendor's documented `control` subcommand. The
-application lifecycle inside a running instance (`ApplicationLifecycle`) is unchanged.
+It is the only path that dispatches the vendor's documented `control` subcommand. A restart is
+a Stop phase and then a Start phase composed by the host (Workflow #381 B, "Restart" below);
+the vendor's `control ... restart` is never dispatched. The application lifecycle inside a
+running instance (`ApplicationLifecycle`) is unchanged.
 
 ## Operation and origin gate
 
@@ -50,8 +52,10 @@ opens on its next use.
 
 `actingcommand-device::mumu_manager::control_instance(manager_path, index, action, wait)`:
 
-- Dispatches `MuMuManager.exe control -v <index> launch | shutdown | restart` (no console
-  window), bounded by `MUMU_MANAGER_CONTROL_TIMEOUT` = 60 s. The vendor documents only the
+- Dispatches `MuMuManager.exe control -v <index> launch | shutdown` (no console window),
+  bounded by `MUMU_MANAGER_CONTROL_TIMEOUT` = 60 s. A `restart` reaching it is refused before
+  any vendor command with the device stage `mumu_manager.restart_refused` (effect
+  `not_performed`); the host never passes one (Workflow #381 B, coordinator answer D4). The vendor documents only the
   syntax: no return value, exit code, JSON or blocking behaviour. A non-zero exit
   (`mumu_manager.control_exit`; the exit code equals `errcode` when an envelope is present) or
   an `{"errcode","errmsg"}` envelope with `errcode != 0` and exit 0
@@ -71,19 +75,56 @@ opens on its next use.
   (`mumu_manager.errcode` / `.entry` / `.exit`), a shape or other typed reader failure
   (`.shape`, `.decode`, `.json`, `.output_bound`, `.run`) or `launch_err_code != 0` ends the
   wait early.
-- Success: `start` / `restart` when `is_process_started && is_android_started && adb_port != 0`;
-  `stop` when `!is_process_started`. Default waits `MUMU_MANAGER_STATE_WAIT_START` = 120 s and
-  `MUMU_MANAGER_STATE_WAIT_STOP` = 120 s (raised from 60 s: `info` may not answer for more than
-  30 s while the instance is stopping), counted from the moment `control` returned.
+- Success: `start` when `is_process_started && is_android_started && adb_port != 0`; `stop`
+  when `!is_process_started` and no vendor device process of the instance is left (below).
+  Default waits `MUMU_MANAGER_STATE_WAIT_START` = 120 s and `MUMU_MANAGER_STATE_WAIT_STOP` =
+  120 s (raised from 60 s: `info` may not answer for more than 30 s while the instance is
+  stopping), counted from the moment `control` returned.
+- Stop's process check (Workflow #381 B F2, review M2): a stop is confirmed only when `info`
+  reports `!is_process_started` **and** the system process listing shows no `MuMuNxDevice.exe`
+  carrying `-v <index>` (observed on 10-09: Android stopped in about 11 s, the vendor's device
+  process lived 41 s). The listing runs only after `info` reported the process stopped, at most
+  once per `MUMU_MANAGER_PROCESS_LIST_INTERVAL` = 5 s, each one bounded by
+  `MUMU_MANAGER_PROCESS_LIST_TIMEOUT` = 10 s (one PowerShell `Win32_Process` query, 1-3 s in
+  practice, no console window). A listing that fails or passes its bound is a failed listing:
+  `info`'s answer confirms the stop and the outcome records `device_process_present=unknown`
+  (a warning, below); a failed listing never becomes a timeout. The outcome of a stop carries
+  `device_process_present` (`false`, or `unknown`); a failed stop carries `true` when its last
+  listing still showed the device process, `unknown` otherwise. A stop's worst case is 60 s
+  (`control`) + 120 s (wait) + 10 s (last poll) + 10 s (last listing) = 200 s.
 - Failure: `launch_err_code != 0` (`mumu_manager.launch_error`, carrying `launch_err_msg` in the
   summary), an `info` refusal (its existing typed stages, an expired poll excepted) or the
   deadline (`mumu_manager.wait_timeout`, carrying the last observed state, or `no observation`
   when every poll expired, and the count of expired polls).
 - `player_state` is undocumented: it is recorded opaquely and never branched on.
-- Caveat from the undocumented behaviour: if `control restart` reports the old running state
-  before the shutdown phase, the wait may satisfy the running criterion early. The Runtime does
-  not assume it either way; the bounds are Runtime policy.
 - The hidden `api` subcommand is never dispatched.
+
+## Restart (Workflow #381 B)
+
+An operator `restart` (`actingctl emulator restart`, MCP `ac_emulator restart`) is a Stop phase
+and then a Start phase under one instance admission guard, each through the same drive path as
+`stop` and `start` (fence, close before the action, provider control, rebinding, self-check
+invalidation, ADB baseline after the Start), as the ladder's emulator-restart rung does. Each
+phase is its own provider call with its own deadline, measured from its own `control` return:
+the Stop with `MUMU_MANAGER_STATE_WAIT_STOP`, the Start with `MUMU_MANAGER_STATE_WAIT_START`;
+the vendor's `restart` verb is never dispatched (the 10-09 incident: the vendor's self-restart
+of its shell was lost when that shell's own shutdown hung, and the instance stayed stopped).
+
+- The Start follows a confirmed Stop, or a Stop that ended in `mumu_manager.wait_timeout`. After
+  any other Stop failure (`control_exit`, `control_errcode`, `run`, `launch_error` and every
+  other stage) no Start is dispatched.
+- A restart succeeds only when both phases are confirmed; it then ends exactly as a successful
+  start does (connection preparation, startup package scheduling), and the receipt result is
+  `EmulatorInstanceControlled { action: restart, .. }` with `elapsed_ms` the whole request's
+  provider and ADB baseline time.
+- A restart whose Stop was not confirmed by its provider control fails
+  `emulator_restart_stop_failed` (phase `stop`) whatever its Start did; a confirmed Stop
+  followed by a failed provider control of the Start fails `emulator_restart_start_failed`
+  (phase `start`). Every other failure of a phase (a busy fence, a session close, a rebinding,
+  the ADB baseline) fails the restart with its own code, as for `start` and `stop`.
+- Bounds: a Stop phase takes at most 200 s, 210 s when it fails (the state read below); a Start
+  phase at most 220 s on success (with the 30 s ADB baseline), 200 s on failure. The client
+  waits 440 s for a restart's receipt ("Client and CLI").
 
 ### Observed on MuMuManager 6.5.7.0 (acceptance run of #437; observations, not vendor guarantees)
 
@@ -130,9 +171,9 @@ guard so nothing can bypass the host checks: `open_input`, `open_capture` and
 `adb.endpoint_pending` (category `protocol`).
 
 Emulator control itself works on a pending instance: the fence and the close-before step do not
-require a bound endpoint. After a successful `start` or `restart`, still under the per-instance
-admission guard, the registry binds the entry to the host it was registered with and the port the
-control outcome reported (`EmulatorControlOutcome.adb_port`), the host refreshes its
+require a bound endpoint. After a successful Start (a `start`, or a restart's Start phase), still
+under the per-instance admission guard, the registry binds the entry to the host it was
+registered with and the port the control outcome reported (`EmulatorControlOutcome.adb_port`), the host refreshes its
 `registered_instances` record (endpoint and audit endpoint together, under the registry lock
 that every identity check now also holds), and one more `runtime.instance_bound` event for the
 instance (same discovered fields, now with `adb_host` and `adb_port`, linked to the control
@@ -148,7 +189,7 @@ Stop/start cannot admit or reject a waiting lease request using its earlier endp
 The existing active-lease/queued-request fence and device-registry endpoint gate remain.
 
 ADB baseline (slice #316-B3): the vendor reports `running` a few seconds before adbd answers,
-so a bound `start` / `restart` succeeds only once the ADB baseline answers. Still under the
+so a bound Start succeeds only once the ADB baseline answers. Still under the
 admission guard, after the rebinding, the host probes the bound endpoint (`ensure_device`
 with a connect attempt allowed) every 500 ms against one absolute 30 s deadline; the probes are not recorded,
 the wait is part of the receipt's `elapsed_ms`. Each get-state/connect/get-state command uses
@@ -157,7 +198,7 @@ success, and the next poll/sleep shares that deadline. The existing bounded proc
 cleanup remains mandatory and can finish after the execution deadline; no late success or
 hard FFI cancellation is claimed. Original command errors and unconfirmed cleanup survive;
 unconfirmed resource closure remains fatal. Other callers retain their default command
-timeouts, and the client receipt budget stays 230 s. A timeout fails typed with
+timeouts; the client receipt budgets are in "Client and CLI". A timeout fails typed with
 `emulator_control_adb_not_ready` (`backend_operation_failed`, receipt state `failed`, effect
 `indeterminate`; native detail carries the alias, the port, the milliseconds waited and the
 last ADB error): `command.validated`, the second `runtime.instance_bound`, `device.connected`
@@ -165,6 +206,24 @@ and the startup package are all withheld, the binding keeps the reported port, a
   request may be repeated. After a successful `stop` the entry returns to pending
 and `status` shows `adb_port: null` again; no event beyond the existing `device.connected`
 invalidation records that transition.
+
+State after a failure (Workflow #381 B F4, review M3): after any failed provider control
+(`start`, `stop`, either phase of a restart, the ladder's rung 3) the host reads the instance's
+state once through the provider's read-only surface (`info -v <index>`, bounded by
+`MUMU_MANAGER_COMMAND_TIMEOUT` = 10 s, no device session) and applies it, still under the
+admission guard and before the failure is recorded:
+
+- stopped (`!is_process_started`): the binding returns to pending, the `backend.selfcheck.*`
+  facts are invalidated, `device.connected` is recorded `false` and the stop invalidations
+  follow (`device.connected`, the foreground and the task facts, `device_closed`);
+- running: the reported port is bound (a changed binding records one more
+  `runtime.instance_bound` under the request's links) and the self-check facts are invalidated;
+- no settled observation (the read failed, or the instance is between the two): when the vendor
+  command ran (effect `indeterminate`) the self-check facts and `device.connected` are
+  invalidated; otherwise nothing changes, so a refusal that changed nothing keeps a running
+  instance connected.
+
+Each request still gets exactly one terminal.
 
 Note for #322 readers: the port recorded by the newest `runtime.instance_bound` of an instance
 represents that instance from then on; older events keep the port they were recorded with.
@@ -181,13 +240,21 @@ surface keeps the trait default `emulator_control.unsupported`
 Every request is recorded intent -> result, all linked to the instance:
 
 1. `client.cli_command` (Cli) or `client.ui_action` (Ui) and `command.received`, action
-   `emulator.instance.start | stop | restart`.
+   `emulator.instance.start | stop | restart`. A restart then writes, for each phase under the
+   restart's links, `command.received` with the phase's action (`emulator.instance.stop`, then
+   `emulator.instance.start`) and the phase's own events below; on success the Start phase's
+   `command.validated` is the receipt terminal (Workflow #381 B M1: the event sequence of a
+   restart changed, its structure did not).
 2. When a device session was open, the existing resource-close events of that session
    (`runtime.lifecycle_observed` with `resource_quiescence`, or the session-close failure).
-3. On success `command.validated` with effect `performed` (the receipt terminal), then after
-   `start` / `restart` one `runtime.instance_bound` carrying the resolved `adb_host` and
-   `adb_port`, then `runtime.fact_recorded` for `device.connected` (and after `stop` a
-   `runtime.fact_invalidated` with reason `device_closed`).
+3. On success `command.validated` with effect `performed` (the receipt terminal), then after a
+   Start one `runtime.instance_bound` carrying the resolved `adb_host` and `adb_port`, then
+   `runtime.fact_recorded` for `device.connected` (and after a Stop a
+   `runtime.fact_invalidated` with reason `device_closed`). A Stop that `info` alone confirmed
+   because its process listing failed first records one `runtime.failed` at Warning,
+   `emulator_stop_process_unverified` (`instance_id`, `device_process_present=unknown`,
+   `stop_elapsed_ms`), under the request's links (on rung 3 the ladder's), before its
+   `command.validated`.
 4. On denial or failure `command.rejected` (the receipt terminal; diagnostic
    `backend.operation_failed` for tool failures, `lease.fencing_denied` for the busy denial,
    `runtime.diagnostic` otherwise; effect `not_performed` before the tool ran, `indeterminate`
@@ -197,11 +264,28 @@ Every request is recorded intent -> result, all linked to the instance:
    control_instance}` declared Sensitive, where `stage` is the typed step
    (`mumu_manager.control_exit`, `.control_errcode`, `.launch_error`, `.wait_timeout`, `.run`,
    `.timeout`, `.path`, an `info` reader stage, `emulator_control.unavailable`, `.unsupported`).
+   The primary detail's message carries `key=value` tokens: the stage, exit status, elapsed
+   time and last state of the failure, and for a stop `device_process_present`.
+5. A failed restart records one `command.rejected` (action `emulator.instance.restart`, the
+   receipt terminal) and one `runtime.failed`, after its Start phase when one ran (coordinator
+   answer D2); a failed phase records nothing of its own. For `emulator_restart_stop_failed` and
+   `emulator_restart_start_failed` the primary detail's stage, the exit code and the native
+   detail are the failing phase's, and the message carries the tokens `restart_phase=stop|start`,
+   `stop_result=confirmed|<the Stop's device stage, last part>`, `stop_elapsed_ms`,
+   `start_dispatched`, `start_elapsed_ms` (when the Start ran), `process_started`,
+   `android_started`, `adb_port_present` (the last state, when known: the Start's success, or
+   the state read after the failing phase, or its last observation), `device_process_present`
+   (the Stop's process check) and `cause=<emulator_control_wait_timeout |
+   emulator_control_failed>`, the failing phase's control code until #378 A2 makes it a
+   `caused_by` link. A Start that succeeded after a Stop whose wait expired still prepares the
+   connection and schedules the startup package before that record.
 
 Host codes: `emulator_control_busy` (`runtime_busy`, denied), `emulator_control_unavailable`
 and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_control_wait_timeout`,
-`emulator_control_failed`, `emulator_control_endpoint_unresolved` and
-`emulator_control_adb_not_ready` (`backend_operation_failed`, failed). Device-facing requests on a pending instance are denied with `instance_not_running`
+`emulator_control_failed`, `emulator_control_endpoint_unresolved`,
+`emulator_control_adb_not_ready`, and for a restart `emulator_restart_stop_failed` and
+`emulator_restart_start_failed` (`backend_operation_failed`, failed; registered, pending since
+0.12.0); `emulator_stop_process_unverified` is the stop's Warning record. Device-facing requests on a pending instance are denied with `instance_not_running`
 (`invalid_request`), see "Cold start". The receipt carries the host code and its operation
 in the optional, additive `host_code`/`host_operation` error-projection fields (closed static
 codes; a client built before them cannot decode such a receipt, `deny_unknown_fields`), so
@@ -256,7 +340,7 @@ that belongs to emulator control:
   (phase `startup_package_scheduled { instance_id }`, the package locator in the audit machine
   path, links of the control request plus a freshly minted causation id) is appended, the
   package's claim is queued, and the receipt returns as before with
-  `startup_package: scheduled`. The 230 s control wait is never spent on the package.
+  `startup_package: scheduled`. The control's receipt wait is never spent on the package.
 - Workflow #369 H-6: the claim (high priority, no deadline, never preempting; its own
   `lease.requested` + `scheduler.queued` under the causation id) is queued while the control
   still holds the instance's admission guard, and granted (`scheduler.admitted` +
@@ -375,14 +459,17 @@ its own run links, hands the key back to that continuation. Rung 2's entry and s
 - `emulator_restart`: Stop and then Start through this contract's existing provider control
   path, under one instance admission guard, on the ladder's key: the control's fence admits that
   key (lease id and holder id, no destructive step open), the retained session is closed under
-  it, and the readiness preparation runs on it and releases nothing. A Stop or Start that fails
-  or times out (for example `emulator_control_wait_timeout`) records `command.rejected` +
-  `runtime.failed` and fails the rung with its code, so an instance left stopped is reported,
-  never left down silently. Each action records `command.received`, then
-  `command.validated` or `command.rejected` + `runtime.failed`. Stop must observe the old
-  process gone before `recovery_instance_stopped` is recorded and Start is considered.
-  Admission/fencing is checked again before Start. Stop failure, timeout, ambiguous identity
-  or unconfirmed close ends the rung without Start. Start binds its newly observed port and
+  it, and the readiness preparation runs on it and releases nothing. Each action records
+  `command.received`, then `command.validated` or `command.rejected` + `runtime.failed` (a
+  failed Stop's record carries `device_process_present`, `true` when its last process listing
+  still showed the device process; coordinator answer D5). A confirmed Stop records
+  `recovery_instance_stopped` and the Start follows. Workflow #381 B F3: a Stop that ended in
+  `emulator_control_wait_timeout` also leads on to the Start and the readiness wait; its
+  `command.rejected` serves as the `stop` of `recovery_environment_ready`, and no
+  `recovery_instance_stopped` is written. Every other Stop failure, an ambiguous identity or an
+  unconfirmed close ends the rung without Start, with its code as the rung's reason; a Start
+  that fails or times out fails the rung with its code, so an instance left stopped is
+  reported, never left down silently. Admission/fencing is checked again before Start. Start binds its newly observed port and
   completes the existing ADB baseline. Then (Workflow #369-1) the rung waits for readiness
   within 120 s of Start: Android must report a resumed activity (the read-only foreground
   query of the ADB baseline; no session is opened) and a fresh input/capture preparation
@@ -474,10 +561,16 @@ that is not registered with `stuck_recovery_instance_unknown` (both fatal).
 ## Client and CLI
 
 `RuntimeClient::control_emulator_instance(instance_alias, action)` sends the operation with an
-explicit receipt wait of 230 s (`EMULATOR_CONTROL_RESPONSE_TIMEOUT`: 60 s tool bound + 120 s
-readiness wait, the same for start, restart and stop + one 10 s poll that may straddle the
-deadline + the 30 s ADB baseline wait after start / restart = 220 s, plus the IO margin) and
-returns the `EmulatorInstanceControlled` result verbatim.
+explicit receipt wait (`emulator_control_response_timeout(action)`) and returns the
+`EmulatorInstanceControlled` result verbatim:
+
+- start and stop: 230 s (`EMULATOR_CONTROL_RESPONSE_TIMEOUT`). A start takes 60 s tool bound +
+  120 s readiness wait + one 10 s poll that may straddle the deadline + the 30 s ADB baseline
+  = 220 s; a stop 60 + 120 + 10 s + one 10 s process listing that may straddle the deadline,
+  + the 10 s state read after a failure = 210 s; plus the IO margin.
+- restart: 440 s (`EMULATOR_RESTART_RESPONSE_TIMEOUT`, Workflow #381 B, coordinator answer
+  D3): a Stop phase of at most 210 s and a Start phase of at most 220 s, plus the 10 s IO
+  margin. MCP `ac_emulator` states both figures.
 
 ```
 actingctl emulator status  --state-root <state-root> --instance <alias>

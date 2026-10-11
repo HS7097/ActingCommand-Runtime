@@ -210,6 +210,14 @@
       "type": "unix_ms",
       "description": "The start of a scheduling window, in Unix milliseconds."
     },
+    "window_end_unix_ms": {
+      "type": "unix_ms",
+      "description": "The end of the activity window a clock slot was refused or deferred in, in Unix milliseconds."
+    },
+    "first_run": {
+      "type": "boolean",
+      "description": "The pair had no earlier dispatch."
+    },
     "count": {
       "type": "integer",
       "description": "A count."
@@ -545,6 +553,22 @@
     "budget_dimension": {
       "type": "vocab:budget_dimension",
       "description": "The policy budget dimension that is exhausted."
+    },
+    "unknown_reason": {
+      "type": "vocab:unknown_reason",
+      "description": "Why an input a selection document reads could not be read as a known value."
+    },
+    "rule_id": {
+      "type": "token",
+      "description": "The id of a selection document's gate or scoring term."
+    },
+    "unknown_clause": {
+      "type": "vocab:unknown_clause",
+      "description": "The on_unknown clause a selection document declares for a gate or term."
+    },
+    "reader_problem": {
+      "type": "vocab:reader_problem",
+      "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
     },
     "pause_reason": {
       "type": "name",
@@ -1336,6 +1360,42 @@
     "with_console": {
       "type": "boolean",
       "description": "Whether the console starts too."
+    },
+    "restart_phase": {
+      "type": "vocab:emulator_restart_phase",
+      "description": "The phase of an emulator restart that a failure belongs to."
+    },
+    "stop_result": {
+      "type": "vocab:emulator_stop_result",
+      "description": "How the Stop phase of an emulator restart ended."
+    },
+    "stop_elapsed_ms": {
+      "type": "duration_ms",
+      "description": "Time the Stop of an emulator restart or of a stop took, in milliseconds."
+    },
+    "start_elapsed_ms": {
+      "type": "duration_ms",
+      "description": "Time the Start phase of an emulator restart took, in milliseconds."
+    },
+    "start_dispatched": {
+      "type": "boolean",
+      "description": "Whether the Start phase of an emulator restart ran."
+    },
+    "process_started": {
+      "type": "boolean",
+      "description": "Whether the emulator instance's process was started at the last observation."
+    },
+    "android_started": {
+      "type": "boolean",
+      "description": "Whether Android in the emulator instance was started at the last observation."
+    },
+    "adb_port_present": {
+      "type": "boolean",
+      "description": "Whether the last observation of the emulator instance reported an ADB port."
+    },
+    "device_process_present": {
+      "type": "vocab:device_process_presence",
+      "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
     }
   },
   "vocabularies": {
@@ -2200,6 +2260,90 @@
         },
         "detection_quota_exhausted": {
           "description": "Detection quota exhausted."
+        }
+      }
+    },
+    "unknown_reason": {
+      "description": "Why an input a selection document reads could not be read as a known value.",
+      "tokens": {
+        "fact_missing": {
+          "description": "No record exists under the fact key."
+        },
+        "fact_expired": {
+          "description": "The record's own expiry has passed."
+        },
+        "fact_stale": {
+          "description": "The record is older than the freshness bound the document declares."
+        },
+        "fact_low_confidence": {
+          "description": "The record's confidence is below the floor the document declares."
+        },
+        "fact_not_scalar": {
+          "description": "The record holds an artifact or a record list, not a scalar."
+        },
+        "type_mismatch": {
+          "description": "The value present does not have the declared type."
+        },
+        "field_missing": {
+          "description": "The candidate carries no value under the field name."
+        },
+        "resource_observation_missing": {
+          "description": "No observation exists for the resource a rule reads."
+        },
+        "lookup_miss": {
+          "description": "No lookup entry covers the value and the transform declares no default."
+        }
+      }
+    },
+    "unknown_clause": {
+      "description": "An on_unknown clause of a selection document that the scheduling layer does not apply.",
+      "tokens": {
+        "drop_candidate": {
+          "description": "The clause drops the candidate from ranking."
+        },
+        "substitute": {
+          "description": "The clause substitutes a declared verdict (gate) or value (term)."
+        }
+      }
+    },
+    "reader_problem": {
+      "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding.",
+      "tokens": {
+        "key_not_marked": {
+          "description": "The recognition maintenance package carries no reading mark for the key."
+        },
+        "designated_operation": {
+          "description": "The package declares a designated operation, so it is not a reader."
+        },
+        "no_marks": {
+          "description": "The package carries no reading mark."
+        },
+        "recognize_only": {
+          "description": "The package is recognize-only, so it is not a reader."
+        },
+        "stability_termination": {
+          "description": "The package ends on a stability termination, so it is not a reader."
+        },
+        "policy_fact_authority": {
+          "description": "The key is a policy fact of the catalog, so a reading of it is refused."
+        },
+        "live_pool_key": {
+          "description": "The key is observed by a ledger-fact pool, so a reading of it is refused."
+        },
+        "package_unbound": {
+          "description": "The instance has no recognition maintenance package bound."
+        },
+        "not_declared": {
+          "description": "The bound package is not declared for recognition maintenance, so the binding is ignored."
+        },
+        "disabled": {
+          "description": "Fact refresh is turned off in the configuration."
+        },
+        "confidence_below_document": {
+          "description": "The reading mark's confidence floor is below the floor the document declares."
+        },
+        "interval_exceeds_freshness": {
+          "description": "The minimum reading interval exceeds the freshness the document or the mark requires."
         }
       }
     },
@@ -3804,6 +3948,90 @@
           "description": "The current value."
         }
       }
+    },
+    "emulator_restart_phase": {
+      "description": "The phase of an emulator restart.",
+      "tokens": {
+        "stop": {
+          "description": "The Stop phase."
+        },
+        "start": {
+          "description": "The Start phase."
+        }
+      }
+    },
+    "emulator_stop_result": {
+      "description": "How the Stop phase of an emulator restart ended: confirmed, or the device stage it failed at (the stage's last part).",
+      "tokens": {
+        "confirmed": {
+          "description": "The Stop was confirmed."
+        },
+        "control_exit": {
+          "description": "The shutdown command exited non-zero (mumu_manager.control_exit)."
+        },
+        "control_errcode": {
+          "description": "The shutdown command answered an errcode envelope with errcode not 0 (mumu_manager.control_errcode)."
+        },
+        "launch_error": {
+          "description": "info reported launch_err_code not 0 (mumu_manager.launch_error)."
+        },
+        "wait_timeout": {
+          "description": "The readiness wait for the stopped state expired (mumu_manager.wait_timeout)."
+        },
+        "run": {
+          "description": "MuMuManager could not be started, or a poll could not run (mumu_manager.run)."
+        },
+        "timeout": {
+          "description": "The shutdown command passed its bound (mumu_manager.timeout)."
+        },
+        "path": {
+          "description": "The MuMuManager path is not valid UTF-8 (mumu_manager.path)."
+        },
+        "errcode": {
+          "description": "An info poll answered an errcode envelope (mumu_manager.errcode)."
+        },
+        "entry": {
+          "description": "An info poll's instance entry carried an errcode envelope (mumu_manager.entry)."
+        },
+        "exit": {
+          "description": "An info poll exited non-zero (mumu_manager.exit)."
+        },
+        "shape": {
+          "description": "An info poll answered an unexpected shape (mumu_manager.shape)."
+        },
+        "decode": {
+          "description": "An info poll's output is not UTF-8 (mumu_manager.decode)."
+        },
+        "json": {
+          "description": "An info poll's output is not JSON (mumu_manager.json)."
+        },
+        "output_bound": {
+          "description": "An info poll's output passed its bound (mumu_manager.output_bound)."
+        },
+        "unavailable": {
+          "description": "The instance has no MuMuManager binding (emulator_control.unavailable)."
+        },
+        "unsupported": {
+          "description": "The provider has no instance control (emulator_control.unsupported)."
+        },
+        "unregistered": {
+          "description": "The instance is not registered with the provider (emulator_control.unregistered)."
+        }
+      }
+    },
+    "device_process_presence": {
+      "description": "Whether a vendor device process of an emulator instance was still running when a Stop's process listing last looked.",
+      "tokens": {
+        "true": {
+          "description": "The last listing still showed the device process."
+        },
+        "false": {
+          "description": "The last listing showed no device process of the instance."
+        },
+        "unknown": {
+          "description": "No listing answered: it failed, passed its bound or never ran."
+        }
+      }
     }
   },
   "domains": {
@@ -3837,6 +4065,18 @@
     "frame_retention_": [
       "runtime-host"
     ],
+    "fact_refresh_": [
+      "policy"
+    ],
+    "selection_input_": [
+      "policy"
+    ],
+    "selection_unknown_": [
+      "policy"
+    ],
+    "selection_evaluation_": [
+      "policy"
+    ],
     "artifact_kept_": [
       "artifact-store"
     ],
@@ -3865,6 +4105,15 @@
       "runtime-host"
     ],
     "policy_settlement_dispatch_": [
+      "runtime-host"
+    ],
+    "emulator_restart_": [
+      "runtime-host"
+    ],
+    "emulator_stop_": [
+      "runtime-host"
+    ],
+    "clock_slot_": [
       "runtime-host"
     ]
   },

@@ -487,7 +487,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_emulator",
         title: "Emulator control",
         tier: Tier::Operator,
-        description: "Starts, stops or restarts one instance's emulator through the Runtime (action start, stop or restart), as actingctl emulator does; the Runtime takes it only from an operator origin. stop and restart end whatever runs on that emulator. It can take up to 230 s: within the call budget the answer is {controlled}, otherwise {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id.",
+        description: "Starts, stops or restarts one instance's emulator through the Runtime (action start, stop or restart), as actingctl emulator does; the Runtime takes it only from an operator origin. stop and restart end whatever runs on that emulator. It can take up to 230 s (a restart, a stop and then a start, up to 440 s): within the call budget the answer is {controlled}, otherwise {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id.",
         read_only: false,
         destructive: true,
         idempotent: false,

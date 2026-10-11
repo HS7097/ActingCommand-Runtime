@@ -10,7 +10,8 @@ use actingcommand_device::{
     InputBackend,
 };
 pub use actingcommand_device::{
-    EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+    DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+    InstanceState,
 };
 pub use actingcommand_recognition_pack::VisionProvider as RecognitionVisionProvider;
 use actingcommand_recognition_pack::{
@@ -1399,6 +1400,25 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 ),
             0,
         ))
+    }
+
+    /// Read-only: one bounded `info` read of the emulator instance itself (Workflow #381 B,
+    /// review M3), taken after a failed control action so the host applies the instance's
+    /// current state. Opens no device session. Providers without an instance-control surface
+    /// keep this typed refusal.
+    fn read_instance_state(&self, _instance_alias: &str) -> DeviceResult<InstanceState> {
+        Err(
+            DeviceError::fatal("emulator state read unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "emulator_control.unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    "read_instance_state",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+        )
     }
 
     /// Completes or reverts the discovery binding of an instance after emulator control:

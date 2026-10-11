@@ -6,7 +6,7 @@ name: release
 #     [-f version=X.Y.Z] [-f source_sha=<40-hex main commit>] [-f prerelease=true] [-f dry_run=true]
 # are equivalent. prepare (read-only) fixes the source commit and the version;
 # build calls windows-remote-build.yml, the one build path, which builds that exact
-# commit, runs its checks (including the H3 old-state check), zips the Runtime and
+# commit, runs its checks (including the fresh-root boot smoke), zips the Runtime and
 # Tools artifacts with SHA256SUMS and creates the Release vX.Y.Z with its tag on
 # that commit. With dry_run everything runs except creating the tag and the Release.
 # The version exists only in the Release tag (no VERSION file, nothing in Cargo.toml,

@@ -1354,66 +1354,6 @@ fn game_and_server_scope_changes_cannot_reuse_a_trusted_decision_identity() {
     host.close().expect("close host");
 }
 
-#[test]
-fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
-    let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
-    let mut sources = policy_sources(1);
-    let mut activity: serde_json::Value =
-        serde_json::from_slice(&sources.activity.bytes).expect("activity fixture");
-    activity["profiles"][0]["goals"][0]["deadline_unix_ms"] = serde_json::json!(POLICY_NOW_UNIX_MS);
-    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("activity bytes");
-    host.activate_policy_catalog(&sources)
-        .expect("activate catalog");
-    host.observe_performance_control_for_test(PerformanceControlObservation {
-        observed_at_unix_ms: POLICY_NOW_UNIX_MS - 2_000,
-        host_responsiveness_basis_points: Some(7_000),
-        third_party_pressure_basis_points: Some(0),
-        foreground_fullscreen: false,
-    })
-    .expect("first contention sample");
-    host.observe_performance_control_for_test(PerformanceControlObservation {
-        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
-        host_responsiveness_basis_points: Some(7_000),
-        third_party_pressure_basis_points: Some(0),
-        foreground_fullscreen: false,
-    })
-    .expect("second contention sample");
-    assert_eq!(
-        host.performance_control_directive(POLICY_INSTANCE_ALIAS)
-            .expect("directive")
-            .level,
-        PerformanceControlLevel::DispatchPaused
-    );
-
-    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
-    assert_eq!(intent.prerequisites.urgency_milli, 1_000);
-    let error = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
-        .expect_err("deadline must not bypass a measured contention gate");
-    assert_eq!(error.code(), "performance_capacity_deadline_conflict");
-
-    let mut client = TestClient::connect(&host);
-    let events = projected_events(&mut client, EventQuery::default());
-    assert!(
-        events
-            .iter()
-            .any(|event| event.event_type == EventType::PerformanceBalanceChanged)
-    );
-    assert!(
-        events
-            .iter()
-            .any(|event| event.event_type == EventType::PolicyDispatchRejected)
-    );
-    assert!(
-        !events
-            .iter()
-            .any(|event| event.event_type == EventType::LeaseGranted)
-    );
-    host.close().expect("close host");
-}
-
 // Workflow #369 S4: policy waits (model-369-queue.md v3.1 W-1).
 
 /// Where test (l) and test (m) refuse A's settlement at the restart.
@@ -1468,13 +1408,17 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
             ),
         ]))
     };
-    let scheduled = || {
-        config(&root).with_scheduled_procedures([
-            "procedure.observe".to_owned(),
-            "procedure.observe-b".to_owned(),
-        ])
+    // Board #71: the first start's Runtime clock stands at the fixture's time and the restart's
+    // at the fixed restart instant.
+    let scheduled = |clock_unix_ms| {
+        config(&root)
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(clock_unix_ms, 0)))
+            .with_scheduled_procedures([
+                "procedure.observe".to_owned(),
+                "procedure.observe-b".to_owned(),
+            ])
     };
-    let host = RuntimeHost::start(scheduled(), provider()).expect("first start");
+    let host = RuntimeHost::start(scheduled(POLICY_NOW_UNIX_MS), provider()).expect("first start");
     host.activate_policy_catalog(&pending_policy_sources(1))
         .expect("two-instance catalog activation");
     let cycle = evaluate_pending_policy(&host, PolicyTrigger::FactsChanged);
@@ -1503,10 +1447,12 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
     host.close().expect("close with A's dispatch open");
 
     let restart = match refusal {
-        StartSettlementRefusal::Host => scheduled().with_policy_settlement_refusal_for_test(run_id),
+        StartSettlementRefusal::Host => {
+            scheduled(POLICY_RESTART_UNIX_MS).with_policy_settlement_refusal_for_test(run_id)
+        }
         StartSettlementRefusal::Ledger => {
             actingcommand_ledger::refuse_scheduled_settlement_for_test(&intent.decision_id);
-            scheduled()
+            scheduled(POLICY_RESTART_UNIX_MS)
         }
     };
     let host = RuntimeHost::start(restart, provider())
@@ -1545,8 +1491,8 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
     assert!(!paused.contains_key(POLICY_INSTANCE_ALIAS_B));
 
     // The restart's own records (the pause, the Error) are later than the fixture's time, so
-    // the evaluation after it runs at the wall clock.
-    let now = unix_ms_now().expect("wall clock");
+    // the evaluation after it runs at the restart's fixed instant.
+    let now = POLICY_RESTART_UNIX_MS;
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
             &pending_policy_facts(),

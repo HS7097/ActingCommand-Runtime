@@ -16,6 +16,14 @@ injects the same owner into State using `from_database`.
 assembly opens one connection; facades share that owner rather than reopening it.
 The Host's existing OwnerGuard continues to arbitrate process ownership.
 
+`RuntimeDatabase::open_existing_unchecked(root)` opens existing storage
+read-only, with the same path, key and connection checks as
+`open_existing(root, true)`, but without `quick_check(1)`. Only the
+`check-config` catalog preview uses it, for its selected ledger read and its
+State view: every row it reads is authenticated on its own. Startup,
+`ledger-maintenance` and the forensic readers open through `open_existing` and
+keep the whole-file check.
+
 State database construction preserves this order:
 
 1. Validate the bootstrap seed length (16–1024 bytes), create and validate the root.
