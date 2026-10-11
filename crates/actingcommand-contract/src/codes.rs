@@ -531,6 +531,10 @@ crate::outcome_codes! {
         InvalidInstallTransitionStatus => "invalid_install_transition_status": error,
         InvalidInstallTimeout => "invalid_install_timeout": error,
         InvalidInstallTransitionId => "invalid_install_transition_id": error,
+        InstallSlotLockMissing => "install_slot_lock_missing": error,
+        InstallSlotLockOpenFailed => "install_slot_lock_open_failed": error,
+        InstallSlotInUse => "install_slot_in_use": error,
+        InstallSlotLockFailed => "install_slot_lock_failed": error,
     }
 }
 

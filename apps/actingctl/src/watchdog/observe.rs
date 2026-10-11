@@ -59,7 +59,10 @@ impl Installation {
             )
         })?;
         let inherited = actingcommand_contract::process_installation().map_err(|error| {
-            Failure::misconfigured(error.code(), "the process installation is unreadable")
+            Failure::misconfigured(
+                error.code().as_str(),
+                "the process installation is unreadable",
+            )
         })?;
         let selected = match inherited {
             Some(selected) if selected.root() == root => selected.clone(),
@@ -86,7 +89,7 @@ impl Installation {
                 }
                 Err(error) => {
                     return Err(Failure::misconfigured(
-                        error.code(),
+                        error.code().as_str(),
                         "install\\active.json or its inputs are unreadable",
                     ));
                 }
@@ -115,7 +118,7 @@ impl Installation {
             Ok(Some(current)) => Ok(current.selection_json() == self.selection_json),
             Ok(None) => Ok(false),
             Err(error) => Err(Failure::misconfigured(
-                error.code(),
+                error.code().as_str(),
                 "install\\active.json is unreadable before the start",
             )),
         }
@@ -125,7 +128,7 @@ impl Installation {
 fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Failure> {
     let bytes = selected
         .config_bytes()
-        .map_err(|error| Failure::misconfigured(error.code(), "the selected config"))?;
+        .map_err(|error| Failure::misconfigured(error.code().as_str(), "the selected config"))?;
     let document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| Failure::misconfigured("watchdog_config_unreadable", error.to_string()))?;
     let state_root = document

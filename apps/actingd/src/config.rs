@@ -923,19 +923,21 @@ pub(super) fn load_for(
     path: &Path,
     purpose: actingcommand_contract::InstallConfigPurpose,
 ) -> Result<ActingdConfigFile, &'static str> {
-    let installation =
-        actingcommand_contract::process_installation_for(purpose).map_err(|error| error.code())?;
+    let installation = actingcommand_contract::process_installation_for(purpose)
+        .map_err(|error| error.code().as_str())?;
     let selected_path = installation
         .map(|selected| selected.resolve_config(path))
         .transpose()
-        .map_err(|error| error.code())?;
+        .map_err(|error| error.code().as_str())?;
     let path = selected_path.as_deref().unwrap_or(path);
     let metadata = fs::metadata(path).map_err(|_| "config_unavailable")?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_CONFIG_BYTES {
         return Err("config_size_invalid");
     }
     let bytes = match installation {
-        Some(selected) => selected.config_bytes().map_err(|error| error.code())?,
+        Some(selected) => selected
+            .config_bytes()
+            .map_err(|error| error.code().as_str())?,
         None => fs::read(path).map_err(|_| "config_read_failed")?,
     };
     let mut config =
@@ -955,7 +957,7 @@ pub(super) fn load_for(
     config.install_root = match installation {
         Some(selected) => Some(selected.root().to_path_buf()),
         None => actingcommand_contract::process_slot_lock()
-            .map_err(|error| error.code())?
+            .map_err(|error| error.code().as_str())?
             .map(|lock| lock.root().to_path_buf()),
     };
     Ok(config)

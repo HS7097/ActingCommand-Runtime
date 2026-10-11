@@ -82,7 +82,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         actingcommand_contract::InstallConfigPurpose::Running
     };
     actingcommand_contract::process_installation_for(purpose)
-        .map_err(|error| ActingdError::config(error.code()))?;
+        .map_err(|error| ActingdError::config(error.code().as_str()))?;
     if arguments
         .first()
         .is_some_and(|argument| argument == "ledger-maintenance")
@@ -1551,7 +1551,7 @@ fn parse_install_held_arguments(
         let held: actingcommand_contract::InstallHeldStartup = serde_json::from_str(value)
             .map_err(|_| ActingdError::config("install_held_input_invalid"))?;
         held.validate()
-            .map_err(|error| ActingdError::config(error.code()))?;
+            .map_err(|error| ActingdError::config(error.code().as_str()))?;
         arguments.truncate(2);
         Ok((arguments, Some(held)))
     } else {
@@ -1618,8 +1618,8 @@ impl ActingdError {
             RuntimeLifecycleFailure::Host(error)
         } else if let Some(error) = &self.client {
             RuntimeLifecycleFailure::Client {
-                code: error.code(),
-                operation: error.operation(),
+                code: error.code().as_str(),
+                operation: error.operation().as_str(),
                 fatal: error.is_fatal(),
                 runtime_code: error.projection().map(|projection| projection.code),
                 message: &client_message,
@@ -1678,7 +1678,7 @@ impl ActingdError {
 
     fn client(error: RuntimeClientError) -> Self {
         Self {
-            code: error.code(),
+            code: error.code().as_str(),
             stage: None,
             secondary: [None, None, None],
             recording_failure: None,

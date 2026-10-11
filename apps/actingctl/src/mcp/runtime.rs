@@ -89,7 +89,7 @@ impl RuntimeAccess {
     pub(super) fn new(root: Option<PathBuf>, state_root: Option<PathBuf>) -> Self {
         let located = (|| {
             let process = actingcommand_contract::process_installation()
-                .map_err(|error| error.code().to_owned())?;
+                .map_err(|error| error.code().as_str().to_owned())?;
             let installation = match process {
                 Some(selected) => {
                     if let Some(root) = &root {
@@ -104,7 +104,7 @@ impl RuntimeAccess {
                     .as_deref()
                     .map(actingcommand_contract::InstalledProcess::read)
                     .transpose()
-                    .map_err(|error| error.code().to_owned())?
+                    .map_err(|error| error.code().as_str().to_owned())?
                     .flatten(),
             };
             let program_root = installation
@@ -261,10 +261,10 @@ pub(super) fn connect_at(
 pub(super) fn client_error(error: &RuntimeClientError) -> ToolError {
     let mut mapped = ToolError::new(
         error.disposition().as_str(),
-        error.code(),
+        error.code().as_str(),
         error.to_string(),
     )
-    .with_detail("operation", json!(error.operation()));
+    .with_detail("operation", json!(error.operation().as_str()));
     if let Some(projection) = error.projection() {
         mapped = mapped.with_detail("runtime_code", json!(projection.code));
     }
@@ -293,8 +293,8 @@ fn unavailable(error: &RuntimeClientError, state_root: &Path) -> ToolError {
             state_root.display()
         ),
     )
-    .with_detail("client_code", json!(error.code()))
-    .with_detail("operation", json!(error.operation()))
+    .with_detail("client_code", json!(error.code().as_str()))
+    .with_detail("operation", json!(error.operation().as_str()))
     .blocked_by("actingd running on this state root; starting it belongs to the person")
 }
 

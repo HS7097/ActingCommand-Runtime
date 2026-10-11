@@ -9729,6 +9729,58 @@
       "description": "A PPOCR node-placement diagnostic report was refused: PPOCR invocation repeated a model diagnostic.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "install_slot_lock_missing": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: install slot lock missing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "install_slot_lock_open_failed": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: install slot lock open failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "install_slot_in_use": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: install slot in use.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "install_slot_lock_failed": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: install slot lock failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

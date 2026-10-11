@@ -4146,6 +4146,9 @@
       "ledger",
       "runtime-host"
     ],
+    "actingctl_": [
+      "actingctl"
+    ],
     "actinglab_": [
       "actinglab"
     ],

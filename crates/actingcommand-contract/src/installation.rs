@@ -57,8 +57,8 @@ impl InstallSlotLock {
             .open(root.join(format!("install/slot-{}.lock", slot.as_str())))
             .map_err(|error| {
                 RuntimeContractError::new(match error.kind() {
-                    std::io::ErrorKind::NotFound => "install_slot_lock_missing",
-                    _ => "install_slot_lock_open_failed",
+                    std::io::ErrorKind::NotFound => RuntimeContractCode::InstallSlotLockMissing,
+                    _ => RuntimeContractCode::InstallSlotLockOpenFailed,
                 })
             })?;
         let locked = if exclusive {
@@ -68,8 +68,8 @@ impl InstallSlotLock {
         };
         locked.map_err(|error| {
             RuntimeContractError::new(match error {
-                std::fs::TryLockError::WouldBlock => "install_slot_in_use",
-                std::fs::TryLockError::Error(_) => "install_slot_lock_failed",
+                std::fs::TryLockError::WouldBlock => RuntimeContractCode::InstallSlotInUse,
+                std::fs::TryLockError::Error(_) => RuntimeContractCode::InstallSlotLockFailed,
             })
         })?;
         let metadata = file.metadata().map_err(|_| {
