@@ -1097,15 +1097,6 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         now_unix_ms: u64,
         switches: FrameRetentionSwitches,
     ) -> GlobalLedgerResult<FrameRetentionView> {
-        // one-off (to be reverted): the 10-02 latch gates the cleaner's view again
-        if self.retention.unlinked_warning {
-            return Ok(FrameRetentionView {
-                through_sequence: self.retention.through_sequence,
-                evaluated_at_unix_ms: now_unix_ms,
-                frames: Vec::new(),
-                error_points: Vec::new(),
-            });
-        }
         self.retention
             .frame_view(&self.events, &self.indexes, now_unix_ms, switches)
     }
