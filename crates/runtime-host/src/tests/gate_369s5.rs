@@ -346,7 +346,8 @@ fn gate_a_resume_reconnects_on_its_claim_granted_before_the_lift() {
     };
     let pause = client.request(RuntimeOperation::PauseScheduling {
         scope: scope.clone(),
-        reason_code: "gate_check".to_owned(),
+        pause_reason: actingcommand_contract::SchedulingPauseReason::new("gate_check")
+            .expect("pause reason"),
         drain_timeout_ms: 1_000,
     });
     assert_eq!(client.send(&pause).state(), RuntimeReceiptState::Completed);

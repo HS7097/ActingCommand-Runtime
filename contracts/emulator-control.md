@@ -158,10 +158,10 @@ receipt state `denied`):
 
 - lease acquisition (`acquire_lease` and `queue_lease`, before the scheduler prepares or queues
   anything) and read-only observation (`observe`, `capture_sequence`, `observe_contained_page`,
-  after `command.received`) record `command.rejected` (diagnostic `runtime.diagnostic`, effect
+  after `command.received`) record `command.rejected` (diagnostic `runtime_diagnostic`, effect
   `not_performed`, the receipt terminal) plus one `runtime.failed` (stage `operation_cleanup`)
   whose native detail names the alias (`instance_alias=<alias>; adb_endpoint=pending; ...`);
-- the monitor probe records `monitor.failed` (diagnostic `runtime.diagnostic`, runtime code
+- the monitor probe records `monitor.failed` (diagnostic `runtime_diagnostic`, runtime code
   `invalid_request`) plus the same `runtime.failed` instead of a command event, and the probe
   is rescheduled as after any other refusal.
 
@@ -256,8 +256,8 @@ Every request is recorded intent -> result, all linked to the instance:
    `stop_elapsed_ms`), under the request's links (on rung 3 the ladder's), before its
    `command.validated`.
 4. On denial or failure `command.rejected` (the receipt terminal; diagnostic
-   `backend.operation_failed` for tool failures, `lease.fencing_denied` for the busy denial,
-   `runtime.diagnostic` otherwise; effect `not_performed` before the tool ran, `indeterminate`
+   `backend_operation_failed` for tool failures, `lease_fencing_denied` for the busy denial,
+   `runtime_diagnostic` otherwise; effect `not_performed` before the tool ran, `indeterminate`
    once it ran) plus one `runtime.failed` (stage `operation_cleanup`) whose record carries
    `raw_os_error` = the tool exit code, `native_detail` = the bounded vendor output
    (Sensitive) and a primary detail `{category, stage, backend: mumu_manager, operation:
@@ -347,7 +347,7 @@ that belongs to emulator control:
   `lease.granted`) when the control lets the guard go, so no dispatch can see the instance free
   between the start and the startup run. Until #369 S6b the claim is not gated by a scheduling
   pause (`contracts/scheduling-pause.md`). A new startup claim cancels one still queued for the
-  same instance (`scheduler.denied lease.queue_cancelled`, warning).
+  same instance (`scheduler.denied lease_queue_cancelled`, warning).
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
   request and correlation ids, the claim's holder and synthesized connection, origin
@@ -633,7 +633,7 @@ ADB port. No `MuMuManager` path, install root or resolution source is on the wir
 it; the receipt is `completed` without a terminal, like `Status`.
 
 A refusal appends `command.rejected` (the receipt terminal, diagnostic
-`backend.operation_failed` or `runtime.diagnostic`, effect `not_performed`) plus one
+`backend_operation_failed` or `runtime_diagnostic`, effect `not_performed`) plus one
 `runtime.failed` (stage `operation_cleanup`) whose `native_detail` keeps the provider's device
 error; the primary detail `{category, stage, backend: execution_backend_provider, operation:
 discover_instances}` is a controlled template declared Sensitive. Host operation

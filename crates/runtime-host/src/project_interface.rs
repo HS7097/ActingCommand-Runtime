@@ -46,7 +46,7 @@ impl ProjectInterfaceProjection {
     ) -> RuntimeHostResult<ProjectInterfaceResponse> {
         let negotiated_version = request.negotiate().map_err(|error| {
             RuntimeHostError::request(
-                error.code(),
+                error.code().as_str(),
                 "negotiate_project_interface",
                 RuntimeErrorCode::ProtocolInvalid,
             )
@@ -225,14 +225,14 @@ impl ProjectInterfaceProjection {
             match response {
                 Ok(response) => return Ok(response),
                 Err(error)
-                    if error.code() == "project_interface_response_too_large"
+                    if error.code().as_str() == "project_interface_response_too_large"
                         && decisions.len() > 1
                         && negotiated_version == PROJECT_INTERFACE_CONTRACT_V3 =>
                 {
                     decisions.pop();
                 }
                 Err(error)
-                    if error.code() == "project_interface_response_too_large"
+                    if error.code().as_str() == "project_interface_response_too_large"
                         && decisions.len() > 1
                         && negotiated_version != PROJECT_INTERFACE_CONTRACT_V3 =>
                 {
@@ -255,15 +255,15 @@ impl ProjectInterfaceProjection {
 fn project_contract_error(
     error: actingcommand_contract::ProjectInterfaceError,
 ) -> RuntimeHostError {
-    if error.code() == "project_interface_response_too_large" {
+    if error.code().as_str() == "project_interface_response_too_large" {
         RuntimeHostError::request(
-            error.code(),
+            error.code().as_str(),
             "project_runtime_interface",
             RuntimeErrorCode::ProtocolInvalid,
         )
     } else {
         RuntimeHostError::fatal(
-            error.code(),
+            error.code().as_str(),
             "project_runtime_interface",
             RuntimeErrorCode::RuntimeFatal,
         )

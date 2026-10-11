@@ -12,6 +12,8 @@ use super::runtime::Connected;
 use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
+use crate::codes::ActingctlCode;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     EventQuery, LedgerView, RequestId, RunId, RuntimeEventQueryCursor,
     RuntimeEventQueryPageRequest, RuntimeInstanceStatus, TaskId,
@@ -52,7 +54,7 @@ fn now_unix_ms() -> Result<u64, ToolError> {
         .ok_or_else(|| {
             ToolError::new(
                 "runtime",
-                "clock_unavailable",
+                ActingctlCode::ClockUnavailable,
                 "the system clock is before the Unix epoch or out of range",
             )
         })
@@ -73,7 +75,7 @@ pub(super) fn latest_run(
     if Instant::now() + READ_RESERVE >= context.deadline {
         return Err(ToolError::new(
             "runtime",
-            "call_budget_exhausted",
+            ActingctlCode::CallBudgetExhausted,
             format!(
                 "the 25 s call budget left no time to read the runs of {}",
                 instance.instance_alias()
@@ -117,7 +119,7 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
             serde_json::from_value::<RequestId>(json!(handle)).map_err(|_| {
                 if handle.starts_with("correlation_") || handle.starts_with(lab::HANDLE_PREFIX) {
                     ToolError::usage(
-                        "handle_unknown",
+                        ActingctlCode::HandleUnknown,
                         "this job handle is not held by this MCP process: the process that started it ended, or it is another one's",
                     )
                 } else {
@@ -181,7 +183,7 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
     let since = match arguments.integer("since_unix_ms", 0, u64::MAX)? {
         Some(since) if since < oldest => {
             return Err(ToolError::usage(
-                "since_out_of_range",
+                ActingctlCode::SinceOutOfRange,
                 format!("since_unix_ms reaches back at most 7 days, to {oldest}"),
             )
             .with_detail("oldest_unix_ms", json!(oldest)));
@@ -228,7 +230,7 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
     let request = RuntimeEventQueryPageRequest::new(ERRORS_PAGE_LIMIT, None).map_err(|error| {
         ToolError::new(
             "runtime",
-            "errors_query_invalid",
+            ActingctlCode::ErrorsQueryInvalid,
             format!("cannot form the errors page request: {error}"),
         )
     })?;
@@ -385,7 +387,7 @@ impl Diagnosis {
                         .map_err(|error| {
                             ToolError::new(
                                 "runtime",
-                                "cursor_encode_failed",
+                                ActingctlCode::CursorEncodeFailed,
                                 format!("cannot form the next cursor: {error}"),
                             )
                         })?,
@@ -429,11 +431,11 @@ fn start_suspension_report(
     context: &ToolContext<'_>,
     location: &super::runtime::Location,
 ) -> Result<SuspensionChild, Value> {
-    location.check().map_err(|_| json!({ "status": "unavailable", "code": "install_selection_unavailable", "message": location.state_root.as_ref().err() }))?;
+    location.check().map_err(|_| json!({ "status": "unavailable", "code": SharedCode::InstallSelectionUnavailable.as_str(), "message": location.state_root.as_ref().err() }))?;
     let Some(root) = location.root.as_deref() else {
         return Err(json!({
             "status": "unavailable",
-            "code": "install_root_unresolved",
+            "code": ActingctlCode::InstallRootUnresolved.as_str(),
             "message": "actingctl does not run from an install root and mcp-serve got no --root, so actingd suspended cannot be found",
         }));
     };
@@ -492,21 +494,25 @@ fn finish_suspension_report(
         Ok(Err(_)) => {
             return unavailable(json!({
                 "status": "unavailable",
-                "code": "suspended_report_reader_panicked",
+                "code": ActingctlCode::SuspendedReportReaderPanicked.as_str(),
             }));
         }
         Ok(Ok(Err(failure))) => {
             let (code, message) = match failure {
-                ChildFailure::Spawn(error) => ("suspended_report_spawn_failed", error.to_string()),
-                ChildFailure::Io(error) => ("suspended_report_io_failed", error.to_string()),
+                ChildFailure::Spawn(error) => {
+                    (ActingctlCode::SuspendedReportSpawnFailed, error.to_string())
+                }
+                ChildFailure::Io(error) => {
+                    (ActingctlCode::SuspendedReportIoFailed, error.to_string())
+                }
                 ChildFailure::StillRunning => (
-                    "suspended_report_timeout",
+                    ActingctlCode::SuspendedReportTimeout,
                     "actingd suspended was still running at the end of the call budget".to_owned(),
                 ),
             };
             return unavailable(json!({
                 "status": "unavailable",
-                "code": code,
+                "code": code.as_str(),
                 "message": message,
             }));
         }
@@ -533,7 +539,7 @@ fn finish_suspension_report(
             if !same_root {
                 return unavailable(json!({
                     "status": "unavailable",
-                    "code": "suspended_report_state_root_mismatch",
+                    "code": ActingctlCode::SuspendedReportStateRootMismatch.as_str(),
                     "message": "actingd suspended read another state root than the one this server reads; its rows are left out",
                     "details": {
                         "report_state_root": report_state_root.map(|path| path.display().to_string()),
@@ -582,7 +588,7 @@ fn finish_suspension_report(
         })),
         Err(error) => unavailable(json!({
             "status": "failed",
-            "code": "suspended_report_unreadable",
+            "code": ActingctlCode::SuspendedReportUnreadable.as_str(),
             "message": format!("actingd suspended printed no JSON report: {error}"),
             "exit_code": exit_code,
             "stderr_tail": stderr_tail,

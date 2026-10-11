@@ -319,7 +319,10 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
             )
             .unwrap()[0] ^= 1;
         assert_eq!(
-            verify_lab_operation_evidence(&corrupt).unwrap_err().code(),
+            verify_lab_operation_evidence(&corrupt)
+                .unwrap_err()
+                .code()
+                .as_str(),
             "runtime_lab_artifact_hash_mismatch"
         );
         if complete {
@@ -1401,11 +1404,11 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
     assert_eq!(busy_exit, 4);
     assert_eq!(busy["error"]["code"], "device_error");
     // Workflow #369 W-3 (S5): the command waits its cap in the instance's queue, then is
-    // refused `lease_queue_expired` (`QueueExpired`) instead of an immediate `LeaseBusy`.
+    // refused `lease_queue_expired` (`queue_expired`) instead of an immediate `lease_busy`.
     assert!(
         busy["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("QueueExpired"))
+            .is_some_and(|message| message.contains("runtime code queue_expired"))
     );
     assert_eq!(state.application_calls.load(Ordering::Acquire), 0);
     lease_client
@@ -1964,7 +1967,7 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "--req",
             correlation_id,
             "--diagnostic-code",
-            "runtime.owner_conflict",
+            "owner_conflict",
             "--from-sequence",
             &sequence,
             "--to-sequence",
@@ -2105,7 +2108,7 @@ fn runtime_owned_evidence_export_without_formal_summary_fails_closed() {
         .as_str()
         .expect("typed export failure message");
     assert!(message.contains("runtime_request_rejected"));
-    assert!(message.contains("EvidenceExportFailed"));
+    assert!(message.contains("evidence_export_failed"));
     assert!(!evidence.exists());
     assert_eq!(state.captures.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
@@ -2193,8 +2196,8 @@ fn runtime_debug_session_export_without_formal_summary_fails_closed() {
             .expect("evidence request"),
         )
         .expect_err("missing formal capture summary must fail closed");
-    assert_eq!(error.code(), "runtime_request_rejected");
-    assert_eq!(error.operation(), "export_evidence");
+    assert_eq!(error.code().as_str(), "runtime_request_rejected");
+    assert_eq!(error.operation().as_str(), "export_evidence");
     assert_eq!(
         error.projection().expect("typed export projection").code,
         RuntimeErrorCode::EvidenceExportFailed

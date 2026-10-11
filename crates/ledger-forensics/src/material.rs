@@ -30,9 +30,9 @@ impl ForensicMaterialRequest {
         if state_root.as_os_str().is_empty() {
             return Err(material_error("invalid_state_root", "state root is empty"));
         }
-        request
-            .validate()
-            .map_err(|error| material_error(error.code(), "invalid typed material selection"))?;
+        request.validate().map_err(|error| {
+            material_error(error.code().as_str(), "invalid typed material selection")
+        })?;
         Ok(Self {
             state_root,
             request,
@@ -94,7 +94,7 @@ pub fn read_material_complete(
         )
         .map_err(|error| {
             ReadError::Request(material_error(
-                error.code(),
+                error.code().as_str(),
                 "invalid typed material selection",
             ))
         })?;
@@ -288,7 +288,7 @@ pub fn read_material_to<W: Write>(
     }
     result
         .validate()
-        .map_err(|error| material_error(error.code(), "invalid material read result"))?;
+        .map_err(|error| material_error(error.code().as_str(), "invalid material read result"))?;
     let maximum_reply_bytes = result.request.max_reply_bytes;
     let mut report = ForensicReport::MaterialRead(Box::new(result));
     let mut body = serde_json::to_vec(&report).map_err(|_| {
@@ -324,9 +324,9 @@ pub fn read_material_to<W: Write>(
             operation: "read_ledger_material".to_owned(),
             error: RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false),
         });
-        result
-            .validate()
-            .map_err(|error| material_error(error.code(), "invalid bounded material result"))?;
+        result.validate().map_err(|error| {
+            material_error(error.code().as_str(), "invalid bounded material result")
+        })?;
         native_error = Some(material_error(
             code,
             "cooperative read or complete reply bound exceeded",

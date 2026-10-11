@@ -15,6 +15,7 @@ use super::protocol::{
 };
 use super::runtime::RuntimeAccess;
 use super::tools::{self, TierSet, ToolContext, ToolDef, ToolError};
+use crate::codes::ActingctlCode;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
@@ -626,7 +627,7 @@ fn call_tool(
         lock(&shared.calls).remove(&job.key);
         let failure = ToolError::new(
             "runtime",
-            "mcp_workers_unavailable",
+            ActingctlCode::McpWorkersUnavailable,
             "no tools/call worker is running; see stderr",
         );
         let result = tools::call_result(Err(failure), job.era);
@@ -671,7 +672,7 @@ fn run_job(shared: &Shared, job: Job) {
         .unwrap_or_else(|_| {
             Err(ToolError::new(
                 "runtime",
-                "mcp_tool_panicked",
+                ActingctlCode::McpToolPanicked,
                 format!("{} stopped on an internal panic; see stderr", tool.name),
             ))
         });

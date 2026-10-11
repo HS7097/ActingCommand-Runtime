@@ -54,13 +54,6 @@ actingcommand_contract::outcome_codes! {
         /// check: it cancels its continuation, fails the current rung with this reason and
         /// finishes exhausted at warning (keys `instance_id`, `lease_id`).
         RecoveryLadderKeyLost => "recovery_ladder_key_lost": warning,
-        /// Error. A lease used, renewed or released after its expiry; since #369 S2+S3b also
-        /// a Runtime-held key whose renewal came after it lapsed (keys `lease_id`). The
-        /// scheduler spells it too until A2b moves its spellings into a registry.
-        LeaseExpired => "lease_expired": error,
-        /// Error. A lease that is no longer the instance's lease; since #369 S2+S3b also a
-        /// Runtime-held key whose renewal found it gone (keys `lease_id`).
-        LeaseMissing => "lease_missing": error,
         /// Error. An instance worker panicked again before it finished one payload after its
         /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
         RuntimeRestartRequired => "runtime_restart_required": error,
@@ -139,15 +132,5 @@ actingcommand_contract::outcome_codes! {
         /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
         /// Workflow #372 K2).
         ClockSlotOwed => "clock_slot_owed": info,
-        /// Error. An operator request (a direct task run, a safe reset, an application
-        /// lifecycle command, a self-check or an instance resume's reconnect) waited its cap in
-        /// its instance's queue without a grant, and its entry was removed (Workflow #369 S5;
-        /// keys `timeout_ms`, and `holder_kind`, `queue_position` when known). The scheduler
-        /// spells it too until A2b moves its spellings into a registry.
-        LeaseQueueExpired => "lease_queue_expired": error,
-        /// Error. An immediate try met a holder or an eligible waiting entry; a Lab operation's
-        /// refusal names it (Workflow #369 S5; keys `holder_kind`, `queue_position`, both
-        /// optional). The scheduler spells it too until A2b moves its spellings into a registry.
-        LeaseBusy => "lease_busy": error,
     }
 }

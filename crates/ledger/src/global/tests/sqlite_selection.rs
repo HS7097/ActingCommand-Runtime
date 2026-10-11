@@ -75,7 +75,8 @@ fn approval(index: u64) -> actingcommand_contract::SanitizedEventDraft {
                     catalog_hash: format!("sha256:{}", "d".repeat(64)),
                     catalog_version: 1,
                 },
-                "user_confirmed",
+                actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                    .expect("approval reason"),
             )
             .expect("approval record"),
             AuditInput::new(),

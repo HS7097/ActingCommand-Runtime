@@ -4251,6 +4251,123 @@ fn token_paths(flat: &[TokenTree]) -> Vec<(Vec<String>, Span)> {
     paths
 }
 
+/// The registered spelling a registry constant names (Workflow #378): `Family::Variant` where
+/// `Family` is an `outcome_codes!` or `outcome_locations!` enum of the workspace, optionally read
+/// through `.code()`, `.location()` or `.as_str()`.
+fn registry_spelling(expression: &Expr) -> Option<String> {
+    let mut expression = expression;
+    while let Expr::Reference(value) = expression {
+        expression = &value.expr;
+    }
+    if let Expr::MethodCall(call) = expression
+        && call.args.is_empty()
+        && matches!(
+            call.method.to_string().as_str(),
+            "code" | "location" | "as_str"
+        )
+    {
+        return registry_spelling(&call.receiver);
+    }
+    let Expr::Path(value) = expression else {
+        return None;
+    };
+    registry_path_spelling(&path_names(&value.path))
+}
+
+/// The spelling of `Family::Variant` when `Family` is a registry the workspace declares. The
+/// spelling is read from the registry entry (`Variant => "spelling"`), never derived from the
+/// variant's name, so a path into any other enum (for example `DiagnosticCode`) is no spelling.
+fn registry_path_spelling(names: &[String]) -> Option<String> {
+    let [.., family, variant] = names else {
+        return None;
+    };
+    registry_spellings()
+        .get(&(family.clone(), variant.clone()))
+        .cloned()
+}
+
+/// Every `outcome_codes!` and `outcome_locations!` entry of the workspace's `src/codes.rs`
+/// files, by `(enum, variant)`. A registry file that exists but cannot be read stops the guard.
+fn registry_spellings() -> &'static BTreeMap<(String, String), String> {
+    static SPELLINGS: std::sync::OnceLock<BTreeMap<(String, String), String>> =
+        std::sync::OnceLock::new();
+    SPELLINGS.get_or_init(|| {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("the architecture tool sits two levels below the workspace root")
+            .to_path_buf();
+        let mut spellings = BTreeMap::new();
+        for group in ["apps", "crates", "providers", "tools"] {
+            let Ok(entries) = std::fs::read_dir(root.join(group)) else {
+                continue;
+            };
+            let mut members = entries
+                .map(|entry| entry.expect("read a workspace member directory").path())
+                .collect::<Vec<_>>();
+            members.sort();
+            for member in members {
+                let path = member.join("src").join("codes.rs");
+                if !path.is_file() {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                    panic!("registry file {} cannot be read: {error}", path.display())
+                });
+                registry_entries(&source, &mut spellings);
+            }
+        }
+        spellings
+    })
+}
+
+/// The `Variant => "spelling"` entries of each `outcome_codes!`/`outcome_locations!` enum, read
+/// line by line from a formatted registry file.
+fn registry_entries(source: &str, spellings: &mut BTreeMap<(String, String), String>) {
+    let mut in_registry = false;
+    let mut family: Option<String> = None;
+    for line in source.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        if line.contains("outcome_codes!") || line.contains("outcome_locations!") {
+            in_registry = true;
+            family = None;
+            continue;
+        }
+        if !in_registry {
+            continue;
+        }
+        if family.is_none() {
+            if let Some((_, after)) = line.split_once("enum ") {
+                family = Some(
+                    after
+                        .chars()
+                        .take_while(|character| {
+                            character.is_ascii_alphanumeric() || *character == '_'
+                        })
+                        .collect(),
+                );
+            }
+            continue;
+        }
+        if line.starts_with('}') {
+            in_registry = false;
+            family = None;
+            continue;
+        }
+        if let (Some(family), Some((variant, value))) = (&family, line.split_once("=>"))
+            && let Some(spelling) = value.split('"').nth(1)
+        {
+            spellings.insert(
+                (family.clone(), variant.trim().to_owned()),
+                spelling.to_owned(),
+            );
+        }
+    }
+}
+
 fn path_names(path: &syn::Path) -> Vec<String> {
     path.segments
         .iter()
@@ -4782,12 +4899,21 @@ impl<'ast> Visit<'ast> for RefusalCodeVisitor {
             && let [.., owner, constructor] = path_names(&function.path).as_slice()
             && owner.ends_with("Error")
             && matches!(constructor.as_str(), "new" | "request" | "fatal")
-            && let Some(Expr::Lit(syn::ExprLit {
-                lit: Lit::Str(code),
-                ..
-            })) = call.args.first()
+            && let Some(argument) = call.args.first()
         {
-            self.codes.insert(code.value());
+            match argument {
+                Expr::Lit(syn::ExprLit {
+                    lit: Lit::Str(code),
+                    ..
+                }) => {
+                    self.codes.insert(code.value());
+                }
+                argument => {
+                    if let Some(code) = registry_spelling(argument) {
+                        self.codes.insert(code);
+                    }
+                }
+            }
         }
         syn::visit::visit_expr_call(self, call);
     }
@@ -6144,6 +6270,9 @@ impl<'ast> Visit<'ast> for FactsVisitor<'_> {
                     .segments
                     .first()
                     .map_or_else(Span::call_site, |segment| segment.ident.span());
+                if let Some(spelling) = registry_path_spelling(&names) {
+                    self.record(FunctionReference::Literal(spelling), span);
+                }
                 self.record(FunctionReference::Value(names), span);
             }
         }
@@ -6867,6 +6996,9 @@ pub fn inspect_envelope_sites(
     }
     impl EnvelopeVisitor<'_> {
         fn render(&self, argument: &Expr) -> (String, bool) {
+            if let Some(spelling) = registry_spelling(argument) {
+                return (format!("{spelling:?}"), false);
+            }
             let mut argument = argument;
             while let Expr::Reference(value) = argument {
                 argument = &value.expr;

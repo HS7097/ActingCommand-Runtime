@@ -300,7 +300,11 @@ fn visit(
     mut each: impl FnMut(&ProjectedEvent) -> ForensicResult<()>,
 ) -> ForensicResult<LedgerReadScope> {
     let invalid_page = |error: actingcommand_contract::RuntimeContractError| {
-        ForensicError::new(error.code(), OPERATION, "invalid runtime fact page request")
+        ForensicError::new(
+            error.code().as_str(),
+            OPERATION,
+            "invalid runtime fact page request",
+        )
     };
     let mut request = RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, None)
         .and_then(|request| request.at_snapshot(position))

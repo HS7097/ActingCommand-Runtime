@@ -3,6 +3,7 @@
 //! Pure verification shared by online Lab receipts and offline ledger consumers.
 
 use super::*;
+use crate::codes::{RuntimeContractCode, SharedCode};
 use crate::{ArtifactId, ArtifactProducer, EventPayload, ProjectionPayload, RetentionClass};
 use std::collections::BTreeMap;
 
@@ -24,7 +25,7 @@ impl fmt::Debug for LabOperationEvidence {
     }
 }
 
-fn lab_error(code: &'static str) -> RuntimeContractError {
+fn lab_error(code: impl Into<crate::outcome::Code>) -> RuntimeContractError {
     RuntimeContractError::new(code)
 }
 
@@ -37,9 +38,9 @@ fn lab_event(
         .filter(|event| event.sequence == terminal.sequence && event.event_id == terminal.event_id);
     let event = matches
         .next()
-        .ok_or_else(|| lab_error("runtime_lab_event_missing"))?;
+        .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabEventMissing))?;
     if matches.next().is_some() {
-        return Err(lab_error("runtime_lab_event_duplicate"));
+        return Err(lab_error(RuntimeContractCode::RuntimeLabEventDuplicate));
     }
     Ok(event)
 }
@@ -52,7 +53,9 @@ fn verify_lab_artifact(
     prepared: &LabOperationPrepared,
 ) -> RuntimeContractResult<Vec<u8>> {
     if reference.correlation_id != Some(source.operation.record.prepared.correlation_id) {
-        return Err(lab_error("runtime_lab_artifact_correlation_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabArtifactCorrelationMismatch,
+        ));
     }
     let mut created = None;
     let mut completed = None;
@@ -70,19 +73,27 @@ fn verify_lab_artifact(
             || event.links.frame_id() != reference.frame_id.as_ref()
             || event.artifacts != [reference.clone()]
         {
-            return Err(lab_error("runtime_lab_artifact_identity_mismatch"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabArtifactIdentityMismatch,
+            ));
         }
         let slot = match event.event_type {
             EventType::ArtifactCreated => &mut created,
             EventType::ArtifactVerified => &mut completed,
-            _ => return Err(lab_error("runtime_lab_artifact_event_invalid")),
+            _ => {
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabArtifactEventInvalid,
+                ));
+            }
         };
         if slot.replace(event).is_some() {
-            return Err(lab_error("runtime_lab_artifact_event_duplicate"));
+            return Err(lab_error(SharedCode::RuntimeLabArtifactEventDuplicate));
         }
     }
     let (Some(created), Some(completed)) = (created, completed) else {
-        return Err(lab_error("runtime_lab_artifact_lifecycle_missing"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabArtifactLifecycleMissing,
+        ));
     };
     if created.sequence >= completed.sequence
         || completed.sequence != verified.sequence
@@ -96,16 +107,18 @@ fn verify_lab_artifact(
             && (reference.producer != ArtifactProducer::CaptureStore
                 || reference.redaction_state != ArtifactRedactionState::NotRequired))
     {
-        return Err(lab_error("runtime_lab_artifact_lifecycle_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabArtifactLifecycleMismatch,
+        ));
     }
     let bytes = source
         .artifacts
         .get(&reference.artifact_id)
-        .ok_or_else(|| lab_error("runtime_lab_artifact_hash_mismatch"))?;
+        .ok_or_else(|| lab_error(SharedCode::RuntimeLabArtifactHashMismatch))?;
     if bytes.len() as u64 != reference.byte_count
         || format!("sha256:{:x}", Sha256::digest(bytes)) != reference.sha256
     {
-        return Err(lab_error("runtime_lab_artifact_hash_mismatch"));
+        return Err(lab_error(SharedCode::RuntimeLabArtifactHashMismatch));
     }
     Ok(bytes.clone())
 }
@@ -123,11 +136,11 @@ fn verify_lab_projection(
     };
     let bytes = verify_lab_artifact(source, events, &observation.artifact, verified, prepared)?;
     let evidence: ContainedObservationEvidence = serde_json::from_slice(&bytes)
-        .map_err(|_| lab_error("runtime_lab_projection_decode_failed"))?;
+        .map_err(|_| lab_error(RuntimeContractCode::RuntimeLabProjectionDecodeFailed))?;
     evidence
         .private_facts
         .validate()
-        .map_err(|_| lab_error("runtime_lab_private_facts_invalid"))?;
+        .map_err(|_| lab_error(RuntimeContractCode::RuntimeLabPrivateFactsInvalid))?;
     if evidence.schema_version != ONLINE_OBSERVATION_SCHEMA
         || evidence.request_id != source.operation.record.prepared.request_id
         || evidence.correlation_id != source.operation.record.prepared.correlation_id
@@ -142,7 +155,9 @@ fn verify_lab_projection(
         || frame.verified.sequence >= verified.sequence
         || observation.artifact.frame_id != frame.observation.artifact().frame_id
     {
-        return Err(lab_error("runtime_lab_projection_content_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabProjectionContentMismatch,
+        ));
     }
     let projection_event = lab_event(events, verified)?;
     let decoded = events.iter().filter(|event| event.links.frame_id() == frame.observation.artifact().frame_id.as_ref()
@@ -195,7 +210,9 @@ fn verify_lab_projection(
             .count()
             != 1
     {
-        return Err(lab_error("runtime_lab_recognition_lifecycle_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabRecognitionLifecycleMismatch,
+        ));
     }
     Ok(())
 }
@@ -214,7 +231,9 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 || event.links.correlation_id() != Some(&operation.record.prepared.correlation_id)
         })
     {
-        return Err(lab_error("runtime_lab_event_request_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabEventRequestMismatch,
+        ));
     }
     let record = &operation.record;
     let prepared = &record.prepared;
@@ -226,7 +245,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         prepared,
     )?;
     let stored_prepared: LabOperationPrepared = serde_json::from_slice(&prepared_bytes)
-        .map_err(|_| lab_error("runtime_lab_prepared_decode_failed"))?;
+        .map_err(|_| lab_error(RuntimeContractCode::RuntimeLabPreparedDecodeFailed))?;
     let terminal_bytes = verify_lab_artifact(
         source,
         events,
@@ -235,13 +254,15 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         prepared,
     )?;
     let stored_record: LabOperationRecord = serde_json::from_slice(&terminal_bytes)
-        .map_err(|_| lab_error("runtime_lab_terminal_decode_failed"))?;
+        .map_err(|_| lab_error(RuntimeContractCode::RuntimeLabTerminalDecodeFailed))?;
     if stored_prepared != *prepared
         || stored_record != *record
         || record.prepared_artifact.artifact.frame_id.is_some()
         || operation.terminal_artifact.artifact.frame_id.is_some()
     {
-        return Err(lab_error("runtime_lab_record_content_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabRecordContentMismatch,
+        ));
     }
     let mut diagnostic_ids = BTreeSet::from([
         record.prepared_artifact.artifact.artifact_id,
@@ -282,7 +303,9 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             .sum::<u64>()
             > diagnostic_limit as u64 * MAX_OBSERVATION_ARTIFACT_BYTES as u64
     {
-        return Err(lab_error("runtime_lab_diagnostic_budget_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabDiagnosticBudgetMismatch,
+        ));
     }
     for failure in [&record.failure, &record.cleanup_failure]
         .into_iter()
@@ -294,7 +317,9 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 || event.links.lease_id() != prepared.lease_id.as_ref()
                 || reference.sequence >= operation.terminal_artifact.verified.sequence
             {
-                return Err(lab_error("runtime_lab_failure_event_mismatch"));
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabFailureEventMismatch,
+                ));
             }
         }
     }
@@ -307,10 +332,10 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             || grants[0].links.lease_id() != Some(&lease)
             || grants[0].links.instance_id() != Some(&prepared.instance_id)
         {
-            return Err(lab_error("runtime_lab_lease_grant_mismatch"));
+            return Err(lab_error(RuntimeContractCode::RuntimeLabLeaseGrantMismatch));
         }
     } else if !grants.is_empty() || prepared.before_frame.is_some() {
-        return Err(lab_error("runtime_lab_unleased_frame"));
+        return Err(lab_error(RuntimeContractCode::RuntimeLabUnleasedFrame));
     }
     for (frame, projection) in [
         (&prepared.before_frame, &prepared.before_projection),
@@ -328,7 +353,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 .first()
                 .is_none_or(|grant| grant.sequence >= frame.verified.sequence)
             {
-                return Err(lab_error("runtime_lab_frame_before_lease"));
+                return Err(lab_error(RuntimeContractCode::RuntimeLabFrameBeforeLease));
             }
             if let Some(projection) = projection {
                 verify_lab_projection(source, events, prepared, frame, projection)?;
@@ -353,7 +378,9 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                     prepared,
                 )?;
                 let evidence: ContainedObservationEvidence = serde_json::from_slice(&bytes)
-                    .map_err(|_| lab_error("runtime_lab_projection_decode_failed"))?;
+                    .map_err(|_| {
+                        lab_error(RuntimeContractCode::RuntimeLabProjectionDecodeFailed)
+                    })?;
                 let projection = ContainedPageObservation {
                     instance_id: evidence.instance_id,
                     expected_package_sha256: evidence.expected_package_sha256,
@@ -397,17 +424,19 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             .iter()
             .any(|artifact| !frame_ids.contains(&artifact.artifact_id))
     {
-        return Err(lab_error("runtime_lab_frame_budget_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabFrameBudgetMismatch,
+        ));
     }
     if let Some(action) = &prepared.action {
         let projection = prepared
             .before_projection
             .as_ref()
-            .ok_or_else(|| lab_error("runtime_lab_action_projection_missing"))?;
+            .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabActionProjectionMissing))?;
         let (element, geometry, resolved) = prepared
             .selection
             .resolve(&projection.projection)
-            .map_err(|_| lab_error("runtime_lab_action_unresolvable"))?;
+            .map_err(|_| lab_error(RuntimeContractCode::RuntimeLabActionUnresolvable))?;
         if element != prepared.selected_element
             || Some(&geometry) != prepared.geometry.as_ref()
             || &resolved != action
@@ -417,7 +446,9 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 .is_none_or(|frame| !frame.lease_valid_after_capture)
             || projection.projection_sequence >= record.prepared_artifact.verified.sequence
         {
-            return Err(lab_error("runtime_lab_action_source_mismatch"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabActionSourceMismatch,
+            ));
         }
     }
     let intents = events
@@ -427,7 +458,9 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
     if let Some(reference) = record.input_intent {
         let intent = lab_event(events, reference)?;
         let ProjectionPayload::Full(payload) = &intent.payload else {
-            return Err(lab_error("runtime_lab_input_intent_payload_missing"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabInputIntentPayloadMissing,
+            ));
         };
         if intents.len() != 1
             || intent.event_type != EventType::InputIntent
@@ -442,11 +475,15 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 .count()
                 != 1
         {
-            return Err(lab_error("runtime_lab_input_intent_mismatch"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabInputIntentMismatch,
+            ));
         }
         lab_event(action_events, reference)?;
     } else if !intents.is_empty() || !action_events.is_empty() {
-        return Err(lab_error("runtime_lab_unreported_input_intent"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabUnreportedInputIntent,
+        ));
     }
     let input_events = action_events
         .iter()
@@ -470,21 +507,29 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             || input.links.action_id() != record.input_action_id.as_ref()
             || prepared.action.is_none()
         {
-            return Err(lab_error("runtime_lab_input_identity_mismatch"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabInputIdentityMismatch,
+            ));
         }
         let ProjectionPayload::Full(payload) = &input.payload else {
-            return Err(lab_error("runtime_lab_input_payload_missing"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabInputPayloadMissing,
+            ));
         };
         if payload.effect_disposition() != Some(record.effect)
             || Some(payload.action()) != prepared.action.as_ref().map(InputAction::event_action)
         {
-            return Err(lab_error("runtime_lab_input_effect_mismatch"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabInputEffectMismatch,
+            ));
         }
         if record
             .input_intent
             .is_none_or(|intent| intent.sequence >= input.sequence)
         {
-            return Err(lab_error("runtime_lab_input_intent_mismatch"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabInputIntentMismatch,
+            ));
         }
         if input.event_type == EventType::InputFailed
             && (record.after_frame.is_some()
@@ -493,14 +538,18 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                     .as_ref()
                     .is_none_or(|failure| failure.stage != LabOperationStage::Input))
         {
-            return Err(lab_error("runtime_lab_failed_input_reobserved"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabFailedInputReobserved,
+            ));
         }
         if record
             .after_frame
             .as_ref()
             .is_some_and(|frame| frame.verified.sequence <= input.sequence)
         {
-            return Err(lab_error("runtime_lab_post_frame_order_invalid"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabPostFrameOrderInvalid,
+            ));
         }
     } else if !input_events.is_empty()
         || events.iter().any(|event| {
@@ -517,17 +566,17 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 .as_ref()
                 .is_none_or(|failure| failure.stage != LabOperationStage::Input))
     {
-        return Err(lab_error("runtime_lab_unreported_input"));
+        return Err(lab_error(RuntimeContractCode::RuntimeLabUnreportedInput));
     }
     if record.failure.is_none() {
         let before = prepared
             .before_frame
             .as_ref()
-            .ok_or_else(|| lab_error("runtime_lab_before_missing"))?;
+            .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabBeforeMissing))?;
         let after = record
             .after_frame
             .as_ref()
-            .ok_or_else(|| lab_error("runtime_lab_after_missing"))?;
+            .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabAfterMissing))?;
         if before.observation.artifact().frame_id == after.observation.artifact().frame_id
             || lease_events.iter().any(|event| {
                 event.sequence > grants[0].sequence
@@ -545,12 +594,16 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                     )
             })
         {
-            return Err(lab_error("runtime_lab_success_lease_discontinuous"));
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabSuccessLeaseDiscontinuous,
+            ));
         }
     }
     let final_event = lab_event(events, source.terminal)?;
     let ProjectionPayload::Full(payload) = &final_event.payload else {
-        return Err(lab_error("runtime_lab_terminal_payload_missing"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabTerminalPayloadMissing,
+        ));
     };
     if final_event.event_type
         != if record.failure.is_some() {
@@ -565,7 +618,9 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         || final_event.links.instance_id() != Some(&prepared.instance_id)
         || final_event.links.lease_id() != prepared.lease_id.as_ref()
     {
-        return Err(lab_error("runtime_lab_terminal_outcome_mismatch"));
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabTerminalOutcomeMismatch,
+        ));
     }
     Ok(())
 }

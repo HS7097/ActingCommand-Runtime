@@ -218,7 +218,7 @@ impl CandidateProjectionFailure {
 
 impl From<CandidateProjectionError> for CandidateProjectionFailure {
     fn from(error: CandidateProjectionError) -> Self {
-        Self::new(error.code(), error.item(), error.detail())
+        Self::new(error.code().as_str(), error.item(), error.detail())
     }
 }
 
@@ -348,7 +348,7 @@ impl SceneEvaluation<'_> {
             .validate_coordinate_space(self.scene)
             .map_err(|error| {
                 CandidateProjectionFailure::new(
-                    INVALID_CANDIDATE_PROJECTION,
+                    INVALID_CANDIDATE_PROJECTION.as_str(),
                     "frame",
                     error.message(),
                 )

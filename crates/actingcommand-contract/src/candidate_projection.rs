@@ -11,6 +11,8 @@
 //! shapes, the budgets, the identifier grammar and the hash. Producing a projection from a
 //! scene belongs to the recognition pack.
 
+use crate::codes::CandidateProjectionCode;
+use crate::outcome::Code;
 use crate::page_projection::Privacy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,13 +37,16 @@ pub const CANDIDATE_PROJECTION_MAX_BYTES: usize = 32 * 1024;
 pub const CANDIDATE_SETS_MAX_BYTES: usize = 32 * 1024;
 
 /// Any per-projection budget above; the error names the exceeded item.
-pub const CANDIDATE_PROJECTION_BUDGET_EXCEEDED: &str = "candidate_projection_budget_exceeded";
+pub const CANDIDATE_PROJECTION_BUDGET_EXCEEDED: Code =
+    CandidateProjectionCode::CandidateProjectionBudgetExceeded.code();
 /// The public candidate sets of one observation exceed [`CANDIDATE_SETS_MAX_BYTES`].
-pub const CANDIDATE_SETS_BUDGET_EXCEEDED: &str = "candidate_sets_budget_exceeded";
+pub const CANDIDATE_SETS_BUDGET_EXCEEDED: Code =
+    CandidateProjectionCode::CandidateSetsBudgetExceeded.code();
 /// A projection, a public candidate set or a privacy split breaks this contract's shape.
-pub const INVALID_CANDIDATE_PROJECTION: &str = "invalid_candidate_projection";
+pub const INVALID_CANDIDATE_PROJECTION: Code =
+    CandidateProjectionCode::InvalidCandidateProjection.code();
 /// A candidate identifier is not `{layout_id}#{NN}`.
-pub const INVALID_CANDIDATE_ID: &str = "invalid_candidate_id";
+pub const INVALID_CANDIDATE_ID: Code = CandidateProjectionCode::InvalidCandidateId.code();
 
 pub const CANDIDATE_LAYOUT_ID_MAX_BYTES: usize = 64;
 pub const CANDIDATE_FEATURE_NAME_MAX_BYTES: usize = 32;
@@ -50,7 +55,7 @@ const PAGE_ID_MAX_BYTES: usize = 256;
 /// One failure of this contract: its code, the item or field it concerns, and a detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateProjectionError {
-    code: &'static str,
+    code: Code,
     item: &'static str,
     detail: String,
 }
@@ -81,7 +86,7 @@ impl CandidateProjectionError {
         }
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 

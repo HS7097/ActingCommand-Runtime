@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::RuntimeContractCode;
 
 pub const SAVED_ARTIFACT_OCR_DEADLINE_MS: u64 = 120_000;
 
@@ -54,7 +55,7 @@ impl SavedArtifactOcrRequest {
             || source.captured.sequence > source.through_sequence
         {
             return Err(RuntimeContractError::new(
-                "invalid_saved_artifact_ocr_request",
+                RuntimeContractCode::InvalidSavedArtifactOcrRequest,
             ));
         }
         Ok(())
@@ -82,7 +83,7 @@ impl SavedArtifactOcrResult {
             || self.verified.sequence == 0
         {
             return Err(RuntimeContractError::new(
-                "invalid_saved_artifact_ocr_result",
+                RuntimeContractCode::InvalidSavedArtifactOcrResult,
             ));
         }
         Ok(())

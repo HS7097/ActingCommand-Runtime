@@ -661,7 +661,7 @@ fn manifest_capture_summary(
             CapturePersistedEvidence::new(frame_index, screenshot.artifact.clone()).map_err(
                 |error| {
                     ArtifactStoreError::fatal(
-                        error.code(),
+                        error.code().as_str(),
                         "verify_evidence_manifest",
                         error.to_string(),
                     )
@@ -687,7 +687,7 @@ fn manifest_capture_summary(
             CapturePinnedEvidence::new(frame_index, pin.reason, pin.artifact.clone()).map_err(
                 |error| {
                     ArtifactStoreError::fatal(
-                        error.code(),
+                        error.code().as_str(),
                         "verify_evidence_manifest",
                         error.to_string(),
                     )
@@ -705,7 +705,11 @@ fn manifest_capture_summary(
         pinned,
     )
     .map_err(|error| {
-        ArtifactStoreError::fatal(error.code(), "verify_evidence_manifest", error.to_string())
+        ArtifactStoreError::fatal(
+            error.code().as_str(),
+            "verify_evidence_manifest",
+            error.to_string(),
+        )
     })
 }
 

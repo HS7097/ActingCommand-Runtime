@@ -5,6 +5,7 @@
 //! These structs are transport DTOs. Runtime domain state remains internal to the host and is
 //! translated into this neutral projection at the IPC boundary.
 
+use crate::codes::{ProjectInterfaceCode, SharedCode};
 use crate::{
     ApprovalDisposition, ApprovalTargetKind, EventSeverity, EventType, InstanceId, OwnerEpoch,
 };
@@ -49,15 +50,15 @@ pub type ProjectInterfaceResult<T> = Result<T, ProjectInterfaceError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectInterfaceError {
-    code: &'static str,
+    code: crate::outcome::Code,
 }
 
 impl ProjectInterfaceError {
-    const fn new(code: &'static str) -> Self {
-        Self { code }
+    fn new(code: impl Into<crate::outcome::Code>) -> Self {
+        Self { code: code.into() }
     }
 
-    pub const fn code(self) -> &'static str {
+    pub const fn code(self) -> crate::outcome::Code {
         self.code
     }
 }
@@ -117,7 +118,7 @@ impl ProjectInterfaceCompatibility {
                 unknown_field_policy: ProjectUnknownFieldPolicy::Reject,
             }),
             _ => Err(ProjectInterfaceError::new(
-                "project_contract_version_unsupported",
+                ProjectInterfaceCode::ProjectContractVersionUnsupported,
             )),
         }
     }
@@ -126,7 +127,7 @@ impl ProjectInterfaceCompatibility {
         let current = Self::for_contract(&self.current_version)?;
         if self != &current {
             return Err(ProjectInterfaceError::new(
-                "project_compatibility_matrix_invalid",
+                ProjectInterfaceCode::ProjectCompatibilityMatrixInvalid,
             ));
         }
         Ok(())
@@ -162,10 +163,13 @@ impl ProjectDecisionPageCursor {
             || self.before_intent_sequence > self.snapshot_ledger_position
         {
             return Err(ProjectInterfaceError::new(
-                "project_decision_cursor_invalid",
+                SharedCode::ProjectDecisionCursorInvalid,
             ));
         }
-        validate_text(&self.before_decision_id, "project_decision_cursor_invalid")
+        validate_text(
+            &self.before_decision_id,
+            SharedCode::ProjectDecisionCursorInvalid,
+        )
     }
 
     pub const fn snapshot_ledger_position(&self) -> u64 {
@@ -201,7 +205,9 @@ impl ProjectDecisionPageRequest {
 
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
         if self.limit == 0 || self.limit > MAX_PROJECT_DECISION_PAGE_SIZE {
-            return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+            return Err(ProjectInterfaceError::new(
+                SharedCode::ProjectDecisionPageInvalid,
+            ));
         }
         if let Some(cursor) = &self.cursor {
             cursor.validate()?;
@@ -296,22 +302,25 @@ impl ProjectInterfaceRequest {
             PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION | PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1
         ) {
             return Err(ProjectInterfaceError::new(
-                "unsupported_project_request_schema",
+                ProjectInterfaceCode::UnsupportedProjectRequestSchema,
             ));
         }
         if self.accepted_contract_versions.is_empty()
             || self.accepted_contract_versions.len() > MAX_ACCEPTED_VERSIONS
         {
             return Err(ProjectInterfaceError::new(
-                "project_contract_versions_invalid",
+                ProjectInterfaceCode::ProjectContractVersionsInvalid,
             ));
         }
         let mut seen = BTreeSet::new();
         for version in &self.accepted_contract_versions {
-            validate_text(version, "project_contract_versions_invalid")?;
+            validate_text(
+                version,
+                ProjectInterfaceCode::ProjectContractVersionsInvalid,
+            )?;
             if !seen.insert(version) {
                 return Err(ProjectInterfaceError::new(
-                    "project_contract_versions_invalid",
+                    ProjectInterfaceCode::ProjectContractVersionsInvalid,
                 ));
             }
         }
@@ -330,14 +339,14 @@ impl ProjectInterfaceRequest {
         };
         if !schema_matches_versions {
             return Err(ProjectInterfaceError::new(
-                "project_request_schema_contract_mismatch",
+                ProjectInterfaceCode::ProjectRequestSchemaContractMismatch,
             ));
         }
         if self.schema_version == PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1
             && self.decision_page.is_some()
         {
             return Err(ProjectInterfaceError::new(
-                "project_decision_page_requires_v2",
+                ProjectInterfaceCode::ProjectDecisionPageRequiresV2,
             ));
         }
         if let Some(page) = &self.decision_page {
@@ -348,7 +357,7 @@ impl ProjectInterfaceRequest {
                 )
             }) {
                 return Err(ProjectInterfaceError::new(
-                    "project_decision_page_requires_v2",
+                    ProjectInterfaceCode::ProjectDecisionPageRequiresV2,
                 ));
             }
             page.validate()?;
@@ -366,7 +375,9 @@ impl ProjectInterfaceRequest {
                     .iter()
                     .any(|accepted| accepted == supported)
             })
-            .ok_or_else(|| ProjectInterfaceError::new("project_contract_version_unsupported"))
+            .ok_or_else(|| {
+                ProjectInterfaceError::new(ProjectInterfaceCode::ProjectContractVersionUnsupported)
+            })
     }
 
     pub fn accepted_contract_versions(&self) -> &[String] {
@@ -565,12 +576,16 @@ impl ProjectDecisionPage {
             || self.returned_count > self.requested_limit
             || self.has_more != self.next_cursor.is_some()
         {
-            return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+            return Err(ProjectInterfaceError::new(
+                SharedCode::ProjectDecisionPageInvalid,
+            ));
         }
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;
             if cursor.snapshot_ledger_position() != self.snapshot_ledger_position {
-                return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+                return Err(ProjectInterfaceError::new(
+                    SharedCode::ProjectDecisionPageInvalid,
+                ));
             }
         }
         Ok(())
@@ -617,11 +632,13 @@ pub struct ProjectInterfaceSnapshot {
 impl ProjectInterfaceSnapshot {
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
         if let Some(source) = &self.runtime.source {
-            source
-                .validate()
-                .map_err(|_| ProjectInterfaceError::new("project_current_source_invalid"))?;
+            source.validate().map_err(|_| {
+                ProjectInterfaceError::new(ProjectInterfaceCode::ProjectCurrentSourceInvalid)
+            })?;
             if source.sequence < self.ledger_position {
-                return Err(ProjectInterfaceError::new("project_current_source_invalid"));
+                return Err(ProjectInterfaceError::new(
+                    ProjectInterfaceCode::ProjectCurrentSourceInvalid,
+                ));
             }
         }
         if self.ledger_position == 0
@@ -634,25 +651,38 @@ impl ProjectInterfaceSnapshot {
             || self.approvals.len() > MAX_PROJECT_APPROVALS
             || self.diagnostics.len() > MAX_PROJECT_DIAGNOSTICS
         {
-            return Err(ProjectInterfaceError::new("project_snapshot_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectSnapshotInvalid,
+            ));
         }
         match (&self.project, &self.catalog) {
             (Some(project), Some(catalog)) if project.project_id == catalog.catalog_id => {}
             (None, None) => {}
             _ => {
                 return Err(ProjectInterfaceError::new(
-                    "project_catalog_identity_mismatch",
+                    ProjectInterfaceCode::ProjectCatalogIdentityMismatch,
                 ));
             }
         }
         if let Some(project) = &self.project {
-            validate_text(&project.project_id, "project_identity_invalid")?;
+            validate_text(
+                &project.project_id,
+                ProjectInterfaceCode::ProjectIdentityInvalid,
+            )?;
         }
         if let Some(catalog) = &self.catalog {
-            validate_text(&catalog.catalog_id, "project_catalog_invalid")?;
-            validate_hash(&catalog.catalog_hash, "project_catalog_invalid")?;
+            validate_text(
+                &catalog.catalog_id,
+                ProjectInterfaceCode::ProjectCatalogInvalid,
+            )?;
+            validate_hash(
+                &catalog.catalog_hash,
+                ProjectInterfaceCode::ProjectCatalogInvalid,
+            )?;
             if catalog.catalog_version == 0 {
-                return Err(ProjectInterfaceError::new("project_catalog_invalid"));
+                return Err(ProjectInterfaceError::new(
+                    ProjectInterfaceCode::ProjectCatalogInvalid,
+                ));
             }
         }
         validate_instances(&self.instances)?;
@@ -664,7 +694,9 @@ impl ProjectInterfaceSnapshot {
             if page.snapshot_ledger_position() != self.ledger_position
                 || usize::from(page.returned_count()) != self.decisions.len()
             {
-                return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+                return Err(ProjectInterfaceError::new(
+                    SharedCode::ProjectDecisionPageInvalid,
+                ));
             }
         }
         validate_approvals(&self.approvals)?;
@@ -698,7 +730,7 @@ impl ProjectLedgerSnapshot {
             || self.diagnostics.len() > MAX_PROJECT_DIAGNOSTICS
         {
             return Err(ProjectInterfaceError::new(
-                "project_ledger_snapshot_invalid",
+                ProjectInterfaceCode::ProjectLedgerSnapshotInvalid,
             ));
         }
         match (&self.project, &self.catalog) {
@@ -706,18 +738,29 @@ impl ProjectLedgerSnapshot {
             (None, None) => {}
             _ => {
                 return Err(ProjectInterfaceError::new(
-                    "project_catalog_identity_mismatch",
+                    ProjectInterfaceCode::ProjectCatalogIdentityMismatch,
                 ));
             }
         }
         if let Some(project) = &self.project {
-            validate_text(&project.project_id, "project_identity_invalid")?;
+            validate_text(
+                &project.project_id,
+                ProjectInterfaceCode::ProjectIdentityInvalid,
+            )?;
         }
         if let Some(catalog) = &self.catalog {
-            validate_text(&catalog.catalog_id, "project_catalog_invalid")?;
-            validate_hash(&catalog.catalog_hash, "project_catalog_invalid")?;
+            validate_text(
+                &catalog.catalog_id,
+                ProjectInterfaceCode::ProjectCatalogInvalid,
+            )?;
+            validate_hash(
+                &catalog.catalog_hash,
+                ProjectInterfaceCode::ProjectCatalogInvalid,
+            )?;
             if catalog.catalog_version == 0 {
-                return Err(ProjectInterfaceError::new("project_catalog_invalid"));
+                return Err(ProjectInterfaceError::new(
+                    ProjectInterfaceCode::ProjectCatalogInvalid,
+                ));
             }
         }
         validate_facts(&self.facts)?;
@@ -727,7 +770,9 @@ impl ProjectLedgerSnapshot {
         if self.decision_page.snapshot_ledger_position() != self.ledger_position
             || usize::from(self.decision_page.returned_count()) != self.decisions.len()
         {
-            return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+            return Err(ProjectInterfaceError::new(
+                SharedCode::ProjectDecisionPageInvalid,
+            ));
         }
         validate_approvals(&self.approvals)?;
         validate_diagnostics(&self.diagnostics, self.ledger_position)?;
@@ -750,15 +795,19 @@ pub struct ProjectCurrentView {
 impl ProjectCurrentView {
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
         if let Some(source) = &self.source {
-            source
-                .validate()
-                .map_err(|_| ProjectInterfaceError::new("project_current_source_invalid"))?;
+            source.validate().map_err(|_| {
+                ProjectInterfaceError::new(ProjectInterfaceCode::ProjectCurrentSourceInvalid)
+            })?;
             if source.sequence != self.observed_ledger_position {
-                return Err(ProjectInterfaceError::new("project_current_source_invalid"));
+                return Err(ProjectInterfaceError::new(
+                    ProjectInterfaceCode::ProjectCurrentSourceInvalid,
+                ));
             }
         }
         if self.observed_ledger_position == 0 || self.instances.len() > MAX_PROJECT_INSTANCES {
-            return Err(ProjectInterfaceError::new("project_current_view_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectCurrentViewInvalid,
+            ));
         }
         validate_instances(&self.instances)
     }
@@ -790,7 +839,7 @@ impl ProjectInterfaceResponse {
     ) -> ProjectInterfaceResult<Self> {
         if negotiated_version != PROJECT_INTERFACE_CONTRACT_V3 {
             return Err(ProjectInterfaceError::new(
-                "project_current_contract_mismatch",
+                ProjectInterfaceCode::ProjectCurrentContractMismatch,
             ));
         }
         let compatibility = ProjectInterfaceCompatibility::for_contract(negotiated_version)?;
@@ -813,7 +862,7 @@ impl ProjectInterfaceResponse {
             PROJECT_INTERFACE_CONTRACT_V1 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1,
             _ => {
                 return Err(ProjectInterfaceError::new(
-                    "project_legacy_contract_mismatch",
+                    ProjectInterfaceCode::ProjectLegacyContractMismatch,
                 ));
             }
         };
@@ -829,11 +878,12 @@ impl ProjectInterfaceResponse {
 
     fn finish(self) -> ProjectInterfaceResult<Self> {
         self.validate()?;
-        let encoded = serde_json::to_vec(&self)
-            .map_err(|_| ProjectInterfaceError::new("project_response_encode_failed"))?;
+        let encoded = serde_json::to_vec(&self).map_err(|_| {
+            ProjectInterfaceError::new(ProjectInterfaceCode::ProjectResponseEncodeFailed)
+        })?;
         if encoded.len() > MAX_PROJECT_INTERFACE_RESPONSE_BYTES {
             return Err(ProjectInterfaceError::new(
-                "project_interface_response_too_large",
+                SharedCode::ProjectInterfaceResponseTooLarge,
             ));
         }
         Ok(self)
@@ -846,20 +896,20 @@ impl ProjectInterfaceResponse {
             PROJECT_INTERFACE_CONTRACT_V1 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1,
             _ => {
                 return Err(ProjectInterfaceError::new(
-                    "project_contract_version_unsupported",
+                    ProjectInterfaceCode::ProjectContractVersionUnsupported,
                 ));
             }
         };
         if self.schema_version != expected_schema {
             return Err(ProjectInterfaceError::new(
-                "unsupported_project_response_schema",
+                ProjectInterfaceCode::UnsupportedProjectResponseSchema,
             ));
         }
         let expected_compatibility =
             ProjectInterfaceCompatibility::for_contract(&self.contract_version)?;
         if self.compatibility != expected_compatibility {
             return Err(ProjectInterfaceError::new(
-                "project_compatibility_matrix_invalid",
+                ProjectInterfaceCode::ProjectCompatibilityMatrixInvalid,
             ));
         }
         self.compatibility.validate()?;
@@ -876,7 +926,9 @@ impl ProjectInterfaceResponse {
                 snapshot.validate()?;
                 current.validate()?;
                 if current.observed_ledger_position < snapshot.ledger_position {
-                    return Err(ProjectInterfaceError::new("project_current_view_invalid"));
+                    return Err(ProjectInterfaceError::new(
+                        ProjectInterfaceCode::ProjectCurrentViewInvalid,
+                    ));
                 }
                 Ok(())
             }
@@ -891,7 +943,7 @@ impl ProjectInterfaceResponse {
                 PROJECT_INTERFACE_CONTRACT_V1,
             ) if snapshot.decision_page.is_none() => snapshot.validate(),
             _ => Err(ProjectInterfaceError::new(
-                "project_response_contract_mismatch",
+                ProjectInterfaceCode::ProjectResponseContractMismatch,
             )),
         }
     }
@@ -943,7 +995,7 @@ impl ProjectInterfaceResponse {
                     Some(page) => page,
                     None => {
                         let returned_count = u16::try_from(decisions.len()).map_err(|_| {
-                            ProjectInterfaceError::new("project_decision_page_invalid")
+                            ProjectInterfaceError::new(SharedCode::ProjectDecisionPageInvalid)
                         })?;
                         ProjectDecisionPage::new(
                             ledger_position,
@@ -975,14 +1027,19 @@ fn validate_instances(instances: &[ProjectInstanceView]) -> ProjectInterfaceResu
     let mut ids = BTreeSet::new();
     let mut previous = None;
     for instance in instances {
-        validate_text(&instance.instance_alias, "project_instance_invalid")?;
+        validate_text(
+            &instance.instance_alias,
+            ProjectInterfaceCode::ProjectInstanceInvalid,
+        )?;
         if !aliases.insert(instance.instance_alias.as_str())
             || !ids.insert(instance.instance_id)
             || previous.is_some_and(|value| value >= instance.instance_alias.as_str())
             || (instance.destructive_step_active || instance.preempt_requested)
                 && !instance.lease_active
         {
-            return Err(ProjectInterfaceError::new("project_instance_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectInstanceInvalid,
+            ));
         }
         previous = Some(instance.instance_alias.as_str());
     }
@@ -998,9 +1055,12 @@ fn validate_facts(facts: &[ProjectFactView]) -> ProjectInterfaceResult<()> {
             &fact.source_snapshot_id,
             &fact.fact_schema_version,
         ] {
-            validate_text(value, "project_fact_invalid")?;
+            validate_text(value, ProjectInterfaceCode::ProjectFactInvalid)?;
         }
-        validate_raw_hash(&fact.resource_bundle_hash, "project_fact_invalid")?;
+        validate_raw_hash(
+            &fact.resource_bundle_hash,
+            ProjectInterfaceCode::ProjectFactInvalid,
+        )?;
         if fact.observed_at_unix_ms == 0
             || fact
                 .expires_at_unix_ms
@@ -1008,7 +1068,9 @@ fn validate_facts(facts: &[ProjectFactView]) -> ProjectInterfaceResult<()> {
             || fact.confidence_milli > 1_000
             || !identities.insert((fact.scope.clone(), fact.key.as_str()))
         {
-            return Err(ProjectInterfaceError::new("project_fact_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectFactInvalid,
+            ));
         }
     }
     Ok(())
@@ -1017,15 +1079,20 @@ fn validate_facts(facts: &[ProjectFactView]) -> ProjectInterfaceResult<()> {
 fn validate_goals(goals: &[ProjectGoalView]) -> ProjectInterfaceResult<()> {
     let mut identities = BTreeSet::new();
     for goal in goals {
-        validate_text(&goal.goal_id, "project_goal_invalid")?;
-        validate_text(&goal.activity_profile_id, "project_goal_invalid")?;
+        validate_text(&goal.goal_id, ProjectInterfaceCode::ProjectGoalInvalid)?;
+        validate_text(
+            &goal.activity_profile_id,
+            ProjectInterfaceCode::ProjectGoalInvalid,
+        )?;
         goal.scope.validate()?;
         goal.metric.validate()?;
         if goal.deadline_unix_ms == 0
             || goal.strategic_weight_milli > MAX_STRATEGIC_WEIGHT_MILLI
             || !identities.insert((goal.activity_profile_id.as_str(), goal.goal_id.as_str()))
         {
-            return Err(ProjectInterfaceError::new("project_goal_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectGoalInvalid,
+            ));
         }
     }
     Ok(())
@@ -1044,23 +1111,28 @@ fn validate_decisions(
             &decision.operation_id,
             &decision.fact_snapshot_id,
         ] {
-            validate_text(value, "project_decision_invalid")?;
+            validate_text(value, ProjectInterfaceCode::ProjectDecisionInvalid)?;
         }
-        validate_hash(&decision.catalog_hash, "project_decision_invalid")?;
+        validate_hash(
+            &decision.catalog_hash,
+            ProjectInterfaceCode::ProjectDecisionInvalid,
+        )?;
         if decision.catalog_version == 0
             || decision.input_ledger_position == 0
             || decision.input_ledger_position > ledger_position
             || decision.urgency_milli > 1_000
             || !ids.insert(decision.decision_id.as_str())
         {
-            return Err(ProjectInterfaceError::new("project_decision_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectDecisionInvalid,
+            ));
         }
         for value in decision
             .approval_fact_ids
             .iter()
             .chain(decision.reason_codes.iter())
         {
-            validate_text(value, "project_decision_invalid")?;
+            validate_text(value, ProjectInterfaceCode::ProjectDecisionInvalid)?;
         }
     }
     Ok(())
@@ -1069,18 +1141,30 @@ fn validate_decisions(
 fn validate_approvals(approvals: &[ProjectApprovalView]) -> ProjectInterfaceResult<()> {
     let mut ids = BTreeSet::new();
     for approval in approvals {
-        validate_text(&approval.approval_id, "project_approval_invalid")?;
-        validate_hash(&approval.catalog_hash, "project_approval_invalid")?;
+        validate_text(
+            &approval.approval_id,
+            ProjectInterfaceCode::ProjectApprovalInvalid,
+        )?;
+        validate_hash(
+            &approval.catalog_hash,
+            ProjectInterfaceCode::ProjectApprovalInvalid,
+        )?;
         if approval.catalog_version == 0 || !ids.insert(approval.approval_id.as_str()) {
-            return Err(ProjectInterfaceError::new("project_approval_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectApprovalInvalid,
+            ));
         }
         match approval.target_kind {
             ApprovalTargetKind::Catalog if approval.target_id.is_none() => {}
             ApprovalTargetKind::Plan | ApprovalTargetKind::Decision
                 if approval.target_id.as_ref().is_some_and(|value| {
-                    validate_text(value, "project_approval_invalid").is_ok()
+                    validate_text(value, ProjectInterfaceCode::ProjectApprovalInvalid).is_ok()
                 }) => {}
-            _ => return Err(ProjectInterfaceError::new("project_approval_invalid")),
+            _ => {
+                return Err(ProjectInterfaceError::new(
+                    ProjectInterfaceCode::ProjectApprovalInvalid,
+                ));
+            }
         }
     }
     Ok(())
@@ -1098,10 +1182,12 @@ fn validate_diagnostics(
             || diagnostic.timestamp_unix_ms == 0
             || diagnostic.fatal != (diagnostic.severity == EventSeverity::Fatal)
         {
-            return Err(ProjectInterfaceError::new("project_diagnostic_invalid"));
+            return Err(ProjectInterfaceError::new(
+                ProjectInterfaceCode::ProjectDiagnosticInvalid,
+            ));
         }
         if let Some(code) = &diagnostic.code {
-            validate_text(code, "project_diagnostic_invalid")?;
+            validate_text(code, ProjectInterfaceCode::ProjectDiagnosticInvalid)?;
         }
         previous = diagnostic.sequence;
     }
@@ -1115,27 +1201,31 @@ impl ProjectScopeView {
             Self::Server { server_id } => server_id,
             Self::Game { game_id } => game_id,
         };
-        validate_text(value, "project_scope_invalid")
+        validate_text(value, ProjectInterfaceCode::ProjectScopeInvalid)
     }
 }
 
 impl ProjectGoalMetricView {
     fn validate(&self) -> ProjectInterfaceResult<()> {
         match self {
-            Self::Fact { fact_key } => validate_text(fact_key, "project_goal_metric_invalid"),
-            Self::Pool { pool_id } => validate_text(pool_id, "project_goal_metric_invalid"),
+            Self::Fact { fact_key } => {
+                validate_text(fact_key, ProjectInterfaceCode::ProjectGoalMetricInvalid)
+            }
+            Self::Pool { pool_id } => {
+                validate_text(pool_id, ProjectInterfaceCode::ProjectGoalMetricInvalid)
+            }
             Self::Outcome {
                 task_id,
                 outcome_key,
             } => {
-                validate_text(task_id, "project_goal_metric_invalid")?;
-                validate_text(outcome_key, "project_goal_metric_invalid")
+                validate_text(task_id, ProjectInterfaceCode::ProjectGoalMetricInvalid)?;
+                validate_text(outcome_key, ProjectInterfaceCode::ProjectGoalMetricInvalid)
             }
         }
     }
 }
 
-fn validate_text(value: &str, code: &'static str) -> ProjectInterfaceResult<()> {
+fn validate_text(value: &str, code: impl Into<crate::outcome::Code>) -> ProjectInterfaceResult<()> {
     if value.is_empty()
         || value.len() > MAX_PROJECT_TEXT_BYTES
         || value.chars().any(char::is_control)
@@ -1145,7 +1235,7 @@ fn validate_text(value: &str, code: &'static str) -> ProjectInterfaceResult<()> 
     Ok(())
 }
 
-fn validate_hash(value: &str, code: &'static str) -> ProjectInterfaceResult<()> {
+fn validate_hash(value: &str, code: impl Into<crate::outcome::Code>) -> ProjectInterfaceResult<()> {
     if !value.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64
             && hex
@@ -1157,7 +1247,10 @@ fn validate_hash(value: &str, code: &'static str) -> ProjectInterfaceResult<()> 
     Ok(())
 }
 
-fn validate_raw_hash(value: &str, code: &'static str) -> ProjectInterfaceResult<()> {
+fn validate_raw_hash(
+    value: &str,
+    code: impl Into<crate::outcome::Code>,
+) -> ProjectInterfaceResult<()> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(ProjectInterfaceError::new(code));
     }
@@ -1328,7 +1421,11 @@ mod tests {
             ProjectInterfaceRequest::new(vec!["actingcommand.project-interface.v9".into()])
                 .expect("well formed request");
         assert_eq!(
-            request.negotiate().expect_err("unsupported").code(),
+            request
+                .negotiate()
+                .expect_err("unsupported")
+                .code()
+                .as_str(),
             "project_contract_version_unsupported"
         );
         let compatible = ProjectInterfaceRequest::new(vec![
@@ -1357,7 +1454,7 @@ mod tests {
         value["contract_version"] = serde_json::json!("actingcommand.project-interface.v9");
         let decoded: ProjectInterfaceResponse = serde_json::from_value(value).expect("shape");
         assert_eq!(
-            decoded.validate().expect_err("version").code(),
+            decoded.validate().expect_err("version").code().as_str(),
             "project_contract_version_unsupported"
         );
     }
@@ -1387,7 +1484,8 @@ mod tests {
         assert_eq!(
             ProjectDecisionPageCursor::new(6, 7, "decision:neutral")
                 .expect_err("cursor cannot exceed snapshot")
-                .code(),
+                .code()
+                .as_str(),
             "project_decision_cursor_invalid"
         );
     }
@@ -1403,7 +1501,8 @@ mod tests {
             snapshot
                 .validate()
                 .expect_err("mixed snapshot position")
-                .code(),
+                .code()
+                .as_str(),
             "project_decision_page_invalid"
         );
     }

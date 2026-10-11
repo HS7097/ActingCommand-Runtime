@@ -562,7 +562,7 @@ impl<B: DurableStorage> EventStore<B> {
         continuation: ScheduledPolicyRecoveryContinuation,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let draft = continuation.apply_to(draft).map_err(|error| {
-            GlobalLedgerError::request(error.code(), "validate_recovered_scheduled_event")
+            GlobalLedgerError::request(error.code().as_str(), "validate_recovered_scheduled_event")
         })?;
         self.append_with_event_id(draft, None, &mut None)
     }

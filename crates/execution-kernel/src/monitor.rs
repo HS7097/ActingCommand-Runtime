@@ -91,13 +91,15 @@ mod tests {
         assert_eq!(
             MonitorObservation::new(MonitorDiagnosis::Healthy, "home", Some("campaign".into()))
                 .expect_err("healthy page mismatch")
-                .code(),
+                .code()
+                .as_str(),
             "invalid_monitor_observation"
         );
         assert_eq!(
             MonitorObservation::new(MonitorDiagnosis::UnexpectedPage, "home", None)
                 .expect_err("unexpected page without current page")
-                .code(),
+                .code()
+                .as_str(),
             "invalid_monitor_observation"
         );
 
@@ -117,7 +119,11 @@ mod tests {
         let invalid: MonitorDecision =
             serde_json::from_value(invalid).expect("structurally valid decision");
         assert_eq!(
-            invalid.validate().expect_err("incoherent decision").code(),
+            invalid
+                .validate()
+                .expect_err("incoherent decision")
+                .code()
+                .as_str(),
             "invalid_monitor_decision"
         );
     }

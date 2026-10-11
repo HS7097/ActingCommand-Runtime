@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::ClientCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CorrelationId, HolderId, InstanceId, LeaseId, LeaseToken, RuntimeOperation, RuntimeReceipt,
     RuntimeRequest, RuntimeResult,
@@ -339,13 +341,13 @@ impl TestObservationRecorder {
         request: Option<&RuntimeRequest>,
         receipt: Option<&RuntimeReceipt>,
         token: Option<&LeaseToken>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), Code> {
         let current = thread::current();
         let thread_name = current.name().unwrap_or("unnamed").to_owned();
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "test_observation_recorder_lock_poisoned")?;
+            .map_err(|_| ClientCode::TestObservationRecorderLockPoisoned.code())?;
         let operation = request
             .map(|request| operation_for(request.operation()))
             .unwrap_or(operation);
@@ -369,13 +371,13 @@ impl TestObservationRecorder {
         thread_role: ObservationThreadRole,
         outcome: ObservationOutcome,
         identities: ObservationIdentities,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), Code> {
         let current = thread::current();
         let thread_name = current.name().unwrap_or("unnamed").to_owned();
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "test_observation_recorder_lock_poisoned")?;
+            .map_err(|_| ClientCode::TestObservationRecorderLockPoisoned.code())?;
         push_record(
             &mut state,
             stage,
@@ -397,14 +399,14 @@ fn push_record(
     thread_name: String,
     outcome: ObservationOutcome,
     identities: ObservationIdentities,
-) -> Result<(), &'static str> {
+) -> Result<(), Code> {
     state.next_sequence = state
         .next_sequence
         .checked_add(1)
-        .ok_or("test_observation_sequence_overflow")?;
+        .ok_or(ClientCode::TestObservationSequenceOverflow.code())?;
     let sequence = state.next_sequence;
     let elapsed_micros = u64::try_from(state.started.elapsed().as_micros())
-        .map_err(|_| "test_observation_elapsed_overflow")?;
+        .map_err(|_| ClientCode::TestObservationElapsedOverflow.code())?;
     state.records.push(ObservationRecord {
         sequence,
         elapsed_micros,

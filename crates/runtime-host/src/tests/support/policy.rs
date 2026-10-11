@@ -366,7 +366,7 @@ fn record_policy_approval_disposition(
             catalog_hash: intent.catalog_hash.clone(),
             catalog_version: intent.catalog_version,
         },
-        "user_confirmed",
+        actingcommand_contract::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
     )
     .expect("approval decision");
     let mut client = TestClient::connect(host);
@@ -390,7 +390,7 @@ fn record_target_approval(client: &mut TestClient, approval_id: &str, target: Ap
         approval_id,
         ApprovalDisposition::Approved,
         target,
-        "proposal_reviewed",
+        actingcommand_contract::ApprovalReasonCode::new("proposal_reviewed").expect("approval reason"),
     )
     .expect("proposal approval");
     let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });

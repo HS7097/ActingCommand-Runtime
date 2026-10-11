@@ -7,8 +7,9 @@ use crate::codes::HostCode;
 use crate::policy_host::InstanceOccupancy;
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
-    SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseScope, SchedulingPauseState,
-    SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
+    SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseReason,
+    SchedulingPauseScope, SchedulingPauseState, SchedulingResumeCaptureCheck,
+    SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
 
 /// Workflow #369 W-1 (review L-6): how long a policy admission retries an admission guard that
@@ -299,7 +300,7 @@ impl SchedulingPauseTable {
         if let Some(pause) = &self.global {
             rows.push(pause_row(
                 None,
-                &pause.reason_code,
+                pause.pause_reason.as_str(),
                 pause.since_unix_ms,
                 origin(None)?,
             ));
@@ -307,7 +308,7 @@ impl SchedulingPauseTable {
         for (alias, pause) in &self.instances {
             rows.push(pause_row(
                 Some(alias),
-                &pause.reason_code,
+                pause.pause_reason.as_str(),
                 pause.since_unix_ms,
                 origin(Some(alias.clone()))?,
             ));
@@ -370,7 +371,7 @@ impl SchedulingPauseTable {
     pub(super) fn hold_instance_at_start(
         &mut self,
         instance_alias: &str,
-        reason_code: &str,
+        pause_reason: &str,
         since_unix_ms: u64,
         origin: PauseOrigin,
     ) -> RuntimeHostResult<bool> {
@@ -382,19 +383,20 @@ impl SchedulingPauseTable {
                 .entry(instance_alias.to_owned())
                 .or_default(),
         )?;
-        let state = InstancePauseState {
-            revision,
-            reason_code: reason_code.to_owned(),
-            since_unix_ms,
-            stage: InstancePauseStage::Released,
-        };
-        state.validate().map_err(|_| {
+        let invalid = || {
             RuntimeHostError::fatal(
                 "scheduling_pause_state_invalid",
                 "hold_start_instance_pause",
                 RuntimeErrorCode::RuntimeFatal,
             )
-        })?;
+        };
+        let state = InstancePauseState {
+            revision,
+            pause_reason: SchedulingPauseReason::new(pause_reason).map_err(|_| invalid())?,
+            since_unix_ms,
+            stage: InstancePauseStage::Released,
+        };
+        state.validate().map_err(|_| invalid())?;
         self.set_instance(instance_alias, state, origin);
         Ok(true)
     }
@@ -1932,7 +1934,7 @@ impl HostShared {
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         scope: &SchedulingPauseScope,
-        reason_code: &str,
+        pause_reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
     ) -> Result<OperationSuccess, RequestFailure> {
         let since_unix_ms = self
@@ -1959,7 +1961,7 @@ impl HostShared {
                 let revision = next_scheduling_pause_revision(&mut prospective.global_revision)?;
                 let state = SchedulingPauseState {
                     revision,
-                    reason_code: reason_code.to_owned(),
+                    pause_reason: pause_reason.clone(),
                     since_unix_ms,
                 };
                 prospective.set_global(state.clone(), origin.clone());
@@ -1997,7 +1999,7 @@ impl HostShared {
                 )?;
                 let state = InstancePauseState {
                     revision,
-                    reason_code: reason_code.to_owned(),
+                    pause_reason: pause_reason.clone(),
                     since_unix_ms,
                     stage: InstancePauseStage::Draining,
                 };

@@ -7,6 +7,7 @@
 //! `error_parts`.
 
 use super::super::{Effect, Overflow, finish};
+use crate::codes::ActingctlCode;
 use crate::mcp::tools::ToolError;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -172,9 +173,13 @@ fn gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back
         "message": "gate lab failure",
         "details": Value::Object(details),
     });
-    let error = ToolError::new("runtime", "lab_process_failed", "gate lab failure")
-        .with_detail("lab_exit_code", json!(5))
-        .with_detail("lab_error", lab_error.clone());
+    let error = ToolError::new(
+        "runtime",
+        ActingctlCode::LabProcessFailed,
+        "gate lab failure",
+    )
+    .with_detail("lab_exit_code", json!(5))
+    .with_detail("lab_error", lab_error.clone());
     let overflow = Overflow {
         handle: "lab_job_gate_c",
         what: "do",

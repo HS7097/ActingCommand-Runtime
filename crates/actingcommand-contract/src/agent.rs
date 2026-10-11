@@ -2,6 +2,7 @@
 
 //! Typed Runtime boundary for a detachable Agent Dispatcher sidecar.
 
+use crate::codes::{RuntimeContractCode, SanitizationCode, SharedCode};
 use crate::{
     AgentSessionId, AgentWakeId, CorrelationId, EventId, EventLinksDraft, IdentifierIssuanceError,
     IdentifierIssuer, InstanceId, IssuedActionId, IssuedCorrelationId, IssuedInstanceId,
@@ -63,7 +64,7 @@ impl AgentWakeTrigger {
     ) -> Result<Self, SanitizationError> {
         if event_sequence == 0 || observed_at_unix_ms == 0 {
             return Err(SanitizationError::new(
-                "invalid_agent_wake_trigger",
+                SanitizationCode::InvalidAgentWakeTrigger,
                 "agent_wake",
             ));
         }
@@ -101,7 +102,7 @@ impl AgentSessionBudget {
             || self.max_session_ms > MAX_AGENT_SESSION_MS
         {
             return Err(SanitizationError::new(
-                "invalid_agent_session_budget",
+                SanitizationCode::InvalidAgentSessionBudget,
                 "agent_budget",
             ));
         }
@@ -147,7 +148,7 @@ impl AgentCapabilityContract {
             || self.max_projection_events > MAX_AGENT_PROJECTION_EVENTS
         {
             return Err(SanitizationError::new(
-                "invalid_agent_capability_contract",
+                SanitizationCode::InvalidAgentCapabilityContract,
                 "agent_capabilities",
             ));
         }
@@ -207,7 +208,10 @@ impl AgentWakeData {
             || self.requested_at_unix_ms == 0
             || self.attention_state != AgentAttentionState::PausedNeedsAgent
         {
-            return Err(SanitizationError::new("invalid_agent_wake", "agent_wake"));
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidAgentWake,
+                "agent_wake",
+            ));
         }
         self.budget.validate()?;
         self.capabilities.validate()
@@ -375,7 +379,7 @@ impl AgentSessionStatus {
     pub fn resumed(&self, observed_at_unix_ms: u64) -> Result<Self, SanitizationError> {
         if self.state != AgentAttentionState::Active {
             return Err(SanitizationError::new(
-                "agent_session_not_active",
+                SharedCode::AgentSessionNotActive,
                 "agent_session",
             ));
         }
@@ -388,7 +392,7 @@ impl AgentSessionStatus {
     pub fn retry_or_escalate(&self, observed_at_unix_ms: u64) -> Result<Self, SanitizationError> {
         if self.state != AgentAttentionState::Active {
             return Err(SanitizationError::new(
-                "agent_session_not_active",
+                SharedCode::AgentSessionNotActive,
                 "agent_session",
             ));
         }
@@ -418,7 +422,7 @@ impl AgentSessionStatus {
     ) -> Result<Self, SanitizationError> {
         if self.state != AgentAttentionState::Active {
             return Err(SanitizationError::new(
-                "agent_session_not_active",
+                SharedCode::AgentSessionNotActive,
                 "agent_session",
             ));
         }
@@ -435,7 +439,9 @@ impl AgentSessionStatus {
         let deadline = self
             .started_at_unix_ms
             .checked_add(self.budget.max_session_ms)
-            .ok_or_else(|| SanitizationError::new("invalid_agent_session_time", "agent_session"))?;
+            .ok_or_else(|| {
+                SanitizationError::new(SanitizationCode::InvalidAgentSessionTime, "agent_session")
+            })?;
         if self.started_at_unix_ms == 0
             || self.updated_at_unix_ms < self.started_at_unix_ms
             || self.attempts_used == 0
@@ -444,7 +450,7 @@ impl AgentSessionStatus {
             || (self.state == AgentAttentionState::Active && self.updated_at_unix_ms > deadline)
         {
             return Err(SanitizationError::new(
-                "invalid_agent_session",
+                SanitizationCode::InvalidAgentSession,
                 "agent_session",
             ));
         }
@@ -527,7 +533,7 @@ impl AgentSessionResponse {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.observed_at_unix_ms == 0 || !valid_agent_code(&self.code) {
             return Err(SanitizationError::new(
-                "invalid_agent_response",
+                RuntimeContractCode::InvalidAgentResponse,
                 "agent_response",
             ));
         }
@@ -576,7 +582,7 @@ impl AgentSessionEventData {
             response.validate()?;
             if response.session_id != self.status.session_id {
                 return Err(SanitizationError::new(
-                    "agent_response_session_mismatch",
+                    SharedCode::AgentResponseSessionMismatch,
                     "agent_response",
                 ));
             }
@@ -620,7 +626,7 @@ impl AgentSessionContext {
                 .any(|event| !matches!(event.payload, ProjectionPayload::Public(_)))
         {
             return Err(SanitizationError::new(
-                "invalid_agent_ledger_projection",
+                SanitizationCode::InvalidAgentLedgerProjection,
                 "agent_projection",
             ));
         }

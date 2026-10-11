@@ -437,7 +437,9 @@ impl PolicyControlState {
         let runtime_exceeded = runtime_budget_exceeded(intent, admission, runtime_ms)?;
         let effective_input = if runtime_exceeded {
             PolicyExecutionInput::Failed {
-                error_code: actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED.to_owned(),
+                error_code: actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED
+                    .as_str()
+                    .to_owned(),
                 class: PolicyFailureClass::Severe,
             }
         } else {

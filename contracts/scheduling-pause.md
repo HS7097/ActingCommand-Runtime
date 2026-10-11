@@ -11,7 +11,7 @@ and an instance resume reconnects the device at once through the connection prep
 ## Operations and origin gate
 
 ```text
-PauseScheduling  { scope, reason_code, drain_timeout_ms }
+PauseScheduling  { scope, pause_reason, drain_timeout_ms }
 ResumeScheduling { scope, expected? }
 scope = { "kind": "global" } | { "kind": "instance", "instance_alias": "<alias>" }
 expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
@@ -21,8 +21,8 @@ expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
   `(Cli, Cli)`; every other origin is `invalid_scheduling_pause_origin`. No scheduler,
   agent or Lab path can pause or resume dispatch. A `Ui` request needs no governance
   identity card.
-- `reason_code` is a closed code: 1..=64 bytes of `[a-z0-9_.-]`
-  (`invalid_scheduling_pause_reason`).
+- `pause_reason` is a name (outcome key `pause_reason`, type `name`; Workflow #378 A2a): 1..=64
+  bytes of `[a-z0-9_.-]` (`invalid_scheduling_pause_reason`).
 - `drain_timeout_ms` is bounded to `1_000..=600_000`
   (`invalid_scheduling_pause_drain_timeout`). It is validated for both scopes and used only
   by an instance pause.
@@ -230,9 +230,9 @@ stage changes `draining` to `paused` to `released` do not.
 
 ## Status
 
-`Status` (`RuntimeControlPlaneStatus`) carries `scheduling_pause: { revision, reason_code,
+`Status` (`RuntimeControlPlaneStatus`) carries `scheduling_pause: { revision, pause_reason,
 since_unix_ms }` while the global pause holds, and each `RuntimeInstanceStatus` carries
-`pause: { revision, reason_code, since_unix_ms, stage: draining | paused | released }` while
+`pause: { revision, pause_reason, since_unix_ms, stage: draining | paused | released }` while
 its instance is paused. Both fields are absent otherwise (additive wire: a
 `deny_unknown_fields` reader must move to this contract before it reads a paused status).
 
@@ -241,7 +241,7 @@ its instance is paused. Both fields are absent otherwise (additive wire: a
 A pause has no TTL; only `ResumeScheduling` lifts it. Since Workflow #361 B1 a pause survives a
 restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Runtime`,
 `record_list`, no lifetime; `contracts/runtime-fact-store.md`), one row per held pause:
-`scope` (`global` or `instance`), `instance_alias` (instance rows), `reason_code`,
+`scope` (`global` or `instance`), `instance_alias` (instance rows), `pause_reason`,
 `since_unix_ms` (`timestamp_ms`), `set_in_owner_epoch` and, on a restored row,
 `restored_from_owner_epoch`. An empty list means nothing is paused; a ledger without the fact
 (any ledger older than this rule) starts unpaused, as before.

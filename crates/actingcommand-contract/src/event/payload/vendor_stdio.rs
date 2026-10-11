@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::SanitizationCode;
+
 /// Fixed owner references; these are roles, not evidence of file-object identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -212,7 +214,7 @@ impl VendorStdioFacts {
     pub(crate) fn validate(&self) -> Result<(), super::SanitizationError> {
         if self.steps.len() > MAX_VENDOR_STDIO_STEPS {
             return Err(super::SanitizationError::new(
-                "vendor_stdio_steps_exceeded",
+                SanitizationCode::VendorStdioStepsExceeded,
                 "vendor_stdio",
             ));
         }
@@ -228,7 +230,7 @@ impl VendorStdioFacts {
             })
         {
             return Err(super::SanitizationError::new(
-                "vendor_stdio_residue_facts_exceeded",
+                SanitizationCode::VendorStdioResidueFactsExceeded,
                 "vendor_stdio",
             ));
         }

@@ -216,7 +216,7 @@ impl HostShared {
         )
         .map_err(|error| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                error.code(),
+                error.code().as_str(),
                 "export_evidence",
                 RuntimeErrorCode::RuntimeFatal,
             ))

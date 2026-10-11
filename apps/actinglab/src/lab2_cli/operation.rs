@@ -75,7 +75,7 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         };
         request
             .validate()
-            .map_err(|error| CliError::usage(error.code()))?;
+            .map_err(|error| CliError::usage(error.code().as_str()))?;
         let session = begin_runtime_debug_session()?;
         let verified = session
             .run_contained_lab_operation(&instance, request)

@@ -2314,7 +2314,7 @@ impl Declaration<'_> {
                 serde_json::from_value(reading.clone())
                     .map_err(|_| self.error(&pointer, ResourceDeclarationReason::InvalidValue))?;
             if let Err(reason) = declaration.validate() {
-                let path: &[&str] = match reason {
+                let path: &[&str] = match reason.as_str() {
                     "resource_reading_id_invalid" => &["id"],
                     "resource_reading_fact_key_invalid" => &["fact_key"],
                     "resource_reading_page_id_invalid" => &["page_id"],

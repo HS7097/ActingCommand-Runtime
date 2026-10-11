@@ -356,7 +356,8 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
                     catalog_hash: format!("sha256:{}", "a".repeat(64)),
                     catalog_version: 1,
                 },
-                "user_confirmed",
+                actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                    .expect("approval reason"),
             )
             .expect("approval decision"),
         },
@@ -425,7 +426,8 @@ fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
                         catalog_hash: format!("sha256:{}", marker.to_string().repeat(64)),
                         catalog_version: 1,
                     },
-                    "user_confirmed",
+                    actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                        .expect("approval reason"),
                 )
                 .expect("approval decision"),
             });

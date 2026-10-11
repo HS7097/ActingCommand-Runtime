@@ -3780,7 +3780,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 // `run_ending` record reaches this check unvalidated.
                 selection.validate_for_append().map_err(|error| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        error.code(),
+                        error.code().as_str(),
                         "record_contained_task_selection",
                         RuntimeErrorCode::RuntimeFatal,
                     ))

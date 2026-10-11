@@ -485,7 +485,10 @@ fn a_pause_during_a_rung_run_ends_the_climb_at_warning_and_completes() {
             scope: SchedulingPauseScope::Instance {
                 instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
             },
-            reason_code: "s2_pause_during_climb".to_owned(),
+            pause_reason: actingcommand_contract::SchedulingPauseReason::new(
+                "s2_pause_during_climb",
+            )
+            .expect("pause reason"),
             drain_timeout_ms: 1_000,
         },
     )
@@ -563,7 +566,10 @@ fn pause_instance(host: &RuntimeHost, instance_alias: &str, connection: u64) -> 
             scope: SchedulingPauseScope::Instance {
                 instance_alias: instance_alias.to_owned(),
             },
-            reason_code: "s2_pause_on_the_ladder".to_owned(),
+            pause_reason: actingcommand_contract::SchedulingPauseReason::new(
+                "s2_pause_on_the_ladder",
+            )
+            .expect("pause reason"),
             drain_timeout_ms: 1_000,
         },
     )
@@ -1193,7 +1199,10 @@ fn a_start_under_a_pause_still_runs_its_startup_package() {
             scope: SchedulingPauseScope::Instance {
                 instance_alias: STARTUP_ALIAS.to_owned(),
             },
-            reason_code: "s2_start_under_pause".to_owned(),
+            pause_reason: actingcommand_contract::SchedulingPauseReason::new(
+                "s2_start_under_pause",
+            )
+            .expect("pause reason"),
             drain_timeout_ms: 1_000,
         },
     )

@@ -133,7 +133,7 @@ are not gated.
   `string(<package>)` is recorded ledger first (`runtime.fact_recorded`) whenever the observed
   value differs from the stored one (`contracts/runtime-fact-store.md`, "Producers").
 - Mismatch: `application_not_foreground` (`invalid_request`, receipt state `denied`):
-  `command.rejected` for the input's own action (diagnostic `runtime.diagnostic`, effect
+  `command.rejected` for the input's own action (diagnostic `runtime_diagnostic`, effect
   `not_performed`, the receipt terminal) plus one `runtime.failed` (stage `operation_cleanup`)
   whose native detail names the alias, the observed package and the assigned one. The fact
   is still recorded, so the ledger shows which application took the foreground. Inside a

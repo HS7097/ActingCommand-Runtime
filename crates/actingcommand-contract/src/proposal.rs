@@ -2,6 +2,7 @@
 
 //! Typed declaration proposal boundary for Runtime-controlled catalog promotion.
 
+use crate::codes::{RuntimeContractCode, SanitizationCode};
 use crate::{
     ApprovalTarget, ArtifactId, ArtifactKind, ArtifactRedactionState, MAX_STRATEGIC_WEIGHT_MILLI,
     ProjectedArtifactReference, SanitizationError,
@@ -84,14 +85,22 @@ impl CatalogDeclarationPatch {
             (ProposalPatchOperation::Remove, None) => Ok(()),
             (ProposalPatchOperation::Add | ProposalPatchOperation::Replace, Some(value)) => {
                 if value.is_empty() || value.len() > MAX_PROPOSAL_PATCH_VALUE_BYTES {
-                    return Err(invalid("invalid_proposal_patch_value", "proposal_patch"));
+                    return Err(invalid(
+                        SanitizationCode::InvalidProposalPatchValue,
+                        "proposal_patch",
+                    ));
                 }
                 serde_json::from_str::<serde_json::Value>(value)
                     .map(|_| ())
-                    .map_err(|_| invalid("invalid_proposal_patch_value", "proposal_patch"))
+                    .map_err(|_| {
+                        invalid(
+                            SanitizationCode::InvalidProposalPatchValue,
+                            "proposal_patch",
+                        )
+                    })
             }
             _ => Err(invalid(
-                "invalid_proposal_patch_operation",
+                SanitizationCode::InvalidProposalPatchOperation,
                 "proposal_patch",
             )),
         }
@@ -155,7 +164,7 @@ impl TaskTemplateInstantiation {
                 .is_some_and(|value| value > MAX_STRATEGIC_WEIGHT_MILLI)
         {
             return Err(invalid(
-                "invalid_template_instantiation",
+                SanitizationCode::InvalidTemplateInstantiation,
                 "template_instantiation",
             ));
         }
@@ -211,7 +220,10 @@ impl ProposalKind {
             Self::ParameterInstantiation { instantiation } => instantiation.validate(),
             Self::CatalogDiff { patches } => {
                 if patches.is_empty() || patches.len() > MAX_PROPOSAL_PATCHES {
-                    return Err(invalid("invalid_proposal_patch_count", "proposal_patches"));
+                    return Err(invalid(
+                        SanitizationCode::InvalidProposalPatchCount,
+                        "proposal_patches",
+                    ));
                 }
                 let mut total = 0_usize;
                 for patch in patches {
@@ -222,12 +234,15 @@ impl ProposalKind {
                             value.checked_add(patch.value_json.as_ref().map_or(0, String::len))
                         })
                         .ok_or_else(|| {
-                            invalid("proposal_patch_budget_exceeded", "proposal_patches")
+                            invalid(
+                                SanitizationCode::ProposalPatchBudgetExceeded,
+                                "proposal_patches",
+                            )
                         })?;
                 }
                 if total > MAX_PROPOSAL_PATCH_BYTES {
                     return Err(invalid(
-                        "proposal_patch_budget_exceeded",
+                        SanitizationCode::ProposalPatchBudgetExceeded,
                         "proposal_patches",
                     ));
                 }
@@ -278,13 +293,16 @@ impl CatalogProposal {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.schema_version != PROPOSAL_SCHEMA_VERSION {
             return Err(invalid(
-                "unsupported_proposal_schema",
+                SanitizationCode::UnsupportedProposalSchema,
                 "proposal_schema_version",
             ));
         }
         self.validate_components()?;
         if self.proposal_id != proposal_id_for(self)? {
-            return Err(invalid("proposal_identity_mismatch", "proposal_id"));
+            return Err(invalid(
+                SanitizationCode::ProposalIdentityMismatch,
+                "proposal_id",
+            ));
         }
         Ok(())
     }
@@ -296,7 +314,10 @@ impl CatalogProposal {
             || self.report_refs.is_empty()
             || self.report_refs.len() > MAX_PROPOSAL_REPORTS
         {
-            return Err(invalid("invalid_proposal_boundary", "catalog_proposal"));
+            return Err(invalid(
+                SanitizationCode::InvalidProposalBoundary,
+                "catalog_proposal",
+            ));
         }
         let mut reports = BTreeSet::new();
         for reference in &self.report_refs {
@@ -308,7 +329,10 @@ impl CatalogProposal {
                 || reference.redaction_state() == ArtifactRedactionState::Pending
                 || !reports.insert(reference.artifact_id)
             {
-                return Err(invalid("invalid_proposal_report", "proposal_report"));
+                return Err(invalid(
+                    SanitizationCode::InvalidProposalReport,
+                    "proposal_report",
+                ));
             }
         }
         self.proposal.validate()
@@ -406,7 +430,10 @@ impl ProposalPreview {
             || self.report_count == 0
             || usize::from(self.report_count) > MAX_PROPOSAL_REPORTS
         {
-            return Err(invalid("invalid_proposal_preview", "proposal_preview"));
+            return Err(invalid(
+                RuntimeContractCode::InvalidProposalPreview,
+                "proposal_preview",
+            ));
         }
         match (
             self.class,
@@ -419,7 +446,10 @@ impl ProposalPreview {
                 Some(hash),
             ) => validate_sha256(hash, "target_catalog_hash"),
             (ProposalClass::C, ProposalDisposition::NeedsHumanSpecification, None) => Ok(()),
-            _ => Err(invalid("invalid_proposal_preview", "proposal_preview")),
+            _ => Err(invalid(
+                RuntimeContractCode::InvalidProposalPreview,
+                "proposal_preview",
+            )),
         }
     }
 
@@ -491,7 +521,7 @@ impl CatalogPromotionAuthorization {
             || promotion.preview.class != proposal.class()
         {
             return Err(invalid(
-                "proposal_authorization_identity_mismatch",
+                SanitizationCode::ProposalAuthorizationIdentityMismatch,
                 "proposal_authorization",
             ));
         }
@@ -520,7 +550,7 @@ impl CatalogPromotionAuthorization {
             || self.report_artifact_ids.len() > MAX_PROPOSAL_REPORTS
         {
             return Err(invalid(
-                "invalid_proposal_authorization",
+                SanitizationCode::InvalidProposalAuthorization,
                 "proposal_authorization",
             ));
         }
@@ -531,7 +561,7 @@ impl CatalogPromotionAuthorization {
                 || previous_approval.is_some_and(|value| value >= approval)
             {
                 return Err(invalid(
-                    "invalid_proposal_approval_facts",
+                    SanitizationCode::InvalidProposalApprovalFacts,
                     "approval_fact_ids",
                 ));
             }
@@ -541,7 +571,7 @@ impl CatalogPromotionAuthorization {
         for report in &self.report_artifact_ids {
             if previous_report.is_some_and(|value| value >= *report) {
                 return Err(invalid(
-                    "invalid_proposal_report_facts",
+                    SanitizationCode::InvalidProposalReportFacts,
                     "report_artifact_ids",
                 ));
             }
@@ -587,7 +617,10 @@ impl ProposalPromotion {
             || self.approval_fact_ids.is_empty()
             || self.approval_fact_ids.len() > 64
         {
-            return Err(invalid("invalid_proposal_promotion", "proposal_promotion"));
+            return Err(invalid(
+                RuntimeContractCode::InvalidProposalPromotion,
+                "proposal_promotion",
+            ));
         }
         let mut previous = None::<&str>;
         for approval in &self.approval_fact_ids {
@@ -595,7 +628,7 @@ impl ProposalPromotion {
             if !approval.starts_with("approval:") || previous.is_some_and(|value| value >= approval)
             {
                 return Err(invalid(
-                    "invalid_proposal_approval_facts",
+                    SanitizationCode::InvalidProposalApprovalFacts,
                     "approval_fact_ids",
                 ));
             }
@@ -632,7 +665,12 @@ fn proposal_id_for(proposal: &CatalogProposal) -> Result<String, SanitizationErr
         report_refs: &proposal.report_refs,
         proposal: &proposal.proposal,
     })
-    .map_err(|_| invalid("proposal_identity_encode_failed", "proposal_id"))?;
+    .map_err(|_| {
+        invalid(
+            SanitizationCode::ProposalIdentityEncodeFailed,
+            "proposal_id",
+        )
+    })?;
     Ok(format!("proposal:{:x}", Sha256::digest(bytes)))
 }
 
@@ -655,7 +693,7 @@ fn validate_hash_identity(
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     }) {
-        return Err(invalid("invalid_proposal_hash", field));
+        return Err(invalid(SanitizationCode::InvalidProposalHash, field));
     }
     Ok(())
 }
@@ -669,7 +707,7 @@ fn validate_identifier(value: &str, field: &'static str) -> Result<(), Sanitizat
                 || matches!(byte, b'.' | b'_' | b':' | b'-')
         })
     {
-        return Err(invalid("invalid_proposal_identifier", field));
+        return Err(invalid(SanitizationCode::InvalidProposalIdentifier, field));
     }
     Ok(())
 }
@@ -686,14 +724,20 @@ fn validate_patch_path(path: &str) -> Result<(), SanitizationError> {
         || path == "/catalog/catalog_id"
         || path.starts_with("/catalog/catalog_id/")
     {
-        return Err(invalid("invalid_proposal_patch_path", "proposal_patch"));
+        return Err(invalid(
+            SanitizationCode::InvalidProposalPatchPath,
+            "proposal_patch",
+        ));
     }
     let bytes = path.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'~' {
             if index + 1 >= bytes.len() || !matches!(bytes[index + 1], b'0' | b'1') {
-                return Err(invalid("invalid_proposal_patch_path", "proposal_patch"));
+                return Err(invalid(
+                    SanitizationCode::InvalidProposalPatchPath,
+                    "proposal_patch",
+                ));
             }
             index += 1;
         }
@@ -702,7 +746,7 @@ fn validate_patch_path(path: &str) -> Result<(), SanitizationError> {
     Ok(())
 }
 
-fn invalid(code: &'static str, field: &'static str) -> SanitizationError {
+fn invalid(code: impl Into<crate::outcome::Code>, field: &'static str) -> SanitizationError {
     SanitizationError::new(code, field)
 }
 
@@ -783,7 +827,7 @@ mod tests {
             },
         )
         .expect_err("report is mandatory");
-        assert_eq!(error.code(), "invalid_proposal_boundary");
+        assert_eq!(error.code().as_str(), "invalid_proposal_boundary");
     }
 
     #[test]

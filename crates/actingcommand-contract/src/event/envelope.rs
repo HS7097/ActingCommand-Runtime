@@ -8,6 +8,7 @@ use super::{
     IssuedRunId, IssuedTaskId, LeaseId, OriginModule, RecognitionId, RequestId, RunId,
     SanitizationError, SecretFingerprinter, Sensitivity, StoreIssuedArtifact, TaskId,
 };
+use crate::codes::{SanitizationCode, SharedCode};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -139,7 +140,7 @@ impl ArtifactRetentionSource {
     ) -> Result<SanitizedEventDraft, SanitizationError> {
         let Some(fact) = draft.payload.artifact_retention() else {
             return Err(SanitizationError::new(
-                "artifact_retention_draft_invalid",
+                SanitizationCode::ArtifactRetentionDraftInvalid,
                 "payload",
             ));
         };
@@ -157,7 +158,7 @@ impl ArtifactRetentionSource {
             || self.links.frame_id != identity.artifact.frame_id
         {
             return Err(SanitizationError::new(
-                "artifact_retention_link_conflict",
+                SanitizationCode::ArtifactRetentionLinkConflict,
                 "source_links",
             ));
         }
@@ -212,13 +213,13 @@ impl ScheduledPolicyRecoveryContinuation {
         )
         else {
             return Err(SanitizationError::new(
-                "scheduled_recovery_link_missing",
+                SanitizationCode::ScheduledRecoveryLinkMissing,
                 "dispatch_links",
             ));
         };
         let Some(lease_id) = lease_granted.lease_id else {
             return Err(SanitizationError::new(
-                "scheduled_recovery_link_missing",
+                SanitizationCode::ScheduledRecoveryLinkMissing,
                 "lease_id",
             ));
         };
@@ -235,7 +236,7 @@ impl ScheduledPolicyRecoveryContinuation {
             || lease_granted.recognition_id.is_some()
         {
             return Err(SanitizationError::new(
-                "scheduled_recovery_link_conflict",
+                SanitizationCode::ScheduledRecoveryLinkConflict,
                 "source_links",
             ));
         }
@@ -270,7 +271,7 @@ impl ScheduledPolicyRecoveryContinuation {
             || !event_links_are_empty(&draft.links)
         {
             return Err(SanitizationError::new(
-                "scheduled_recovery_draft_invalid",
+                SharedCode::ScheduledRecoveryDraftInvalid,
                 "scheduled_policy_continuation",
             ));
         }
@@ -481,7 +482,7 @@ impl EventDraft {
     ) -> Result<SanitizedEventDraft, SanitizationError> {
         if self.timestamp_unix_ms == 0 {
             return Err(SanitizationError::new(
-                "invalid_timestamp",
+                SharedCode::InvalidTimestamp,
                 "timestamp_unix_ms",
             ));
         }
@@ -508,7 +509,7 @@ impl EventDraft {
                 || self.links.frame_id() != observation.frame.as_ref().map(|frame| &frame.frame_id))
         {
             return Err(SanitizationError::new(
-                "task_geometry_identity_mismatch",
+                SanitizationCode::TaskGeometryIdentityMismatch,
                 "task_geometry",
             ));
         }
@@ -528,7 +529,7 @@ impl EventDraft {
                 || self.links.action_id().is_none())
         {
             return Err(SanitizationError::new(
-                "task_effect_frame_identity_missing",
+                SanitizationCode::TaskEffectFrameIdentityMissing,
                 "frame_extent",
             ));
         }
@@ -552,7 +553,7 @@ impl EventDraft {
                     .is_some_and(|id| id != &timing.correlation_id)
             {
                 return Err(SanitizationError::new(
-                    "task_timing_identity_mismatch",
+                    SanitizationCode::TaskTimingIdentityMismatch,
                     "task_timing",
                 ));
             }

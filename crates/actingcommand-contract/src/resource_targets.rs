@@ -5,6 +5,7 @@
 //! parsed and checked by the policy crate; the Runtime stores the checked policy as the
 //! instance fact `session.resource_targets`.
 
+use crate::codes::RuntimeContractCode;
 use crate::{EventId, RuntimeContractError, RuntimeContractResult};
 use serde::{Deserialize, Serialize};
 
@@ -187,7 +188,7 @@ pub struct ActiveResourceTargets {
 
 impl ResourceTargetView {
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        let invalid = || RuntimeContractError::new("invalid_resource_target_view");
+        let invalid = || RuntimeContractError::new(RuntimeContractCode::InvalidResourceTargetView);
         crate::validate_instance_alias(&self.instance_alias).map_err(|_| invalid())?;
         if self.policy_instance.is_empty()
             || self.evaluated_at_unix_ms == 0
@@ -223,7 +224,8 @@ impl ResourceTargetView {
 
 impl ResourceTargetsApplied {
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        let invalid = || RuntimeContractError::new("invalid_resource_targets_applied");
+        let invalid =
+            || RuntimeContractError::new(RuntimeContractCode::InvalidResourceTargetsApplied);
         crate::validate_instance_alias(&self.instance_alias).map_err(|_| invalid())?;
         if !canonical_sha256(&self.policy_sha256)
             || !canonical_sha256(&self.checked_catalog_hash)
@@ -255,7 +257,7 @@ impl ResourceTargetsRejection {
             || self.column == 0
         {
             return Err(RuntimeContractError::new(
-                "invalid_resource_targets_rejection",
+                RuntimeContractCode::InvalidResourceTargetsRejection,
             ));
         }
         Ok(())

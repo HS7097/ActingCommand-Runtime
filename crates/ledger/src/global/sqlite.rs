@@ -210,7 +210,7 @@ impl SqliteMarker {
     ) -> GlobalLedgerResult<Self> {
         record
             .validate()
-            .map_err(|error| failure(error.code(), "validate_cutover_marker"))?;
+            .map_err(|error| failure(error.code().as_str(), "validate_cutover_marker"))?;
         Ok(Self {
             state: "ready",
             migration: Some(Box::new(record.clone())),
@@ -241,7 +241,7 @@ impl SqliteMarker {
                     })?;
                 record
                     .validate()
-                    .map_err(|error| failure(error.code(), "validate_cutover_marker"))?;
+                    .map_err(|error| failure(error.code().as_str(), "validate_cutover_marker"))?;
                 // The stored text is authoritative: the keyed meta tag covers these exact
                 // bytes, and the decoded record is never re-encoded for comparison.
                 Self {

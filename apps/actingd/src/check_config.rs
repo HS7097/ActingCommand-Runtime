@@ -11,7 +11,7 @@ use actingcommand_runtime_host::{
     ExecutionBackendRegistry, ResolvedAdbEndpoint, ResolvedInstanceEndpoint, RuntimeHostConfig,
     preview_policy_catalog_transition,
 };
-use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider};
+use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider, VisionListingCode};
 use config::InstanceBindingKey;
 use serde_json::json;
 use std::path::Path;
@@ -43,27 +43,31 @@ const DEVICE_PATH_NAMES: [&str; 5] = [
 /// socket is bound. SQLite may leave the `-wal` / `-shm` sidecars of a cleanly stopped root.
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     if arguments.len() > 3 {
-        return Err(ActingdError::config("check_config_usage_invalid"));
+        return Err(ActingdError::config(ActingdCode::CheckConfigUsageInvalid));
     }
     let mut config = None;
     let (pairs, remaining) = arguments[1..].as_chunks::<2>();
     for pair in pairs {
         if pair[0] != "--config" || config.is_some() || pair[1].is_empty() {
-            return Err(ActingdError::config("check_config_option_invalid"));
+            return Err(ActingdError::config(ActingdCode::CheckConfigOptionInvalid));
         }
         config = Some(PathBuf::from(&pair[1]));
     }
     if !remaining.is_empty() {
-        return Err(ActingdError::config("check_config_option_invalid"));
+        return Err(ActingdError::config(ActingdCode::CheckConfigOptionInvalid));
     }
-    let config_path = config.ok_or_else(|| ActingdError::config("check_config_config_missing"))?;
+    let config_path =
+        config.ok_or_else(|| ActingdError::config(ActingdCode::CheckConfigConfigMissing))?;
     let mut rejection = None;
     let checked = config::load_for(
         &config_path,
         actingcommand_contract::InstallConfigPurpose::CandidateCheck,
     )
-    .map_err(|code| (code, "load"))
-    .and_then(|file| file.assemble().map_err(|code| (code, "assemble")))
+    .map_err(|code| registered(code, ActingdLocation::ConfigLoad))
+    .and_then(|file| {
+        file.assemble()
+            .map_err(|code| registered(code, ActingdLocation::ConfigAssemble))
+    })
     .and_then(|assembly| {
         let RuntimeAssembly {
             host,
@@ -78,7 +82,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         let adb_default = config::ac_adb::require(&adb_requirement).map_err(|refused| {
             let code = refused.code();
             rejection = Some(Rejection::AdbInstall(refused));
-            (code, "assemble")
+            registered(code, ActingdLocation::ConfigAssemble)
         })?;
         // Workflow #360: the vision root listed exactly as startup lists it; no model file is
         // read. A folder that breaks the folder rule fails this check, though startup would
@@ -89,11 +93,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 let inventory = vision.inspect().map_err(|refused| {
                     let code = refused.code;
                     rejection = Some(Rejection::Vision(refused));
-                    (code, "vision")
+                    registered(code, ActingdLocation::ConfigVision)
                 })?;
                 if !inventory.listing.invalid.is_empty() {
                     rejection = Some(Rejection::VisionFolders(inventory.listing.invalid));
-                    return Err(("vision_model_folder_invalid", "vision"));
+                    return Err(registered(
+                        VisionListingCode::VisionModelFolderInvalid,
+                        ActingdLocation::ConfigVision,
+                    ));
                 }
                 Some(vision_report(vision, &inventory))
             }
@@ -106,14 +113,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         // refusals (duplicate aliases or instance ids) carry the code startup would report.
         let registry = provider
             .into_registry()
-            .map_err(|error| (error.code(), "assemble"))?;
+            .map_err(|error| host_refusal(&error, ActingdLocation::ConfigAssemble))?;
         host.validate()
-            .map_err(|error| (error.code(), "validate"))?;
+            .map_err(|error| host_refusal(&error, ActingdLocation::ConfigValidate))?;
         let resource_packages =
             config::validate_resource_packages(&resource_packages).map_err(|refused| {
                 let code = refused.code;
                 rejection = Some(Rejection::ResourcePackage(refused));
-                (code, "resource_package")
+                registered(code, ActingdLocation::ResourcePackage)
             })?;
         let checked = CheckedAssembly {
             host,
@@ -142,10 +149,10 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 .map_or(&[][..], |policy| policy.catalog_approval_ids.as_slice()),
         })
         .map_err(|refused| {
-            let code = refused.code();
+            let failure = host_refusal(&refused, ActingdLocation::PolicyState);
             let elapsed_ms = u64::try_from(previewing.elapsed().as_millis()).unwrap_or(u64::MAX);
             rejection = Some(Rejection::PolicyState(Box::new(refused), elapsed_ms));
-            (code, "policy_state")
+            failure
         })?;
         report["policy_plan"] = policy_plan_report(&preview);
         if !preview.state_root_present()
@@ -158,8 +165,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     let (report, result) = match checked {
         Ok(report) => (report, Ok(())),
         Err((code, stage)) => {
-            let mut error = json!({ "code": code, "stage": stage });
-            let mut failure = ActingdError::config(code);
+            let mut error = json!({ "code": code.as_str(), "stage": v1_stage_token(stage) });
+            let mut failure = ActingdError::coded(code);
             if let Some(rejection) = rejection {
                 let (detail, message) = match rejection {
                     Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
@@ -227,9 +234,30 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         }
     };
     let encoded = serde_json::to_string(&report)
-        .map_err(|_| ActingdError::process("check_config_report_encode_failed"))?;
+        .map_err(|_| ActingdError::process(ActingdCode::CheckConfigReportEncodeFailed))?;
     println!("{encoded}");
     result
+}
+
+/// A check-config refusal: its code and the stage that refused (`error.code`, `error.stage`).
+type Refusal = (ErrorCode, Location);
+
+/// A refusal with a registered code.
+fn registered(code: impl Into<Code>, stage: ActingdLocation) -> Refusal {
+    (ErrorCode::Registered(code.into()), stage.location())
+}
+
+/// A refusal with the runtime host's code.
+fn host_refusal(
+    error: &actingcommand_runtime_host::RuntimeHostError,
+    stage: ActingdLocation,
+) -> Refusal {
+    (
+        ErrorCode::Host {
+            host_code: error.code(),
+        },
+        stage.location(),
+    )
 }
 
 /// A refusal that carries `error.detail`: a resource package (stage `resource_package`), the
@@ -346,7 +374,7 @@ fn summarize(
     config_path: &Path,
     checked: &CheckedAssembly,
     resource_packages: &BTreeMap<String, InstanceResourcePackage>,
-) -> Result<serde_json::Value, (&'static str, &'static str)> {
+) -> Result<serde_json::Value, Refusal> {
     let registry = &checked.registry;
     let mut instances = registry
         .instance_aliases()
@@ -355,7 +383,12 @@ fn summarize(
             let mode = match checked.modes.get(&alias) {
                 Some(ScheduledExecutionMode::DeviceRegistry) => "device_registry",
                 Some(ScheduledExecutionMode::FixtureSimulation) => "fixture_simulation",
-                None => return Err(("execution_backend_registry_incomplete", "validate")),
+                None => {
+                    return Err(registered(
+                        SharedCode::ExecutionBackendRegistryIncomplete,
+                        ActingdLocation::ConfigValidate,
+                    ));
+                }
             };
             // The startup package as assembled: locator and digest, neither opened nor hashed.
             let startup_package = checked.host.startup_packages().get(&alias).map(|request| {
@@ -384,9 +417,12 @@ fn summarize(
                     "stuck_recovery_cooldown_secs": stuck_recovery.cooldown_secs,
                 }));
             }
-            let resolved = registry
-                .resolve(&alias)
-                .ok_or(("execution_backend_registry_incomplete", "validate"))?;
+            let resolved = registry.resolve(&alias).ok_or_else(|| {
+                registered(
+                    SharedCode::ExecutionBackendRegistryIncomplete,
+                    ActingdLocation::ConfigValidate,
+                )
+            })?;
             let endpoint = resolved
                 .adb_endpoint()
                 .and_then(ResolvedInstanceEndpoint::bound);
@@ -442,7 +478,12 @@ fn summarize(
                 source,
                 ..
             }) => json!({ "path": path, "source": source.as_str() }),
-            Some(_) => return Err(("config_manifest_incomplete", "assemble")),
+            Some(_) => {
+                return Err(registered(
+                    ActingdCode::ConfigManifestIncomplete,
+                    ActingdLocation::ConfigAssemble,
+                ));
+            }
             None => serde_json::Value::Null,
         };
         device_paths.insert(name.to_owned(), value);
@@ -471,10 +512,9 @@ fn summarize(
         "vision": checked.vision,
         // Workflow #318 (cfg3): one `env_override_ignored:<VAR>` per set variable that
         // `allow_env_overrides` off leaves unread; empty otherwise.
-        "warnings": checked
-            .ignored_env_overrides
+        "warnings": config::env_override_warnings(&checked.ignored_env_overrides)
             .iter()
-            .map(|variable| config::env_override_warning(variable))
+            .map(config::env_override_warning_v1)
             .collect::<Vec<_>>(),
     });
     if let Some(unresolved) = mumu_root_unresolved {
@@ -499,14 +539,17 @@ fn manifest_parameter<'a>(
 fn manifest_integer(
     manifest: &RuntimeConfigManifest,
     key: &str,
-) -> Result<serde_json::Value, (&'static str, &'static str)> {
+) -> Result<serde_json::Value, Refusal> {
     match manifest_parameter(manifest, key) {
         Some(ConfigParameter {
             value: FactScalar::Integer(value),
             source,
             ..
         }) => Ok(json!({ "value": value, "source": source.as_str() })),
-        _ => Err(("config_manifest_incomplete", "assemble")),
+        _ => Err(registered(
+            ActingdCode::ConfigManifestIncomplete,
+            ActingdLocation::ConfigAssemble,
+        )),
     }
 }
 

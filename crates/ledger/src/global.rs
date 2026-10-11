@@ -1728,7 +1728,7 @@ impl GlobalLedger {
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         query
             .validate()
-            .map_err(|error| GlobalLedgerError::request(error.code(), "query_events"))?;
+            .map_err(|error| GlobalLedgerError::request(error.code().as_str(), "query_events"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1749,9 +1749,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        query
-            .validate()
-            .map_err(|error| GlobalLedgerError::request(error.code(), "query_event_page"))?;
+        query.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code().as_str(), "query_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1778,10 +1778,10 @@ impl GlobalLedger {
         request: RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         query.validate().map_err(|error| {
-            GlobalLedgerError::request(error.code(), "project_ledger_view_page")
+            GlobalLedgerError::request(error.code().as_str(), "project_ledger_view_page")
         })?;
         request.validate().map_err(|error| {
-            GlobalLedgerError::request(error.code(), "project_ledger_view_page")
+            GlobalLedgerError::request(error.code().as_str(), "project_ledger_view_page")
         })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self.sender.as_ref().ok_or_else(|| {
@@ -1876,7 +1876,7 @@ impl GlobalLedger {
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
         query
             .validate()
-            .map_err(|error| GlobalLedgerError::request(error.code(), "project_events"))?;
+            .map_err(|error| GlobalLedgerError::request(error.code().as_str(), "project_events"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1902,9 +1902,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
-        query
-            .validate()
-            .map_err(|error| GlobalLedgerError::request(error.code(), "project_event_page"))?;
+        query.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code().as_str(), "project_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender

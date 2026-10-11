@@ -1487,7 +1487,10 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
     let pause = paused
         .get(POLICY_INSTANCE_ALIAS)
         .expect("A's instance is paused");
-    assert_eq!(pause.reason_code, "policy_settlement_dispatch_unsettled");
+    assert_eq!(
+        pause.pause_reason.as_str(),
+        "policy_settlement_dispatch_unsettled"
+    );
     assert!(!paused.contains_key(POLICY_INSTANCE_ALIAS_B));
 
     // The restart's own records (the pause, the Error) are later than the fixture's time, so

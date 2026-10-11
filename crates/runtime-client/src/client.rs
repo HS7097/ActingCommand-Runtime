@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{ClientCode, ClientLocation};
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
@@ -25,8 +28,8 @@ use actingcommand_contract::{
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
     RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
-    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseExpectation, SchedulingPauseScope, TaskId,
-    TaskOutcome, TaskPayload, TaskSemanticFact, TerminalEvent,
+    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseExpectation, SchedulingPauseReason,
+    SchedulingPauseScope, TaskId, TaskOutcome, TaskPayload, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -188,8 +191,8 @@ impl RuntimeClientConfig {
             || self.maximum_frame_bytes > DEFAULT_RUNTIME_MAX_FRAME_BYTES
         {
             return Err(RuntimeClientError::fatal(
-                "runtime_client_config_invalid",
-                "connect_runtime",
+                ClientCode::RuntimeClientConfigInvalid,
+                ClientLocation::ConnectRuntime.location(),
             ));
         }
         Ok(())
@@ -624,14 +627,14 @@ impl PredictiveMaintenanceRequest {
     ) -> RuntimeClientResult<Self> {
         trend_policy.validate().map_err(|_| {
             RuntimeClientError::fatal(
-                "maintenance_trend_policy_invalid",
-                "build_predictive_maintenance_request",
+                ClientCode::MaintenanceTrendPolicyInvalid,
+                ClientLocation::BuildPredictiveMaintenanceRequest.location(),
             )
         })?;
         let policy = encode_policy_document(
             RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
             &trend_policy,
-            "build_predictive_maintenance_request",
+            ClientLocation::BuildPredictiveMaintenanceRequest.location(),
         )?;
         let transport = RuntimeMaintenanceQuery::new(
             instance_id,
@@ -644,8 +647,8 @@ impl PredictiveMaintenanceRequest {
         )
         .map_err(|_| {
             RuntimeClientError::fatal(
-                "predictive_maintenance_request_invalid",
-                "build_predictive_maintenance_request",
+                ClientCode::PredictiveMaintenanceRequestInvalid,
+                ClientLocation::BuildPredictiveMaintenanceRequest.location(),
             )
         })?;
         Ok(Self { transport })
@@ -837,13 +840,16 @@ impl RuntimeClient {
     pub fn connect(config: RuntimeClientConfig) -> RuntimeClientResult<Self> {
         config.validate()?;
         let info = read_runtime_info(config.state_root())?;
-        let address = info
-            .socket_addr()
-            .map_err(|_| RuntimeClientError::fatal("runtime_info_invalid", "connect_runtime"))?;
+        let address = info.socket_addr().map_err(|_| {
+            RuntimeClientError::fatal(
+                SharedCode::RuntimeInfoInvalid,
+                ClientLocation::ConnectRuntime.location(),
+            )
+        })?;
         let stream = connect_runtime_stream(
             address,
             within_deadline(config.io_timeout, config.deadline),
-            "connect_runtime",
+            ClientLocation::ConnectRuntime.location(),
         )?;
         let client = Self {
             shared: Arc::new(RuntimeClientShared {
@@ -853,8 +859,8 @@ impl RuntimeClient {
                     stream,
                     ids: IdentifierIssuer::new().map_err(|_| {
                         RuntimeClientError::fatal(
-                            "runtime_identifier_issuer_failed",
-                            "connect_runtime",
+                            ClientCode::RuntimeIdentifierIssuerFailed,
+                            ClientLocation::ConnectRuntime.location(),
                         )
                     })?,
                     actor: config.actor,
@@ -871,8 +877,8 @@ impl RuntimeClient {
         let observed_epoch = client.health()?;
         if observed_epoch != client.shared.info.owner_epoch() {
             return Err(RuntimeClientError::fatal(
-                "runtime_owner_epoch_changed",
-                "connect_runtime",
+                ClientCode::RuntimeOwnerEpochChanged,
+                ClientLocation::ConnectRuntime.location(),
             ));
         }
         Ok(client)
@@ -885,8 +891,8 @@ impl RuntimeClient {
     /// Starts a new local interaction on this same connection. Each operation still has its own request.
     pub fn begin_interaction(&self) -> RuntimeClientResult<Self> {
         let correlation = self
-            .connection("begin_interaction")?
-            .issue_correlation("begin_interaction", None)?;
+            .connection(ClientLocation::BeginInteraction.location())?
+            .issue_correlation(ClientLocation::BeginInteraction.location(), None)?;
         Ok(Self {
             shared: Arc::clone(&self.shared),
             correlation: Some(correlation),
@@ -899,9 +905,12 @@ impl RuntimeClient {
     }
 
     pub fn health(&self) -> RuntimeClientResult<OwnerEpoch> {
-        match self.execute("runtime_health", RuntimeOperation::Health)? {
+        match self.execute(
+            ClientLocation::RuntimeHealth.location(),
+            RuntimeOperation::Health,
+        )? {
             RuntimeResult::Health { owner_epoch } => Ok(owner_epoch),
-            _ => Err(self.unexpected_result("runtime_health")),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeHealth.location())),
         }
     }
 
@@ -910,7 +919,7 @@ impl RuntimeClient {
         let target = self.shared.info.shutdown_target();
         let receipt = self
             .execute_receipt(
-                "request_runtime_shutdown",
+                ContractLocation::RequestRuntimeShutdown.location(),
                 RuntimeOperation::RequestShutdown { target },
                 None,
             )
@@ -919,23 +928,26 @@ impl RuntimeClient {
                     error
                 } else {
                     RuntimeClientError::fatal(
-                        "runtime_shutdown_receipt_unconfirmed",
-                        "request_runtime_shutdown",
+                        ClientCode::RuntimeShutdownReceiptUnconfirmed,
+                        ContractLocation::RequestRuntimeShutdown.location(),
                     )
                     .with_related(error)
                 }
             })?;
         if !matches!(receipt.result(), Some(RuntimeResult::ShutdownAccepted { target: accepted }) if *accepted == target)
         {
-            return Err(self.unexpected_result("request_runtime_shutdown"));
+            return Err(self.unexpected_result(ContractLocation::RequestRuntimeShutdown.location()));
         }
         Ok(receipt)
     }
 
     pub fn status(&self) -> RuntimeClientResult<RuntimeControlPlaneStatus> {
-        match self.execute("runtime_status", RuntimeOperation::Status)? {
+        match self.execute(
+            ClientLocation::RuntimeStatus.location(),
+            RuntimeOperation::Status,
+        )? {
             RuntimeResult::Status { status } => Ok(status),
-            _ => Err(self.unexpected_result("runtime_status")),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeStatus.location())),
         }
     }
 
@@ -954,7 +966,7 @@ impl RuntimeClient {
         let expected = action.clone();
         let receipt = self
             .execute_receipt(
-                "install_transition",
+                ContractLocation::InstallTransition.location(),
                 RuntimeOperation::InstallTransition { target, action },
                 None,
             )
@@ -963,8 +975,8 @@ impl RuntimeClient {
                     error
                 } else {
                     RuntimeClientError::fatal(
-                        "install_transition_receipt_unconfirmed",
-                        "install_transition",
+                        ClientCode::InstallTransitionReceiptUnconfirmed,
+                        ContractLocation::InstallTransition.location(),
                     )
                     .with_related(error)
                 }
@@ -997,7 +1009,7 @@ impl RuntimeClient {
             _ => false,
         };
         if !matches {
-            return Err(self.unexpected_result("install_transition"));
+            return Err(self.unexpected_result(ContractLocation::InstallTransition.location()));
         }
         Ok(receipt)
     }
@@ -1006,30 +1018,33 @@ impl RuntimeClient {
     /// reported instance with its bound alias. Binds nothing; see `DiscoverInstances`.
     pub fn discover_instances(&self) -> RuntimeClientResult<RuntimeInstanceDiscovery> {
         match self.execute_with_timeout(
-            "discover_instances",
+            ContractLocation::DiscoverInstances.location(),
             RuntimeOperation::DiscoverInstances,
             Some(INSTANCE_DISCOVERY_RESPONSE_TIMEOUT),
         )? {
             RuntimeResult::InstancesDiscovered { discovery } => Ok(discovery),
-            _ => Err(self.unexpected_result("discover_instances")),
+            _ => Err(self.unexpected_result(ContractLocation::DiscoverInstances.location())),
         }
     }
 
     /// Reads the sealed image of the Runtime's own fact store at the ledger's latest sequence.
     pub fn runtime_fact_snapshot(&self) -> RuntimeClientResult<RuntimeFactSnapshot> {
         match self.execute(
-            "runtime_fact_snapshot",
+            ClientLocation::RuntimeFactSnapshot.location(),
             RuntimeOperation::RuntimeFactSnapshot,
         )? {
             RuntimeResult::RuntimeFactSnapshot { snapshot } => Ok(snapshot),
-            _ => Err(self.unexpected_result("runtime_fact_snapshot")),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeFactSnapshot.location())),
         }
     }
 
     pub fn publish_fact(&self, record: FactRecord) -> RuntimeClientResult<EventId> {
-        match self.execute("publish_fact", RuntimeOperation::PublishFact { record })? {
+        match self.execute(
+            ContractLocation::PublishFact.location(),
+            RuntimeOperation::PublishFact { record },
+        )? {
             RuntimeResult::FactPublished { event_id } => Ok(event_id),
-            _ => Err(self.unexpected_result("publish_fact")),
+            _ => Err(self.unexpected_result(ContractLocation::PublishFact.location())),
         }
     }
 
@@ -1039,11 +1054,11 @@ impl RuntimeClient {
         observation: actingcommand_contract::FactObservation,
     ) -> RuntimeClientResult<EventId> {
         match self.execute(
-            "publish_facts",
+            ContractLocation::PublishFacts.location(),
             RuntimeOperation::PublishFacts { observation },
         )? {
             RuntimeResult::FactPublished { event_id } => Ok(event_id),
-            _ => Err(self.unexpected_result("publish_facts")),
+            _ => Err(self.unexpected_result(ContractLocation::PublishFacts.location())),
         }
     }
 
@@ -1059,16 +1074,16 @@ impl RuntimeClient {
             || document_json.len() > actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
         {
             return Err(RuntimeClientError::fatal(
-                "resource_targets_document_invalid",
-                "apply_resource_targets",
+                SharedCode::ResourceTargetsDocumentInvalid,
+                ContractLocation::ApplyResourceTargets.location(),
             ));
         }
         match self.execute(
-            "apply_resource_targets",
+            ContractLocation::ApplyResourceTargets.location(),
             RuntimeOperation::ApplyResourceTargets { document_json },
         )? {
             RuntimeResult::ResourceTargetsApplied { applied } => Ok(*applied),
-            _ => Err(self.unexpected_result("apply_resource_targets")),
+            _ => Err(self.unexpected_result(ContractLocation::ApplyResourceTargets.location())),
         }
     }
 
@@ -1077,25 +1092,28 @@ impl RuntimeClient {
         request: ProjectInterfaceRequest,
     ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
         match self.execute(
-            "runtime_project_interface",
+            ClientLocation::RuntimeProjectInterface.location(),
             RuntimeOperation::ProjectInterface { request },
         )? {
             RuntimeResult::ProjectInterface { response } => {
                 response.into_snapshot().map_err(|_| {
                     RuntimeClientError::fatal(
-                        "runtime_project_interface_invalid",
-                        "runtime_project_interface",
+                        ClientCode::RuntimeProjectInterfaceInvalid,
+                        ClientLocation::RuntimeProjectInterface.location(),
                     )
                 })
             }
-            _ => Err(self.unexpected_result("runtime_project_interface")),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeProjectInterface.location())),
         }
     }
 
     pub fn monitor_status(&self) -> RuntimeClientResult<RuntimeMonitorRegistryStatus> {
-        match self.execute("runtime_monitor_status", RuntimeOperation::MonitorStatus)? {
+        match self.execute(
+            ClientLocation::RuntimeMonitorStatus.location(),
+            RuntimeOperation::MonitorStatus,
+        )? {
             RuntimeResult::MonitorStatus { status } => Ok(status),
-            _ => Err(self.unexpected_result("runtime_monitor_status")),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeMonitorStatus.location())),
         }
     }
 
@@ -1105,14 +1123,14 @@ impl RuntimeClient {
         policy: RuntimeMonitorPolicy,
     ) -> RuntimeClientResult<RuntimeMonitorInstanceStatus> {
         match self.execute(
-            "runtime_monitor_configure",
+            ClientLocation::RuntimeMonitorConfigure.location(),
             RuntimeOperation::ConfigureMonitor {
                 instance_alias: instance_alias.to_string(),
                 policy,
             },
         )? {
             RuntimeResult::MonitorConfigured { status } => Ok(status),
-            _ => Err(self.unexpected_result("runtime_monitor_configure")),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeMonitorConfigure.location())),
         }
     }
 
@@ -1121,13 +1139,13 @@ impl RuntimeClient {
         instance_alias: &str,
     ) -> RuntimeClientResult<RuntimeMonitorInstanceStatus> {
         match self.execute(
-            "runtime_monitor_clear",
+            ClientLocation::RuntimeMonitorClear.location(),
             RuntimeOperation::ClearMonitor {
                 instance_alias: instance_alias.to_string(),
             },
         )? {
             RuntimeResult::MonitorCleared { status } => Ok(status),
-            _ => Err(self.unexpected_result("runtime_monitor_clear")),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeMonitorClear.location())),
         }
     }
 
@@ -1140,9 +1158,10 @@ impl RuntimeClient {
         instance_alias: &str,
         action: EmulatorInstanceAction,
     ) -> RuntimeClientResult<RuntimeResult> {
-        let correlation = self.issue_correlation("control_emulator_instance")?;
+        let correlation =
+            self.issue_correlation(ContractLocation::ControlEmulatorInstance.location())?;
         let receipt = self.execute_receipt_with_correlation(
-            "control_emulator_instance",
+            ContractLocation::ControlEmulatorInstance.location(),
             RuntimeOperation::ControlEmulatorInstance {
                 instance_alias: instance_alias.to_string(),
                 action,
@@ -1160,7 +1179,7 @@ impl RuntimeClient {
             ) if completed_alias == instance_alias && *completed_action == action => {
                 Ok(result.clone())
             }
-            _ => Err(self.unexpected_result("control_emulator_instance")),
+            _ => Err(self.unexpected_result(ContractLocation::ControlEmulatorInstance.location())),
         }
     }
 
@@ -1171,23 +1190,25 @@ impl RuntimeClient {
     pub fn pause_scheduling(
         &self,
         scope: SchedulingPauseScope,
-        reason_code: &str,
+        pause_reason: SchedulingPauseReason,
         drain_timeout_ms: u64,
     ) -> RuntimeClientResult<RuntimeResult> {
-        let io_timeout = self.connection("pause_scheduling")?.io_timeout;
+        let io_timeout = self
+            .connection(ContractLocation::PauseScheduling.location())?
+            .io_timeout;
         let response_timeout = pause_scheduling_response_timeout(drain_timeout_ms, io_timeout)?;
         let result = self.execute_with_timeout(
-            "pause_scheduling",
+            ContractLocation::PauseScheduling.location(),
             RuntimeOperation::PauseScheduling {
                 scope: scope.clone(),
-                reason_code: reason_code.to_owned(),
+                pause_reason,
                 drain_timeout_ms,
             },
             Some(response_timeout),
         )?;
         match &result {
             RuntimeResult::SchedulingPaused { scope: paused, .. } if *paused == scope => Ok(result),
-            _ => Err(self.unexpected_result("pause_scheduling")),
+            _ => Err(self.unexpected_result(ContractLocation::PauseScheduling.location())),
         }
     }
 
@@ -1202,7 +1223,7 @@ impl RuntimeClient {
         scope: SchedulingPauseScope,
     ) -> RuntimeClientResult<RuntimeResult> {
         let result = self.execute(
-            "resume_scheduling",
+            ContractLocation::ResumeScheduling.location(),
             RuntimeOperation::ResumeScheduling {
                 scope: scope.clone(),
                 expected: None,
@@ -1212,7 +1233,7 @@ impl RuntimeClient {
             RuntimeResult::SchedulingResumed { scope: resumed, .. } if *resumed == scope => {
                 Ok(result)
             }
-            _ => Err(self.unexpected_result("resume_scheduling")),
+            _ => Err(self.unexpected_result(ContractLocation::ResumeScheduling.location())),
         }
     }
 
@@ -1232,7 +1253,7 @@ impl RuntimeClient {
         scope: SchedulingPauseScope,
         expected: SchedulingPauseExpectation,
     ) -> RuntimeClientResult<RuntimeResult> {
-        const OPERATION: &str = "resume_scheduling";
+        const OPERATION: Location = ContractLocation::ResumeScheduling.location();
         let result = match self.send_or_dropped(
             OPERATION,
             RuntimeOperation::ResumeScheduling {
@@ -1249,7 +1270,7 @@ impl RuntimeClient {
                     Ok(status) => status,
                     Err(reconnect) => {
                         return Err(RuntimeClientError::fatal(
-                            "runtime_scheduling_resume_unconfirmed",
+                            ClientCode::RuntimeSchedulingResumeUnconfirmed,
                             OPERATION,
                         )
                         .with_related(error)
@@ -1269,9 +1290,9 @@ impl RuntimeClient {
                 };
                 return Err(RuntimeClientError::fatal(
                     if revision == Some(expected.revision) {
-                        "runtime_operation_unsupported"
+                        ClientCode::RuntimeOperationUnsupported
                     } else {
-                        "runtime_scheduling_resume_unconfirmed"
+                        ClientCode::RuntimeSchedulingResumeUnconfirmed
                     },
                     OPERATION,
                 )
@@ -1296,7 +1317,7 @@ impl RuntimeClient {
         &self,
         instance_alias: &str,
     ) -> RuntimeClientResult<actingcommand_contract::ResourceTargetView> {
-        const OPERATION: &str = "resource_target_view";
+        const OPERATION: Location = ContractLocation::ResourceTargetView.location();
         match self.send_or_dropped(
             OPERATION,
             RuntimeOperation::ResourceTargetView {
@@ -1313,7 +1334,7 @@ impl RuntimeClient {
             },
             SentOutcome::Dropped(error) => match self.reconnect_in_owner_epoch(OPERATION) {
                 Ok(()) => Err(RuntimeClientError::fatal(
-                    "runtime_operation_unsupported",
+                    ClientCode::RuntimeOperationUnsupported,
                     OPERATION,
                 )
                 .with_related(error)),
@@ -1330,7 +1351,7 @@ impl RuntimeClient {
     /// and is returned unchanged, as is every other failure, a receipt timeout included.
     fn send_or_dropped(
         &self,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
     ) -> RuntimeClientResult<SentOutcome> {
         let mut connection = self.connection(operation_name)?;
@@ -1358,19 +1379,17 @@ impl RuntimeClient {
 
     /// Replaces this handle's connection after a send whose receipt never arrived and checks
     /// that the same owner still answers; another epoch latches `runtime_owner_epoch_changed`.
-    fn reconnect_in_owner_epoch(&self, operation: &'static str) -> RuntimeClientResult<()> {
+    fn reconnect_in_owner_epoch(&self, operation: Location) -> RuntimeClientResult<()> {
         {
             let mut connection = self.connection(operation)?;
-            let address = self
-                .shared
-                .info
-                .socket_addr()
-                .map_err(|_| RuntimeClientError::fatal("runtime_info_invalid", operation))?;
+            let address = self.shared.info.socket_addr().map_err(|_| {
+                RuntimeClientError::fatal(SharedCode::RuntimeInfoInvalid, operation)
+            })?;
             connection.stream = connect_runtime_stream(address, connection.io_timeout, operation)?;
             connection.terminal_error = None;
         }
         if self.health()? != self.shared.info.owner_epoch() {
-            let error = RuntimeClientError::fatal("runtime_owner_epoch_changed", operation);
+            let error = RuntimeClientError::fatal(ClientCode::RuntimeOwnerEpochChanged, operation);
             return Err(self.connection(operation)?.latch(error));
         }
         Ok(())
@@ -1383,7 +1402,7 @@ impl RuntimeClient {
     /// #369 W-3), plus the IO margin: 33 000 ms + IO.
     pub fn self_check_instance(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeResult> {
         let result = self.execute(
-            "self_check_instance",
+            ClientLocation::SelfCheckInstance.location(),
             RuntimeOperation::SelfCheckInstance {
                 instance_alias: instance_alias.to_owned(),
             },
@@ -1393,7 +1412,7 @@ impl RuntimeClient {
                 instance_alias: checked,
                 ..
             } if checked == instance_alias => Ok(result),
-            _ => Err(self.unexpected_result("self_check_instance")),
+            _ => Err(self.unexpected_result(ClientLocation::SelfCheckInstance.location())),
         }
     }
 
@@ -1410,18 +1429,21 @@ impl RuntimeClient {
         );
         let result = (|| {
             let holder = self
-                .connection("issue_lease_holder")?
+                .connection(ClientLocation::IssueLeaseHolder.location())?
                 .ids
                 .mint_holder_id()
                 .map_err(|_| {
-                    RuntimeClientError::fatal("runtime_identifier_issue_failed", "acquire_lease")
+                    RuntimeClientError::fatal(
+                        SharedCode::RuntimeIdentifierIssueFailed,
+                        ContractLocation::AcquireLease.location(),
+                    )
                 })?;
             match self.execute(
-                "acquire_lease",
+                ContractLocation::AcquireLease.location(),
                 RuntimeOperation::acquire_lease(instance_alias, holder),
             )? {
                 RuntimeResult::LeaseGranted { token } => Ok(token),
-                _ => Err(self.unexpected_result("acquire_lease")),
+                _ => Err(self.unexpected_result(ContractLocation::AcquireLease.location())),
             }
         })();
         #[cfg(feature = "test-observation")]
@@ -1447,19 +1469,22 @@ impl RuntimeClient {
         policy: LeaseQueuePolicy,
     ) -> RuntimeClientResult<LeaseAdmission> {
         let holder = self
-            .connection("issue_queued_lease_holder")?
+            .connection(ClientLocation::IssueQueuedLeaseHolder.location())?
             .ids
             .mint_holder_id()
             .map_err(|_| {
-                RuntimeClientError::fatal("runtime_identifier_issue_failed", "queue_lease")
+                RuntimeClientError::fatal(
+                    SharedCode::RuntimeIdentifierIssueFailed,
+                    ContractLocation::QueueLease.location(),
+                )
             })?;
         match self.execute(
-            "queue_lease",
+            ContractLocation::QueueLease.location(),
             RuntimeOperation::queue_lease(instance_alias, holder, policy),
         )? {
             RuntimeResult::LeaseGranted { token } => Ok(LeaseAdmission::Granted(token)),
             RuntimeResult::LeaseQueued { status } => Ok(LeaseAdmission::Queued(status)),
-            _ => Err(self.unexpected_result("queue_lease")),
+            _ => Err(self.unexpected_result(ContractLocation::QueueLease.location())),
         }
     }
 
@@ -1468,18 +1493,18 @@ impl RuntimeClient {
         queued_request_id: RequestId,
     ) -> RuntimeClientResult<LeaseAdmission> {
         match self.execute(
-            "poll_queued_lease",
+            ContractLocation::PollQueuedLease.location(),
             RuntimeOperation::PollQueuedLease { queued_request_id },
         )? {
             RuntimeResult::LeaseGranted { token } => Ok(LeaseAdmission::Granted(token)),
             RuntimeResult::LeasePending { status } => Ok(LeaseAdmission::Queued(status)),
-            _ => Err(self.unexpected_result("poll_queued_lease")),
+            _ => Err(self.unexpected_result(ContractLocation::PollQueuedLease.location())),
         }
     }
 
     pub fn cancel_queued_lease(&self, queued_request_id: RequestId) -> RuntimeClientResult<()> {
         match self.execute(
-            "cancel_queued_lease",
+            ContractLocation::CancelQueuedLease.location(),
             RuntimeOperation::CancelQueuedLease { queued_request_id },
         )? {
             RuntimeResult::LeaseQueueCancelled { request_id, .. }
@@ -1487,7 +1512,7 @@ impl RuntimeClient {
             {
                 Ok(())
             }
-            _ => Err(self.unexpected_result("cancel_queued_lease")),
+            _ => Err(self.unexpected_result(ContractLocation::CancelQueuedLease.location())),
         }
     }
 
@@ -1503,13 +1528,13 @@ impl RuntimeClient {
             Some(token),
         );
         let result = match self.execute(
-            "renew_lease",
+            ContractLocation::RenewLease.location(),
             RuntimeOperation::RenewLease {
                 token: token.clone(),
             },
         ) {
             Ok(RuntimeResult::LeaseRenewed { token }) => Ok(token),
-            Ok(_) => Err(self.unexpected_result("renew_lease")),
+            Ok(_) => Err(self.unexpected_result(ContractLocation::RenewLease.location())),
             Err(error) => Err(error),
         };
         #[cfg(feature = "test-observation")]
@@ -1541,7 +1566,7 @@ impl RuntimeClient {
             Some(token),
         );
         let result = match self.execute(
-            "release_lease",
+            ContractLocation::ReleaseLease.location(),
             RuntimeOperation::ReleaseLease {
                 token: token.clone(),
             },
@@ -1550,7 +1575,7 @@ impl RuntimeClient {
                 instance_id,
                 lease_id,
             }) if instance_id == token.instance_id() && lease_id == token.lease_id() => Ok(()),
-            Ok(_) => Err(self.unexpected_result("release_lease")),
+            Ok(_) => Err(self.unexpected_result(ContractLocation::ReleaseLease.location())),
             Err(error) => Err(error),
         };
         #[cfg(feature = "test-observation")]
@@ -1575,7 +1600,7 @@ impl RuntimeClient {
         request: actingcommand_contract::SavedArtifactOcrRequest,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.execute_receipt(
-            "recognize_artifact",
+            ContractLocation::RecognizeArtifact.location(),
             RuntimeOperation::RecognizeArtifact {
                 request: Box::new(request),
             },
@@ -1585,16 +1610,16 @@ impl RuntimeClient {
             receipt.result(),
             Some(RuntimeResult::ArtifactRecognized { .. })
         ) {
-            return Err(self.unexpected_result("recognize_artifact"));
+            return Err(self.unexpected_result(ContractLocation::RecognizeArtifact.location()));
         }
         Ok(receipt)
     }
 
     pub fn observe_readonly(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
-        let correlation = self.issue_correlation("observe_readonly")?;
+        let correlation = self.issue_correlation(ContractLocation::ObserveReadonly.location())?;
         let correlation_id = *correlation.transport();
         let receipt = self.execute_receipt_with_correlation(
-            "observe_readonly",
+            ContractLocation::ObserveReadonly.location(),
             RuntimeOperation::ObserveReadonly {
                 instance_alias: instance_alias.to_string(),
             },
@@ -1605,7 +1630,7 @@ impl RuntimeClient {
             receipt.result(),
             Some(RuntimeResult::ReadonlyObservationCompleted { .. })
         ) {
-            return Err(self.unexpected_result("observe_readonly"));
+            return Err(self.unexpected_result(ContractLocation::ObserveReadonly.location()));
         }
         self.flow_output(receipt, correlation_id)
     }
@@ -1616,16 +1641,19 @@ impl RuntimeClient {
         spec: CaptureSequenceSpec,
     ) -> RuntimeClientResult<RuntimeFlowOutput> {
         spec.validate().map_err(|_| {
-            RuntimeClientError::fatal("runtime_capture_sequence_invalid", "capture_sequence")
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeCaptureSequenceInvalid,
+                ContractLocation::CaptureSequence.location(),
+            )
         })?;
         let response_timeout = {
-            let connection = self.connection("capture_sequence")?;
+            let connection = self.connection(ContractLocation::CaptureSequence.location())?;
             capture_sequence_response_timeout(connection.backend_open_timeout, spec)?
         };
-        let correlation = self.issue_correlation("capture_sequence")?;
+        let correlation = self.issue_correlation(ContractLocation::CaptureSequence.location())?;
         let correlation_id = *correlation.transport();
         let receipt = self.execute_receipt_with_correlation(
-            "capture_sequence",
+            ContractLocation::CaptureSequence.location(),
             RuntimeOperation::CaptureSequence {
                 instance_alias: instance_alias.to_string(),
                 spec,
@@ -1637,21 +1665,25 @@ impl RuntimeClient {
             receipt.result(),
             Some(RuntimeResult::CaptureSequenceCompleted { .. })
         ) {
-            return Err(self.unexpected_result("capture_sequence"));
+            return Err(self.unexpected_result(ContractLocation::CaptureSequence.location()));
         }
         self.flow_output(receipt, correlation_id)
     }
 
     pub fn safe_reset(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
-        let connection = self.connection("safe_reset")?;
-        let correlation = connection.issue_correlation("safe_reset", self.correlation)?;
+        let connection = self.connection(ClientLocation::SafeReset.location())?;
+        let correlation =
+            connection.issue_correlation(ClientLocation::SafeReset.location(), self.correlation)?;
         let holder = connection.ids.mint_holder_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "safe_reset")
+            RuntimeClientError::fatal(
+                SharedCode::RuntimeIdentifierIssueFailed,
+                ClientLocation::SafeReset.location(),
+            )
         })?;
         let correlation_id = *correlation.transport();
         drop(connection);
         let receipt = self.execute_receipt_with_correlation(
-            "safe_reset",
+            ClientLocation::SafeReset.location(),
             RuntimeOperation::safe_reset(instance_alias, holder),
             correlation,
             None,
@@ -1660,7 +1692,7 @@ impl RuntimeClient {
             receipt.result(),
             Some(RuntimeResult::SafeResetCompleted { .. })
         ) {
-            return Err(self.unexpected_result("safe_reset"));
+            return Err(self.unexpected_result(ClientLocation::SafeReset.location()));
         }
         self.flow_output(receipt, correlation_id)
     }
@@ -1670,16 +1702,21 @@ impl RuntimeClient {
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> RuntimeClientResult<RuntimeFlowOutput> {
-        let connection = self.connection("application_lifecycle")?;
-        let correlation =
-            connection.issue_correlation("application_lifecycle", self.correlation)?;
+        let connection = self.connection(ClientLocation::ApplicationLifecycle.location())?;
+        let correlation = connection.issue_correlation(
+            ClientLocation::ApplicationLifecycle.location(),
+            self.correlation,
+        )?;
         let holder = connection.ids.mint_holder_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "application_lifecycle")
+            RuntimeClientError::fatal(
+                SharedCode::RuntimeIdentifierIssueFailed,
+                ClientLocation::ApplicationLifecycle.location(),
+            )
         })?;
         let correlation_id = *correlation.transport();
         drop(connection);
         let receipt = self.execute_receipt_with_correlation(
-            "application_lifecycle",
+            ClientLocation::ApplicationLifecycle.location(),
             RuntimeOperation::application_lifecycle(instance_alias, holder, action),
             correlation,
             None,
@@ -1691,7 +1728,7 @@ impl RuntimeClient {
                 ..
             }) if *completed == action
         ) {
-            return Err(self.unexpected_result("application_lifecycle"));
+            return Err(self.unexpected_result(ClientLocation::ApplicationLifecycle.location()));
         }
         self.flow_output(receipt, correlation_id)
     }
@@ -1713,18 +1750,27 @@ impl RuntimeClient {
         instance_alias: &str,
         request: ContainedTaskRequest,
     ) -> RuntimeClientResult<PreparedContainedTask> {
-        let connection = self.connection("run_contained_task")?;
+        let connection = self.connection(ContractLocation::RunContainedTask.location())?;
         let response_timeout = contained_task_response_timeout(
             connection.io_timeout,
             Duration::from_millis(request.response_deadline_ms()),
         )?;
-        let correlation = connection.issue_correlation("run_contained_task", self.correlation)?;
+        let correlation = connection.issue_correlation(
+            ContractLocation::RunContainedTask.location(),
+            self.correlation,
+        )?;
         let holder = connection.ids.mint_holder_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
+            RuntimeClientError::fatal(
+                SharedCode::RuntimeIdentifierIssueFailed,
+                ContractLocation::RunContainedTask.location(),
+            )
         })?;
         let operation = RuntimeOperation::run_contained_task(instance_alias, holder, request);
-        let runtime_request =
-            connection.request_with_correlation("run_contained_task", operation, correlation)?;
+        let runtime_request = connection.request_with_correlation(
+            ContractLocation::RunContainedTask.location(),
+            operation,
+            correlation,
+        )?;
         Ok(PreparedContainedTask {
             shared: Arc::clone(&self.shared),
             selected_correlation: self.correlation_id(),
@@ -1745,8 +1791,8 @@ impl RuntimeClient {
             || self.correlation_id() != prepared.selected_correlation
         {
             return Err(RuntimeClientError::fatal(
-                "runtime_contained_task_prepared_client_mismatch",
-                "run_contained_task",
+                ClientCode::RuntimeContainedTaskPreparedClientMismatch,
+                ContractLocation::RunContainedTask.location(),
             ));
         }
         let PreparedContainedTask {
@@ -1758,16 +1804,18 @@ impl RuntimeClient {
         let instance_alias = instance_alias.as_str();
         let correlation_id = runtime_request.correlation_id();
         let operation = runtime_request.operation().clone();
-        let mut connection = self.connection("run_contained_task")?;
+        let mut connection = self.connection(ContractLocation::RunContainedTask.location())?;
         let receipt = match self.exchange_receipt(
             &mut connection,
-            "run_contained_task",
+            ContractLocation::RunContainedTask.location(),
             operation,
             runtime_request.clone(),
             Some(response_timeout),
         ) {
             Ok(receipt) => receipt,
-            Err(error) if error.code() == "runtime_contained_task_response_timeout" => {
+            Err(error)
+                if error.code() == ClientCode::RuntimeContainedTaskResponseTimeout.code() =>
+            {
                 drop(connection);
                 let recovery =
                     self.recover_contained_task_timeout(instance_alias, &runtime_request);
@@ -1795,22 +1843,22 @@ impl RuntimeClient {
                 let error = RuntimeClientError::fatal(
                     match reason {
                         ContainedTaskCancellationReason::DeadlineExceeded => {
-                            "runtime_contained_task_response_timeout"
+                            ClientCode::RuntimeContainedTaskResponseTimeout
                         }
                         ContainedTaskCancellationReason::ClientRequested
                         | ContainedTaskCancellationReason::RecoveredAfterRestart => {
-                            "runtime_contained_task_cancelled"
+                            ClientCode::RuntimeContainedTaskCancelled
                         }
                         ContainedTaskCancellationReason::PausedByOperator => {
-                            "runtime_contained_task_paused"
+                            ClientCode::RuntimeContainedTaskPaused
                         }
                     },
-                    "run_contained_task",
+                    ContractLocation::RunContainedTask.location(),
                 );
                 let recovery = self.safe_reset(instance_alias).map(|_| ());
                 return Err(contained_task_recovery_outcome(error, recovery));
             }
-            _ => return Err(self.unexpected_result("run_contained_task")),
+            _ => return Err(self.unexpected_result(ContractLocation::RunContainedTask.location())),
         }
         drop(connection);
         self.flow_output(receipt, correlation_id)
@@ -1822,23 +1870,24 @@ impl RuntimeClient {
         original: &RuntimeRequest,
     ) -> RuntimeClientResult<()> {
         {
-            let mut connection = self.connection("recover_contained_task_timeout")?;
+            let mut connection =
+                self.connection(ClientLocation::RecoverContainedTaskTimeout.location())?;
             connection.stream.shutdown(Shutdown::Both).map_err(|_| {
                 connection.latch(RuntimeClientError::fatal(
-                    "runtime_contained_task_cancel_failed",
-                    "recover_contained_task_timeout",
+                    ClientCode::RuntimeContainedTaskCancelFailed,
+                    ClientLocation::RecoverContainedTaskTimeout.location(),
                 ))
             })?;
             let address = self.shared.info.socket_addr().map_err(|_| {
                 connection.latch(RuntimeClientError::fatal(
-                    "runtime_info_invalid",
-                    "recover_contained_task_timeout",
+                    SharedCode::RuntimeInfoInvalid,
+                    ClientLocation::RecoverContainedTaskTimeout.location(),
                 ))
             })?;
             let stream = connect_runtime_stream(
                 address,
                 connection.io_timeout,
-                "recover_contained_task_timeout",
+                ClientLocation::RecoverContainedTaskTimeout.location(),
             )
             .map_err(|error| connection.latch(error))?;
             connection.stream = stream;
@@ -1847,46 +1896,48 @@ impl RuntimeClient {
 
         let observed_epoch = self.health().map_err(|error| {
             RuntimeClientError::fatal(
-                "runtime_contained_task_recovery_failed",
-                "recover_contained_task_timeout",
+                ClientCode::RuntimeContainedTaskRecoveryFailed,
+                ClientLocation::RecoverContainedTaskTimeout.location(),
             )
             .with_related(error)
         })?;
         if observed_epoch != self.shared.info.owner_epoch() {
             let error = RuntimeClientError::fatal(
-                "runtime_owner_epoch_changed",
-                "recover_contained_task_timeout",
+                ClientCode::RuntimeOwnerEpochChanged,
+                ClientLocation::RecoverContainedTaskTimeout.location(),
             );
             return Err(self
-                .connection("recover_contained_task_timeout")?
+                .connection(ClientLocation::RecoverContainedTaskTimeout.location())?
                 .latch(error));
         }
         let recovery_timeout = {
-            let connection = self.connection("recover_contained_task_timeout")?;
+            let connection =
+                self.connection(ClientLocation::RecoverContainedTaskTimeout.location())?;
             connection.io_timeout
         };
         let recovery_deadline = std::time::Instant::now()
             .checked_add(recovery_timeout)
             .ok_or_else(|| {
                 RuntimeClientError::fatal(
-                    "runtime_contained_task_recovery_timeout_overflow",
-                    "recover_contained_task_timeout",
+                    ClientCode::RuntimeContainedTaskRecoveryTimeoutOverflow,
+                    ClientLocation::RecoverContainedTaskTimeout.location(),
                 )
             })?;
         loop {
             let status = self.contained_task_cancellation(
                 original.request_id(),
-                "recover_contained_task_timeout",
+                ClientLocation::RecoverContainedTaskTimeout.location(),
             )?;
             match status {
                 ContainedTaskCancellationStatus::Terminal { .. } => break,
                 ContainedTaskCancellationStatus::RecoveryRequired { .. } => {
-                    let mut connection = self.connection("recover_contained_task_timeout")?;
+                    let mut connection =
+                        self.connection(ClientLocation::RecoverContainedTaskTimeout.location())?;
                     let response_timeout = connection.io_timeout;
                     let operation = original.operation().clone();
                     let receipt = self.exchange_receipt(
                         &mut connection,
-                        "recover_contained_task_timeout",
+                        ClientLocation::RecoverContainedTaskTimeout.location(),
                         operation,
                         original.clone(),
                         Some(response_timeout),
@@ -1896,15 +1947,17 @@ impl RuntimeClient {
                         Some(RuntimeResult::ContainedTaskCancelled { .. })
                             | Some(RuntimeResult::ContainedTaskCompleted { .. })
                     ) {
-                        return Err(self.unexpected_result("recover_contained_task_timeout"));
+                        return Err(self.unexpected_result(
+                            ClientLocation::RecoverContainedTaskTimeout.location(),
+                        ));
                     }
                     break;
                 }
                 ContainedTaskCancellationStatus::Pending { .. } => {
                     if std::time::Instant::now() >= recovery_deadline {
                         return Err(RuntimeClientError::fatal(
-                            "runtime_contained_task_busy",
-                            "recover_contained_task_timeout",
+                            ClientCode::RuntimeContainedTaskBusy,
+                            ClientLocation::RecoverContainedTaskTimeout.location(),
                         ));
                     }
                     std::thread::sleep(Duration::from_millis(10));
@@ -1915,12 +1968,12 @@ impl RuntimeClient {
             Ok(_) => Ok(()),
             Err(error) => {
                 let error = RuntimeClientError::fatal(
-                    "runtime_contained_task_recovery_failed",
-                    "recover_contained_task_timeout",
+                    ClientCode::RuntimeContainedTaskRecoveryFailed,
+                    ClientLocation::RecoverContainedTaskTimeout.location(),
                 )
                 .with_related(error);
                 Err(self
-                    .connection("recover_contained_task_timeout")?
+                    .connection(ClientLocation::RecoverContainedTaskTimeout.location())?
                     .latch(error))
             }
         }
@@ -1934,7 +1987,10 @@ impl RuntimeClient {
         &self,
         task_request_id: RequestId,
     ) -> RuntimeClientResult<ContainedTaskCancellationStatus> {
-        self.contained_task_cancellation(task_request_id, "cancel_contained_task")
+        self.contained_task_cancellation(
+            task_request_id,
+            ContractLocation::CancelContainedTask.location(),
+        )
     }
 
     /// Stops a run another client may have submitted and lifts the touches it may still hold
@@ -1949,9 +2005,9 @@ impl RuntimeClient {
         task_request_id: RequestId,
         wait: Duration,
     ) -> RuntimeClientResult<ContainedTaskCancelAndReset> {
-        const OPERATION: &str = "cancel_contained_task_and_reset";
+        const OPERATION: Location = ClientLocation::CancelContainedTaskAndReset.location();
         let deadline = Instant::now().checked_add(wait).ok_or_else(|| {
-            RuntimeClientError::fatal("runtime_contained_task_cancel_wait_invalid", OPERATION)
+            RuntimeClientError::fatal(ClientCode::RuntimeContainedTaskCancelWaitInvalid, OPERATION)
         })?;
         let mut saw_pending = false;
         loop {
@@ -1969,7 +2025,7 @@ impl RuntimeClient {
                 }
                 ContainedTaskCancellationStatus::RecoveryRequired { .. } => {
                     return Err(RuntimeClientError::fatal(
-                        "runtime_contained_task_recovery_required",
+                        ClientCode::RuntimeContainedTaskRecoveryRequired,
                         OPERATION,
                     ));
                 }
@@ -1999,21 +2055,21 @@ impl RuntimeClient {
     fn contained_task_cancellation(
         &self,
         task_request_id: RequestId,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeClientResult<ContainedTaskCancellationStatus> {
         let RuntimeResult::ContainedTaskCancellation {
             task_request_id: cancelled_request_id,
             status,
         } = self.execute(
-            "cancel_contained_task",
+            ContractLocation::CancelContainedTask.location(),
             RuntimeOperation::CancelContainedTask { task_request_id },
         )?
         else {
-            return Err(self.unexpected_result("cancel_contained_task"));
+            return Err(self.unexpected_result(ContractLocation::CancelContainedTask.location()));
         };
         if cancelled_request_id != task_request_id {
             return Err(RuntimeClientError::fatal(
-                "runtime_contained_task_cancellation_identity_mismatch",
+                ClientCode::RuntimeContainedTaskCancellationIdentityMismatch,
                 operation,
             ));
         }
@@ -2045,7 +2101,7 @@ impl RuntimeClient {
             Some(token),
         );
         let result = match self.execute_receipt(
-            "runtime_input",
+            ClientLocation::RuntimeInput.location(),
             RuntimeOperation::Input {
                 frame,
                 token: token.clone(),
@@ -2058,7 +2114,7 @@ impl RuntimeClient {
             {
                 Ok(receipt)
             }
-            Ok(_) => Err(self.unexpected_result("runtime_input")),
+            Ok(_) => Err(self.unexpected_result(ClientLocation::RuntimeInput.location())),
             Err(error) => Err(error),
         };
         #[cfg(feature = "test-observation")]
@@ -2084,7 +2140,7 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<TerminalEvent> {
         self.record_client_action_receipt(action)?
             .terminal()
-            .ok_or_else(|| self.unexpected_result("record_client_action"))
+            .ok_or_else(|| self.unexpected_result(ContractLocation::RecordClientAction.location()))
     }
 
     /// Returns the complete validated receipt for the same single client-action submission.
@@ -2093,19 +2149,22 @@ impl RuntimeClient {
         action: ClientActionRecord,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         action.validate().map_err(|_| {
-            RuntimeClientError::fatal("client_action_invalid", "record_client_action")
+            RuntimeClientError::fatal(
+                SharedCode::ClientActionInvalid,
+                ContractLocation::RecordClientAction.location(),
+            )
         })?;
         let receipt = self.execute_receipt(
-            "record_client_action",
+            ContractLocation::RecordClientAction.location(),
             RuntimeOperation::RecordClientAction { action },
             None,
         )?;
         if !matches!(receipt.result(), Some(RuntimeResult::ClientActionRecorded)) {
-            return Err(self.unexpected_result("record_client_action"));
+            return Err(self.unexpected_result(ContractLocation::RecordClientAction.location()));
         }
-        receipt
-            .terminal()
-            .ok_or_else(|| self.unexpected_result("record_client_action"))?;
+        receipt.terminal().ok_or_else(|| {
+            self.unexpected_result(ContractLocation::RecordClientAction.location())
+        })?;
         Ok(receipt)
     }
 
@@ -2115,7 +2174,9 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<TerminalEvent> {
         self.record_approval_decision_receipt(decision)?
             .terminal()
-            .ok_or_else(|| self.unexpected_result("record_approval_decision"))
+            .ok_or_else(|| {
+                self.unexpected_result(ContractLocation::RecordApprovalDecision.location())
+            })
     }
 
     /// Returns the complete validated approval receipt without changing its authorization or replay.
@@ -2124,12 +2185,15 @@ impl RuntimeClient {
         decision: ApprovalDecisionRecord,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         decision.validate().map_err(|_| {
-            RuntimeClientError::fatal("approval_decision_invalid", "record_approval_decision")
+            RuntimeClientError::fatal(
+                SharedCode::ApprovalDecisionInvalid,
+                ContractLocation::RecordApprovalDecision.location(),
+            )
         })?;
         let approval_id = decision.approval_id().to_owned();
         let disposition = decision.disposition();
         let receipt = self.execute_receipt(
-            "record_approval_decision",
+            ContractLocation::RecordApprovalDecision.location(),
             RuntimeOperation::RecordApprovalDecision { decision },
             None,
         )?;
@@ -2140,11 +2204,11 @@ impl RuntimeClient {
                 disposition: recorded_disposition,
             }) if recorded_id == &approval_id && *recorded_disposition == disposition
         ) {
-            return Err(self.unexpected_result("record_approval_decision"));
+            return Err(self.unexpected_result(ContractLocation::RecordApprovalDecision.location()));
         }
-        receipt
-            .terminal()
-            .ok_or_else(|| self.unexpected_result("record_approval_decision"))?;
+        receipt.terminal().ok_or_else(|| {
+            self.unexpected_result(ContractLocation::RecordApprovalDecision.location())
+        })?;
         Ok(receipt)
     }
 
@@ -2156,11 +2220,13 @@ impl RuntimeClient {
         card: &GovernanceIdentityCard,
     ) -> RuntimeClientResult<()> {
         match self.execute(
-            "declare_governance_identity",
+            ContractLocation::DeclareGovernanceIdentity.location(),
             RuntimeOperation::DeclareGovernanceIdentity { card: card.clone() },
         )? {
             RuntimeResult::GovernanceIdentityAccepted => Ok(()),
-            _ => Err(self.unexpected_result("declare_governance_identity")),
+            _ => {
+                Err(self.unexpected_result(ContractLocation::DeclareGovernanceIdentity.location()))
+            }
         }
     }
 
@@ -2169,11 +2235,11 @@ impl RuntimeClient {
         wake_id: AgentWakeId,
     ) -> RuntimeClientResult<AgentSessionContext> {
         match self.execute(
-            "start_agent_session",
+            ContractLocation::StartAgentSession.location(),
             RuntimeOperation::StartAgentSession { wake_id },
         )? {
             RuntimeResult::AgentSessionOpened { context } => Ok(*context),
-            _ => Err(self.unexpected_result("start_agent_session")),
+            _ => Err(self.unexpected_result(ContractLocation::StartAgentSession.location())),
         }
     }
 
@@ -2182,11 +2248,11 @@ impl RuntimeClient {
         session_id: AgentSessionId,
     ) -> RuntimeClientResult<AgentSessionContext> {
         match self.execute(
-            "resume_agent_session",
+            ContractLocation::ResumeAgentSession.location(),
             RuntimeOperation::ResumeAgentSession { session_id },
         )? {
             RuntimeResult::AgentSessionObserved { context } => Ok(*context),
-            _ => Err(self.unexpected_result("resume_agent_session")),
+            _ => Err(self.unexpected_result(ContractLocation::ResumeAgentSession.location())),
         }
     }
 
@@ -2195,11 +2261,11 @@ impl RuntimeClient {
         session_id: AgentSessionId,
     ) -> RuntimeClientResult<AgentSessionContext> {
         match self.execute(
-            "agent_session_status",
+            ClientLocation::AgentSessionStatus.location(),
             RuntimeOperation::AgentSessionStatus { session_id },
         )? {
             RuntimeResult::AgentSessionObserved { context } => Ok(*context),
-            _ => Err(self.unexpected_result("agent_session_status")),
+            _ => Err(self.unexpected_result(ClientLocation::AgentSessionStatus.location())),
         }
     }
 
@@ -2208,14 +2274,17 @@ impl RuntimeClient {
         response: AgentSessionResponse,
     ) -> RuntimeClientResult<AgentSessionStatus> {
         response.validate().map_err(|_| {
-            RuntimeClientError::fatal("agent_response_invalid", "record_agent_response")
+            RuntimeClientError::fatal(
+                ClientCode::AgentResponseInvalid,
+                ContractLocation::RecordAgentResponse.location(),
+            )
         })?;
         match self.execute(
-            "record_agent_response",
+            ContractLocation::RecordAgentResponse.location(),
             RuntimeOperation::RecordAgentResponse { response },
         )? {
             RuntimeResult::AgentResponseRecorded { status } => Ok(status),
-            _ => Err(self.unexpected_result("record_agent_response")),
+            _ => Err(self.unexpected_result(ContractLocation::RecordAgentResponse.location())),
         }
     }
 
@@ -2225,21 +2294,24 @@ impl RuntimeClient {
         evidence: Vec<ProjectedArtifactReference>,
     ) -> RuntimeClientResult<RuntimeStrategicPlan> {
         report.validate().map_err(|_| {
-            RuntimeClientError::fatal("strategic_report_invalid", "prepare_strategic_report")
+            RuntimeClientError::fatal(
+                SharedCode::StrategicReportInvalid,
+                ContractLocation::PrepareStrategicReport.location(),
+            )
         })?;
         let report = encode_policy_document(
             RuntimePlanningDocumentKind::StrategicReport,
             report,
-            "prepare_strategic_report",
+            ContractLocation::PrepareStrategicReport.location(),
         )?;
         let request = RuntimeStrategicReportRequest::new(report, evidence).map_err(|_| {
             RuntimeClientError::fatal(
-                "strategic_report_request_invalid",
-                "prepare_strategic_report",
+                ClientCode::StrategicReportRequestInvalid,
+                ContractLocation::PrepareStrategicReport.location(),
             )
         })?;
         match self.execute(
-            "prepare_strategic_report",
+            ContractLocation::PrepareStrategicReport.location(),
             RuntimeOperation::PrepareStrategicReport {
                 request: Box::new(request),
             },
@@ -2249,7 +2321,7 @@ impl RuntimeClient {
                 let projection = self.decode_policy_document(
                     &projection,
                     RuntimePlanningDocumentKind::StrategicProjection,
-                    "prepare_strategic_report",
+                    ContractLocation::PrepareStrategicReport.location(),
                 )?;
                 Ok(RuntimeStrategicPlan {
                     report,
@@ -2258,7 +2330,7 @@ impl RuntimeClient {
                     preview,
                 })
             }
-            _ => Err(self.unexpected_result("prepare_strategic_report")),
+            _ => Err(self.unexpected_result(ContractLocation::PrepareStrategicReport.location())),
         }
     }
 
@@ -2267,13 +2339,15 @@ impl RuntimeClient {
         as_of_ledger_position: u64,
     ) -> RuntimeClientResult<RuntimePolicyInputIdentity> {
         match self.execute(
-            "project_policy_input_identity",
+            ContractLocation::ProjectPolicyInputIdentity.location(),
             RuntimeOperation::ProjectPolicyInputIdentity {
                 as_of_ledger_position,
             },
         )? {
             RuntimeResult::PolicyInputIdentityProjected { identity } => Ok(identity),
-            _ => Err(self.unexpected_result("project_policy_input_identity")),
+            _ => {
+                Err(self.unexpected_result(ContractLocation::ProjectPolicyInputIdentity.location()))
+            }
         }
     }
 
@@ -2287,49 +2361,49 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<ForwardProjection> {
         config.validate().map_err(|_| {
             RuntimeClientError::fatal(
-                "forward_projection_config_invalid",
-                "project_policy_forward",
+                ClientCode::ForwardProjectionConfigInvalid,
+                ContractLocation::ProjectPolicyForward.location(),
             )
         })?;
         let request = RuntimeForwardProjectionRequest::new(
             encode_policy_document(
                 RuntimePlanningDocumentKind::EvaluationFacts,
                 facts,
-                "project_policy_forward",
+                ContractLocation::ProjectPolicyForward.location(),
             )?,
             encode_policy_document(
                 RuntimePlanningDocumentKind::EvaluationResources,
                 resources,
-                "project_policy_forward",
+                ContractLocation::ProjectPolicyForward.location(),
             )?,
             encode_policy_document(
                 RuntimePlanningDocumentKind::EvaluationTime,
                 &time,
-                "project_policy_forward",
+                ContractLocation::ProjectPolicyForward.location(),
             )?,
             seed,
             encode_policy_document(
                 RuntimePlanningDocumentKind::ForwardProjectionConfig,
                 &config,
-                "project_policy_forward",
+                ContractLocation::ProjectPolicyForward.location(),
             )?,
         )
         .map_err(|_| {
             RuntimeClientError::fatal(
-                "forward_projection_request_invalid",
-                "project_policy_forward",
+                ClientCode::ForwardProjectionRequestInvalid,
+                ContractLocation::ProjectPolicyForward.location(),
             )
         })?;
         let operation = RuntimeOperation::ProjectPolicyForward {
             request: Box::new(request),
         };
-        match self.execute("project_policy_forward", operation)? {
+        match self.execute(ContractLocation::ProjectPolicyForward.location(), operation)? {
             RuntimeResult::PolicyForwardProjected { projection } => self.decode_policy_document(
                 &projection,
                 RuntimePlanningDocumentKind::ForwardProjection,
-                "project_policy_forward",
+                ContractLocation::ProjectPolicyForward.location(),
             ),
-            _ => Err(self.unexpected_result("project_policy_forward")),
+            _ => Err(self.unexpected_result(ContractLocation::ProjectPolicyForward.location())),
         }
     }
 
@@ -2338,7 +2412,7 @@ impl RuntimeClient {
         request: PredictiveMaintenanceRequest,
     ) -> RuntimeClientResult<MaintenanceAssessment> {
         match self.execute(
-            "assess_predictive_maintenance",
+            ContractLocation::AssessPredictiveMaintenance.location(),
             RuntimeOperation::AssessPredictiveMaintenance {
                 query: Box::new(request.transport),
             },
@@ -2347,9 +2421,12 @@ impl RuntimeClient {
                 .decode_policy_document(
                     &assessment,
                     RuntimePlanningDocumentKind::MaintenanceAssessmentV2,
-                    "assess_predictive_maintenance",
+                    ContractLocation::AssessPredictiveMaintenance.location(),
                 ),
-            _ => Err(self.unexpected_result("assess_predictive_maintenance")),
+            _ => {
+                Err(self
+                    .unexpected_result(ContractLocation::AssessPredictiveMaintenance.location()))
+            }
         }
     }
 
@@ -2357,17 +2434,20 @@ impl RuntimeClient {
         &self,
         proposal: CatalogProposal,
     ) -> RuntimeClientResult<ProposalPreview> {
-        proposal
-            .validate()
-            .map_err(|_| RuntimeClientError::fatal("proposal_invalid", "compile_proposal"))?;
+        proposal.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                SharedCode::ProposalInvalid,
+                ContractLocation::CompileProposal.location(),
+            )
+        })?;
         match self.execute(
-            "compile_proposal",
+            ContractLocation::CompileProposal.location(),
             RuntimeOperation::CompileProposal {
                 proposal: Box::new(proposal),
             },
         )? {
             RuntimeResult::ProposalEvaluated { preview } => Ok(preview),
-            _ => Err(self.unexpected_result("compile_proposal")),
+            _ => Err(self.unexpected_result(ContractLocation::CompileProposal.location())),
         }
     }
 
@@ -2375,17 +2455,20 @@ impl RuntimeClient {
         &self,
         proposal: CatalogProposal,
     ) -> RuntimeClientResult<ProposalPromotion> {
-        proposal
-            .validate()
-            .map_err(|_| RuntimeClientError::fatal("proposal_invalid", "promote_proposal"))?;
+        proposal.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                SharedCode::ProposalInvalid,
+                ContractLocation::PromoteProposal.location(),
+            )
+        })?;
         match self.execute(
-            "promote_proposal",
+            ContractLocation::PromoteProposal.location(),
             RuntimeOperation::PromoteProposal {
                 proposal: Box::new(proposal),
             },
         )? {
             RuntimeResult::ProposalPromoted { promotion } => Ok(promotion),
-            _ => Err(self.unexpected_result("promote_proposal")),
+            _ => Err(self.unexpected_result(ContractLocation::PromoteProposal.location())),
         }
     }
 
@@ -2398,11 +2481,13 @@ impl RuntimeClient {
             .checked_add(MAX_COMPLETE_EVENT_QUERY_DURATION)
             .ok_or_else(|| {
                 RuntimeClientError::fatal(
-                    "runtime_event_query_time_limit_invalid",
-                    "query_runtime_events",
+                    ClientCode::RuntimeEventQueryTimeLimitInvalid,
+                    ContractLocation::QueryRuntimeEvents.location(),
                 )
             })?;
-        let io_timeout = self.connection("query_runtime_events")?.io_timeout;
+        let io_timeout = self
+            .connection(ContractLocation::QueryRuntimeEvents.location())?
+            .io_timeout;
         let mut events = Vec::new();
         let mut event_ids = BTreeSet::<EventId>::new();
         let mut cursor = None;
@@ -2413,22 +2498,22 @@ impl RuntimeClient {
                 .checked_duration_since(Instant::now())
                 .ok_or_else(|| {
                     RuntimeClientError::fatal(
-                        "runtime_event_query_time_limit_exceeded",
-                        "query_runtime_events",
+                        ClientCode::RuntimeEventQueryTimeLimitExceeded,
+                        ContractLocation::QueryRuntimeEvents.location(),
                     )
                 })?;
             if remaining.is_zero() {
                 return Err(RuntimeClientError::fatal(
-                    "runtime_event_query_time_limit_exceeded",
-                    "query_runtime_events",
+                    ClientCode::RuntimeEventQueryTimeLimitExceeded,
+                    ContractLocation::QueryRuntimeEvents.location(),
                 ));
             }
             let request =
                 RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
                     .map_err(|_| {
                     RuntimeClientError::fatal(
-                        "runtime_event_query_page_request_invalid",
-                        "query_runtime_events",
+                        ClientCode::RuntimeEventQueryPageRequestInvalid,
+                        ContractLocation::QueryRuntimeEvents.location(),
                     )
                 })?;
             let page = self.query_event_page_with_timeout(
@@ -2439,15 +2524,15 @@ impl RuntimeClient {
             )?;
             if Instant::now() >= deadline {
                 return Err(RuntimeClientError::fatal(
-                    "runtime_event_query_time_limit_exceeded",
-                    "query_runtime_events",
+                    ClientCode::RuntimeEventQueryTimeLimitExceeded,
+                    ContractLocation::QueryRuntimeEvents.location(),
                 ));
             }
             match snapshot_ledger_position {
                 Some(expected) if expected != page.snapshot_ledger_position() => {
                     return Err(RuntimeClientError::fatal(
-                        "runtime_event_query_pagination_invalid",
-                        "query_runtime_events",
+                        ClientCode::RuntimeEventQueryPaginationInvalid,
+                        ContractLocation::QueryRuntimeEvents.location(),
                     ));
                 }
                 None => snapshot_ledger_position = Some(page.snapshot_ledger_position()),
@@ -2456,14 +2541,14 @@ impl RuntimeClient {
             for event in page.events() {
                 if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
                     return Err(RuntimeClientError::fatal(
-                        "runtime_event_query_pagination_invalid",
-                        "query_runtime_events",
+                        ClientCode::RuntimeEventQueryPaginationInvalid,
+                        ContractLocation::QueryRuntimeEvents.location(),
                     ));
                 }
                 if events.len() == MAX_COMPLETE_EVENT_QUERY_EVENTS {
                     return Err(RuntimeClientError::fatal(
-                        "runtime_event_query_event_limit_exceeded",
-                        "query_runtime_events",
+                        ClientCode::RuntimeEventQueryEventLimitExceeded,
+                        ContractLocation::QueryRuntimeEvents.location(),
                     ));
                 }
                 last_sequence = event.sequence;
@@ -2474,29 +2559,29 @@ impl RuntimeClient {
             }
             if events.len() == MAX_COMPLETE_EVENT_QUERY_EVENTS {
                 return Err(RuntimeClientError::fatal(
-                    "runtime_event_query_event_limit_exceeded",
-                    "query_runtime_events",
+                    ClientCode::RuntimeEventQueryEventLimitExceeded,
+                    ContractLocation::QueryRuntimeEvents.location(),
                 ));
             }
             let next = page.next_cursor().cloned().ok_or_else(|| {
                 RuntimeClientError::fatal(
-                    "runtime_event_query_pagination_invalid",
-                    "query_runtime_events",
+                    ClientCode::RuntimeEventQueryPaginationInvalid,
+                    ContractLocation::QueryRuntimeEvents.location(),
                 )
             })?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
             if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
             {
                 return Err(RuntimeClientError::fatal(
-                    "runtime_event_query_pagination_invalid",
-                    "query_runtime_events",
+                    ClientCode::RuntimeEventQueryPaginationInvalid,
+                    ContractLocation::QueryRuntimeEvents.location(),
                 ));
             }
             cursor = Some(next);
         }
         Err(RuntimeClientError::fatal(
-            "runtime_event_query_page_limit_exceeded",
-            "query_runtime_events",
+            ClientCode::RuntimeEventQueryPageLimitExceeded,
+            ContractLocation::QueryRuntimeEvents.location(),
         ))
     }
 
@@ -2521,15 +2606,18 @@ impl RuntimeClient {
             let request =
                 RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
                     .map_err(|_| {
-                    RuntimeClientError::fatal("run_summary_page_request_invalid", "summarize_run")
+                    RuntimeClientError::fatal(
+                        ClientCode::RunSummaryPageRequestInvalid,
+                        ClientLocation::SummarizeRun.location(),
+                    )
                 })?;
             let page =
                 self.query_event_page(query.clone(), ProjectionProfile::Forensic, request)?;
             match snapshot_ledger_position {
                 Some(expected) if expected != page.snapshot_ledger_position() => {
                     return Err(RuntimeClientError::fatal(
-                        "run_summary_snapshot_changed",
-                        "summarize_run",
+                        ClientCode::RunSummarySnapshotChanged,
+                        ClientLocation::SummarizeRun.location(),
                     ));
                 }
                 None => snapshot_ledger_position = Some(page.snapshot_ledger_position()),
@@ -2538,26 +2626,29 @@ impl RuntimeClient {
             for event in page.events() {
                 if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
                     return Err(RuntimeClientError::fatal(
-                        "run_summary_pagination_invalid",
-                        "summarize_run",
+                        ClientCode::RunSummaryPaginationInvalid,
+                        ClientLocation::SummarizeRun.location(),
                     ));
                 }
                 if events.len() == MAX_RUN_SUMMARY_EVENTS {
                     return Err(RuntimeClientError::fatal(
-                        "run_summary_event_limit_exceeded",
-                        "summarize_run",
+                        ClientCode::RunSummaryEventLimitExceeded,
+                        ClientLocation::SummarizeRun.location(),
                     ));
                 }
                 let event_bytes = serde_json::to_vec(event).map_err(|_| {
-                    RuntimeClientError::fatal("run_summary_event_encode_failed", "summarize_run")
+                    RuntimeClientError::fatal(
+                        ClientCode::RunSummaryEventEncodeFailed,
+                        ClientLocation::SummarizeRun.location(),
+                    )
                 })?;
                 resident_bytes = resident_bytes
                     .checked_add(event_bytes.len())
                     .filter(|total| *total <= MAX_RUN_SUMMARY_RESIDENT_BYTES)
                     .ok_or_else(|| {
                         RuntimeClientError::fatal(
-                            "run_summary_resident_limit_exceeded",
-                            "summarize_run",
+                            ClientCode::RunSummaryResidentLimitExceeded,
+                            ClientLocation::SummarizeRun.location(),
                         )
                     })?;
                 last_sequence = event.sequence;
@@ -2568,26 +2659,29 @@ impl RuntimeClient {
             }
             if events.len() == MAX_RUN_SUMMARY_EVENTS {
                 return Err(RuntimeClientError::fatal(
-                    "run_summary_event_limit_exceeded",
-                    "summarize_run",
+                    ClientCode::RunSummaryEventLimitExceeded,
+                    ClientLocation::SummarizeRun.location(),
                 ));
             }
             let next = page.next_cursor().cloned().ok_or_else(|| {
-                RuntimeClientError::fatal("run_summary_pagination_invalid", "summarize_run")
+                RuntimeClientError::fatal(
+                    ClientCode::RunSummaryPaginationInvalid,
+                    ClientLocation::SummarizeRun.location(),
+                )
             })?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
             if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
             {
                 return Err(RuntimeClientError::fatal(
-                    "run_summary_pagination_invalid",
-                    "summarize_run",
+                    ClientCode::RunSummaryPaginationInvalid,
+                    ClientLocation::SummarizeRun.location(),
                 ));
             }
             cursor = Some(next);
         }
         Err(RuntimeClientError::fatal(
-            "run_summary_page_limit_exceeded",
-            "summarize_run",
+            ClientCode::RunSummaryPageLimitExceeded,
+            ClientLocation::SummarizeRun.location(),
         ))
     }
 
@@ -2610,14 +2704,17 @@ impl RuntimeClient {
         mut request: actingcommand_contract::RuntimeMaterialReadRequest,
     ) -> RuntimeClientResult<actingcommand_contract::RuntimeMaterialReadResult> {
         request.max_reply_bytes = request.max_reply_bytes.min(
-            self.connection("read_runtime_material")?
+            self.connection(ContractLocation::ReadRuntimeMaterial.location())?
                 .maximum_frame_bytes,
         );
         request.validate().map_err(|_| {
-            RuntimeClientError::fatal("material_read_request_invalid", "read_runtime_material")
+            RuntimeClientError::fatal(
+                ClientCode::MaterialReadRequestInvalid,
+                ContractLocation::ReadRuntimeMaterial.location(),
+            )
         })?;
         let receipt = self.execute_receipt(
-            "read_runtime_material",
+            ContractLocation::ReadRuntimeMaterial.location(),
             RuntimeOperation::ReadMaterial {
                 request: Box::new(request.clone()),
             },
@@ -2625,12 +2722,12 @@ impl RuntimeClient {
         )?;
         match receipt.result() {
             Some(RuntimeResult::MaterialRead { result }) if result.request == request => {
-                result
-                    .validate()
-                    .map_err(|_| self.unexpected_result("read_runtime_material"))?;
+                result.validate().map_err(|_| {
+                    self.unexpected_result(ContractLocation::ReadRuntimeMaterial.location())
+                })?;
                 Ok(result.as_ref().clone())
             }
-            _ => Err(self.unexpected_result("read_runtime_material")),
+            _ => Err(self.unexpected_result(ContractLocation::ReadRuntimeMaterial.location())),
         }
     }
 
@@ -2655,19 +2752,19 @@ impl RuntimeClient {
             RuntimeMaterialReadState as State, RuntimeReceiptState,
             validate_material_read_selection,
         };
-        const OPERATION: &str = "read_runtime_material_complete";
+        const OPERATION: Location = ClientLocation::ReadRuntimeMaterialComplete.location();
         const LEGACY_CHUNK_BYTES: u32 = 64 * 1024;
-        let budget_exceeded = |source, code: &str| NotProvided {
+        let budget_exceeded = |source, code: Code| NotProvided {
             source,
             limit: RuntimeMaterialReadLimit::BudgetExceeded,
             failure: Some(RuntimeMaterialReadFailure {
-                code: code.to_owned(),
-                operation: OPERATION.to_owned(),
+                code: code.as_str().to_owned(),
+                operation: OPERATION.as_str().to_owned(),
                 error: RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false),
             }),
             error: None,
         };
-        let client_failure = |source, state, code| Failed {
+        let client_failure = |source, state, code: Code| Failed {
             source,
             state,
             failure: None,
@@ -2691,10 +2788,14 @@ impl RuntimeClient {
             )
             .is_err()
         {
-            return client_failure(None, State::RequestDenied, "material_read_request_invalid");
+            return client_failure(
+                None,
+                State::RequestDenied,
+                ClientCode::MaterialReadRequestInvalid.code(),
+            );
         }
         if selection.byte_count > max_material_bytes as u64 {
-            return budget_exceeded(None, "material_read_budget_exceeded");
+            return budget_exceeded(None, SharedCode::MaterialReadBudgetExceeded.code());
         }
         let mut bytes = Vec::with_capacity(selection.byte_count as usize);
         let mut request = RuntimeMaterialReadRequest {
@@ -2714,10 +2815,13 @@ impl RuntimeClient {
         let mut assembled_source: Option<RuntimeMaterialReadSource> = None;
         while request.offset < request.byte_count {
             if Instant::now() >= deadline {
-                return budget_exceeded(assembled_source, "material_read_budget_exceeded");
+                return budget_exceeded(
+                    assembled_source,
+                    SharedCode::MaterialReadBudgetExceeded.code(),
+                );
             }
             if !should_continue() {
-                return budget_exceeded(assembled_source, "material_read_cancelled");
+                return budget_exceeded(assembled_source, ClientCode::MaterialReadCancelled.code());
             }
             let (result, error) = match self.read_material(request.clone()) {
                 Ok(result) => (result, None),
@@ -2774,7 +2878,7 @@ impl RuntimeClient {
                         return client_failure(
                             Some(source),
                             State::IntegrityFailed,
-                            "material_read_source_changed",
+                            ClientCode::MaterialReadSourceChanged.code(),
                         );
                     }
                     if chunk.actual_length == 0
@@ -2787,7 +2891,7 @@ impl RuntimeClient {
                         return client_failure(
                             Some(source),
                             State::IntegrityFailed,
-                            "material_read_chunk_invalid",
+                            ClientCode::MaterialReadChunkInvalid.code(),
                         );
                     }
                     request.offset += u64::from(chunk.actual_length);
@@ -2808,17 +2912,23 @@ impl RuntimeClient {
                         state,
                         failure,
                         error: error.unwrap_or_else(|| {
-                            RuntimeClientError::fatal("runtime_result_unexpected", OPERATION)
+                            RuntimeClientError::fatal(
+                                ClientCode::RuntimeResultUnexpected,
+                                OPERATION,
+                            )
                         }),
                     };
                 }
             }
         }
         if Instant::now() >= deadline {
-            return budget_exceeded(assembled_source, "material_read_budget_exceeded");
+            return budget_exceeded(
+                assembled_source,
+                SharedCode::MaterialReadBudgetExceeded.code(),
+            );
         }
         if !should_continue() {
-            return budget_exceeded(assembled_source, "material_read_cancelled");
+            return budget_exceeded(assembled_source, ClientCode::MaterialReadCancelled.code());
         }
         match assembled_source {
             Some(source)
@@ -2830,7 +2940,7 @@ impl RuntimeClient {
             source => client_failure(
                 source,
                 State::IntegrityFailed,
-                "material_read_assembly_mismatch",
+                ClientCode::MaterialReadAssemblyMismatch.code(),
             ),
         }
     }
@@ -2843,7 +2953,7 @@ impl RuntimeClient {
         response_timeout: Option<Duration>,
     ) -> RuntimeClientResult<RuntimeEventQueryPage> {
         match self.execute_with_timeout(
-            "query_runtime_events",
+            ContractLocation::QueryRuntimeEvents.location(),
             RuntimeOperation::QueryEvents {
                 query,
                 profile,
@@ -2852,7 +2962,7 @@ impl RuntimeClient {
             response_timeout,
         )? {
             RuntimeResult::EventPage { page } => Ok(page),
-            _ => Err(self.unexpected_result("query_runtime_events")),
+            _ => Err(self.unexpected_result(ContractLocation::QueryRuntimeEvents.location())),
         }
     }
 
@@ -2862,27 +2972,27 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<RuntimeEventBatch> {
         request.validate().map_err(|_| {
             RuntimeClientError::fatal(
-                "runtime_subscription_request_invalid",
-                "subscribe_runtime_events",
+                ClientCode::RuntimeSubscriptionRequestInvalid,
+                ContractLocation::SubscribeRuntimeEvents.location(),
             )
         })?;
         let response_timeout = self
-            .connection("subscribe_runtime_events")?
+            .connection(ContractLocation::SubscribeRuntimeEvents.location())?
             .io_timeout
             .checked_add(Duration::from_millis(request.wait_ms()))
             .ok_or_else(|| {
                 RuntimeClientError::fatal(
-                    "runtime_subscription_timeout_invalid",
-                    "subscribe_runtime_events",
+                    ClientCode::RuntimeSubscriptionTimeoutInvalid,
+                    ContractLocation::SubscribeRuntimeEvents.location(),
                 )
             })?;
         match self.execute_with_timeout(
-            "subscribe_runtime_events",
+            ContractLocation::SubscribeRuntimeEvents.location(),
             RuntimeOperation::SubscribeEvents { request },
             Some(response_timeout),
         )? {
             RuntimeResult::EventBatch { batch } => Ok(batch),
-            _ => Err(self.unexpected_result("subscribe_runtime_events")),
+            _ => Err(self.unexpected_result(ContractLocation::SubscribeRuntimeEvents.location())),
         }
     }
 
@@ -2891,7 +3001,7 @@ impl RuntimeClient {
         definition: actingcommand_contract::DiagnosticSignatureDefinition,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.execute_receipt(
-            "register_diagnostic_signature",
+            ContractLocation::RegisterDiagnosticSignature.location(),
             RuntimeOperation::RegisterDiagnosticSignature {
                 definition: Box::new(definition),
             },
@@ -2899,7 +3009,10 @@ impl RuntimeClient {
         )?;
         match receipt.result() {
             Some(RuntimeResult::SignatureRegistered { .. }) => Ok(receipt),
-            _ => Err(self.unexpected_result("register_diagnostic_signature")),
+            _ => {
+                Err(self
+                    .unexpected_result(ContractLocation::RegisterDiagnosticSignature.location()))
+            }
         }
     }
 
@@ -2908,7 +3021,7 @@ impl RuntimeClient {
         request: actingcommand_contract::RuntimeSignatureMatchRequest,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.execute_receipt(
-            "match_diagnostic_signatures",
+            ClientLocation::MatchDiagnosticSignatures.location(),
             RuntimeOperation::MatchDiagnosticSignatures {
                 request: Box::new(request),
             },
@@ -2916,7 +3029,7 @@ impl RuntimeClient {
         )?;
         match receipt.result() {
             Some(RuntimeResult::SignaturesMatched { .. }) => Ok(receipt),
-            _ => Err(self.unexpected_result("match_diagnostic_signatures")),
+            _ => Err(self.unexpected_result(ClientLocation::MatchDiagnosticSignatures.location())),
         }
     }
 
@@ -2925,26 +3038,30 @@ impl RuntimeClient {
         registration: actingcommand_contract::SignatureRegistrationRef,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.execute_receipt(
-            "retire_diagnostic_signature",
+            ContractLocation::RetireDiagnosticSignature.location(),
             RuntimeOperation::RetireDiagnosticSignature { registration },
             None,
         )?;
         match receipt.result() {
             Some(RuntimeResult::SignatureRetired { .. }) => Ok(receipt),
-            _ => Err(self.unexpected_result("retire_diagnostic_signature")),
+            _ => {
+                Err(self.unexpected_result(ContractLocation::RetireDiagnosticSignature.location()))
+            }
         }
     }
 
     pub fn begin_authoring_session(&self) -> RuntimeClientResult<RuntimeAuthoringSession> {
-        let connection = self.connection("begin_resource_authoring")?;
+        let connection = self.connection(ClientLocation::BeginResourceAuthoring.location())?;
         if connection.actor != EventActor::Lab || connection.source != EventSource::Lab {
             return Err(RuntimeClientError::fatal(
-                "runtime_authoring_origin_invalid",
-                "begin_resource_authoring",
+                ClientCode::RuntimeAuthoringOriginInvalid,
+                ClientLocation::BeginResourceAuthoring.location(),
             ));
         }
-        let correlation =
-            connection.issue_correlation("begin_resource_authoring", self.correlation)?;
+        let correlation = connection.issue_correlation(
+            ClientLocation::BeginResourceAuthoring.location(),
+            self.correlation,
+        )?;
         drop(connection);
         Ok(RuntimeAuthoringSession {
             client: self.clone(),
@@ -2953,14 +3070,17 @@ impl RuntimeClient {
     }
 
     pub fn begin_debug_session(&self) -> RuntimeClientResult<RuntimeDebugSession> {
-        let connection = self.connection("begin_runtime_debug")?;
+        let connection = self.connection(ClientLocation::BeginRuntimeDebug.location())?;
         if connection.actor != EventActor::Lab || connection.source != EventSource::Lab {
             return Err(RuntimeClientError::fatal(
-                "runtime_debug_origin_invalid",
-                "begin_runtime_debug",
+                ClientCode::RuntimeDebugOriginInvalid,
+                ClientLocation::BeginRuntimeDebug.location(),
             ));
         }
-        let correlation = connection.issue_correlation("begin_runtime_debug", self.correlation)?;
+        let correlation = connection.issue_correlation(
+            ClientLocation::BeginRuntimeDebug.location(),
+            self.correlation,
+        )?;
         drop(connection);
         Ok(RuntimeDebugSession {
             client: self.clone(),
@@ -2970,7 +3090,7 @@ impl RuntimeClient {
 
     fn execute(
         &self,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
     ) -> RuntimeClientResult<RuntimeResult> {
         self.execute_with_timeout(operation_name, operation, None)
@@ -2978,7 +3098,7 @@ impl RuntimeClient {
 
     fn execute_with_timeout(
         &self,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
         response_timeout: Option<Duration>,
     ) -> RuntimeClientResult<RuntimeResult> {
@@ -2991,7 +3111,7 @@ impl RuntimeClient {
 
     fn execute_receipt(
         &self,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
         response_timeout: Option<Duration>,
     ) -> RuntimeClientResult<RuntimeReceipt> {
@@ -3008,7 +3128,7 @@ impl RuntimeClient {
 
     fn execute_receipt_with_correlation(
         &self,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
         correlation: IssuedCorrelationId,
         response_timeout: Option<Duration>,
@@ -3028,7 +3148,7 @@ impl RuntimeClient {
     fn exchange_receipt(
         &self,
         connection: &mut RuntimeConnection,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
         request: RuntimeRequest,
         response_timeout: Option<Duration>,
@@ -3053,7 +3173,7 @@ impl RuntimeClient {
                 RuntimeOperation::RunContainedTask { request, .. } => {
                     Some(ReceiptReadDeadline::after(
                         Duration::from_millis(request.response_deadline_ms()),
-                        "runtime_receipt_timeout",
+                        ClientCode::RuntimeReceiptTimeout,
                     ))
                 }
                 _ => None,
@@ -3064,7 +3184,7 @@ impl RuntimeClient {
                 .is_err()
             {
                 return Err(connection.latch(RuntimeClientError::fatal(
-                    "runtime_read_timeout_failed",
+                    ClientCode::RuntimeReadTimeoutFailed,
                     operation_name,
                 )));
             }
@@ -3086,7 +3206,7 @@ impl RuntimeClient {
                 .is_err()
             {
                 let failure = RuntimeClientError::fatal(
-                    "runtime_read_timeout_restore_failed",
+                    ClientCode::RuntimeReadTimeoutRestoreFailed,
                     operation_name,
                 );
                 let failure = match &exchange_result {
@@ -3101,10 +3221,10 @@ impl RuntimeClient {
                 Ok(receipt) => receipt,
                 Err(error)
                     if matches!(&operation, RuntimeOperation::RunContainedTask { .. })
-                        && error.code() == "runtime_receipt_timeout" =>
+                        && error.code() == ClientCode::RuntimeReceiptTimeout.code() =>
                 {
                     return Err(RuntimeClientError::fatal(
-                        "runtime_contained_task_response_timeout",
+                        ClientCode::RuntimeContainedTaskResponseTimeout,
                         operation_name,
                     )
                     .with_related(error));
@@ -3123,7 +3243,7 @@ impl RuntimeClient {
                     None,
                 );
                 return Err(connection.latch(RuntimeClientError::fatal(
-                    "runtime_receipt_invalid",
+                    ClientCode::RuntimeReceiptInvalid,
                     operation_name,
                 )));
             }
@@ -3146,7 +3266,7 @@ impl RuntimeClient {
                             if *task_request_id != request.request_id()))
             {
                 return Err(connection.latch(RuntimeClientError::fatal(
-                    "runtime_receipt_identity_mismatch",
+                    ClientCode::RuntimeReceiptIdentityMismatch,
                     operation_name,
                 )));
             }
@@ -3161,7 +3281,7 @@ impl RuntimeClient {
                 )
             {
                 return Err(connection.latch(RuntimeClientError::fatal(
-                    "runtime_result_unexpected",
+                    ClientCode::RuntimeResultUnexpected,
                     operation_name,
                 )));
             }
@@ -3172,7 +3292,7 @@ impl RuntimeClient {
                 && &result.request != expected.as_ref()
             {
                 return Err(connection.latch(RuntimeClientError::fatal(
-                    "material_read_receipt_selection_mismatch",
+                    ClientCode::MaterialReadReceiptSelectionMismatch,
                     operation_name,
                 )));
             }
@@ -3209,7 +3329,7 @@ impl RuntimeClient {
             }
             if receipt.result().is_none() {
                 return Err(connection.latch(RuntimeClientError::fatal(
-                    "runtime_result_missing",
+                    ClientCode::RuntimeResultMissing,
                     operation_name,
                 )));
             }
@@ -3232,10 +3352,7 @@ impl RuntimeClient {
         result
     }
 
-    fn issue_correlation(
-        &self,
-        operation: &'static str,
-    ) -> RuntimeClientResult<IssuedCorrelationId> {
+    fn issue_correlation(&self, operation: Location) -> RuntimeClientResult<IssuedCorrelationId> {
         self.connection(operation)?
             .issue_correlation(operation, self.correlation)
     }
@@ -3244,14 +3361,16 @@ impl RuntimeClient {
         &self,
         document: &RuntimePlanningDocument,
         kind: RuntimePlanningDocumentKind,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeClientResult<T>
     where
         T: DeserializeOwned,
     {
         document.decode(kind).map_err(|_| {
-            let error =
-                RuntimeClientError::fatal("runtime_planning_document_decode_failed", operation);
+            let error = RuntimeClientError::fatal(
+                ClientCode::RuntimePlanningDocumentDecodeFailed,
+                operation,
+            );
             match self.connection(operation) {
                 Ok(mut connection) => connection.latch(error),
                 Err(lock_error) => lock_error,
@@ -3274,8 +3393,8 @@ impl RuntimeClient {
             )
             .map_err(|error| {
                 RuntimeClientError::after_commit(
-                    "runtime_projection_failed_after_terminal",
-                    "query_runtime_flow_projection",
+                    ClientCode::RuntimeProjectionFailedAfterTerminal,
+                    ClientLocation::QueryRuntimeFlowProjection.location(),
                     receipt.clone(),
                     error,
                 )
@@ -3284,8 +3403,8 @@ impl RuntimeClient {
         let interaction_run = if self.correlation.is_some() {
             validate_interaction_flow_scope(&receipt, correlation_id, &events).map_err(|error| {
                 RuntimeClientError::after_commit(
-                    "runtime_projection_failed_after_terminal",
-                    "query_runtime_flow_projection",
+                    ClientCode::RuntimeProjectionFailedAfterTerminal,
+                    ClientLocation::QueryRuntimeFlowProjection.location(),
                     receipt.clone(),
                     error,
                 )
@@ -3303,8 +3422,8 @@ impl RuntimeClient {
         )
         .map_err(|error| {
             RuntimeClientError::after_commit(
-                "runtime_official_ocr_projection_failed_after_terminal",
-                "project_runtime_official_ocr",
+                ClientCode::RuntimeOfficialOcrProjectionFailedAfterTerminal,
+                ClientLocation::ProjectRuntimeOfficialOcr.location(),
                 receipt.clone(),
                 error,
             )
@@ -3324,8 +3443,8 @@ impl RuntimeClient {
         })
     }
 
-    fn unexpected_result(&self, operation: &'static str) -> RuntimeClientError {
-        let error = RuntimeClientError::fatal("runtime_result_unexpected", operation);
+    fn unexpected_result(&self, operation: Location) -> RuntimeClientError {
+        let error = RuntimeClientError::fatal(ClientCode::RuntimeResultUnexpected, operation);
         match self.connection(operation) {
             Ok(mut connection) => connection.latch(error),
             Err(lock_error) => lock_error,
@@ -3334,12 +3453,11 @@ impl RuntimeClient {
 
     fn connection(
         &self,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeClientResult<MutexGuard<'_, RuntimeConnection>> {
-        self.shared
-            .connection
-            .lock()
-            .map_err(|_| RuntimeClientError::fatal("runtime_connection_poisoned", operation))
+        self.shared.connection.lock().map_err(|_| {
+            RuntimeClientError::fatal(ClientCode::RuntimeConnectionPoisoned, operation)
+        })
     }
 }
 
@@ -3430,7 +3548,7 @@ fn receipt_ocr_run(
 ) -> RuntimeClientResult<Option<(RunId, TaskId)>> {
     if receipt.correlation_id() != correlation_id {
         return Err(official_ocr_error(
-            "runtime_official_ocr_terminal_identity_mismatch",
+            ClientCode::RuntimeOfficialOcrTerminalIdentityMismatch,
         ));
     }
     let (run_id, task_id) = match receipt.result() {
@@ -3454,7 +3572,7 @@ fn receipt_ocr_run(
                 .collect::<Vec<_>>();
             let [event] = matching.as_slice() else {
                 return Err(official_ocr_error(
-                    "runtime_official_ocr_terminal_identity_mismatch",
+                    ClientCode::RuntimeOfficialOcrTerminalIdentityMismatch,
                 ));
             };
             // Only a task.failed terminal can carry OCR evidence; other rejections keep their error.
@@ -3468,12 +3586,12 @@ fn receipt_ocr_run(
                 .is_some_and(|id| *id != receipt.request_id())
             {
                 return Err(official_ocr_error(
-                    "runtime_official_ocr_terminal_identity_mismatch",
+                    ClientCode::RuntimeOfficialOcrTerminalIdentityMismatch,
                 ));
             }
             let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
                 return Err(official_ocr_error(
-                    "runtime_official_ocr_terminal_payload_invalid",
+                    ClientCode::RuntimeOfficialOcrTerminalPayloadInvalid,
                 ));
             };
             if !matches!(
@@ -3484,15 +3602,15 @@ fn receipt_ocr_run(
                 }
             ) {
                 return Err(official_ocr_error(
-                    "runtime_official_ocr_terminal_payload_invalid",
+                    ClientCode::RuntimeOfficialOcrTerminalPayloadInvalid,
                 ));
             }
             (
                 *event.links.run_id().ok_or_else(|| {
-                    official_ocr_error("runtime_official_ocr_terminal_identity_mismatch")
+                    official_ocr_error(ClientCode::RuntimeOfficialOcrTerminalIdentityMismatch)
                 })?,
                 *event.links.task_id().ok_or_else(|| {
-                    official_ocr_error("runtime_official_ocr_terminal_identity_mismatch")
+                    official_ocr_error(ClientCode::RuntimeOfficialOcrTerminalIdentityMismatch)
                 })?,
             )
         }
@@ -3509,8 +3627,8 @@ fn validate_interaction_flow_scope(
     let run = receipt_ocr_run(receipt, correlation_id, events)?;
     let invalid = || {
         RuntimeClientError::fatal(
-            "runtime_flow_projection_identity_mismatch",
-            "query_runtime_flow_projection",
+            ClientCode::RuntimeFlowProjectionIdentityMismatch,
+            ClientLocation::QueryRuntimeFlowProjection.location(),
         )
     };
     let terminal = receipt.terminal().ok_or_else(invalid)?;
@@ -3536,8 +3654,8 @@ fn validate_interaction_flow_scope(
         }
         if event.links.request_id().is_none() && event.links.run_id().is_none() {
             return Err(RuntimeClientError::fatal(
-                "runtime_flow_projection_identity_missing",
-                "query_runtime_flow_projection",
+                ClientCode::RuntimeFlowProjectionIdentityMissing,
+                ClientLocation::QueryRuntimeFlowProjection.location(),
             ));
         }
         if let Some((run_id, task_id)) = run {
@@ -3588,7 +3706,9 @@ pub(crate) fn resolve_official_ocr_projection(
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return if marker_expected {
-            Err(official_ocr_error("runtime_official_ocr_evidence_missing"))
+            Err(official_ocr_error(
+                ClientCode::RuntimeOfficialOcrEvidenceMissing,
+            ))
         } else {
             Ok(None)
         };
@@ -3599,7 +3719,7 @@ pub(crate) fn resolve_official_ocr_projection(
 
     let started = Instant::now();
     let canonical_root = fs::canonicalize(state_root)
-        .map_err(|_| official_ocr_error("runtime_official_ocr_state_root_unavailable"))?;
+        .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrStateRootUnavailable))?;
     let mut total_bytes = 0_u64;
     let mut recognized_artifacts = 0_usize;
     let mut lifecycle = BTreeMap::new();
@@ -3613,7 +3733,7 @@ pub(crate) fn resolve_official_ocr_projection(
         check_official_ocr_duration(started)?;
         reference
             .validate()
-            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_invalid"))?;
+            .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactInvalid))?;
         let source_run = event.links.run_id();
         let source_task = event.links.task_id();
         if source_run != reference.run_id.as_ref()
@@ -3629,7 +3749,7 @@ pub(crate) fn resolve_official_ocr_projection(
                 && source_run != Some(run_id))
         {
             return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_identity_mismatch",
+                ClientCode::RuntimeOfficialOcrArtifactIdentityMismatch,
             ));
         }
         let request_scope = match (source_run, source_task) {
@@ -3640,7 +3760,7 @@ pub(crate) fn resolve_official_ocr_projection(
                         .is_some_and(|previous| previous != *source_task)
                 {
                     return Err(official_ocr_error(
-                        "runtime_official_ocr_artifact_identity_mismatch",
+                        ClientCode::RuntimeOfficialOcrArtifactIdentityMismatch,
                     ));
                 }
                 None
@@ -3652,13 +3772,13 @@ pub(crate) fn resolve_official_ocr_projection(
                     .request_id()
                     .filter(|id| **id != receipt.request_id())
                     .ok_or_else(|| {
-                        official_ocr_error("runtime_official_ocr_artifact_identity_mismatch")
+                        official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactIdentityMismatch)
                     })?;
                 Some(*request_id)
             }
             _ => {
                 return Err(official_ocr_error(
-                    "runtime_official_ocr_artifact_identity_mismatch",
+                    ClientCode::RuntimeOfficialOcrArtifactIdentityMismatch,
                 ));
             }
         };
@@ -3670,7 +3790,7 @@ pub(crate) fn resolve_official_ocr_projection(
         ));
         if entry.0 != reference || entry.1 != request_scope {
             return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_identity_conflict",
+                ClientCode::RuntimeOfficialOcrArtifactIdentityConflict,
             ));
         }
         let sequence = match event.event_type {
@@ -3680,7 +3800,7 @@ pub(crate) fn resolve_official_ocr_projection(
         };
         if sequence.replace((event.sequence, event.event_id)).is_some() {
             return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_duplicate",
+                ClientCode::RuntimeOfficialOcrArtifactDuplicate,
             ));
         }
     }
@@ -3691,14 +3811,14 @@ pub(crate) fn resolve_official_ocr_projection(
         .filter(|(reference, _, _, _)| reference.run_id.as_ref() == Some(run_id))
         .map(|(reference, _, created, verified)| {
             let (created_sequence, created_event_id) = created.ok_or_else(|| {
-                official_ocr_error("runtime_official_ocr_artifact_lifecycle_incomplete")
+                official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactLifecycleIncomplete)
             })?;
             let (verified_sequence, verified_event_id) = verified.ok_or_else(|| {
-                official_ocr_error("runtime_official_ocr_artifact_lifecycle_incomplete")
+                official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactLifecycleIncomplete)
             })?;
             if created_sequence >= verified_sequence {
                 return Err(official_ocr_error(
-                    "runtime_official_ocr_artifact_lifecycle_invalid",
+                    ClientCode::RuntimeOfficialOcrArtifactLifecycleInvalid,
                 ));
             }
             Ok((
@@ -3716,7 +3836,7 @@ pub(crate) fn resolve_official_ocr_projection(
         check_official_ocr_duration(started)?;
         let object_key = reference
             .object_key()
-            .ok_or_else(|| official_ocr_error("runtime_official_ocr_artifact_path_missing"))?;
+            .ok_or_else(|| official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactPathMissing))?;
         if reference.byte_count() > MAX_OFFICIAL_OCR_ARTIFACT_BYTES {
             return Err(official_ocr_limit_error());
         }
@@ -3728,49 +3848,51 @@ pub(crate) fn resolve_official_ocr_projection(
         }
         let path = state_root.join(object_key);
         let canonical_path = fs::canonicalize(&path)
-            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_read_failed"))?;
+            .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactReadFailed))?;
         if !canonical_path.starts_with(&canonical_root) {
             return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_path_invalid",
+                ClientCode::RuntimeOfficialOcrArtifactPathInvalid,
             ));
         }
         let metadata = fs::metadata(&canonical_path)
-            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_read_failed"))?;
+            .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactReadFailed))?;
         if !metadata.is_file() || metadata.len() != reference.byte_count() {
             return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_length_mismatch",
+                ClientCode::RuntimeOfficialOcrArtifactLengthMismatch,
             ));
         }
         let bytes = fs::read(&canonical_path)
-            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_read_failed"))?;
+            .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrArtifactReadFailed))?;
         if canonical_sha256(&bytes) != reference.sha256() {
             return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_digest_mismatch",
+                ClientCode::RuntimeOfficialOcrArtifactDigestMismatch,
             ));
         }
         let value = serde_json::from_slice::<Value>(&bytes)
-            .map_err(|_| official_ocr_error("runtime_official_ocr_payload_malformed"))?;
+            .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrPayloadMalformed))?;
         match value.get("schema_version").and_then(Value::as_str) {
             Some(OCR_OBSERVATION_SCHEMA) => {
                 recognized_artifacts = recognized_artifacts
                     .checked_add(1)
                     .ok_or_else(official_ocr_limit_error)?;
-                let envelope = serde_json::from_value::<OcrObservationEnvelope>(value)
-                    .map_err(|_| official_ocr_error("runtime_official_ocr_payload_malformed"))?;
+                let envelope =
+                    serde_json::from_value::<OcrObservationEnvelope>(value).map_err(|_| {
+                        official_ocr_error(ClientCode::RuntimeOfficialOcrPayloadMalformed)
+                    })?;
                 if envelope.schema_version != OCR_OBSERVATION_SCHEMA
                     || envelope.task_id != *task_id
                     || envelope.run_id != *run_id
                     || reference.frame_id() != Some(&envelope.frame_id)
                 {
                     return Err(official_ocr_error(
-                        "runtime_official_ocr_payload_identity_mismatch",
+                        ClientCode::RuntimeOfficialOcrPayloadIdentityMismatch,
                     ));
                 }
                 let targets =
                     parse_official_ocr_observation(envelope.frame_index, &envelope.observation)?;
                 let region_payload: OcrObservationPayload =
                     serde_json::from_value(envelope.observation.clone()).map_err(|_| {
-                        official_ocr_error("runtime_official_ocr_observation_malformed")
+                        official_ocr_error(ClientCode::RuntimeOfficialOcrObservationMalformed)
                     })?;
                 for region in region_payload.regions.values() {
                     validate_ocr_region_evidence(region)?;
@@ -3782,7 +3904,7 @@ pub(crate) fn resolve_official_ocr_projection(
                             if matches!(recognition.fact(), TaskSemanticFact::RecognitionCompleted { frame_width, frame_height, matched_page, .. }
                                 if *frame_width == region.frame_width && *frame_height == region.frame_height
                                     && region_payload.page_id.as_ref().is_none_or(|page| matched_page.as_ref() == Some(page))))))
-                    { return Err(official_ocr_error("runtime_official_ocr_region_frame_mismatch")); }
+                    { return Err(official_ocr_error(ClientCode::RuntimeOfficialOcrRegionFrameMismatch)); }
                 }
                 if let Some(frame) = &envelope.frame_artifact {
                     if frame.kind != ArtifactKind::CaptureFrame
@@ -3791,7 +3913,7 @@ pub(crate) fn resolve_official_ocr_projection(
                         || frame.correlation_id != Some(correlation_id)
                     {
                         return Err(official_ocr_error(
-                            "runtime_official_ocr_frame_identity_mismatch",
+                            ClientCode::RuntimeOfficialOcrFrameIdentityMismatch,
                         ));
                     }
                     let lifecycle = events
@@ -3817,12 +3939,12 @@ pub(crate) fn resolve_official_ocr_projection(
                         || lifecycle[1].sequence >= created_sequence
                     {
                         return Err(official_ocr_error(
-                            "runtime_official_ocr_frame_lifecycle_mismatch",
+                            ClientCode::RuntimeOfficialOcrFrameLifecycleMismatch,
                         ));
                     }
                 } else if envelope.observation.get("regions").is_some() {
                     return Err(official_ocr_error(
-                        "runtime_official_ocr_frame_identity_missing",
+                        ClientCode::RuntimeOfficialOcrFrameIdentityMissing,
                     ));
                 }
                 if raw_observations
@@ -3830,7 +3952,7 @@ pub(crate) fn resolve_official_ocr_projection(
                     .is_some()
                 {
                     return Err(official_ocr_error(
-                        "runtime_official_ocr_observation_duplicate",
+                        ClientCode::RuntimeOfficialOcrObservationDuplicate,
                     ));
                 }
                 let mut target_ids = targets
@@ -3855,15 +3977,17 @@ pub(crate) fn resolve_official_ocr_projection(
                 recognized_artifacts = recognized_artifacts
                     .checked_add(1)
                     .ok_or_else(official_ocr_limit_error)?;
-                let envelope = serde_json::from_value::<OcrComparisonEnvelope>(value)
-                    .map_err(|_| official_ocr_error("runtime_official_ocr_payload_malformed"))?;
+                let envelope =
+                    serde_json::from_value::<OcrComparisonEnvelope>(value).map_err(|_| {
+                        official_ocr_error(ClientCode::RuntimeOfficialOcrPayloadMalformed)
+                    })?;
                 if envelope.schema_version != OCR_COMPARISON_ENVELOPE_SCHEMA
                     || envelope.task_id != *task_id
                     || envelope.run_id != *run_id
                     || reference.frame_id() != Some(&envelope.final_frame_id)
                 {
                     return Err(official_ocr_error(
-                        "runtime_official_ocr_payload_identity_mismatch",
+                        ClientCode::RuntimeOfficialOcrPayloadIdentityMismatch,
                     ));
                 }
                 if comparison
@@ -3878,7 +4002,7 @@ pub(crate) fn resolve_official_ocr_projection(
                     .is_some()
                 {
                     return Err(official_ocr_error(
-                        "runtime_official_ocr_comparison_duplicate",
+                        ClientCode::RuntimeOfficialOcrComparisonDuplicate,
                     ));
                 }
             }
@@ -3888,7 +4012,9 @@ pub(crate) fn resolve_official_ocr_projection(
     check_official_ocr_duration(started)?;
     if recognized_artifacts == 0 {
         return if marker_expected {
-            Err(official_ocr_error("runtime_official_ocr_evidence_missing"))
+            Err(official_ocr_error(
+                ClientCode::RuntimeOfficialOcrEvidenceMissing,
+            ))
         } else {
             Ok(None)
         };
@@ -3916,10 +4042,11 @@ pub(crate) fn resolve_official_ocr_projection(
         comparison_artifact_verified_sequence,
         comparison_artifact_verified_event_id,
         comparison_value,
-    ) = comparison.ok_or_else(|| official_ocr_error("runtime_official_ocr_comparison_missing"))?;
+    ) = comparison
+        .ok_or_else(|| official_ocr_error(ClientCode::RuntimeOfficialOcrComparisonMissing))?;
     if observations.is_empty() {
         return Err(official_ocr_error(
-            "runtime_official_ocr_observation_missing",
+            ClientCode::RuntimeOfficialOcrObservationMissing,
         ));
     }
     observations.sort_by_key(|observation| observation.frame_index);
@@ -3928,7 +4055,7 @@ pub(crate) fn resolve_official_ocr_projection(
             != u32::try_from(expected).map_err(|_| official_ocr_limit_error())?
         {
             return Err(official_ocr_error(
-                "runtime_official_ocr_observation_order_invalid",
+                ClientCode::RuntimeOfficialOcrObservationOrderInvalid,
             ));
         }
     }
@@ -3938,7 +4065,7 @@ pub(crate) fn resolve_official_ocr_projection(
         == Some(OCR_FIELDS_REPORT_SCHEMA)
     {
         let records_report: OcrFieldsReport = serde_json::from_value(comparison_value)
-            .map_err(|_| official_ocr_error("runtime_official_ocr_fields_malformed"))?;
+            .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrFieldsMalformed))?;
         let personal = records_report
             .declaration
             .fields
@@ -3955,14 +4082,14 @@ pub(crate) fn resolve_official_ocr_projection(
                 .any(|o| o.artifact.redaction_state != redaction)
         {
             return Err(official_ocr_error(
-                "runtime_official_ocr_fields_privacy_mismatch",
+                ClientCode::RuntimeOfficialOcrFieldsPrivacyMismatch,
             ));
         }
         if (records_report.failure.is_some() && !failed)
             || (failed && marker_expected && records_report.failure.is_none())
         {
             return Err(official_ocr_error(
-                "runtime_official_ocr_fields_terminal_mismatch",
+                ClientCode::RuntimeOfficialOcrFieldsTerminalMismatch,
             ));
         }
         let records = project_ocr_fields(&records_report, &observations, &raw_observations)?;
@@ -3993,7 +4120,9 @@ pub(crate) fn resolve_official_ocr_projection(
         return Ok(None);
     }
     if fields_expected {
-        return Err(official_ocr_error("runtime_official_ocr_mode_mismatch"));
+        return Err(official_ocr_error(
+            ClientCode::RuntimeOfficialOcrModeMismatch,
+        ));
     }
     if comparison_artifact.redaction_state != ArtifactRedactionState::NotRequired
         || observations
@@ -4003,7 +4132,9 @@ pub(crate) fn resolve_official_ocr_projection(
             .values()
             .any(|v| v.get("page_id").is_some() || v.get("personal").is_some())
     {
-        return Err(official_ocr_error("runtime_official_ocr_mode_mismatch"));
+        return Err(official_ocr_error(
+            ClientCode::RuntimeOfficialOcrModeMismatch,
+        ));
     }
     let (summary, report) = parse_official_ocr_comparison(&comparison_value, &observations)?;
     let provider_executions = project_official_ocr_providers(provider_evidence)?;
@@ -4028,7 +4159,7 @@ fn project_ocr_fields(
     observations: &[RuntimeOfficialOcrObservation],
     raw: &BTreeMap<u32, Value>,
 ) -> RuntimeClientResult<Vec<RuntimeOfficialOcrFieldRecord>> {
-    let invalid = || official_ocr_error("runtime_official_ocr_fields_invalid");
+    let invalid = || official_ocr_error(ClientCode::RuntimeOfficialOcrFieldsInvalid);
     report.declaration.validate().map_err(|_| invalid())?;
     let declaration = &report.declaration;
     if report.schema_version != OCR_FIELDS_REPORT_SCHEMA
@@ -4259,7 +4390,7 @@ fn official_ocr_marker_expected(
     }) {
         let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
             return Err(official_ocr_error(
-                "runtime_official_ocr_terminal_payload_invalid",
+                ClientCode::RuntimeOfficialOcrTerminalPayloadInvalid,
             ));
         };
         if let TaskSemanticFact::TerminalCommitted {
@@ -4279,7 +4410,7 @@ fn official_ocr_marker_expected(
             ..
         } = payload.fact()
         {
-            expected |= code == "contained_task_ocr_fields_unresolved";
+            expected |= code == SharedCode::ContainedTaskOcrFieldsUnresolved.as_str();
         }
     }
     Ok(expected)
@@ -4289,7 +4420,7 @@ fn validate_ocr_region_evidence(
     region: &actingcommand_contract::OcrRegionEvidence,
 ) -> RuntimeClientResult<()> {
     use actingcommand_contract::OcrRegionUnresolvedReason as Reason;
-    let invalid = || official_ocr_error("runtime_official_ocr_region_invalid");
+    let invalid = || official_ocr_error(ClientCode::RuntimeOfficialOcrRegionInvalid);
     let within = |rect: &actingcommand_contract::OcrRegionRect| {
         rect.x >= 0
             && rect.y >= 0
@@ -4385,7 +4516,7 @@ fn parse_official_ocr_observation(
         return Err(official_ocr_limit_error());
     }
     let payload = serde_json::from_value::<OcrObservationPayload>(value.clone())
-        .map_err(|_| official_ocr_error("runtime_official_ocr_observation_malformed"))?;
+        .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrObservationMalformed))?;
     if payload.regions.len() > 32
         || payload
             .regions
@@ -4401,11 +4532,11 @@ fn parse_official_ocr_observation(
         || payload.execution.is_some();
     match (direct_shape, payload.targets) {
         (true, None) => {
-            let target_id = payload
-                .target_id
-                .ok_or_else(|| official_ocr_error("runtime_official_ocr_observation_malformed"))?;
+            let target_id = payload.target_id.ok_or_else(|| {
+                official_ocr_error(ClientCode::RuntimeOfficialOcrObservationMalformed)
+            })?;
             let execution = payload.execution.ok_or_else(|| {
-                official_ocr_error("runtime_official_ocr_provider_evidence_missing")
+                official_ocr_error(ClientCode::RuntimeOfficialOcrProviderEvidenceMissing)
             })?;
             validate_official_ocr_target(&target_id, &execution)?;
             Ok(vec![(frame_index, target_id, execution)])
@@ -4420,14 +4551,16 @@ fn parse_official_ocr_observation(
                     let _ = (&target.text, &target.confidence, &target.blocks);
                     validate_official_ocr_target(&target.target_id, &target.execution)?;
                     if !seen.insert(target.target_id.clone()) {
-                        return Err(official_ocr_error("runtime_official_ocr_target_duplicate"));
+                        return Err(official_ocr_error(
+                            ClientCode::RuntimeOfficialOcrTargetDuplicate,
+                        ));
                     }
                     Ok((frame_index, target.target_id, target.execution))
                 })
                 .collect()
         }
         _ => Err(official_ocr_error(
-            "runtime_official_ocr_observation_malformed",
+            ClientCode::RuntimeOfficialOcrObservationMalformed,
         )),
     }
 }
@@ -4469,7 +4602,7 @@ fn validate_official_ocr_target(
         || evidence.fallback_observed.is_some()
     {
         return Err(official_ocr_error(
-            "runtime_official_ocr_provider_evidence_invalid",
+            ClientCode::RuntimeOfficialOcrProviderEvidenceInvalid,
         ));
     }
     Ok(())
@@ -4480,7 +4613,7 @@ fn parse_official_ocr_comparison(
     observations: &[RuntimeOfficialOcrObservation],
 ) -> RuntimeClientResult<(RuntimeOfficialOcrSummary, RuntimeOfficialOcrComparison)> {
     let report = serde_json::from_value::<RuntimeOfficialOcrComparison>(value.clone())
-        .map_err(|_| official_ocr_error("runtime_official_ocr_comparison_malformed"))?;
+        .map_err(|_| official_ocr_error(ClientCode::RuntimeOfficialOcrComparisonMalformed))?;
     let schema_valid = match report.schema_version.as_str() {
         OCR_COMPARISON_SCHEMA_V1 => {
             report.mapping_evidence.is_none() && report.classification_contract.is_none()
@@ -4504,7 +4637,7 @@ fn parse_official_ocr_comparison(
         || !is_sha256_hex(&report.truth_set_sha256)
     {
         return Err(official_ocr_error(
-            "runtime_official_ocr_comparison_invalid",
+            ClientCode::RuntimeOfficialOcrComparisonInvalid,
         ));
     }
     let _ = (
@@ -4529,7 +4662,7 @@ fn parse_official_ocr_comparison(
                 .is_some_and(|prior| prior >= &observed.value)
         {
             return Err(official_ocr_error(
-                "runtime_official_ocr_comparison_invalid",
+                ClientCode::RuntimeOfficialOcrComparisonInvalid,
             ));
         }
         canonical_names.push(observed.value.clone());
@@ -4547,7 +4680,7 @@ fn parse_official_ocr_comparison(
         .collect::<Vec<_>>();
     if duplicates != expected_duplicates {
         return Err(official_ocr_error(
-            "runtime_official_ocr_comparison_invalid",
+            ClientCode::RuntimeOfficialOcrComparisonInvalid,
         ));
     }
 
@@ -4566,7 +4699,7 @@ fn parse_official_ocr_comparison(
                 .is_some_and(|value| value.is_empty())
         {
             return Err(official_ocr_error(
-                "runtime_official_ocr_mapping_evidence_invalid",
+                ClientCode::RuntimeOfficialOcrMappingEvidenceInvalid,
             ));
         }
         let _ = (
@@ -4617,7 +4750,7 @@ fn project_official_ocr_providers(
 ) -> RuntimeClientResult<Vec<RuntimeOfficialOcrProviderExecution>> {
     if records.is_empty() || records.len() > MAX_OFFICIAL_OCR_ITEMS {
         return Err(official_ocr_error(
-            "runtime_official_ocr_provider_evidence_missing",
+            ClientCode::RuntimeOfficialOcrProviderEvidenceMissing,
         ));
     }
     records.sort_by(|left, right| {
@@ -4634,7 +4767,7 @@ fn project_official_ocr_providers(
     for (frame_index, target_id, record) in records {
         if !invocation_ids.insert(record.invocation_id.clone()) {
             return Err(official_ocr_error(
-                "runtime_official_ocr_provider_evidence_mismatch",
+                ClientCode::RuntimeOfficialOcrProviderEvidenceMismatch,
             ));
         }
         let group = match groups
@@ -4649,7 +4782,7 @@ fn project_official_ocr_providers(
         };
         if *target_groups.entry(target_id.clone()).or_insert(group) != group {
             return Err(official_ocr_error(
-                "runtime_official_ocr_provider_evidence_mismatch",
+                ClientCode::RuntimeOfficialOcrProviderEvidenceMismatch,
             ));
         }
         groups[group].1.push(RuntimeOfficialOcrProviderEvidence {
@@ -4728,24 +4861,24 @@ fn check_official_ocr_duration(started: Instant) -> RuntimeClientResult<()> {
     }
 }
 
-fn official_ocr_error(code: &'static str) -> RuntimeClientError {
-    RuntimeClientError::fatal(code, "project_runtime_official_ocr")
+fn official_ocr_error(code: impl Into<Code>) -> RuntimeClientError {
+    RuntimeClientError::fatal(code, ClientLocation::ProjectRuntimeOfficialOcr.location())
 }
 
 fn official_ocr_limit_error() -> RuntimeClientError {
-    official_ocr_error("runtime_official_ocr_projection_limit_exceeded")
+    official_ocr_error(ClientCode::RuntimeOfficialOcrProjectionLimitExceeded)
 }
 
 fn encode_policy_document<T>(
     kind: RuntimePlanningDocumentKind,
     value: &T,
-    operation: &'static str,
+    operation: Location,
 ) -> RuntimeClientResult<RuntimePlanningDocument>
 where
     T: Serialize,
 {
     RuntimePlanningDocument::encode(kind, value).map_err(|_| {
-        RuntimeClientError::fatal("runtime_planning_document_encode_failed", operation)
+        RuntimeClientError::fatal(ClientCode::RuntimePlanningDocumentEncodeFailed, operation)
     })
 }
 
@@ -4777,14 +4910,17 @@ impl RuntimeProjectClient {
         cursor: Option<ProjectDecisionPageCursor>,
     ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
         let page = ProjectDecisionPageRequest::new(limit, cursor).map_err(|_| {
-            RuntimeClientError::fatal("runtime_project_page_invalid", "runtime_project_interface")
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeProjectPageInvalid,
+                ClientLocation::RuntimeProjectInterface.location(),
+            )
         })?;
         let request = ProjectInterfaceRequest::current()
             .with_decision_page(page)
             .map_err(|_| {
                 RuntimeClientError::fatal(
-                    "runtime_project_page_invalid",
-                    "runtime_project_interface",
+                    ClientCode::RuntimeProjectPageInvalid,
+                    ClientLocation::RuntimeProjectInterface.location(),
                 )
             })?;
         self.client.project_snapshot(request)
@@ -4796,8 +4932,8 @@ impl RuntimeProjectClient {
     ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
         let request = ProjectInterfaceRequest::new(accepted_versions).map_err(|_| {
             RuntimeClientError::fatal(
-                "runtime_project_versions_invalid",
-                "runtime_project_interface",
+                ClientCode::RuntimeProjectVersionsInvalid,
+                ClientLocation::RuntimeProjectInterface.location(),
             )
         })?;
         self.client.project_snapshot(request)
@@ -4812,13 +4948,13 @@ impl RuntimeAuthoringSession {
     pub fn append(&self, event: ResourceAuthoringEvent) -> RuntimeClientResult<TerminalEvent> {
         event.validate().map_err(|_| {
             RuntimeClientError::fatal(
-                "runtime_authoring_event_invalid",
-                "record_resource_authoring_event",
+                ClientCode::RuntimeAuthoringEventInvalid,
+                ClientLocation::RecordResourceAuthoringEvent.location(),
             )
         })?;
         let expected_phase = event.phase();
         let receipt = self.client.execute_receipt_with_correlation(
-            "record_resource_authoring_event",
+            ClientLocation::RecordResourceAuthoringEvent.location(),
             RuntimeOperation::RecordAuthoringEvent { event },
             self.correlation,
             None,
@@ -4829,11 +4965,11 @@ impl RuntimeAuthoringSession {
         ) {
             return Err(self
                 .client
-                .unexpected_result("record_resource_authoring_event"));
+                .unexpected_result(ClientLocation::RecordResourceAuthoringEvent.location()));
         }
         receipt.terminal().ok_or_else(|| {
             self.client
-                .unexpected_result("record_resource_authoring_event")
+                .unexpected_result(ClientLocation::RecordResourceAuthoringEvent.location())
         })
     }
 
@@ -4857,20 +4993,27 @@ impl RuntimeDebugSession {
         target: actingcommand_contract::LabPinReleaseTarget,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         target.validate().map_err(|_| {
-            RuntimeClientError::fatal("invalid_lab_pin_release_target", "release_lab_pin")
+            RuntimeClientError::fatal(
+                SharedCode::InvalidLabPinReleaseTarget,
+                ContractLocation::ReleaseLabPin.location(),
+            )
         })?;
         let receipt = self.client.execute_receipt_with_correlation(
-            "release_lab_pin",
+            ContractLocation::ReleaseLabPin.location(),
             RuntimeOperation::ReleaseLabPin { target },
             self.correlation,
             None,
         )?;
         let Some(RuntimeResult::LabPinReleased { release }) = receipt.result() else {
-            return Err(self.client.unexpected_result("release_lab_pin"));
+            return Err(self
+                .client
+                .unexpected_result(ContractLocation::ReleaseLabPin.location()));
         };
         if release.identity.artifact.artifact_id != target.artifact_id || release.pin != target.pin
         {
-            return Err(self.client.unexpected_result("release_lab_pin"));
+            return Err(self
+                .client
+                .unexpected_result(ContractLocation::ReleaseLabPin.location()));
         }
         Ok(receipt)
     }
@@ -4884,14 +5027,17 @@ impl RuntimeDebugSession {
         request: PackageDebugRequest,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         request.validate().map_err(|_| {
-            RuntimeClientError::fatal("runtime_debug_package_invalid", "debug_package")
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeDebugPackageInvalid,
+                ContractLocation::DebugPackage.location(),
+            )
         })?;
         let timeout = self
             .client
-            .connection("debug_package")?
+            .connection(ContractLocation::DebugPackage.location())?
             .backend_open_timeout;
         let receipt = self.client.execute_receipt_with_correlation(
-            "debug_package",
+            ContractLocation::DebugPackage.location(),
             RuntimeOperation::DebugPackage { request },
             self.correlation,
             Some(timeout),
@@ -4900,7 +5046,9 @@ impl RuntimeDebugSession {
             receipt.result(),
             Some(RuntimeResult::PackageDebugCompleted { .. })
         ) {
-            return Err(self.client.unexpected_result("debug_package"));
+            return Err(self
+                .client
+                .unexpected_result(ContractLocation::DebugPackage.location()));
         }
         Ok(receipt)
     }
@@ -4910,14 +5058,17 @@ impl RuntimeDebugSession {
         request: RuntimeEvidenceExportRequest,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         request.validate().map_err(|_| {
-            RuntimeClientError::fatal("runtime_evidence_export_invalid", "export_evidence")
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeEvidenceExportInvalid,
+                ContractLocation::ExportEvidence.location(),
+            )
         })?;
         let timeout = self
             .client
-            .connection("export_evidence")?
+            .connection(ContractLocation::ExportEvidence.location())?
             .backend_open_timeout;
         let receipt = self.client.execute_receipt_with_correlation(
-            "export_evidence",
+            ContractLocation::ExportEvidence.location(),
             RuntimeOperation::ExportEvidence { request },
             self.correlation,
             Some(timeout),
@@ -4926,14 +5077,16 @@ impl RuntimeDebugSession {
             receipt.result(),
             Some(RuntimeResult::EvidenceExportCompleted { .. })
         ) {
-            return Err(self.client.unexpected_result("export_evidence"));
+            return Err(self
+                .client
+                .unexpected_result(ContractLocation::ExportEvidence.location()));
         }
         Ok(receipt)
     }
 
     pub fn observe_readonly(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.client.execute_receipt_with_correlation(
-            "debug_observe_readonly",
+            ClientLocation::DebugObserveReadonly.location(),
             RuntimeOperation::ObserveReadonly {
                 instance_alias: instance_alias.to_string(),
             },
@@ -4944,7 +5097,9 @@ impl RuntimeDebugSession {
             receipt.result(),
             Some(RuntimeResult::ReadonlyObservationCompleted { .. })
         ) {
-            return Err(self.client.unexpected_result("debug_observe_readonly"));
+            return Err(self
+                .client
+                .unexpected_result(ClientLocation::DebugObserveReadonly.location()));
         }
         Ok(receipt)
     }
@@ -4955,14 +5110,19 @@ impl RuntimeDebugSession {
         spec: CaptureSequenceSpec,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         spec.validate().map_err(|_| {
-            RuntimeClientError::fatal("runtime_capture_sequence_invalid", "debug_capture_sequence")
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeCaptureSequenceInvalid,
+                ClientLocation::DebugCaptureSequence.location(),
+            )
         })?;
         let response_timeout = {
-            let connection = self.client.connection("debug_capture_sequence")?;
+            let connection = self
+                .client
+                .connection(ClientLocation::DebugCaptureSequence.location())?;
             capture_sequence_response_timeout(connection.backend_open_timeout, spec)?
         };
         let receipt = self.client.execute_receipt_with_correlation(
-            "debug_capture_sequence",
+            ClientLocation::DebugCaptureSequence.location(),
             RuntimeOperation::CaptureSequence {
                 instance_alias: instance_alias.to_string(),
                 spec,
@@ -4974,32 +5134,41 @@ impl RuntimeDebugSession {
             receipt.result(),
             Some(RuntimeResult::CaptureSequenceCompleted { .. })
         ) {
-            return Err(self.client.unexpected_result("debug_capture_sequence"));
+            return Err(self
+                .client
+                .unexpected_result(ClientLocation::DebugCaptureSequence.location()));
         }
         Ok(receipt)
     }
 
     pub fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
-        let connection = self.client.connection("debug_acquire_lease")?;
+        let connection = self
+            .client
+            .connection(ClientLocation::DebugAcquireLease.location())?;
         let holder = connection.ids.mint_holder_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "debug_acquire_lease")
+            RuntimeClientError::fatal(
+                SharedCode::RuntimeIdentifierIssueFailed,
+                ClientLocation::DebugAcquireLease.location(),
+            )
         })?;
         drop(connection);
         let receipt = self.client.execute_receipt_with_correlation(
-            "debug_acquire_lease",
+            ClientLocation::DebugAcquireLease.location(),
             RuntimeOperation::acquire_lease(instance_alias, holder),
             self.correlation,
             None,
         )?;
         match receipt.result() {
             Some(RuntimeResult::LeaseGranted { token }) => Ok(token.clone()),
-            _ => Err(self.client.unexpected_result("debug_acquire_lease")),
+            _ => Err(self
+                .client
+                .unexpected_result(ClientLocation::DebugAcquireLease.location())),
         }
     }
 
     pub fn renew_lease(&self, token: &LeaseToken) -> RuntimeClientResult<LeaseToken> {
         let receipt = self.client.execute_receipt_with_correlation(
-            "debug_renew_lease",
+            ClientLocation::DebugRenewLease.location(),
             RuntimeOperation::RenewLease {
                 token: token.clone(),
             },
@@ -5008,7 +5177,9 @@ impl RuntimeDebugSession {
         )?;
         match receipt.result() {
             Some(RuntimeResult::LeaseRenewed { token }) => Ok(token.clone()),
-            _ => Err(self.client.unexpected_result("debug_renew_lease")),
+            _ => Err(self
+                .client
+                .unexpected_result(ClientLocation::DebugRenewLease.location())),
         }
     }
 
@@ -5027,7 +5198,7 @@ impl RuntimeDebugSession {
         frame: Option<InputFrameReference>,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.client.execute_receipt_with_correlation(
-            "debug_runtime_input",
+            ClientLocation::DebugRuntimeInput.location(),
             RuntimeOperation::Input {
                 frame,
                 token: token.clone(),
@@ -5038,13 +5209,15 @@ impl RuntimeDebugSession {
         )?;
         match receipt.result() {
             Some(RuntimeResult::InputCommitted { .. }) => Ok(receipt),
-            _ => Err(self.client.unexpected_result("debug_runtime_input")),
+            _ => Err(self
+                .client
+                .unexpected_result(ClientLocation::DebugRuntimeInput.location())),
         }
     }
 
     pub fn release_lease(&self, token: &LeaseToken) -> RuntimeClientResult<()> {
         let receipt = self.client.execute_receipt_with_correlation(
-            "debug_release_lease",
+            ClientLocation::DebugReleaseLease.location(),
             RuntimeOperation::ReleaseLease {
                 token: token.clone(),
             },
@@ -5056,17 +5229,22 @@ impl RuntimeDebugSession {
                 instance_id,
                 lease_id,
             }) if *instance_id == token.instance_id() && *lease_id == token.lease_id() => Ok(()),
-            _ => Err(self.client.unexpected_result("debug_release_lease")),
+            _ => Err(self
+                .client
+                .unexpected_result(ClientLocation::DebugReleaseLease.location())),
         }
     }
 
     pub fn record_event(&self, event: RuntimeDebugEvent) -> RuntimeClientResult<TerminalEvent> {
         event.validate().map_err(|_| {
-            RuntimeClientError::fatal("runtime_debug_event_invalid", "record_runtime_debug_event")
+            RuntimeClientError::fatal(
+                SharedCode::RuntimeDebugEventInvalid,
+                ContractLocation::RecordRuntimeDebugEvent.location(),
+            )
         })?;
         let expected_phase = event.phase();
         let receipt = self.client.execute_receipt_with_correlation(
-            "record_runtime_debug_event",
+            ContractLocation::RecordRuntimeDebugEvent.location(),
             RuntimeOperation::RecordDebugEvent { event },
             self.correlation,
             None,
@@ -5075,11 +5253,14 @@ impl RuntimeDebugSession {
             receipt.result(),
             Some(RuntimeResult::DebugEventRecorded { phase }) if *phase == expected_phase
         ) {
-            return Err(self.client.unexpected_result("record_runtime_debug_event"));
+            return Err(self
+                .client
+                .unexpected_result(ContractLocation::RecordRuntimeDebugEvent.location()));
         }
-        receipt
-            .terminal()
-            .ok_or_else(|| self.client.unexpected_result("record_runtime_debug_event"))
+        receipt.terminal().ok_or_else(|| {
+            self.client
+                .unexpected_result(ContractLocation::RecordRuntimeDebugEvent.location())
+        })
     }
 
     pub fn query_events(
@@ -5126,7 +5307,7 @@ impl fmt::Debug for RuntimeClient {
 impl RuntimeConnection {
     fn issue_correlation(
         &self,
-        operation: &'static str,
+        operation: Location,
         selected: Option<IssuedCorrelationId>,
     ) -> RuntimeClientResult<IssuedCorrelationId> {
         if let Some(error) = &self.terminal_error {
@@ -5135,7 +5316,7 @@ impl RuntimeConnection {
         match selected {
             Some(correlation) => Ok(correlation),
             None => self.ids.mint_correlation_id().map_err(|_| {
-                RuntimeClientError::fatal("runtime_identifier_issue_failed", operation)
+                RuntimeClientError::fatal(SharedCode::RuntimeIdentifierIssueFailed, operation)
             }),
         }
     }
@@ -5151,7 +5332,7 @@ impl RuntimeConnection {
 
     fn request(
         &self,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
         selected: Option<IssuedCorrelationId>,
     ) -> RuntimeClientResult<RuntimeRequest> {
@@ -5161,13 +5342,13 @@ impl RuntimeConnection {
 
     fn request_with_correlation(
         &self,
-        operation_name: &'static str,
+        operation_name: Location,
         operation: RuntimeOperation,
         correlation: IssuedCorrelationId,
     ) -> RuntimeClientResult<RuntimeRequest> {
         let request = RuntimeRequest::new(
             self.ids.mint_request_id().map_err(|_| {
-                RuntimeClientError::fatal("runtime_identifier_issue_failed", operation_name)
+                RuntimeClientError::fatal(SharedCode::RuntimeIdentifierIssueFailed, operation_name)
             })?,
             correlation,
             None,
@@ -5176,7 +5357,9 @@ impl RuntimeConnection {
             unix_ms_now()?,
             operation,
         )
-        .map_err(|_| RuntimeClientError::fatal("runtime_request_invalid", operation_name))?;
+        .map_err(|_| {
+            RuntimeClientError::fatal(ClientCode::RuntimeRequestInvalid, operation_name)
+        })?;
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::ClientRequestCreated,
@@ -5194,8 +5377,8 @@ impl RuntimeConnection {
 fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClientResult<Value> {
     if events.is_empty() {
         return Err(RuntimeClientError::fatal(
-            "run_summary_not_found",
-            "summarize_run",
+            ClientCode::RunSummaryNotFound,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     let intent_event = exactly_one_run_event(events, EventType::PolicyDispatchIntent)?;
@@ -5208,20 +5391,26 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => payload,
         _ => {
             return Err(RuntimeClientError::fatal(
-                "run_summary_payload_mismatch",
-                "summarize_run",
+                ClientCode::RunSummaryPayloadMismatch,
+                ClientLocation::SummarizeRun.location(),
             ));
         }
     };
     let task_id = intent_event.links.task_id().copied().ok_or_else(|| {
-        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        RuntimeClientError::fatal(
+            ClientCode::RunSummaryIdentityMissing,
+            ClientLocation::SummarizeRun.location(),
+        )
     })?;
     let correlation_id = intent_event
         .links
         .correlation_id()
         .copied()
         .ok_or_else(|| {
-            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+            RuntimeClientError::fatal(
+                ClientCode::RunSummaryIdentityMissing,
+                ClientLocation::SummarizeRun.location(),
+            )
         })?;
     if events.iter().any(|event| {
         event.links.run_id() != Some(&run_id)
@@ -5229,18 +5418,21 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             || event.links.correlation_id() != Some(&correlation_id)
     }) {
         return Err(RuntimeClientError::fatal(
-            "run_summary_identity_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryIdentityMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     let lease_id = lease_event.links.lease_id().copied().ok_or_else(|| {
-        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        RuntimeClientError::fatal(
+            ClientCode::RunSummaryIdentityMissing,
+            ClientLocation::SummarizeRun.location(),
+        )
     })?;
     for event in [release_event, execution_event, completed_event] {
         if event.links.lease_id() != Some(&lease_id) {
             return Err(RuntimeClientError::fatal(
-                "run_summary_lease_mismatch",
-                "summarize_run",
+                ClientCode::RunSummaryLeaseMismatch,
+                ClientLocation::SummarizeRun.location(),
             ));
         }
     }
@@ -5255,8 +5447,8 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         || completed.admission() != admitted.admission()
     {
         return Err(RuntimeClientError::fatal(
-            "run_summary_policy_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryPolicyMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     if is_policy_settlement_interrupted(execution.outcome()) {
@@ -5278,13 +5470,13 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             })
         {
             return Err(RuntimeClientError::fatal(
-                "run_summary_settlement_interrupted_invalid",
-                "summarize_run",
+                ClientCode::RunSummarySettlementInterruptedInvalid,
+                ClientLocation::SummarizeRun.location(),
             ));
         }
         return Ok(json!({
             "schema_version": "actingcommand.run-summary.v1",
-            "status": "policy_settlement_interrupted",
+            "status": SharedCode::PolicySettlementInterrupted.as_str(),
             "run_id": run_id,
             "task_id": task_id,
             "correlation_id": correlation_id,
@@ -5308,7 +5500,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
                 "release_sequence": release_event.sequence
             },
             "outcome": {
-                "kind": "policy_settlement_interrupted",
+                "kind": SharedCode::PolicySettlementInterrupted.as_str(),
                 "policy": execution.outcome(),
                 "result": "original_cause_unavailable",
                 "original_cause": "unavailable"
@@ -5339,8 +5531,8 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     let task_event = exactly_one_run_event(events, task_event_type)?;
     if task_event.links.lease_id() != Some(&lease_id) {
         return Err(RuntimeClientError::fatal(
-            "run_summary_lease_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryLeaseMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     let lab_request_event = exactly_one_run_event(events, EventType::LabRequest)?;
@@ -5349,15 +5541,21 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         .request_id()
         .copied()
         .ok_or_else(|| {
-            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+            RuntimeClientError::fatal(
+                ClientCode::RunSummaryIdentityMissing,
+                ClientLocation::SummarizeRun.location(),
+            )
         })?;
     let receipt_request_id = task_event.links.request_id().copied().ok_or_else(|| {
-        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        RuntimeClientError::fatal(
+            ClientCode::RunSummaryIdentityMissing,
+            ClientLocation::SummarizeRun.location(),
+        )
     })?;
     if lab_request_id != receipt_request_id {
         return Err(RuntimeClientError::fatal(
-            "run_summary_receipt_request_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryReceiptRequestMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     validate_task_terminal(task_event, execution.outcome())?;
@@ -5420,8 +5618,12 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         "completed_sequence": completed_event.sequence
     });
     if let Some(timing) = task_timing {
-        summary["task_timing"] = serde_json::to_value(timing)
-            .map_err(|_| RuntimeClientError::fatal("run_summary_encode_failed", "summarize_run"))?;
+        summary["task_timing"] = serde_json::to_value(timing).map_err(|_| {
+            RuntimeClientError::fatal(
+                ClientCode::RunSummaryEncodeFailed,
+                ClientLocation::SummarizeRun.location(),
+            )
+        })?;
     }
     Ok(summary)
 }
@@ -5432,8 +5634,8 @@ fn validate_task_terminal(
 ) -> RuntimeClientResult<()> {
     let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(task_event)? else {
         return Err(RuntimeClientError::fatal(
-            "run_summary_payload_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryPayloadMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     };
     let TaskSemanticFact::TerminalCommitted {
@@ -5443,8 +5645,8 @@ fn validate_task_terminal(
     } = payload.fact()
     else {
         return Err(RuntimeClientError::fatal(
-            "run_summary_payload_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryPayloadMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     };
     let matches = match execution {
@@ -5458,8 +5660,8 @@ fn validate_task_terminal(
     };
     if !matches {
         return Err(RuntimeClientError::fatal(
-            "run_summary_policy_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryPolicyMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     Ok(())
@@ -5469,7 +5671,7 @@ fn is_policy_settlement_interrupted(execution: &PolicyExecutionOutcome) -> bool 
     matches!(
         execution,
         PolicyExecutionOutcome::Failed { failure }
-            if failure.error_code == "policy_settlement_interrupted"
+            if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
                 && failure.original_class == PolicyFailureClass::Severe
                 && failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition == PolicyFailureDisposition::PausedTask
@@ -5498,25 +5700,28 @@ fn validate_admitted_package(
         };
         if event.links.request_id() != Some(request_id) {
             return Err(RuntimeClientError::fatal(
-                "run_summary_package_request_mismatch",
-                "summarize_run",
+                ClientCode::RunSummaryPackageRequestMismatch,
+                ClientLocation::SummarizeRun.location(),
             ));
         }
         admitted_package_sha256.push(package_sha256);
     }
     let [admitted_package_sha256] = admitted_package_sha256.as_slice() else {
         return Err(RuntimeClientError::fatal(
-            "run_summary_package_fact_count_invalid",
-            "summarize_run",
+            ClientCode::RunSummaryPackageFactCountInvalid,
+            ClientLocation::SummarizeRun.location(),
         ));
     };
     policy_package_digest.validate().map_err(|_| {
-        RuntimeClientError::fatal("run_summary_package_digest_invalid", "summarize_run")
+        RuntimeClientError::fatal(
+            ClientCode::RunSummaryPackageDigestInvalid,
+            ClientLocation::SummarizeRun.location(),
+        )
     })?;
     if policy_package_digest != *admitted_package_sha256 {
         return Err(RuntimeClientError::fatal(
-            "run_summary_package_digest_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryPackageDigestMismatch,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     Ok(())
@@ -5528,8 +5733,8 @@ fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult
         .any(|event| event.origin.source() == EventSource::Device)
     {
         return Err(RuntimeClientError::fatal(
-            "run_summary_device_event_forbidden",
-            "summarize_run",
+            ClientCode::RunSummaryDeviceEventForbidden,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     let simulation_origin = |event: &ProjectedEvent| {
@@ -5553,8 +5758,8 @@ fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult
         || capture_events.iter().any(|event| !simulation_origin(event))
     {
         return Err(RuntimeClientError::fatal(
-            "run_summary_simulation_provenance_invalid",
-            "summarize_run",
+            ClientCode::RunSummarySimulationProvenanceInvalid,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     let input_events = events
@@ -5572,8 +5777,8 @@ fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult
             .any(|event| event.event_type == EventType::InputFailed)
     {
         return Err(RuntimeClientError::fatal(
-            "run_summary_simulation_provenance_invalid",
-            "summarize_run",
+            ClientCode::RunSummarySimulationProvenanceInvalid,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     let input_intent_count = input_events
@@ -5590,8 +5795,8 @@ fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult
                 Ok(())
             }
             _ => Err(RuntimeClientError::fatal(
-                "run_summary_simulation_effect_invalid",
-                "summarize_run",
+                ClientCode::RunSummarySimulationEffectInvalid,
+                ClientLocation::SummarizeRun.location(),
             )),
         })
         .collect::<RuntimeClientResult<Vec<_>>>()?
@@ -5602,8 +5807,8 @@ fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult
         .count();
     if input_intent_count != simulated_effect_count || committed_inputs != simulated_effect_count {
         return Err(RuntimeClientError::fatal(
-            "run_summary_simulation_effect_invalid",
-            "summarize_run",
+            ClientCode::RunSummarySimulationEffectInvalid,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     Ok(simulated_effect_count)
@@ -5615,12 +5820,15 @@ fn exactly_one_run_event(
 ) -> RuntimeClientResult<&ProjectedEvent> {
     let mut matching = events.iter().filter(|event| event.event_type == event_type);
     let event = matching.next().ok_or_else(|| {
-        RuntimeClientError::fatal("run_summary_event_count_invalid", "summarize_run")
+        RuntimeClientError::fatal(
+            ClientCode::RunSummaryEventCountInvalid,
+            ClientLocation::SummarizeRun.location(),
+        )
     })?;
     if matching.next().is_some() {
         return Err(RuntimeClientError::fatal(
-            "run_summary_event_count_invalid",
-            "summarize_run",
+            ClientCode::RunSummaryEventCountInvalid,
+            ClientLocation::SummarizeRun.location(),
         ));
     }
     Ok(event)
@@ -5630,8 +5838,8 @@ fn full_payload(event: &ProjectedEvent) -> RuntimeClientResult<&EventPayload> {
     match &event.payload {
         ProjectionPayload::Full(payload) => Ok(payload.as_ref()),
         _ => Err(RuntimeClientError::fatal(
-            "run_summary_projection_incomplete",
-            "summarize_run",
+            ClientCode::RunSummaryProjectionIncomplete,
+            ClientLocation::SummarizeRun.location(),
         )),
     }
 }
@@ -5655,38 +5863,63 @@ fn policy_dispatch_payload(
             EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)),
         ) => Ok(payload),
         _ => Err(RuntimeClientError::fatal(
-            "run_summary_payload_mismatch",
-            "summarize_run",
+            ClientCode::RunSummaryPayloadMismatch,
+            ClientLocation::SummarizeRun.location(),
         )),
     }
 }
 
 fn read_runtime_info(state_root: &Path) -> RuntimeClientResult<RuntimeInfo> {
     let path = state_root.join(RUNTIME_INFO_FILE);
-    let metadata = fs::metadata(&path)
-        .map_err(|_| RuntimeClientError::fatal("runtime_info_unavailable", "discover_runtime"))?;
+    let metadata = fs::metadata(&path).map_err(|_| {
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeInfoUnavailable,
+            ClientLocation::DiscoverRuntime.location(),
+        )
+    })?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_RUNTIME_INFO_BYTES {
         return Err(RuntimeClientError::fatal(
-            "runtime_info_invalid",
-            "discover_runtime",
+            SharedCode::RuntimeInfoInvalid,
+            ClientLocation::DiscoverRuntime.location(),
         ));
     }
-    let bytes = fs::read(path)
-        .map_err(|_| RuntimeClientError::fatal("runtime_info_read_failed", "discover_runtime"))?;
-    let info = serde_json::from_slice::<RuntimeInfo>(&bytes)
-        .map_err(|_| RuntimeClientError::fatal("runtime_info_decode_failed", "discover_runtime"))?;
-    info.validate()
-        .map_err(|_| RuntimeClientError::fatal("runtime_info_invalid", "discover_runtime"))?;
+    let bytes = fs::read(path).map_err(|_| {
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeInfoReadFailed,
+            ClientLocation::DiscoverRuntime.location(),
+        )
+    })?;
+    let info = serde_json::from_slice::<RuntimeInfo>(&bytes).map_err(|_| {
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeInfoDecodeFailed,
+            ClientLocation::DiscoverRuntime.location(),
+        )
+    })?;
+    info.validate().map_err(|_| {
+        RuntimeClientError::fatal(
+            SharedCode::RuntimeInfoInvalid,
+            ClientLocation::DiscoverRuntime.location(),
+        )
+    })?;
     Ok(info)
 }
 
 fn unix_ms_now() -> RuntimeClientResult<u64> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| RuntimeClientError::fatal("runtime_clock_invalid", "create_request"))?
+        .map_err(|_| {
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeClockInvalid,
+                ClientLocation::CreateRequest.location(),
+            )
+        })?
         .as_millis();
-    u64::try_from(millis)
-        .map_err(|_| RuntimeClientError::fatal("runtime_clock_overflow", "create_request"))
+    u64::try_from(millis).map_err(|_| {
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeClockOverflow,
+            ClientLocation::CreateRequest.location(),
+        )
+    })
 }
 
 /// Workflow #381 A R1′: `timeout`, cut to what remains before the session's deadline; at least
@@ -5709,19 +5942,19 @@ pub(crate) fn bounded_timeout(timeout: Duration, remaining: Option<Duration>) ->
 fn connect_runtime_stream(
     address: std::net::SocketAddr,
     io_timeout: Duration,
-    operation: &'static str,
+    operation: Location,
 ) -> RuntimeClientResult<TcpStream> {
     let stream = TcpStream::connect_timeout(&address, io_timeout)
-        .map_err(|_| RuntimeClientError::fatal("runtime_connect_failed", operation))?;
+        .map_err(|_| RuntimeClientError::fatal(ClientCode::RuntimeConnectFailed, operation))?;
     stream
         .set_read_timeout(Some(io_timeout))
-        .map_err(|_| RuntimeClientError::fatal("runtime_read_timeout_failed", operation))?;
+        .map_err(|_| RuntimeClientError::fatal(ClientCode::RuntimeReadTimeoutFailed, operation))?;
     stream
         .set_write_timeout(Some(io_timeout))
-        .map_err(|_| RuntimeClientError::fatal("runtime_write_timeout_failed", operation))?;
+        .map_err(|_| RuntimeClientError::fatal(ClientCode::RuntimeWriteTimeoutFailed, operation))?;
     stream
         .set_nodelay(true)
-        .map_err(|_| RuntimeClientError::fatal("runtime_tcp_nodelay_failed", operation))?;
+        .map_err(|_| RuntimeClientError::fatal(ClientCode::RuntimeTcpNodelayFailed, operation))?;
     Ok(stream)
 }
 
@@ -5736,8 +5969,8 @@ pub(super) fn receipt_response_timeout(
                 .checked_add(io_timeout)
                 .ok_or_else(|| {
                     RuntimeClientError::fatal(
-                        "runtime_receipt_timeout_overflow",
-                        "recognize_artifact",
+                        ClientCode::RuntimeReceiptTimeoutOverflow,
+                        ContractLocation::RecognizeArtifact.location(),
                     )
                 })
         }
@@ -5755,7 +5988,10 @@ pub(super) fn receipt_response_timeout(
                     actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS,
                 ))
                 .ok_or_else(|| {
-                    RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "safe_reset")
+                    RuntimeClientError::fatal(
+                        ClientCode::RuntimeReceiptTimeoutOverflow,
+                        ClientLocation::SafeReset.location(),
+                    )
                 })
         }
         RuntimeOperation::ApplicationLifecycle { .. } => io_timeout
@@ -5764,13 +6000,16 @@ pub(super) fn receipt_response_timeout(
             ))
             .ok_or_else(|| {
                 RuntimeClientError::fatal(
-                    "runtime_receipt_timeout_overflow",
-                    "application_lifecycle",
+                    ClientCode::RuntimeReceiptTimeoutOverflow,
+                    ClientLocation::ApplicationLifecycle.location(),
                 )
             }),
         RuntimeOperation::ReleaseLease { .. } => {
             backend_open_timeout.checked_add(io_timeout).ok_or_else(|| {
-                RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "release_lease")
+                RuntimeClientError::fatal(
+                    ClientCode::RuntimeReceiptTimeoutOverflow,
+                    ContractLocation::ReleaseLease.location(),
+                )
             })
         }
         // Workflow #317 sc3: the preparation phase closes a session the instance still holds
@@ -5789,7 +6028,10 @@ pub(super) fn receipt_response_timeout(
         )
         .checked_add(io_timeout)
         .ok_or_else(|| {
-            RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "connection_preparation")
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeReceiptTimeoutOverflow,
+                ClientLocation::ConnectionPreparation.location(),
+            )
         }),
         _ => Ok(io_timeout),
     }
@@ -5805,7 +6047,7 @@ enum SentOutcome {
 /// The connection that carried `request_id` ended before its receipt header: what an older
 /// Runtime's decoder leaves when it drops a frame it cannot read (a timeout is not this).
 fn dropped_before_receipt(error: &RuntimeClientError, request_id: RequestId) -> bool {
-    error.code() == "runtime_receipt_header_failed"
+    error.code() == ClientCode::RuntimeReceiptHeaderFailed.code()
         && error.projection().is_none()
         && error.receipt_header_io().is_some_and(|io| {
             matches!(
@@ -5828,7 +6070,10 @@ pub(crate) fn pause_scheduling_response_timeout(
         .checked_add(Duration::from_millis(SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS))
         .and_then(|timeout| timeout.checked_add(io_timeout))
         .ok_or_else(|| {
-            RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "pause_scheduling")
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeReceiptTimeoutOverflow,
+                ContractLocation::PauseScheduling.location(),
+            )
         })
 }
 
@@ -5840,8 +6085,8 @@ pub(crate) fn contained_task_response_timeout(
         .checked_add(io_timeout)
         .ok_or_else(|| {
             RuntimeClientError::fatal(
-                "runtime_contained_task_timeout_overflow",
-                "run_contained_task",
+                ClientCode::RuntimeContainedTaskTimeoutOverflow,
+                ContractLocation::RunContainedTask.location(),
             )
         })
 }
@@ -5853,7 +6098,7 @@ fn contained_task_recovery_outcome(
     match recovery {
         Ok(()) => primary,
         Err(recovery)
-            if recovery.code() == "runtime_contained_task_busy"
+            if recovery.code() == ClientCode::RuntimeContainedTaskBusy.code()
                 || recovery.projection().is_some_and(|projection| {
                     matches!(
                         projection.code,
@@ -5885,7 +6130,10 @@ fn input_response_timeout(
             .checked_add(*corner_hold_ms)
             .and_then(|value| value.checked_add(*brake_duration_ms))
             .ok_or_else(|| {
-                RuntimeClientError::fatal("runtime_input_timeout_overflow", "runtime_input")
+                RuntimeClientError::fatal(
+                    ClientCode::RuntimeInputTimeoutOverflow,
+                    ClientLocation::RuntimeInput.location(),
+                )
             })?,
         _ => 0,
     };
@@ -5895,7 +6143,12 @@ fn input_response_timeout(
         .checked_mul(2)
         .and_then(|timeout| timeout.checked_add(Duration::from_millis(duration_ms)))
         .and_then(|timeout| timeout.checked_add(io_timeout))
-        .ok_or_else(|| RuntimeClientError::fatal("runtime_input_timeout_overflow", "runtime_input"))
+        .ok_or_else(|| {
+            RuntimeClientError::fatal(
+                ClientCode::RuntimeInputTimeoutOverflow,
+                ClientLocation::RuntimeInput.location(),
+            )
+        })
 }
 
 fn capture_sequence_response_timeout(
@@ -5903,14 +6156,17 @@ fn capture_sequence_response_timeout(
     spec: CaptureSequenceSpec,
 ) -> RuntimeClientResult<Duration> {
     let planned_wait_ms = spec.planned_wait_ms().map_err(|_| {
-        RuntimeClientError::fatal("runtime_capture_sequence_invalid", "capture_sequence")
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeCaptureSequenceInvalid,
+            ContractLocation::CaptureSequence.location(),
+        )
     })?;
     backend_open_timeout
         .checked_add(Duration::from_millis(planned_wait_ms))
         .ok_or_else(|| {
             RuntimeClientError::fatal(
-                "runtime_capture_sequence_timeout_overflow",
-                "capture_sequence",
+                ClientCode::RuntimeCaptureSequenceTimeoutOverflow,
+                ContractLocation::CaptureSequence.location(),
             )
         })
 }
@@ -6007,7 +6263,10 @@ mod run_summary_package_tests {
         let (_, canonical) = digest('a');
         let error = validate_admitted_package(&[], request_id.transport(), &canonical)
             .expect_err("missing package admission");
-        assert_eq!(error.code(), "run_summary_package_fact_count_invalid");
+        assert_eq!(
+            error.code().as_str(),
+            "run_summary_package_fact_count_invalid"
+        );
     }
 
     #[test]
@@ -6021,7 +6280,10 @@ mod run_summary_package_tests {
         ];
         let error = validate_admitted_package(&events, request_id.transport(), &canonical)
             .expect_err("duplicate package admission");
-        assert_eq!(error.code(), "run_summary_package_fact_count_invalid");
+        assert_eq!(
+            error.code().as_str(),
+            "run_summary_package_fact_count_invalid"
+        );
     }
 
     #[test]
@@ -6033,7 +6295,7 @@ mod run_summary_package_tests {
         let events = [package_event(&issuer, request_id, other, 1)];
         let error = validate_admitted_package(&events, request_id.transport(), &canonical)
             .expect_err("mismatched package admission");
-        assert_eq!(error.code(), "run_summary_package_digest_mismatch");
+        assert_eq!(error.code().as_str(), "run_summary_package_digest_mismatch");
     }
 }
 

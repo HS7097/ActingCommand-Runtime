@@ -7,6 +7,7 @@
 //! ledger read-only; nothing is written and no lock is taken, so it runs beside the daemon.
 
 use super::*;
+use actingcommand_contract::codes::ContractLocation;
 use actingcommand_runtime_host::{SuspensionReportRequest, suspension_report};
 use serde_json::json;
 
@@ -14,20 +15,21 @@ const SUSPENDED_SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v1";
 
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     if arguments.len() > 3 {
-        return Err(ActingdError::config("suspended_usage_invalid"));
+        return Err(ActingdError::config(ActingdCode::SuspendedUsageInvalid));
     }
     let mut config = None;
     let (pairs, remaining) = arguments[1..].as_chunks::<2>();
     for pair in pairs {
         if pair[0] != "--config" || config.is_some() || pair[1].is_empty() {
-            return Err(ActingdError::config("suspended_option_invalid"));
+            return Err(ActingdError::config(ActingdCode::SuspendedOptionInvalid));
         }
         config = Some(PathBuf::from(&pair[1]));
     }
     if !remaining.is_empty() {
-        return Err(ActingdError::config("suspended_option_invalid"));
+        return Err(ActingdError::config(ActingdCode::SuspendedOptionInvalid));
     }
-    let config_path = config.ok_or_else(|| ActingdError::config("suspended_config_missing"))?;
+    let config_path =
+        config.ok_or_else(|| ActingdError::config(ActingdCode::SuspendedConfigMissing))?;
     let RuntimeAssembly { host, policy, .. } = config::load(&config_path)
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
@@ -46,21 +48,23 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         })
         .map_err(|error| {
             (
-                error.code(),
+                ErrorCode::Host {
+                    host_code: error.code(),
+                },
                 error.operation(),
                 error.detail().map(str::to_owned),
             )
         }),
         None => Err((
-            "suspended_policy_unconfigured",
-            "read_suspension_config",
+            ErrorCode::Registered(SharedCode::SuspendedPolicyUnconfigured.code()),
+            ContractLocation::ReadSuspensionConfig.as_str(),
             None,
         )),
     };
     match report {
         Ok(report) => {
             let encoded = serde_json::to_string(&report)
-                .map_err(|_| ActingdError::process("suspended_report_encode_failed"))?;
+                .map_err(|_| ActingdError::process(ActingdCode::SuspendedReportEncodeFailed))?;
             println!("{encoded}");
             Ok(())
         }
@@ -68,13 +72,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             let encoded = serde_json::to_string(&json!({
                 "schema_version": SUSPENDED_SCHEMA_VERSION,
                 "status": "failed",
-                "code": code,
+                "code": code.as_str(),
                 "operation": operation,
                 "detail": detail,
             }))
-            .map_err(|_| ActingdError::process("suspended_report_encode_failed"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::SuspendedReportEncodeFailed))?;
             println!("{encoded}");
-            let error = ActingdError::config(code);
+            let error = ActingdError::coded(code);
             Err(match detail {
                 Some(detail) => error.with_detail(detail),
                 None => error,

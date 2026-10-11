@@ -535,8 +535,9 @@ impl OcrEngine for PpocrCtcModel {
                 .with_ppocr_diagnostics(diagnostics));
             }
         };
-        validate_ppocr_call_diagnostics(&diagnostics)
-            .map_err(|message| failure(message).with_ppocr_diagnostics(diagnostics.clone()))?;
+        validate_ppocr_call_diagnostics(&diagnostics).map_err(|error| {
+            failure(error.to_string()).with_ppocr_diagnostics(diagnostics.clone())
+        })?;
         result.ppocr_diagnostics = diagnostics;
         result
             .validate_for(request)
@@ -986,7 +987,7 @@ fn capture_cuda_node_placement(
             state.diagnostic(role)
         }
     }?;
-    diagnostic.validate()?;
+    diagnostic.validate().map_err(|error| error.to_string())?;
     diagnostics.push(Arc::new(diagnostic));
     drop(shadow_session);
     Ok(())

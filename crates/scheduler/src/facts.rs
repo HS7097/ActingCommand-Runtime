@@ -85,7 +85,9 @@ impl RuntimeFactStore {
     ) -> Result<RuntimeFactChange, RuntimeFactError> {
         record
             .validate()
-            .map_err(|error| RuntimeFactError::Invalid { code: error.code() })?;
+            .map_err(|error| RuntimeFactError::Invalid {
+                code: error.code().as_str(),
+            })?;
         let key = (record.scope.clone(), record.key.clone());
         match self.active.get(&key) {
             Some(existing) if *existing == record => Ok(RuntimeFactChange::Unchanged),
@@ -200,7 +202,9 @@ impl RuntimeFactStore {
     pub fn replay(&mut self, snapshot: &RuntimeFactSnapshot) -> Result<usize, RuntimeFactError> {
         snapshot
             .validate()
-            .map_err(|error| RuntimeFactError::Invalid { code: error.code() })?;
+            .map_err(|error| RuntimeFactError::Invalid {
+                code: error.code().as_str(),
+            })?;
         self.active.clear();
         for record in &snapshot.records {
             self.active

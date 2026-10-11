@@ -99,7 +99,7 @@ fn gate_every_runtime_error_code_has_its_r6_disposition() {
         RuntimeErrorCode::ContainedTaskPaused,
     ] {
         let error = RuntimeClientError::rejected(
-            "run_contained_task",
+            actingcommand_contract::codes::ContractLocation::RunContainedTask.location(),
             RuntimeErrorProjection::new(code, false),
         );
         assert_eq!(error.disposition(), r6_class(code), "{code:?}");
@@ -110,33 +110,48 @@ fn gate_every_runtime_error_code_has_its_r6_disposition() {
 fn gate_failures_after_send_without_a_projection_are_uncertain() {
     for (code, operation) in [
         // The receipt timed out.
-        ("runtime_receipt_timeout", "run_contained_task"),
+        (
+            crate::ClientCode::RuntimeReceiptTimeout.code(),
+            actingcommand_contract::codes::ContractLocation::RunContainedTask.location(),
+        ),
         // The receipt was not read or not confirmed.
-        ("runtime_receipt_header_failed", "install_transition"),
-        ("runtime_receipt_read_failed", "request_runtime_shutdown"),
         (
-            "install_transition_receipt_unconfirmed",
-            "install_transition",
+            crate::ClientCode::RuntimeReceiptHeaderFailed.code(),
+            actingcommand_contract::codes::ContractLocation::InstallTransition.location(),
         ),
         (
-            "runtime_shutdown_receipt_unconfirmed",
-            "request_runtime_shutdown",
+            crate::ClientCode::RuntimeReceiptReadFailed.code(),
+            actingcommand_contract::codes::ContractLocation::RequestRuntimeShutdown.location(),
         ),
-        ("runtime_scheduling_resume_unconfirmed", "resume_scheduling"),
+        (
+            crate::ClientCode::InstallTransitionReceiptUnconfirmed.code(),
+            actingcommand_contract::codes::ContractLocation::InstallTransition.location(),
+        ),
+        (
+            crate::ClientCode::RuntimeShutdownReceiptUnconfirmed.code(),
+            actingcommand_contract::codes::ContractLocation::RequestRuntimeShutdown.location(),
+        ),
+        (
+            crate::ClientCode::RuntimeSchedulingResumeUnconfirmed.code(),
+            actingcommand_contract::codes::ContractLocation::ResumeScheduling.location(),
+        ),
         // The owner epoch changed while the request was out.
         (
-            "runtime_owner_epoch_changed",
-            "recover_contained_task_timeout",
+            crate::ClientCode::RuntimeOwnerEpochChanged.code(),
+            crate::ClientLocation::RecoverContainedTaskTimeout.location(),
         ),
-        ("runtime_owner_epoch_changed", "resume_scheduling"),
+        (
+            crate::ClientCode::RuntimeOwnerEpochChanged.code(),
+            actingcommand_contract::codes::ContractLocation::ResumeScheduling.location(),
+        ),
         // `runtime_contained_task_recovery_*`.
         (
-            "runtime_contained_task_recovery_required",
-            "cancel_contained_task_and_reset",
+            crate::ClientCode::RuntimeContainedTaskRecoveryRequired.code(),
+            crate::ClientLocation::CancelContainedTaskAndReset.location(),
         ),
         (
-            "runtime_contained_task_recovery_failed",
-            "recover_contained_task_timeout",
+            crate::ClientCode::RuntimeContainedTaskRecoveryFailed.code(),
+            crate::ClientLocation::RecoverContainedTaskTimeout.location(),
         ),
     ] {
         assert_eq!(
@@ -148,7 +163,11 @@ fn gate_failures_after_send_without_a_projection_are_uncertain() {
 
     // The same epoch change found while connecting, before any request was sent.
     assert_ne!(
-        RuntimeClientError::fatal("runtime_owner_epoch_changed", "connect_runtime").disposition(),
+        RuntimeClientError::fatal(
+            crate::ClientCode::RuntimeOwnerEpochChanged.code(),
+            crate::ClientLocation::ConnectRuntime.location()
+        )
+        .disposition(),
         RuntimeClientErrorClass::Uncertain
     );
 }
@@ -157,12 +176,12 @@ fn gate_failures_after_send_without_a_projection_are_uncertain() {
 fn gate_a_failure_chained_to_an_after_send_failure_is_uncertain() {
     // The chain `run_contained_task` raises when the receipt of a contained run times out.
     let error = RuntimeClientError::fatal(
-        "runtime_contained_task_response_timeout",
-        "run_contained_task",
+        crate::ClientCode::RuntimeContainedTaskResponseTimeout.code(),
+        actingcommand_contract::codes::ContractLocation::RunContainedTask.location(),
     )
     .with_related(RuntimeClientError::fatal(
-        "runtime_receipt_timeout",
-        "run_contained_task",
+        crate::ClientCode::RuntimeReceiptTimeout.code(),
+        actingcommand_contract::codes::ContractLocation::RunContainedTask.location(),
     ));
     assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
 }
@@ -190,10 +209,13 @@ fn gate_settled_failures_are_not_uncertain() {
     )
     .expect("receipt");
     let after_commit = RuntimeClientError::after_commit(
-        "runtime_projection_failed_after_terminal",
-        "query_runtime_flow_projection",
+        crate::ClientCode::RuntimeProjectionFailedAfterTerminal.code(),
+        crate::ClientLocation::QueryRuntimeFlowProjection.location(),
         receipt,
-        RuntimeClientError::fatal("runtime_receipt_timeout", "query_runtime_events"),
+        RuntimeClientError::fatal(
+            crate::ClientCode::RuntimeReceiptTimeout.code(),
+            actingcommand_contract::codes::ContractLocation::QueryRuntimeEvents.location(),
+        ),
     );
     assert_ne!(
         after_commit.disposition(),
@@ -203,12 +225,14 @@ fn gate_settled_failures_are_not_uncertain() {
 
     // Raised with the dropped request's own failure as its related failure: the same owner,
     // reached again, shows the request was not performed.
-    let not_performed =
-        RuntimeClientError::fatal("runtime_operation_unsupported", "resume_scheduling")
-            .with_related(RuntimeClientError::fatal(
-                "runtime_receipt_header_failed",
-                "resume_scheduling",
-            ));
+    let not_performed = RuntimeClientError::fatal(
+        crate::ClientCode::RuntimeOperationUnsupported.code(),
+        actingcommand_contract::codes::ContractLocation::ResumeScheduling.location(),
+    )
+    .with_related(RuntimeClientError::fatal(
+        crate::ClientCode::RuntimeReceiptHeaderFailed.code(),
+        actingcommand_contract::codes::ContractLocation::ResumeScheduling.location(),
+    ));
     assert_ne!(
         not_performed.disposition(),
         RuntimeClientErrorClass::Uncertain,

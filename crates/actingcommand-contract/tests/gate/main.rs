@@ -6,6 +6,7 @@
 use actingcommand_contract::outcome::{Outcome, install_diagnostic_sink};
 use std::sync::Once;
 
+mod a2a;
 mod c1;
 
 /// Installs this binary's one outcome diagnostic sink, which drops the text. Cutting an

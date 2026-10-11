@@ -672,7 +672,12 @@ fn fill_ledger(root: &Path, pairs: usize) {
     };
     for _ in 0..pairs {
         client
-            .pause_scheduling(scope.clone(), FILL_REASON, FILL_DRAIN_MS)
+            .pause_scheduling(
+                scope.clone(),
+                actingcommand_contract::SchedulingPauseReason::new(FILL_REASON)
+                    .expect("the fill pause reason"),
+                FILL_DRAIN_MS,
+            )
             .expect("pause the instance");
         client
             .resume_scheduling(scope.clone())

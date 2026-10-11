@@ -2,6 +2,7 @@
 
 //! Rust mainline data structures for declarative task-flow contracts.
 
+use crate::codes::{SharedCode, TaskflowCode};
 use crate::types::*;
 use crate::{SchedulingEffectCondition, SchedulingOutcomeDeclaration};
 use serde::{Deserialize, Serialize};
@@ -25,13 +26,13 @@ pub struct TaskPhase {
 pub fn validate_task_phases(
     phases: &[TaskPhase],
     operation_ids: &[&str],
-) -> Result<(), &'static str> {
+) -> Result<(), crate::outcome::Code> {
     let label = |value: &str| {
         !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
     };
     let mut ids = std::collections::BTreeSet::new();
     if phases.is_empty() || phases.len() > MAX_TASK_PHASES {
-        return Err("task_phases_invalid");
+        return Err(TaskflowCode::TaskPhasesInvalid.code());
     }
     for phase in phases {
         if !label(&phase.id)
@@ -61,7 +62,7 @@ pub fn validate_task_phases(
                 .iter()
                 .any(|page| !label(page) || page == "any")
         {
-            return Err("task_phases_invalid");
+            return Err(TaskflowCode::TaskPhasesInvalid.code());
         }
     }
     Ok(())
@@ -91,7 +92,7 @@ pub fn validate_phased_route(
     target_pages: &[String],
     operations: &[TaskPhaseOperation<'_>],
     scheduling: &SchedulingOutcomeDeclaration,
-) -> Result<(), &'static str> {
+) -> Result<(), crate::outcome::Code> {
     validate_task_phases(
         phases,
         &operations
@@ -101,7 +102,7 @@ pub fn validate_phased_route(
     )?;
     scheduling
         .validate()
-        .map_err(|_| "task_phases_outcome_invalid")?;
+        .map_err(|_| TaskflowCode::TaskPhasesOutcomeInvalid.code())?;
     let prefix = format!("{game}/");
     let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
     let pages = |values: &[String]| {
@@ -114,7 +115,7 @@ pub fn validate_phased_route(
         || entry_page == "any"
         || pages(target_pages) != pages(&phases.last().unwrap().target_pages)
     {
-        return Err("task_phases_invalid");
+        return Err(TaskflowCode::TaskPhasesInvalid.code());
     }
     let designated = scheduling.designated_operation();
     if designated.is_some_and(|id| {
@@ -127,7 +128,7 @@ pub fn validate_phased_route(
         .iter()
         .any(|operation| designated == Some(operation.id) && operation.retryable)
     {
-        return Err("task_phases_designated_effect_invalid");
+        return Err(TaskflowCode::TaskPhasesDesignatedEffectInvalid.code());
     }
     let mut pending = std::collections::VecDeque::from([(0_usize, canonical(entry_page), false)]);
     let mut visited = std::collections::BTreeSet::new();
@@ -155,7 +156,7 @@ pub fn validate_phased_route(
                 .count()
                 != 1
             {
-                return Err("task_phases_outcome_incomplete");
+                return Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code());
             }
             terminals += 1;
             continue;
@@ -174,17 +175,17 @@ pub fn validate_phased_route(
                     .filter(eligible)
                     .find(|operation| operation.from == "any")
             })
-            .ok_or("task_phases_unreachable")?;
+            .ok_or(TaskflowCode::TaskPhasesUnreachable.code())?;
         if effect && designated == Some(operation.id) {
-            return Err("task_phases_designated_effect_repeated");
+            return Err(TaskflowCode::TaskPhasesDesignatedEffectRepeated.code());
         }
         if operation.destinations.is_empty() {
-            return Err("task_phases_postcondition_missing");
+            return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
         }
         let next_effect = effect || designated == Some(operation.id);
         for destination in &operation.destinations {
             if destination == "any" {
-                return Err("task_phases_postcondition_missing");
+                return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
             }
             let destination = canonical(destination);
             let next_index = index
@@ -198,7 +199,7 @@ pub fn validate_phased_route(
         }
     }
     if terminals == 0 {
-        return Err("task_phases_unreachable");
+        return Err(TaskflowCode::TaskPhasesUnreachable.code());
     }
     Ok(())
 }
@@ -289,10 +290,10 @@ pub struct OcrFieldExtractionEvidence {
 }
 
 impl OcrFieldTextExtraction {
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub fn validate(&self) -> Result<(), crate::outcome::Code> {
         let Self::StripDeclaredSuffixV1 { suffix } = self;
         if !(1..=16).contains(&suffix.len()) {
-            return Err("ocr_fields_text_extraction_invalid");
+            return Err(TaskflowCode::OcrFieldsTextExtractionInvalid.code());
         }
         let mut bytes = 0;
         for segment in suffix {
@@ -303,11 +304,11 @@ impl OcrFieldTextExtraction {
                 OcrFieldSuffixSegment::Literal { value } if (1..=64).contains(&value.len()) => {
                     value.len()
                 }
-                _ => return Err("ocr_fields_text_extraction_invalid"),
+                _ => return Err(TaskflowCode::OcrFieldsTextExtractionInvalid.code()),
             };
         }
         if bytes > 256 {
-            return Err("ocr_fields_text_extraction_invalid");
+            return Err(TaskflowCode::OcrFieldsTextExtractionInvalid.code());
         }
         Ok(())
     }
@@ -316,7 +317,7 @@ impl OcrFieldTextExtraction {
     pub fn extract(
         &self,
         normalized_text: &str,
-    ) -> Result<Option<OcrFieldExtractionEvidence>, &'static str> {
+    ) -> Result<Option<OcrFieldExtractionEvidence>, crate::outcome::Code> {
         self.validate()?;
         let Self::StripDeclaredSuffixV1 { suffix } = self;
         let mut end = normalized_text.len();
@@ -366,9 +367,9 @@ impl OcrFieldTextExtraction {
         &self,
         normalized_text: &str,
         evidence: &OcrFieldExtractionEvidence,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::outcome::Code> {
         if self.extract(normalized_text)?.as_ref() != Some(evidence) {
-            return Err("ocr_fields_text_extraction_evidence_invalid");
+            return Err(TaskflowCode::OcrFieldsTextExtractionEvidenceInvalid.code());
         }
         Ok(())
     }
@@ -522,7 +523,7 @@ pub enum ResourceReadingType {
 impl ResourceReadingDeclaration {
     /// The shared rule of one declaration. The declaration gate checks the same rules field by
     /// field first; each reason names the field it rejects.
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub fn validate(&self) -> Result<(), crate::outcome::Code> {
         let identifier = |value: &str| {
             !value.is_empty()
                 && value.len() <= 128
@@ -531,31 +532,31 @@ impl ResourceReadingDeclaration {
                     .all(|c| c.is_ascii_alphanumeric() || b"_-/.:".contains(&c))
         };
         if !identifier(&self.id) {
-            return Err("resource_reading_id_invalid");
+            return Err(TaskflowCode::ResourceReadingIdInvalid.code());
         }
         if !(self.fact_key.starts_with("resource.") || self.fact_key.starts_with("inventory."))
             || crate::fact::validate_fact_key(&self.fact_key).is_err()
         {
-            return Err("resource_reading_fact_key_invalid");
+            return Err(TaskflowCode::ResourceReadingFactKeyInvalid.code());
         }
         if !identifier(&self.page_id) || self.page_id == "any" {
-            return Err("resource_reading_page_id_invalid");
+            return Err(TaskflowCode::ResourceReadingPageIdInvalid.code());
         }
         if !identifier(&self.target_id) {
-            return Err("resource_reading_target_id_invalid");
+            return Err(TaskflowCode::ResourceReadingTargetIdInvalid.code());
         }
         let ResourceReadingType::UnsignedInteger { min, max, .. } = self.value;
         if max > MAX_RESOURCE_READING_VALUE {
-            return Err("resource_reading_value_max_invalid");
+            return Err(TaskflowCode::ResourceReadingValueMaxInvalid.code());
         }
         if min > max {
-            return Err("resource_reading_value_min_invalid");
+            return Err(TaskflowCode::ResourceReadingValueMinInvalid.code());
         }
         if !(1..=1_000).contains(&self.minimum_confidence_milli) {
-            return Err("resource_reading_minimum_confidence_invalid");
+            return Err(TaskflowCode::ResourceReadingMinimumConfidenceInvalid.code());
         }
         if !(crate::MIN_FACT_TTL_MS..=crate::MAX_FACT_TTL_MS).contains(&self.valid_for_ms) {
-            return Err("resource_reading_valid_for_invalid");
+            return Err(TaskflowCode::ResourceReadingValidForInvalid.code());
         }
         Ok(())
     }
@@ -574,19 +575,19 @@ impl ResourceReadingDeclaration {
 /// One task's `resource_readings`: 1..=16 valid entries with unique ids and fact keys.
 pub fn validate_resource_readings(
     readings: &[ResourceReadingDeclaration],
-) -> Result<(), &'static str> {
+) -> Result<(), crate::outcome::Code> {
     if readings.is_empty() || readings.len() > MAX_RESOURCE_READINGS {
-        return Err("resource_readings_count_invalid");
+        return Err(TaskflowCode::ResourceReadingsCountInvalid.code());
     }
     let mut ids = std::collections::BTreeSet::new();
     let mut fact_keys = std::collections::BTreeSet::new();
     for reading in readings {
         reading.validate()?;
         if !ids.insert(reading.id.as_str()) {
-            return Err("resource_reading_id_duplicate");
+            return Err(TaskflowCode::ResourceReadingIdDuplicate.code());
         }
         if !fact_keys.insert(reading.fact_key.as_str()) {
-            return Err("resource_reading_fact_key_duplicate");
+            return Err(TaskflowCode::ResourceReadingFactKeyDuplicate.code());
         }
     }
     Ok(())
@@ -609,13 +610,13 @@ impl OcrFieldsDeclaration {
         stop_on_confirmation: bool,
         target_pages: &[String],
         scheduling: &SchedulingOutcomeDeclaration,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::outcome::Code> {
         self.validate()?;
         scheduling
             .validate()
-            .map_err(|_| "ocr_fields_zero_input_outcome_invalid")?;
+            .map_err(|_| TaskflowCode::OcrFieldsZeroInputOutcomeInvalid.code())?;
         let [mapping] = scheduling.mappings() else {
-            return Err("ocr_fields_zero_input_outcome_invalid");
+            return Err(TaskflowCode::OcrFieldsZeroInputOutcomeInvalid.code());
         };
         if execution_mode != "navigable_route"
             || !stop_on_confirmation
@@ -623,7 +624,7 @@ impl OcrFieldsDeclaration {
             || mapping.outcome_key() != self.outcome_key
             || mapping.effect() != SchedulingEffectCondition::NoDesignatedEffect
         {
-            return Err("ocr_fields_zero_input_outcome_invalid");
+            return Err(TaskflowCode::OcrFieldsZeroInputOutcomeInvalid.code());
         }
         let prefix = format!("{game}/");
         let canonical = |pages: &[String]| {
@@ -643,12 +644,12 @@ impl OcrFieldsDeclaration {
             || targets != fields
             || targets != terminals
         {
-            return Err("ocr_fields_zero_input_pages_invalid");
+            return Err(TaskflowCode::OcrFieldsZeroInputPagesInvalid.code());
         }
         Ok(())
     }
 
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub fn validate(&self) -> Result<(), crate::outcome::Code> {
         let identifier = |value: &str| {
             !value.is_empty()
                 && value.len() <= 128
@@ -675,12 +676,12 @@ impl OcrFieldsDeclaration {
             || !(1..=4 * 1024 * 1024).contains(&limits.max_total_bytes)
             || !(1..=4096).contains(&limits.max_truth_entries)
         {
-            return Err("ocr_fields_declaration_invalid");
+            return Err(SharedCode::OcrFieldsDeclarationInvalid.code());
         }
         for field in &self.fields {
             if let Some(extraction) = &field.text_extraction {
                 if !matches!(field.value, OcrFieldType::DictionaryEntry { .. }) {
-                    return Err("ocr_fields_text_extraction_type_invalid");
+                    return Err(TaskflowCode::OcrFieldsTextExtractionTypeInvalid.code());
                 }
                 extraction.validate()?;
             }
@@ -690,11 +691,11 @@ impl OcrFieldsDeclaration {
                 || !ids.insert(&field.id)
                 || !targets.insert(&field.target_id)
             {
-                return Err("ocr_fields_binding_invalid");
+                return Err(TaskflowCode::OcrFieldsBindingInvalid.code());
             }
             match &field.value {
                 OcrFieldType::UnsignedInteger { min, max, .. } if min > max => {
-                    return Err("ocr_fields_range_invalid");
+                    return Err(TaskflowCode::OcrFieldsRangeInvalid.code());
                 }
                 OcrFieldType::DictionaryEntry { dictionary }
                     if dictionary.path.is_empty()
@@ -710,7 +711,7 @@ impl OcrFieldsDeclaration {
                             .bytes()
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
                 {
-                    return Err("ocr_fields_dictionary_reference_invalid");
+                    return Err(SharedCode::OcrFieldsDictionaryReferenceInvalid.code());
                 }
                 _ => {}
             }
@@ -738,19 +739,19 @@ pub struct OcrFieldDictionaryAlias {
 }
 
 impl OcrFieldDictionary {
-    pub fn validate(&self, limits: &OcrFieldsLimits) -> Result<(), &'static str> {
+    pub fn validate(&self, limits: &OcrFieldsLimits) -> Result<(), crate::outcome::Code> {
         if !matches!(
             self.schema_version.as_str(),
             "actingcommand.ocr-truth-set.v2"
         ) && !(self.schema_version == "actingcommand.ocr-truth-set.v1" && self.aliases.is_none())
         {
-            return Err("ocr_fields_dictionary_schema_invalid");
+            return Err(TaskflowCode::OcrFieldsDictionarySchemaInvalid.code());
         }
         if self.items.is_empty()
             || self.items.len() > limits.max_truth_entries as usize
             || self.aliases.as_ref().is_some_and(|v| v.len() > 1024)
         {
-            return Err("ocr_fields_dictionary_limit_exceeded");
+            return Err(SharedCode::OcrFieldsDictionaryLimitExceeded.code());
         }
         let valid = |v: &str| {
             !v.trim().is_empty()
@@ -760,7 +761,7 @@ impl OcrFieldDictionary {
         let mut canonical = std::collections::BTreeSet::new();
         for item in &self.items {
             if !valid(item) || !canonical.insert(item.trim().to_lowercase()) {
-                return Err("ocr_fields_dictionary_ambiguous");
+                return Err(TaskflowCode::OcrFieldsDictionaryAmbiguous.code());
             }
         }
         let mut aliases = std::collections::BTreeSet::new();
@@ -772,7 +773,7 @@ impl OcrFieldDictionary {
                 || !aliases.insert(observed)
                 || !self.items.contains(&alias.canonical)
             {
-                return Err("ocr_fields_dictionary_ambiguous");
+                return Err(TaskflowCode::OcrFieldsDictionaryAmbiguous.code());
             }
         }
         Ok(())

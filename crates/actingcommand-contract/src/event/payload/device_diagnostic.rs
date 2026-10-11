@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{DiagnosticDetailRecord, EventId, SanitizationError, Sensitivity};
+use crate::codes::SanitizationCode;
 use crate::{OriginModule, OwnerEpoch};
 use serde::{Deserialize, Serialize};
 
@@ -129,7 +130,7 @@ impl DeviceDiagnosticBudgetRecord {
 
 fn invalid_budget() -> SanitizationError {
     SanitizationError::new(
-        "invalid_device_diagnostic_budget",
+        SanitizationCode::InvalidDeviceDiagnosticBudget,
         "device_diagnostic_budget",
     )
 }

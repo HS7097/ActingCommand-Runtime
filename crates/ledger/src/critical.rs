@@ -648,10 +648,10 @@ fn persist_outcome(
     effect: EffectDisposition,
     built: Result<EventDraft, SanitizationError>,
 ) -> Result<PersistedEvent, (CriticalOutcomeStage, &'static str)> {
-    let draft = built.map_err(|error| (CriticalOutcomeStage::Build, error.code()))?;
+    let draft = built.map_err(|error| (CriticalOutcomeStage::Build, error.code().as_str()))?;
     let draft = draft
         .sanitize(fingerprinter)
-        .map_err(|error| (CriticalOutcomeStage::Sanitize, error.code()))?;
+        .map_err(|error| (CriticalOutcomeStage::Sanitize, error.code().as_str()))?;
     validate_outcome(operation, intent, &draft, role, effect)
         .map_err(|error| (CriticalOutcomeStage::Validate, error.code()))?;
     appender

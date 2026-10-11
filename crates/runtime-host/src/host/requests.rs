@@ -40,7 +40,7 @@ impl HostShared {
             Ok(validated) => validated,
             Err(error) => {
                 if let RuntimeOperation::InstallTransition { action, .. } = request.operation() {
-                    let failure = self.invalid_install_request(action, error.code())?;
+                    let failure = self.invalid_install_request(action, error.code().as_str())?;
                     return runtime_error_receipt(
                         request,
                         failure.state,
@@ -385,13 +385,13 @@ impl HostShared {
             // Workflow #191 ps1: an instance pause applies to physical instances only.
             RuntimeOperation::PauseScheduling {
                 scope,
-                reason_code,
+                pause_reason,
                 drain_timeout_ms,
             } => {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.pause_scheduling(validated, scope, reason_code, *drain_timeout_ms)
+                self.pause_scheduling(validated, scope, pause_reason, *drain_timeout_ms)
             }
             RuntimeOperation::ResumeScheduling { scope, expected } => {
                 if let Some(instance_alias) = scope.instance_alias() {

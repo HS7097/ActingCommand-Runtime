@@ -2888,7 +2888,7 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &operations,
         &scheduling,
     )
-    .map_err(CliError::package_invalid)
+    .map_err(|code| CliError::package_invalid(code.as_str()))
 }
 
 /// Cross-references of operation `resource_readings` (`contracts/resource-readings.md`). The
@@ -3269,7 +3269,7 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
                     .map_err(|e| CliError::package_invalid(e.to_string()))?;
                 parsed
                     .validate(&fields.limits)
-                    .map_err(CliError::package_invalid)?;
+                    .map_err(|code| CliError::package_invalid(code.as_str()))?;
             }
         }
         return Ok(());
@@ -4811,7 +4811,9 @@ pub fn validate_ocr_fields_mode_declaration(
     }
     let declaration: OcrFieldsDeclaration = serde_json::from_value(value.clone())
         .map_err(|e| CliError::package_invalid(e.to_string()))?;
-    declaration.validate().map_err(CliError::package_invalid)?;
+    declaration
+        .validate()
+        .map_err(|code| CliError::package_invalid(code.as_str()))?;
     let scheduling: SchedulingOutcomeDeclaration = serde_json::from_value(
         scheduling
             .cloned()

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::SharedCode;
 use crate::{GovernanceIdentityCard, GovernanceIdentityRefusal};
 
 /// Where a governance connection came from. The Runtime only binds a loopback address, so
@@ -46,7 +47,10 @@ impl GovernanceIdentityDeclaredPayload {
 
     pub(super) fn validate(&self) -> Result<(), SanitizationError> {
         self.card.validate().map_err(|_| {
-            SanitizationError::new("invalid_governance_identity_card", "governance_identity")
+            SanitizationError::new(
+                SharedCode::InvalidGovernanceIdentityCard,
+                "governance_identity",
+            )
         })
     }
 }

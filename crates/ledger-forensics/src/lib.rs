@@ -134,7 +134,7 @@ impl ForensicEventFilter {
         })?;
         query.validate().map_err(|error| {
             ForensicError::new(
-                error.code(),
+                error.code().as_str(),
                 "validate_event_filter",
                 "event filter violates the typed query rules",
             )

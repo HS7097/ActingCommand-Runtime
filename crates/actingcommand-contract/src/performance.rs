@@ -2,6 +2,7 @@
 
 //! Typed performance facts shared by Runtime monitoring and failure records.
 
+use crate::codes::SanitizationCode;
 use crate::{CorrelationId, EventId, SanitizationError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -246,7 +247,7 @@ impl PerformanceContext {
                 .is_some_and(|value| value > 10_000)
         {
             return Err(SanitizationError::new(
-                "invalid_performance_context",
+                SanitizationCode::InvalidPerformanceContext,
                 "perf_context",
             ));
         }
@@ -280,7 +281,7 @@ impl PerformanceContext {
             || unique_events != self.related_event_ids.len()
         {
             return Err(SanitizationError::new(
-                "invalid_performance_context_health",
+                SanitizationCode::InvalidPerformanceContextHealth,
                 "perf_context",
             ));
         }
@@ -291,7 +292,7 @@ impl PerformanceContext {
                 || pressure.last_observed_at_unix_ms > self.window_end_unix_ms
             {
                 return Err(SanitizationError::new(
-                    "invalid_performance_pressure_time",
+                    SanitizationCode::InvalidPerformancePressureTime,
                     "perf_context",
                 ));
             }
@@ -304,7 +305,7 @@ impl PerformancePressureRecord {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.started_at_unix_ms == 0 || self.last_observed_at_unix_ms < self.started_at_unix_ms {
             return Err(SanitizationError::new(
-                "invalid_performance_pressure_time",
+                SanitizationCode::InvalidPerformancePressureTime,
                 "performance_pressure",
             ));
         }
@@ -335,7 +336,7 @@ impl PerformancePressureRecord {
                 },
             ) if *process_count > 0 && *peak_cpu_basis_points <= 10_000 => Ok(()),
             _ => Err(SanitizationError::new(
-                "invalid_performance_pressure_value",
+                SanitizationCode::InvalidPerformancePressureValue,
                 "performance_pressure",
             )),
         }
@@ -357,7 +358,7 @@ impl PerformanceProcessSummary {
                 .is_some_and(|peak| peak < self.working_set_bytes)
         {
             return Err(SanitizationError::new(
-                "invalid_performance_process",
+                SanitizationCode::InvalidPerformanceProcess,
                 "process",
             ));
         }
@@ -459,7 +460,7 @@ impl PerformanceLedgerWindow {
                     * u128::from(self.writer_lifetime_write_sync_max_ns)
         {
             return Err(SanitizationError::new(
-                "invalid_performance_ledger_window",
+                SanitizationCode::InvalidPerformanceLedgerWindow,
                 "ledger_commits",
             ));
         }
@@ -528,7 +529,7 @@ pub(crate) fn validate_performance_summary(
         || data.third_party_high_load.len() > MAX_PROCESS_SUMMARIES
     {
         return Err(SanitizationError::new(
-            "invalid_performance_process_count",
+            SanitizationCode::InvalidPerformanceProcessCount,
             "processes",
         ));
     }
@@ -553,7 +554,7 @@ pub(crate) fn validate_performance_stutter(
         || data.frame_gap_ms == 0
     {
         return Err(SanitizationError::new(
-            "invalid_performance_stutter",
+            SanitizationCode::InvalidPerformanceStutter,
             "stutter",
         ));
     }
@@ -579,7 +580,7 @@ pub(crate) fn validate_performance_control(
             .is_some_and(|arbitration| arbitration.candidates == 0 || data.instance_id.is_none())
     {
         return Err(SanitizationError::new(
-            "invalid_performance_control",
+            SanitizationCode::InvalidPerformanceControl,
             "performance_control",
         ));
     }
@@ -598,7 +599,7 @@ pub(crate) fn validate_performance_control(
     };
     if !transition_valid {
         return Err(SanitizationError::new(
-            "invalid_performance_control_transition",
+            SanitizationCode::InvalidPerformanceControlTransition,
             "performance_control",
         ));
     }
@@ -614,7 +615,7 @@ pub(crate) fn validate_performance_control(
         ) && data.third_party_pressure_basis_points.is_none()
     {
         return Err(SanitizationError::new(
-            "performance_control_evidence_missing",
+            SanitizationCode::PerformanceControlEvidenceMissing,
             "performance_control",
         ));
     }
@@ -651,7 +652,7 @@ pub(crate) fn validate_performance_monitor_state(
             && (data.consecutive_failures != 0 || data.terminal))
     {
         return Err(SanitizationError::new(
-            "invalid_performance_monitor_state",
+            SanitizationCode::InvalidPerformanceMonitorState,
             "monitor_state",
         ));
     }

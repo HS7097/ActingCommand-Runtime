@@ -1702,7 +1702,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         } else {
             EventSeverity::Info
         };
-        let ids = IdentifierIssuer::new().map_err(|error| invalid(error.code()))?;
+        let ids = IdentifierIssuer::new().map_err(|error| invalid(error.code().as_str()))?;
         let timestamp = match &fact {
             ArtifactRetentionFact::EvictionIntent(intent) if intent.failed_run.is_some() => {
                 intent
@@ -1714,7 +1714,8 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             _ => retention_now()?,
         };
         let draft = EventDraft::new(
-            ids.mint_event_id().map_err(|error| invalid(error.code()))?,
+            ids.mint_event_id()
+                .map_err(|error| invalid(error.code().as_str()))?,
             timestamp,
             severity,
             EventOrigin::new(
@@ -1730,11 +1731,12 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         )?)
         // The FATAL line prints only code and operation; they carry the refused rule.
         .map_err(|error| {
-            GlobalLedgerError::fatal(error.code(), error.field()).with_detail(error.to_string())
+            GlobalLedgerError::fatal(error.code().as_str(), error.field())
+                .with_detail(error.to_string())
         })?;
         let draft = links
             .apply_to(draft)
-            .map_err(|error| invalid(error.code()))?;
+            .map_err(|error| invalid(error.code().as_str()))?;
         let event = PersistedEvent::from_sanitized(self.next_sequence, draft)
             .map_err(|error| invalid(error.code()))?;
         self.persist_retention_checked(event, guarded)

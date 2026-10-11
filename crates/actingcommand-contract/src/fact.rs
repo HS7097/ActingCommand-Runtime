@@ -2,6 +2,7 @@
 
 //! Typed instance, server, and game facts projected from the GlobalLedger.
 
+use crate::codes::SanitizationCode;
 use crate::{EventId, EventType, ProjectedArtifactReference, SanitizationError};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -82,7 +83,9 @@ impl FactRecord {
             observed_at_unix_ms,
             source_detector,
         ))
-        .map_err(|_| SanitizationError::new("invalid_fact_record", "priority_offset"))?;
+        .map_err(|_| {
+            SanitizationError::new(SanitizationCode::InvalidFactRecord, "priority_offset")
+        })?;
         let digest = format!("{:x}", Sha256::digest(identity));
         let record = Self {
             scope,
@@ -119,12 +122,14 @@ impl FactObservation {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         validate_fact_observation(self.records.iter())?;
         if serde_json::to_vec(self)
-            .map_err(|_| SanitizationError::new("invalid_fact_observation", "records"))?
+            .map_err(|_| {
+                SanitizationError::new(SanitizationCode::InvalidFactObservation, "records")
+            })?
             .len()
             > MAX_FACT_OBSERVATION_BYTES
         {
             return Err(SanitizationError::new(
-                "fact_observation_too_large",
+                SanitizationCode::FactObservationTooLarge,
                 "records",
             ));
         }
@@ -139,7 +144,7 @@ pub(crate) fn validate_fact_observation<'a>(
     let first = records
         .peek()
         .copied()
-        .ok_or_else(|| SanitizationError::new("empty_fact_observation", "records"))?;
+        .ok_or_else(|| SanitizationError::new(SanitizationCode::EmptyFactObservation, "records"))?;
     let mut keys = BTreeSet::new();
     for record in records {
         record.validate()?;
@@ -156,7 +161,7 @@ pub(crate) fn validate_fact_observation<'a>(
             || record.invalidate_on != first.invalidate_on
         {
             return Err(SanitizationError::new(
-                "inconsistent_fact_observation",
+                SanitizationCode::InconsistentFactObservation,
                 "records",
             ));
         }
@@ -331,7 +336,10 @@ impl FactRecord {
                 )
             })
         {
-            return Err(SanitizationError::new("invalid_fact_record", "fact"));
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidFactRecord,
+                "fact",
+            ));
         }
         match (&self.expires_at_unix_ms, &self.ttl_policy) {
             (None, None) => {}
@@ -340,18 +348,21 @@ impl FactRecord {
                 let ttl_ms = expires
                     .checked_sub(self.observed_at_unix_ms)
                     .ok_or_else(|| {
-                        SanitizationError::new("fact_ttl_expiry_invalid", "expires_at_unix_ms")
+                        SanitizationError::new(
+                            SanitizationCode::FactTtlExpiryInvalid,
+                            "expires_at_unix_ms",
+                        )
                     })?;
                 if !(policy.minimum_ms..=policy.maximum_ms).contains(&ttl_ms) {
                     return Err(SanitizationError::new(
-                        "fact_ttl_out_of_bounds",
+                        SanitizationCode::FactTtlOutOfBounds,
                         "expires_at_unix_ms",
                     ));
                 }
             }
             _ => {
                 return Err(SanitizationError::new(
-                    "fact_ttl_policy_missing",
+                    SanitizationCode::FactTtlPolicyMissing,
                     "ttl_policy",
                 ));
             }
@@ -373,7 +384,7 @@ impl FactTtlPolicy {
             || self.minimum_ms > self.maximum_ms
         {
             return Err(SanitizationError::new(
-                "fact_ttl_policy_invalid",
+                SanitizationCode::FactTtlPolicyInvalid,
                 "ttl_policy",
             ));
         }
@@ -386,8 +397,9 @@ impl FactScope {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let (value, field) = match self {
             Self::Instance { instance_id } => {
-                return crate::validate_instance_alias(instance_id)
-                    .map_err(|_| SanitizationError::new("invalid_fact_token", "instance_id"));
+                return crate::validate_instance_alias(instance_id).map_err(|_| {
+                    SanitizationError::new(SanitizationCode::InvalidFactToken, "instance_id")
+                });
             }
             Self::Server { server_id } => (server_id, "server_id"),
             Self::Game { game_id } => (game_id, "game_id"),
@@ -429,14 +441,14 @@ impl FactValue {
             Self::RecordList(records) => {
                 if records.len() > MAX_FACT_RECORDS {
                     return Err(SanitizationError::new(
-                        "fact_record_limit_exceeded",
+                        SanitizationCode::FactRecordLimitExceeded,
                         "fact_value",
                     ));
                 }
                 for record in records {
                     if record.len() > MAX_FACT_RECORD_FIELDS {
                         return Err(SanitizationError::new(
-                            "fact_field_limit_exceeded",
+                            SanitizationCode::FactFieldLimitExceeded,
                             "fact_value",
                         ));
                     }
@@ -459,8 +471,9 @@ impl FactValue {
 impl InstanceFactContext {
     /// Validates all three identifiers used to build a scoped projection.
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        crate::validate_instance_alias(&self.instance_id)
-            .map_err(|_| SanitizationError::new("invalid_fact_token", "instance_id"))?;
+        crate::validate_instance_alias(&self.instance_id).map_err(|_| {
+            SanitizationError::new(SanitizationCode::InvalidFactToken, "instance_id")
+        })?;
         validate_token(&self.server_id, "server_id")?;
         validate_token(&self.game_id, "game_id")
     }
@@ -473,7 +486,7 @@ impl InstanceFactSnapshot {
         self.context.validate()?;
         if self.ledger_position == 0 || self.records.len() > MAX_FACT_RECORDS {
             return Err(SanitizationError::new(
-                "invalid_fact_snapshot",
+                SanitizationCode::InvalidFactSnapshot,
                 "fact_snapshot",
             ));
         }
@@ -484,7 +497,7 @@ impl InstanceFactSnapshot {
                 || !identities.insert((record.scope.clone(), record.key.clone()))
             {
                 return Err(SanitizationError::new(
-                    "invalid_fact_snapshot_record",
+                    SanitizationCode::InvalidFactSnapshotRecord,
                     "fact_snapshot",
                 ));
             }
@@ -560,7 +573,7 @@ pub(crate) fn validate_fact_invalidation(
         )
     {
         return Err(SanitizationError::new(
-            "invalid_fact_invalidation",
+            SanitizationCode::InvalidFactInvalidation,
             "fact_invalidation",
         ));
     }
@@ -580,7 +593,10 @@ pub(crate) fn validate_fact_key(value: &str) -> Result<(), SanitizationError> {
     ];
     if value.len() > MAX_FACT_KEY_BYTES || !FAMILIES.iter().any(|prefix| value.starts_with(prefix))
     {
-        return Err(SanitizationError::new("invalid_fact_key", "fact_key"));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidFactKey,
+            "fact_key",
+        ));
     }
     validate_token(value, "fact_key")
 }
@@ -588,14 +604,20 @@ pub(crate) fn validate_fact_key(value: &str) -> Result<(), SanitizationError> {
 fn validate_token(value: &str, field: &'static str) -> Result<(), SanitizationError> {
     if value.is_empty() || value.len() > MAX_FACT_TEXT_BYTES || value.chars().any(char::is_control)
     {
-        return Err(SanitizationError::new("invalid_fact_token", field));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidFactToken,
+            field,
+        ));
     }
     Ok(())
 }
 
 fn validate_text(value: &str, field: &'static str) -> Result<(), SanitizationError> {
     if value.len() > MAX_FACT_TEXT_BYTES || value.chars().any(char::is_control) {
-        return Err(SanitizationError::new("invalid_fact_text", field));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidFactText,
+            field,
+        ));
     }
     Ok(())
 }
@@ -604,7 +626,10 @@ fn validate_sha256(value: &str, field: &'static str) -> Result<(), SanitizationE
     if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(())
     } else {
-        Err(SanitizationError::new("invalid_fact_hash", field))
+        Err(SanitizationError::new(
+            SanitizationCode::InvalidFactHash,
+            field,
+        ))
     }
 }
 
@@ -724,7 +749,8 @@ mod tests {
             missing
                 .validate()
                 .expect_err("missing TTL policy must be rejected")
-                .code(),
+                .code()
+                .as_str(),
             "fact_ttl_policy_missing"
         );
 
@@ -738,7 +764,8 @@ mod tests {
             decoded
                 .validate()
                 .expect_err("legacy expiring fact must be rejected explicitly")
-                .code(),
+                .code()
+                .as_str(),
             "fact_ttl_policy_missing"
         );
 
@@ -752,7 +779,8 @@ mod tests {
             below_family_minimum
                 .validate()
                 .expect_err("out-of-family TTL must be rejected")
-                .code(),
+                .code()
+                .as_str(),
             "fact_ttl_out_of_bounds"
         );
 
@@ -766,7 +794,8 @@ mod tests {
             invalid_family
                 .validate()
                 .expect_err("invalid TTL policy must be rejected")
-                .code(),
+                .code()
+                .as_str(),
             "fact_ttl_policy_invalid"
         );
 
@@ -786,7 +815,8 @@ mod tests {
             oversized_family
                 .validate()
                 .expect_err("oversized TTL family must be rejected")
-                .code(),
+                .code()
+                .as_str(),
             "fact_ttl_policy_invalid"
         );
     }

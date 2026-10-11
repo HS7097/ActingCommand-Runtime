@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
+mod codes;
 #[cfg(test)]
 mod gate_381a;
 #[cfg(feature = "mcp")]
@@ -14,6 +15,8 @@ mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
     ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
@@ -21,6 +24,7 @@ use actingcommand_contract::{
     SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use codes::ActingctlCode;
 use serde_json::Value;
 use std::env;
 use std::ffi::OsString;
@@ -366,13 +370,13 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         ),
         // Workflow #191 ps1: without --instance the pause / resume is global.
         Command::Pause {
-            reason_code,
+            pause_reason,
             drain_timeout_ms,
         } => serde_json::to_value(
             client
                 .pause_scheduling(
                     pause_scope(optional_instance),
-                    &reason_code,
+                    pause_reason,
                     drain_timeout_ms,
                 )
                 .map_err(ActingctlError::runtime)?,
@@ -504,7 +508,7 @@ enum Command {
     EmulatorDiscover,
     /// `pause [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]`.
     Pause {
-        reason_code: String,
+        pause_reason: actingcommand_contract::SchedulingPauseReason,
         drain_timeout_ms: u64,
     },
     /// `resume [--instance <alias>]`.
@@ -627,9 +631,10 @@ impl Invocation {
                 }
                 "--reason" if command == "pause" && pause_reason.is_none() => {
                     let reason = require_text(&arguments, &mut index)?;
-                    actingcommand_contract::validate_scheduling_pause_reason(&reason)
-                        .map_err(|_| ActingctlError::Usage)?;
-                    pause_reason = Some(reason);
+                    pause_reason = Some(
+                        actingcommand_contract::SchedulingPauseReason::new(reason)
+                            .map_err(|_| ActingctlError::Usage)?,
+                    );
                 }
                 "--drain-timeout-ms" if command == "pause" && drain_timeout_ms.is_none() => {
                     let timeout = require_u64(&arguments, &mut index)?;
@@ -783,7 +788,13 @@ impl Invocation {
                 _ => return Err(ActingctlError::Usage),
             },
             "pause" => Command::Pause {
-                reason_code: pause_reason.unwrap_or_else(|| DEFAULT_PAUSE_REASON.to_owned()),
+                pause_reason: match pause_reason {
+                    Some(reason) => reason,
+                    None => {
+                        actingcommand_contract::SchedulingPauseReason::new(DEFAULT_PAUSE_REASON)
+                            .map_err(|_| ActingctlError::Usage)?
+                    }
+                },
                 drain_timeout_ms: drain_timeout_ms.unwrap_or(DEFAULT_PAUSE_DRAIN_TIMEOUT_MS),
             },
             "resume" => Command::Resume,
@@ -902,7 +913,7 @@ enum ActingctlError {
     Output,
     /// `request-shutdown --wait` failed after the shutdown was accepted; `detail` is JSON.
     ShutdownWait {
-        code: &'static str,
+        code: Code,
         detail: String,
     },
 }
@@ -910,6 +921,26 @@ enum ActingctlError {
 impl ActingctlError {
     fn runtime(error: actingcommand_runtime_client::RuntimeClientError) -> Self {
         Self::Runtime(error)
+    }
+
+    /// The registered code of this failure (model section 7.3).
+    fn code(&self) -> Code {
+        match self {
+            Self::Usage => ActingctlCode::ActingctlUsageInvalid.code(),
+            Self::Runtime(error) => error.code(),
+            Self::Package => ActingctlCode::ActingctlPackageResolutionFailed.code(),
+            Self::FactRecord => ActingctlCode::ActingctlFactRecordInvalid.code(),
+            Self::ResourceTargetsFile => ActingctlCode::ResourceTargetsFileInvalid.code(),
+            Self::InstanceUnknown => {
+                actingcommand_contract::RuntimeErrorCode::InstanceUnknown.code()
+            }
+            Self::TaskOffsetScopeAmbiguous => ActingctlCode::TaskOffsetScopeAmbiguous.code(),
+            Self::PriorityOffsetInvalid => SharedCode::PriorityOffsetInvalid.code(),
+            Self::Clock => ActingctlCode::ClockUnavailable.code(),
+            Self::ConfigFactsMissing => ActingctlCode::ConfigFactsMissing.code(),
+            Self::Output => ActingctlCode::ActingctlOutputFailed.code(),
+            Self::ShutdownWait { code, .. } => *code,
+        }
     }
 }
 
@@ -921,12 +952,12 @@ impl fmt::Display for ActingctlError {
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
-            Self::ResourceTargetsFile => formatter.write_str("resource_targets_file_invalid: the policy file is unreadable, empty, larger than 65536 bytes or not UTF-8"),
-            Self::InstanceUnknown => formatter.write_str("instance_unknown: the runtime status lists no instance with that alias"),
-            Self::TaskOffsetScopeAmbiguous => formatter.write_str("task_offset_scope_ambiguous: the registered instances do not name exactly one configured game; pass --instance <alias>"),
-            Self::PriorityOffsetInvalid => formatter.write_str("priority_offset_invalid: the task identifier cannot form a priority offset fact"),
-            Self::Clock => formatter.write_str("clock_unavailable: the system clock is before the Unix epoch or out of range"),
-            Self::ConfigFactsMissing => formatter.write_str("config_facts_missing: the runtime fact snapshot holds no config.subsystems / config.parameters record"),
+            Self::ResourceTargetsFile => write!(formatter, "{}: the policy file is unreadable, empty, larger than 65536 bytes or not UTF-8", self.code()),
+            Self::InstanceUnknown => write!(formatter, "{}: the runtime status lists no instance with that alias", self.code()),
+            Self::TaskOffsetScopeAmbiguous => write!(formatter, "{}: the registered instances do not name exactly one configured game; pass --instance <alias>", self.code()),
+            Self::PriorityOffsetInvalid => write!(formatter, "{}: the task identifier cannot form a priority offset fact", self.code()),
+            Self::Clock => write!(formatter, "{}: the system clock is before the Unix epoch or out of range", self.code()),
+            Self::ConfigFactsMissing => write!(formatter, "{}: the runtime fact snapshot holds no config.subsystems / config.parameters record", self.code()),
             Self::Output => formatter.write_str("failed to write JSON output"),
             Self::ShutdownWait { code, detail } => {
                 write!(formatter, "{code} during wait_shutdown: {detail}")

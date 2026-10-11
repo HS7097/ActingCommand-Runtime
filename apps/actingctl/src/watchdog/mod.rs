@@ -18,6 +18,8 @@ mod start;
 mod state;
 mod task;
 
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Code;
 use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartProbes};
 use log::Level;
 use observe::{Installation, WriterProbe};
@@ -36,12 +38,12 @@ const RUN_LOCK: &str = "run.lock";
 /// A misconfiguration (exit 13): the code names it, the detail says where.
 #[derive(Debug)]
 pub(crate) struct Failure {
-    pub(crate) code: String,
+    pub(crate) code: Code,
     pub(crate) detail: String,
 }
 
 impl Failure {
-    pub(crate) fn misconfigured(code: impl Into<String>, detail: impl Into<String>) -> Self {
+    pub(crate) fn misconfigured(code: impl Into<Code>, detail: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             detail: detail.into(),
@@ -220,7 +222,7 @@ impl Tick {
         }
         let probe = observe::host_probe(&self.installation.root_plain).map_err(|detail| {
             Decision::StartFailed {
-                code: "process_probe_failed".to_owned(),
+                code: ActingctlCode::ProcessProbeFailed.code(),
                 detail,
             }
         })?;
@@ -247,7 +249,7 @@ fn log_directories(root: &Path, watchdog_dir: &Path) -> Vec<PathBuf> {
 fn watchdog_dir(root: &Path) -> Result<(PathBuf, PathBuf), Failure> {
     let root = fs::canonicalize(root).map_err(|error| {
         Failure::misconfigured(
-            "watchdog_root_unavailable",
+            ActingctlCode::WatchdogRootUnavailable,
             format!("{}: {error}", root.display()),
         )
     })?;
@@ -376,7 +378,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
     // Review M6: the directory is created on demand; `install` is not a precondition.
     if let Err(error) = fs::create_dir_all(&directory) {
         let failure = Failure::misconfigured(
-            "watchdog_directory_unavailable",
+            ActingctlCode::WatchdogDirectoryUnavailable,
             format!("{}: {error}", directory.display()),
         );
         return misconfigured_report(None, failure, true, from_task);
@@ -391,7 +393,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
         Ok(file) => file,
         Err(error) => {
             let failure = Failure::misconfigured(
-                "watchdog_run_lock_failed",
+                ActingctlCode::WatchdogRunLockFailed,
                 format!("{}: {error}", directory.join(RUN_LOCK).display()),
             );
             return misconfigured_report(Some(&directory), failure, true, from_task);
@@ -408,7 +410,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
         }
         Err(std::fs::TryLockError::Error(error)) => {
             let failure = Failure::misconfigured(
-                "watchdog_run_lock_failed",
+                ActingctlCode::WatchdogRunLockFailed,
                 format!("{}: {error}", directory.join(RUN_LOCK).display()),
             );
             return misconfigured_report(Some(&directory), failure, true, from_task);
@@ -422,7 +424,7 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
                     &directory,
                     now,
                     Level::Warn,
-                    "watchdog_state_reset",
+                    ActingctlCode::WatchdogStateReset,
                     &[
                         ("schema_version", schema.clone()),
                         ("set_aside", aside.display().to_string()),
@@ -572,7 +574,10 @@ fn start_runtime(
         .last_mut()
         .filter(|record| record.at_unix_ms == now)
         .ok_or_else(|| {
-            Failure::misconfigured("watchdog_state_unwritable", "the start record vanished")
+            Failure::misconfigured(
+                ActingctlCode::WatchdogStateUnwritable,
+                "the start record vanished",
+            )
         })?;
     record.method = outcome.method.to_owned();
     let previous = tick.record();
@@ -587,7 +592,7 @@ fn start_runtime(
                 directory,
                 finished,
                 Level::Warn,
-                "watchdog_started_runtime",
+                ActingctlCode::WatchdogStartedRuntime,
                 &[
                     ("generation", installation.generation.to_string()),
                     ("method", outcome.method.to_owned()),
@@ -606,14 +611,14 @@ fn start_runtime(
             })
         }
         Err(error) => {
-            record.outcome = error.code.to_owned();
+            record.outcome = error.code.as_str().to_owned();
             log::append(
                 directory,
                 finished,
                 Level::Error,
-                "watchdog_start_failed",
+                ActingctlCode::WatchdogStartFailed,
                 &[
-                    ("code", error.code.to_owned()),
+                    ("code", error.code.to_string()),
                     ("generation", installation.generation.to_string()),
                     ("method", outcome.method.to_owned()),
                     ("log", log_plain),
@@ -623,7 +628,7 @@ fn start_runtime(
                 ],
             )?;
             Ok(Decision::StartFailed {
-                code: error.code.to_owned(),
+                code: error.code,
                 detail: error.detail,
             })
         }
@@ -648,17 +653,17 @@ fn record_decision(
     if logged {
         return Ok(());
     }
-    let (level, code, fields): (Level, &str, Vec<(&str, String)>) = match decision {
+    let (level, code, fields): (Level, ActingctlCode, Vec<(&str, String)>) = match decision {
         Decision::RunInProgress | Decision::Start | Decision::Started { .. } => return Ok(()),
         Decision::StartFailed { code, detail } => (
             Level::Error,
-            "watchdog_start_failed",
-            vec![("code", code.clone()), ("detail", detail.clone())],
+            ActingctlCode::WatchdogStartFailed,
+            vec![("code", code.to_string()), ("detail", detail.clone())],
         ),
         Decision::Misconfigured { code, detail } => (
             Level::Error,
-            "watchdog_misconfigured",
-            vec![("code", code.clone()), ("detail", detail.clone())],
+            ActingctlCode::WatchdogMisconfigured,
+            vec![("code", code.to_string()), ("detail", detail.clone())],
         ),
         Decision::Alive {
             owner,
@@ -667,7 +672,7 @@ fn record_decision(
             if !started_by_watchdog {
                 (
                     Level::Info,
-                    "watchdog_formal_start_observed",
+                    ActingctlCode::WatchdogFormalStartObserved,
                     vec![
                         ("pid", owner.pid.to_string()),
                         ("owner_epoch", owner.owner_epoch.clone()),
@@ -678,7 +683,7 @@ fn record_decision(
             } else {
                 (
                     Level::Info,
-                    "watchdog_alive",
+                    ActingctlCode::WatchdogAlive,
                     vec![
                         ("pid", owner.pid.to_string()),
                         ("owner_epoch", owner.owner_epoch.clone()),
@@ -689,13 +694,13 @@ fn record_decision(
         }
         Decision::OwnerLockHeld { detail } => (
             Level::Info,
-            "watchdog_owner_lock_held",
+            ActingctlCode::WatchdogOwnerLockHeld,
             vec![("detail", detail.clone())],
         ),
-        Decision::NeverStarted => (Level::Info, "watchdog_never_started", Vec::new()),
+        Decision::NeverStarted => (Level::Info, ActingctlCode::WatchdogNeverStarted, Vec::new()),
         Decision::OwnerRetainedUnconfirmed { owner_epoch } => (
             Level::Error,
-            "watchdog_owner_retained_unconfirmed",
+            ActingctlCode::WatchdogOwnerRetainedUnconfirmed,
             vec![
                 ("owner_epoch", owner_epoch.clone()),
                 (
@@ -707,29 +712,37 @@ fn record_decision(
         ),
         Decision::FatalHold(fatal) => (
             Level::Error,
-            "watchdog_fatal_hold",
+            ActingctlCode::WatchdogFatalHold,
             vec![("log", fatal.log.clone()), ("line", fatal.line.clone())],
         ),
         Decision::FormalClose { owner_epoch } => (
             Level::Info,
-            "watchdog_formal_close",
+            ActingctlCode::WatchdogFormalClose,
             vec![("owner_epoch", owner_epoch.clone())],
         ),
-        Decision::InstallerBusy => (Level::Info, "watchdog_installer_busy", Vec::new()),
-        Decision::SelectionChanged => (Level::Info, "watchdog_selection_changed", Vec::new()),
+        Decision::InstallerBusy => (
+            Level::Info,
+            ActingctlCode::WatchdogInstallerBusy,
+            Vec::new(),
+        ),
+        Decision::SelectionChanged => (
+            Level::Info,
+            ActingctlCode::WatchdogSelectionChanged,
+            Vec::new(),
+        ),
         Decision::RuntimeProcessPresent { processes } => (
             Level::Info,
-            "watchdog_runtime_process_present",
+            ActingctlCode::WatchdogRuntimeProcessPresent,
             vec![("pids", pids(processes))],
         ),
         Decision::RuntimeProcessWithoutOwner { processes } => (
             Level::Error,
-            "watchdog_runtime_process_without_owner",
+            ActingctlCode::WatchdogRuntimeProcessWithoutOwner,
             vec![("pids", pids(processes))],
         ),
         Decision::BudgetExhausted { since_unix_ms } => (
             Level::Error,
-            "watchdog_budget_exhausted",
+            ActingctlCode::WatchdogBudgetExhausted,
             vec![
                 ("since_unix_ms", since_unix_ms.to_string()),
                 ("starts", state.starts.len().to_string()),
@@ -737,7 +750,7 @@ fn record_decision(
         ),
         Decision::Grace { until_unix_ms } => (
             Level::Info,
-            "watchdog_grace",
+            ActingctlCode::WatchdogGrace,
             vec![("until_unix_ms", until_unix_ms.to_string())],
         ),
     };
@@ -755,7 +768,7 @@ fn pids(processes: &[decide::RuntimeProcess]) -> String {
 fn detail(decision: &Decision) -> Value {
     match decision {
         Decision::Misconfigured { code, detail } | Decision::StartFailed { code, detail } => {
-            json!({ "code": code, "detail": detail })
+            json!({ "code": code.as_str(), "detail": detail })
         }
         Decision::OwnerLockHeld { detail } => json!({ "detail": detail }),
         Decision::FatalHold(fatal) => json!({ "log": fatal.log, "line": fatal.line }),
@@ -869,18 +882,22 @@ fn misconfigured_report(
     let mut in_log = false;
     if let Some(directory) = directory {
         let fields = [
-            ("code", failure.code.clone()),
+            ("code", failure.code.to_string()),
             ("detail", failure.detail.clone()),
         ];
         if write {
-            if log::last_line_matches(directory, "watchdog_misconfigured", &failure.code) {
+            if log::last_line_matches(
+                directory,
+                ActingctlCode::WatchdogMisconfigured.code(),
+                failure.code,
+            ) {
                 in_log = true;
             } else {
                 match log::append(
                     directory,
                     now_unix_ms(),
                     Level::Error,
-                    "watchdog_misconfigured",
+                    ActingctlCode::WatchdogMisconfigured,
                     &fields,
                 ) {
                     Ok(()) => in_log = true,
@@ -969,7 +986,7 @@ fn install(root: &Path) -> (Value, u8) {
     for program in [&entry, &launcher] {
         if !program.is_file() {
             let failure = Failure::misconfigured(
-                "watchdog_launcher_missing",
+                ActingctlCode::WatchdogLauncherMissing,
                 format!(
                     "{} is not a file; deploy the Runtime and Tools that carry the watchdog first",
                     program.display()
@@ -982,7 +999,7 @@ fn install(root: &Path) -> (Value, u8) {
         Ok(WriterProbe::Free(guard)) => drop(guard),
         Ok(WriterProbe::Busy) => {
             let failure = Failure::misconfigured(
-                "watchdog_installer_busy",
+                ActingctlCode::WatchdogInstallerBusy,
                 "acsetup holds install\\writer.lock; install the watchdog after it finishes",
             );
             return misconfigured_report(None, failure, false, false);
@@ -992,7 +1009,7 @@ fn install(root: &Path) -> (Value, u8) {
     let directory = installation.root.join("watchdog");
     if let Err(error) = fs::create_dir_all(&directory) {
         let failure = Failure::misconfigured(
-            "watchdog_directory_unavailable",
+            ActingctlCode::WatchdogDirectoryUnavailable,
             format!("{}: {error}", directory.display()),
         );
         return misconfigured_report(None, failure, false, false);
@@ -1013,7 +1030,7 @@ fn install(root: &Path) -> (Value, u8) {
                     &directory,
                     now,
                     Level::Warn,
-                    "watchdog_state_reset",
+                    ActingctlCode::WatchdogStateReset,
                     &[
                         ("schema_version", schema),
                         ("set_aside", aside.display().to_string()),
@@ -1029,7 +1046,7 @@ fn install(root: &Path) -> (Value, u8) {
                 fs::rename(&from, &to).map_err(|error| {
                     (
                         Failure::misconfigured(
-                            "watchdog_state_unwritable",
+                            ActingctlCode::WatchdogStateUnwritable,
                             format!("cannot move {} aside: {error}", from.display()),
                         ),
                         13_u8,
@@ -1039,9 +1056,9 @@ fn install(root: &Path) -> (Value, u8) {
                     &directory,
                     now,
                     Level::Warn,
-                    "watchdog_state_reset",
+                    ActingctlCode::WatchdogStateReset,
                     &[
-                        ("code", unreadable.code),
+                        ("code", unreadable.code.to_string()),
                         ("set_aside", to.display().to_string()),
                     ],
                 )
@@ -1063,7 +1080,7 @@ fn install(root: &Path) -> (Value, u8) {
         .map_err(|error| {
             (
                 Failure::misconfigured(
-                    "watchdog_task_register_failed",
+                    ActingctlCode::WatchdogTaskRegisterFailed,
                     format!("{}: {error}", xml.display()),
                 ),
                 13_u8,
@@ -1075,7 +1092,7 @@ fn install(root: &Path) -> (Value, u8) {
             task::Registration::Absent => {
                 return Err((
                     Failure::misconfigured(
-                        "watchdog_task_mismatch",
+                        ActingctlCode::WatchdogTaskMismatch,
                         format!("Task Scheduler holds no task {name} after schtasks /Create"),
                     ),
                     14,
@@ -1085,7 +1102,7 @@ fn install(root: &Path) -> (Value, u8) {
         let mismatches = task::mismatches(&definition, &root_plain);
         if !mismatches.is_empty() {
             return Err((
-                Failure::misconfigured("watchdog_task_mismatch", mismatches.join("; ")),
+                Failure::misconfigured(ActingctlCode::WatchdogTaskMismatch, mismatches.join("; ")),
                 14,
             ));
         }
@@ -1093,7 +1110,7 @@ fn install(root: &Path) -> (Value, u8) {
             &directory,
             now_unix_ms(),
             Level::Info,
-            "watchdog_installed",
+            ActingctlCode::WatchdogInstalled,
             &[("task", name.clone()), ("user", user.clone())],
         )
         .map_err(|failure| (failure, 13_u8))?;
@@ -1130,7 +1147,7 @@ fn uninstall(root: &Path) -> (Value, u8) {
         Ok(path) => observe::plain_path(&path),
         Err(error) => {
             let failure = Failure::misconfigured(
-                "watchdog_root_unavailable",
+                ActingctlCode::WatchdogRootUnavailable,
                 format!("{}: {error}", root.display()),
             );
             return misconfigured_report(None, failure, false, false);
@@ -1158,7 +1175,7 @@ fn uninstall(root: &Path) -> (Value, u8) {
             Duration::from_millis(decide::READY_TIMEOUT_MS + 20_000),
         ) {
             Ok(_) => false,
-            Err(failure) if failure.code == "watchdog_run_in_progress" => true,
+            Err(failure) if failure.code == ActingctlCode::WatchdogRunInProgress.code() => true,
             Err(failure) => return misconfigured_report(None, failure, false, false),
         }
     } else {
@@ -1170,7 +1187,7 @@ fn uninstall(root: &Path) -> (Value, u8) {
             &directory,
             now_unix_ms(),
             Level::Info,
-            "watchdog_uninstalled",
+            ActingctlCode::WatchdogUninstalled,
             &[("task", name.clone())],
         )
     {
@@ -1196,7 +1213,7 @@ fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Failure> {
     let path = directory.join(RUN_LOCK);
     let failed = |detail: String| {
         Failure::misconfigured(
-            "watchdog_run_lock_failed",
+            ActingctlCode::WatchdogRunLockFailed,
             format!("{}: {detail}", path.display()),
         )
     };
@@ -1216,7 +1233,7 @@ fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Failure> {
             }
             Err(std::fs::TryLockError::WouldBlock) => {
                 return Err(Failure::misconfigured(
-                    "watchdog_run_in_progress",
+                    ActingctlCode::WatchdogRunInProgress,
                     format!(
                         "a tick still holds {} after {} s; run the command again",
                         path.display(),

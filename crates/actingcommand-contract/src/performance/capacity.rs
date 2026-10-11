@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{SanitizationCode, SharedCode};
 use crate::{EventId, LifecycleNativeDetail, OwnerEpoch, SanitizationError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -33,7 +34,7 @@ impl CapacityThresholds {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.hard_bytes == 0 || self.hard_bytes >= self.soft_bytes {
             return Err(SanitizationError::new(
-                "invalid_capacity_thresholds",
+                SharedCode::InvalidCapacityThresholds,
                 "capacity",
             ));
         }
@@ -87,7 +88,7 @@ pub struct PerformanceCapacitySample {
 impl PerformanceCapacitySample {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         self.thresholds.validate()?;
-        let invalid = || SanitizationError::new("invalid_capacity_sample", "capacity");
+        let invalid = || SanitizationError::new(SharedCode::InvalidCapacitySample, "capacity");
         if self.observed_at_unix_ms == 0
             || !(2_000..=10_000).contains(&self.freshness_ms)
             || self.volumes.is_empty()
@@ -239,7 +240,7 @@ impl CapacityDecision {
                 }))
         {
             return Err(SanitizationError::new(
-                "invalid_capacity_decision",
+                SanitizationCode::InvalidCapacityDecision,
                 "capacity",
             ));
         }

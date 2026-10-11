@@ -34,13 +34,17 @@ pub(in crate::global) fn page_bounds(
     latest: u64,
 ) -> Result<(u64, u64), GlobalLedgerError> {
     let invalid = |code| GlobalLedgerError::request(code, "project_ledger_view_page");
-    query.validate().map_err(|error| invalid(error.code()))?;
-    request.validate().map_err(|error| invalid(error.code()))?;
+    query
+        .validate()
+        .map_err(|error| invalid(error.code().as_str()))?;
+    request
+        .validate()
+        .map_err(|error| invalid(error.code().as_str()))?;
     let (snapshot, after) = match request.cursor() {
         Some(cursor) => {
             if !cursor
                 .matches(query, profile)
-                .map_err(|error| invalid(error.code()))?
+                .map_err(|error| invalid(error.code().as_str()))?
             {
                 return Err(invalid("runtime_event_query_cursor_invalid"));
             }
@@ -142,7 +146,7 @@ impl EventIndexes {
                     .ok_or_else(|| invalid("runtime_event_query_response_too_large"))?;
                 Some(
                     RuntimeEventQueryCursor::new(snapshot, last.sequence, query, profile)
-                        .map_err(|error| invalid(error.code()))?,
+                        .map_err(|error| invalid(error.code().as_str()))?,
                 )
             } else {
                 None
@@ -177,7 +181,7 @@ impl EventIndexes {
             match page {
                 Ok(page) => return Ok(page),
                 Err(error)
-                    if error.code() == "runtime_event_query_response_too_large"
+                    if error.code().as_str() == "runtime_event_query_response_too_large"
                         && rows.len() > 1 =>
                 {
                     rows.pop();
@@ -187,7 +191,7 @@ impl EventIndexes {
                     });
                     byte_limited = true;
                 }
-                Err(error) => return Err(invalid(error.code())),
+                Err(error) => return Err(invalid(error.code().as_str())),
             }
         }
     }

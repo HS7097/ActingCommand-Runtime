@@ -208,7 +208,7 @@ impl HostShared {
                 .map_err(|error| {
                     RequestFailure::request(
                         RuntimeHostError::request(
-                            error.code(),
+                            error.code().as_str(),
                             "resolve_current_lab_operation",
                             RuntimeErrorCode::RecognitionFailed,
                         ),

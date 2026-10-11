@@ -135,7 +135,8 @@ Never run the merge locally, and never merge the file by hand.
    unchanged and push again; G9 then passes.
 3. A pull request's CI checks out GitHub's merge of the head into `main`, and `main` requires
    branches to be up to date. After every rebase or merge from `main`, and on any conflict in
-   this file, take your side of the fragments and repeat steps 1 and 2.
+   this file, keep both sides' entries in the fragments and the header, then repeat steps 1
+   and 2.
 
 ## Drift guard `tools/outcome-guard`
 
@@ -160,8 +161,18 @@ scanned. An unparsable registry macro fails G1.
 
 The G2-G5 allow list (`ALLOW_LIST` in the guard) starts with every workspace member, one reason
 each; each A2 part removes the members it converts. Standing entries, kept after B6: wire
-decoders, MCP's JSON-RPC `error_response`, `tools/actinglab-architecture` and
-`tools/outcome-guard`.
+decoders, MCP's JSON-RPC `error_response`, `tools/actinglab-architecture`,
+`tools/outcome-guard`, and G5 for the configuration manifest's subsystem names (vocabulary
+tokens; `runtime_fact_snapshot` equals a runtime-client location).
+
+An entry names a whole member (`item: None`), or one item of one file: a function, which covers
+the findings inside it and in its signature, or a struct or variant field, named `Type.field` or
+`Enum::Variant.field`, which covers only that field's G2 finding. A method is named by its impl's
+self type, `Type::method` (also inside `impl Trait for Type`), or by its trait, `Trait::method`,
+so an entry allows exactly one function; a free or nested function keeps its bare name. A
+channel that a converted member cannot type yet, because another owner's code fills it or a
+later slice replaces it, stays a string behind such an item entry (a bridge); its reason names
+the slice that removes it.
 
 ## Rust API (`actingcommand_contract::outcome`)
 

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::OwnerUnlockActor;
+use crate::codes::SanitizationCode;
 
 /// `owner.unlock`: the operator confirmation recorded by the offline `actingd unlock-owner`
 /// (`contracts/actingd-unlock-owner.md`). It is a `cli.command` fact, never an owner-epoch
@@ -77,7 +78,7 @@ impl OwnerUnlockPayload {
             OwnerResourceDisposition::InUse | OwnerResourceDisposition::Unconfirmed
         ) {
             return Err(SanitizationError::new(
-                "invalid_owner_unlock_disposition",
+                SanitizationCode::InvalidOwnerUnlockDisposition,
                 "owner_unlock",
             ));
         }
