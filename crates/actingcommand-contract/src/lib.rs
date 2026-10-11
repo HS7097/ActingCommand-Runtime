@@ -362,7 +362,7 @@ mod tests {
             format: OcrUnsignedIntegerFormat::default(),
         };
         assert_eq!(
-            declaration.validate(),
+            declaration.validate().map_err(|code| code.as_str()),
             Err("ocr_fields_text_extraction_type_invalid")
         );
 

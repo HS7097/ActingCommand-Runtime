@@ -1028,7 +1028,7 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     assert_eq!(detail.category(), "native");
     assert_eq!(detail.stage(), "device_registry.input.operation");
     assert_eq!(detail.backend(), "adb_shell_input");
-    assert_eq!(detail.operation().as_str(), "tap");
+    assert_eq!(detail.operation(), "tap");
     assert_eq!(detail.message(), "bounded native failure");
     assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
 
@@ -1084,7 +1084,10 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     );
 
     let assert_rejected = |detail, expected_code| {
-        assert_eq!(sanitize_error(failed(detail)).code(), expected_code);
+        assert_eq!(
+            sanitize_error(failed(detail)).code().as_str(),
+            expected_code
+        );
     };
     for detail in [
         DiagnosticDetailDraft::new(
@@ -2653,9 +2656,9 @@ fn resource_authoring_payload_rejects_invalid_identity_paths_and_failure_semanti
         .sanitize(&SpyFingerprinter::new())
         .expect_err("invalid resource authoring payload");
         assert!(
-            error.code().starts_with("invalid_")
-                || error.code().starts_with("missing_")
-                || error.code().starts_with("unexpected_")
+            error.code().as_str().starts_with("invalid_")
+                || error.code().as_str().starts_with("missing_")
+                || error.code().as_str().starts_with("unexpected_")
         );
     }
 }
@@ -2955,7 +2958,7 @@ fn c2_payloads_reject_invalid_numeric_and_unknown_closed_values() {
         )
         .sanitize(&SpyFingerprinter::new())
         .expect_err("invalid C2 payload");
-        assert!(error.code().starts_with("invalid_"));
+        assert!(error.code().as_str().starts_with("invalid_"));
     }
 
     let value = serde_json::json!({

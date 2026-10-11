@@ -2017,7 +2017,8 @@ fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card(
             RuntimeOperation::DeclareGovernanceIdentity { card: invalid }
                 .validate()
                 .expect_err("invalid governance identity card")
-                .code(),
+                .code()
+                .as_str(),
             code
         );
     }
@@ -2788,7 +2789,7 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             assert_eq!(detail.category(), "runtime_connection");
             assert_eq!(detail.stage(), "runtime.ipc.receipt_write");
             assert_eq!(detail.backend(), "local_ipc");
-            assert_eq!(detail.operation().as_str(), "runtime_local_ipc");
+            assert_eq!(detail.operation(), "runtime_local_ipc");
             assert_eq!(detail.declared_sensitivity(), crate::Sensitivity::Internal);
             assert_eq!(
                 detail.message(),

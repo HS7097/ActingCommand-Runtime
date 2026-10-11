@@ -1086,7 +1086,9 @@ pub(super) fn issue_pending_for_tests(
     created_at_unix_ms: u64,
 ) -> Result<StoreIssuedArtifact, SanitizationError> {
     ArtifactStoreIssuer::new()
-        .map_err(|_| SanitizationError::new("artifact_id_issuance_failed", "artifact_id"))?
+        .map_err(|_| {
+            SanitizationError::new(SanitizationCode::ArtifactIdIssuanceFailed, "artifact_id")
+        })?
         .issue(
             kind,
             links,

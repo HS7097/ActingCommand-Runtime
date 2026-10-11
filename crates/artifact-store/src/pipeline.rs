@@ -145,7 +145,7 @@ pub fn capture_summary_record(
             CapturePersistedEvidence::new(frame_index, frame.artifact.project(true)).map_err(
                 |error| {
                     ArtifactStoreError::fatal(
-                        error.code(),
+                        error.code().as_str(),
                         "build_capture_summary_record",
                         error.to_string(),
                     )
@@ -175,7 +175,7 @@ pub fn capture_summary_record(
             )
             .map_err(|error| {
                 ArtifactStoreError::fatal(
-                    error.code(),
+                    error.code().as_str(),
                     "build_capture_summary_record",
                     error.to_string(),
                 )
@@ -193,7 +193,7 @@ pub fn capture_summary_record(
     )
     .map_err(|error| {
         ArtifactStoreError::fatal(
-            error.code(),
+            error.code().as_str(),
             "build_capture_summary_record",
             error.to_string(),
         )
