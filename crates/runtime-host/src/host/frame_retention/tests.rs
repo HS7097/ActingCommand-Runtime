@@ -11,6 +11,8 @@ use actingcommand_ledger::FrameRetentionFrame;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
+mod gate_h5g13;
+
 const T0: u64 = 1_791_753_302_117;
 const DAY_MS: u64 = 86_400_000;
 const NOW: u64 = T0 + 2 * DAY_MS;
