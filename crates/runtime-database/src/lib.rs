@@ -392,9 +392,6 @@ impl RuntimeDatabase {
         let observed = connection
             .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))
             .map_err(sync_failure)?;
-        if sync == CommitSync::Full {
-            self.sync_relaxed.store(false, Ordering::SeqCst);
-        }
         #[cfg(test)]
         let observed = match sync {
             CommitSync::Full => FULL_SYNC_READBACK_HOOK.take().unwrap_or(observed),
@@ -403,6 +400,9 @@ impl RuntimeDatabase {
         if observed != expected {
             return Err(failure("state_database_sync_config_failed", OPERATION)
                 .with_detail(format!("readback={observed}")));
+        }
+        if sync == CommitSync::Full {
+            self.sync_relaxed.store(false, Ordering::SeqCst);
         }
         Ok(())
     }

@@ -830,7 +830,7 @@ impl SqliteStorage {
         let attempt = self.commit_joint(&mut connection, event, work, &projected, &meta);
         let restored = match sync {
             CommitSync::Full => Ok(()),
-            CommitSync::Normal => Ok(()),
+            CommitSync::Normal => self.database.set_commit_sync(&connection, CommitSync::Full),
         };
         let commit_failure = match attempt {
             JointCommit::Committed => {

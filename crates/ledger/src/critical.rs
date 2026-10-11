@@ -5,6 +5,7 @@ use actingcommand_contract::{
     EffectDisposition, EventDraft, EventId, EventLinks, EventPayload, EventType, SanitizationError,
     SanitizedEventDraft, SecretFingerprinter,
 };
+use actingcommand_runtime_database::CommitSync;
 use std::fmt;
 
 pub trait EventAppender {
@@ -13,6 +14,14 @@ pub trait EventAppender {
 
 impl EventAppender for GlobalLedger {
     fn append_durable(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
+        // Critical intents and outcomes must be durable before an effect or reply;
+        // an observational draft here means the durability table was changed wrongly.
+        if crate::durability::commit_sync(draft.payload()) != CommitSync::Full {
+            return Err(GlobalLedgerError::fatal(
+                "critical_event_not_durable",
+                "append_durable",
+            ));
+        }
         self.append(draft)
     }
 }
