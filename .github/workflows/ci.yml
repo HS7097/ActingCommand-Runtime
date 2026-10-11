@@ -35,10 +35,12 @@ name: CI
 #   "ignored"}}]}. Doc-tests are not attributed.
 # - cargo's `Running` headers (stderr) and libtest's sessions (stdout) can interleave in the
 #   merged log, so the k-th session is paired with the k-th `Running` header; doc-test sessions
-#   come last and are skipped. cargo's exit code still decides the Test step. A parse failure (a
-#   result line outside any session, more or fewer sessions than headers, an exe missing from the
-#   table, a binary whose attributed lines differ from its `running N tests` or its
-#   `test result:` counts) fails the attribution step and writes no file.
+#   come last and are skipped. trybuild's `test tests/ui/<name>.rs ... ok` lines (stderr) are no
+#   libtest results wherever they land, never attributed. cargo's exit code still decides the
+#   Test step. A parse failure (a libtest result line outside any session, more or fewer
+#   sessions than headers, an exe missing from the table, a binary whose attributed lines differ
+#   from its `running N tests` or its `test result:` counts) fails the attribution step and
+#   writes no file. `gate` runs the logic tests of ci/gate_check.py (ci/test_gate_check.py).
 # - `gate` downloads every `test-results-*` and runs `ci/gate_check.py check`: each name of
 #   contracts/test-gates/*.toml runs exactly once per configuration of its job and passes; a name
 #   of ci/flaky-tests.toml is reported as skipped; on pull requests no fragment has fewer keys
@@ -736,3 +738,9 @@ jobs:
         run: |
           python3 --version
           python3 ci/gate_check.py check --results "$RUNNER_TEMP/test-results" --base "origin/$BASE_REF"
+      # The logic tests of ci/gate_check.py itself (#382 CI); they read no test results.
+      - name: gate_check logic tests
+        if: ${{ !cancelled() }}
+        run: |
+          python3 --version
+          python3 ci/test_gate_check.py -v
