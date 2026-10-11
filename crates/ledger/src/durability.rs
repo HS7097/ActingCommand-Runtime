@@ -54,8 +54,7 @@ pub(crate) fn commit_sync(payload: &EventPayload) -> CommitSync {
         | EventType::RecognitionRequested
         | EventType::RecognitionCompleted
         | EventType::RecognitionFailed
-        | EventType::ArtifactVerified
-        | EventType::ArtifactPinRecorded => CommitSync::Normal,
+        | EventType::ArtifactVerified => CommitSync::Normal,
         // Classified by payload. The event type is derived from the payload, so the
         // other payload arms are unreachable by construction; they stay durable.
         EventType::RuntimeLifecycleObserved => match payload {
@@ -150,6 +149,7 @@ pub(crate) fn commit_sync(payload: &EventPayload) -> CommitSync {
         | EventType::InputFailed
         // Durable: evidence summary, material publication, retention and export.
         | EventType::CaptureSummaryCommitted
+        | EventType::ArtifactPinRecorded
         | EventType::ArtifactPinReleased
         | EventType::ArtifactEvictionIntent
         | EventType::ArtifactEvictionOutcome
