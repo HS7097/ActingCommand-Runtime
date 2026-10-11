@@ -2,8 +2,9 @@
 
 use super::*;
 use actingcommand_contract::{IdentifierIssuer, IssuedHolderId};
-use std::sync::{Arc, Barrier, Mutex};
-use std::thread;
+
+mod gate_p1;
+mod scenario;
 
 fn ids() -> IdentifierIssuer {
     IdentifierIssuer::new().expect("identifier issuer")
@@ -187,85 +188,6 @@ fn queue_limits_are_bounded_at_configuration_time() {
     assert_eq!(
         invalid_depth.validate().expect_err("queue depth bound"),
         SchedulerError::InvalidConfig
-    );
-}
-
-#[test]
-fn zero_stagger_same_instance_has_one_grant_and_one_busy_denial() {
-    let issuer = ids();
-    let scheduler = Arc::new(Mutex::new(
-        SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler"),
-    ));
-    let instance_id = instance(&issuer);
-    let barrier = Arc::new(Barrier::new(3));
-    let mut workers = Vec::new();
-    for index in 1..=2 {
-        let scheduler = Arc::clone(&scheduler);
-        let barrier = Arc::clone(&barrier);
-        let local = ids();
-        workers.push(thread::spawn(move || {
-            barrier.wait();
-            scheduler.lock().expect("scheduler lock").acquire(
-                request(&local),
-                instance_id,
-                holder(&local).1,
-                connection(index),
-                1,
-            )
-        }));
-    }
-    barrier.wait();
-    let results = workers
-        .into_iter()
-        .map(|worker| worker.join().expect("worker"))
-        .collect::<Vec<_>>();
-    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-    assert_eq!(
-        results
-            .iter()
-            .filter(|result| matches!(result, Err(SchedulerError::Busy { .. })))
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn different_instances_are_independent() {
-    let issuer = ids();
-    let scheduler = Arc::new(Mutex::new(
-        SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler"),
-    ));
-    let barrier = Arc::new(Barrier::new(3));
-    let mut workers = Vec::new();
-    for index in 1..=2 {
-        let scheduler = Arc::clone(&scheduler);
-        let barrier = Arc::clone(&barrier);
-        let local = ids();
-        let instance_id = instance(&issuer);
-        workers.push(thread::spawn(move || {
-            barrier.wait();
-            scheduler.lock().expect("scheduler lock").acquire(
-                request(&local),
-                instance_id,
-                holder(&local).1,
-                connection(index),
-                1,
-            )
-        }));
-    }
-    barrier.wait();
-    let results = workers
-        .into_iter()
-        .map(|worker| worker.join().expect("worker"))
-        .collect::<Vec<_>>();
-    assert!(results.iter().all(Result::is_ok));
-    assert_eq!(
-        scheduler
-            .lock()
-            .expect("scheduler lock")
-            .active_tokens()
-            .len(),
-        2
     );
 }
 
@@ -750,66 +672,6 @@ fn queue_is_bounded_priority_ordered_and_idempotent() {
             )
             .expect_err("cross-connection replay"),
         SchedulerError::QueueConnectionMismatch
-    );
-}
-
-#[test]
-fn zero_stagger_queued_admission_has_one_grant_and_one_queue() {
-    let issuer = ids();
-    let scheduler = Arc::new(Mutex::new(
-        SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler"),
-    ));
-    let instance_id = instance(&issuer);
-    let barrier = Arc::new(Barrier::new(3));
-    let mut workers = Vec::new();
-    for index in 1..=2 {
-        let scheduler = Arc::clone(&scheduler);
-        let barrier = Arc::clone(&barrier);
-        let local = ids();
-        workers.push(thread::spawn(move || {
-            barrier.wait();
-            let mut scheduler = scheduler.lock().expect("scheduler lock");
-            let decision = scheduler
-                .request_queued(
-                    queued_request(
-                        request(&local),
-                        instance_id,
-                        holder(&local).1,
-                        connection(index),
-                        LeasePriority::Normal,
-                        400,
-                    ),
-                    1,
-                )
-                .expect("queued admission")
-                .into_decision();
-            match decision {
-                QueueAdmissionDecision::Lease(prepared) => {
-                    scheduler.commit_acquire(prepared, 1).expect("grant");
-                    "granted"
-                }
-                QueueAdmissionDecision::Queued(_) => "queued",
-            }
-        }));
-    }
-    barrier.wait();
-    let outcomes = workers
-        .into_iter()
-        .map(|worker| worker.join().expect("worker"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| **outcome == "granted")
-            .count(),
-        1
-    );
-    assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| **outcome == "queued")
-            .count(),
-        1
     );
 }
 
