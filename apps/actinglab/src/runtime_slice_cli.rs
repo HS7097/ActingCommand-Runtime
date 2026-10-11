@@ -61,10 +61,10 @@ pub(super) fn map_runtime_error(error: RuntimeClientError) -> CliError {
         )
         .with_details(serde_json::json!({"receipt": receipt}));
     }
-    if error.projection().is_none() && error.code() == "run_summary_not_found" {
+    if error.projection().is_none() && error.code().as_str() == "run_summary_not_found" {
         return CliError::new(
             ErrorKind::UsageValidation,
-            error.code(),
+            error.code().as_str(),
             error.to_string(),
             &[],
         );

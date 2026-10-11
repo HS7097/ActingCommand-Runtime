@@ -148,7 +148,7 @@ impl RuntimeEvents {
     pub(crate) fn sanitize(&self, draft: EventDraft) -> RuntimeHostResult<SanitizedEventDraft> {
         draft.sanitize(&self.fingerprinter).map_err(|error| {
             RuntimeHostError::fatal(
-                error.code(),
+                error.code().as_str(),
                 SANITIZE_RUNTIME_EVENT,
                 RuntimeErrorCode::LedgerFailure,
             )

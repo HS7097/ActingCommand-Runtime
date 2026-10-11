@@ -94,7 +94,7 @@ pub fn read_material_complete(
         )
         .map_err(|error| {
             ReadError::Request(material_error(
-                error.code(),
+                error.code().as_str(),
                 "invalid typed material selection",
             ))
         })?;

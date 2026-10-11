@@ -876,9 +876,13 @@ fn planning_result_contract_error(
     error: RuntimeContractError,
     operation: &'static str,
 ) -> RuntimeHostError {
-    match error.code() {
+    match error.code().as_str() {
         "planning_document_size_invalid" | "planning_response_size_invalid" => {
-            RuntimeHostError::request(error.code(), operation, RuntimeErrorCode::InvalidRequest)
+            RuntimeHostError::request(
+                error.code().as_str(),
+                operation,
+                RuntimeErrorCode::InvalidRequest,
+            )
         }
         _ => RuntimeHostError::fatal(
             "planning_result_encode_failed",

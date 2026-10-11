@@ -14,7 +14,7 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         request.negotiate().map_err(|error| {
             project_interface_failure(RuntimeHostError::request(
-                error.code(),
+                error.code().as_str(),
                 "negotiate_project_interface",
                 RuntimeErrorCode::ProtocolInvalid,
             ))

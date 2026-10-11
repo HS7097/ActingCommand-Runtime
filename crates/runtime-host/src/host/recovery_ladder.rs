@@ -955,7 +955,7 @@ impl HostShared {
             Err(error) => {
                 return Ok(RungAttempt::Failed {
                     run_id: None,
-                    reason: error.code(),
+                    reason: error.code().as_str(),
                 });
             }
         };

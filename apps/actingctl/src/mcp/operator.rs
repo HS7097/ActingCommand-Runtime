@@ -17,7 +17,7 @@ use actingcommand_contract::{
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
     ContainedTaskRequest, EmulatorInstanceAction, EventActor, EventSource, GovernanceIdentityCard,
     MAX_RESOURCE_TARGETS_DOCUMENT_BYTES, OwnerEpoch, PackageRef, RequestId,
-    SchedulingPauseExpectation, SchedulingPauseScope, validate_scheduling_pause_reason,
+    SchedulingPauseExpectation, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{
     ContainedTaskResetOutcome, RunKey, RunStatusMode, RuntimeClient,
@@ -460,12 +460,10 @@ fn scope_alias(scope: &SchedulingPauseScope) -> Option<&str> {
 
 pub(super) fn pause(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "reason", "drain_timeout_s"])?;
-    let reason = arguments
-        .string("reason")?
-        .unwrap_or(DEFAULT_PAUSE_REASON)
-        .to_owned();
-    validate_scheduling_pause_reason(&reason)
-        .map_err(|_| invalid_argument("reason", "must be 1-64 bytes of [a-z0-9_.-]"))?;
+    let reason = actingcommand_contract::SchedulingPauseReason::new(
+        arguments.string("reason")?.unwrap_or(DEFAULT_PAUSE_REASON),
+    )
+    .map_err(|_| invalid_argument("reason", "must be 1-64 bytes of [a-z0-9_.-]"))?;
     let drain_timeout_s = arguments
         .integer("drain_timeout_s", 1, MAX_DRAIN_TIMEOUT_S)?
         .unwrap_or(DEFAULT_DRAIN_TIMEOUT_S);
@@ -483,7 +481,7 @@ pub(super) fn pause(context: &ToolContext<'_>, arguments: &Map<String, Value>) -
         write.warnings,
         move || {
             let paused = client
-                .pause_scheduling(scope, &reason, drain_timeout_s * 1000)
+                .pause_scheduling(scope, reason, drain_timeout_s * 1000)
                 .map_err(|error| client_error(&error))?;
             Ok(json!({"paused": paused, "owner_epoch": owner_epoch}))
         },

@@ -50,7 +50,7 @@ pub fn instance_bindings(
     }
     let invalid_page = |error: RuntimeContractError| {
         ForensicError::new(
-            error.code(),
+            error.code().as_str(),
             "read_instance_bindings",
             "invalid binding page request",
         )
