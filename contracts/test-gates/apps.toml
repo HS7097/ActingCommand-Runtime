@@ -179,6 +179,66 @@ tests = [
 ]
 incident = ["#381 A"]
 
+# Era classification and JSON-RPC errors
+[[gate]]
+key = "28"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_shell::gate_initialize_answers_the_requested_legacy_version_and_2025_11_25_for_any_other",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_modern_request_is_served_without_initialize_and_every_modern_result_is_marked",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_or_unknown_meta_version_is_32022_and_a_request_of_no_era_is_32602",
+    "actingcommand-actingctl::gate::mcp_shell::gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rpc_codes",
+    "actingcommand-actingctl::gate::mcp_shell::gate_tool_definitions_and_call_results_take_the_shape_of_the_negotiated_version",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_batch_is_answered_as_one_array_under_2025_03_26_and_refused_after_later_versions",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_ping_is_answered_before_initialize_and_a_modern_ping_is_32601",
+]
+incident = ["#382 MCP-T1"]
+
+# The result envelope and output budget; an overflow goes to the export, never to silent truncation
+[[gate]]
+key = "30"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_result_over_the_budget_is_output_budget_exceeded_and_one_inside_is_unchanged",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back_unchanged",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_page_over_the_budget_is_truncated_and_its_cursor_resumes_after_its_last_row",
+]
+incident = ["#382 MCP-T1"]
+
+# Jobs: at most 8, handle lookup, and a wait that stops on cancel
+[[gate]]
+key = "31"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_eight_jobs_run_a_ninth_is_refused_unrun_and_a_start_succeeds_once_one_ended",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_find_returns_a_started_job_by_its_handle_and_none_for_one_never_started",
+    "actingcommand-actingctl::gate::mcp_shell::gate_get_run_answers_handle_unknown_for_job_handles_this_process_never_held",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_cancelled_wait_returns_false_and_leaves_the_job_running",
+]
+incident = ["#382 MCP-T1"]
+
+# Cursors round-trip; after a reconnect an old cursor answers cursor_invalid
+[[gate]]
+key = "34"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_shell::gate_events_pages_follow_next_cursor_without_gap_or_repeat_up_to_the_first_snapshot",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_sent_with_other_filters_answers_cursor_invalid",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_from_before_a_runtime_restart_answers_cursor_invalid",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_of_another_server_process_answers_cursor_invalid",
+]
+incident = ["#382 MCP-T1"]
+
+# At stdin EOF the server answers in-flight requests within 2 s and exits 0
+[[gate]]
+key = "35"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_shell::gate_at_stdin_eof_the_requests_already_read_are_answered_and_the_server_exits_0",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_call_still_running_at_stdin_eof_does_not_hold_the_exit",
+]
+incident = ["#382 MCP-T1"]
+
 # vision-provider-check never runs a model
 [[gate]]
 key = "40"

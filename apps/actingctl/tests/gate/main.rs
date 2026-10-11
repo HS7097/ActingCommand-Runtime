@@ -12,7 +12,9 @@ mod held_runtime;
 
 mod emulator_restart;
 mod install_transition;
+mod mcp_harness;
 mod mcp_instance_alias;
+mod mcp_shell;
 
 #[allow(dead_code)]
 #[path = "../../../../tests/support/c4_runtime.rs"]
