@@ -204,6 +204,10 @@ fn with_reason(mut document: Value, member: &str, reason: &str) -> Value {
     document
 }
 
+/// Decodes and validates one pause document and encodes it again; `None` when either step
+/// refuses it.
+type Accepted = fn(&Value) -> Option<Value>;
+
 /// The decoded and validated value, encoded again; `None` when either step refuses it.
 fn accepted_pause_state(document: &Value) -> Option<Value> {
     let state = serde_json::from_value::<SchedulingPauseState>(document.clone()).ok()?;
@@ -240,7 +244,7 @@ fn accepted_pause_scheduling(document: &Value) -> Option<Value> {
 #[test]
 fn gate_scheduling_pause_reason_travels_as_pause_reason() {
     let too_long = "a".repeat(65);
-    let shapes: [(&str, Value, fn(&Value) -> Option<Value>); 3] = [
+    let shapes: [(&str, Value, Accepted); 3] = [
         (
             "global pause state",
             json!({"revision": 1, "since_unix_ms": 1}),
