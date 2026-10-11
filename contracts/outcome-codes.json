@@ -21627,6 +21627,19 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "scheduled_contained_task_not_client_cancellable": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "scheduled_execution_backend_mode_mismatch": {
       "category": "error",
       "owner": "actingd",
@@ -23660,22 +23673,6 @@
       "since": "0.12.0",
       "description": "check-config and unlock-owner stage: loading the configuration file (v1 token load)."
     },
-    "config_policy_state": {
-      "owner": "actingd",
-      "layer": "config",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "check-config stage: previewing the catalog plan against the ledger (v1 token policy_state)."
-    },
-    "config_resource_package": {
-      "owner": "actingd",
-      "layer": "config",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "check-config stage: admitting the resource packages (v1 token resource_package)."
-    },
     "config_validate": {
       "owner": "actingd",
       "layer": "config",
@@ -24004,6 +24001,14 @@
       "since": "0.12.0",
       "description": "actingd stage: connecting the policy monitor and starting the policy driver."
     },
+    "policy_state": {
+      "owner": "actingd",
+      "layer": "config",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "check-config stage: previewing the catalog plan against the ledger."
+    },
     "poll_queued_lease": {
       "owner": "contract",
       "layer": "contract",
@@ -24291,6 +24296,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An operation several owners name with one meaning (contract-owned, A2a D3): request runtime shutdown."
+    },
+    "resource_package": {
+      "owner": "actingd",
+      "layer": "config",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "check-config stage: admitting the resource packages."
     },
     "resource_target_view": {
       "owner": "contract",
