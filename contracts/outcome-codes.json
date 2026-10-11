@@ -210,6 +210,14 @@
       "type": "unix_ms",
       "description": "The start of a scheduling window, in Unix milliseconds."
     },
+    "window_end_unix_ms": {
+      "type": "unix_ms",
+      "description": "The end of the activity window a clock slot was refused or deferred in, in Unix milliseconds."
+    },
+    "first_run": {
+      "type": "boolean",
+      "description": "The pair had no earlier dispatch."
+    },
     "count": {
       "type": "integer",
       "description": "A count."
@@ -4100,6 +4108,9 @@
     ],
     "emulator_stop_": [
       "runtime-host"
+    ],
+    "clock_slot_": [
+      "runtime-host"
     ]
   },
   "codes": {
@@ -4119,6 +4130,70 @@
       "description": "A read found no file at a frame's object key and could not list the kept folders below the state root's kept folder to look for the frame there: a listing failed (io_kind, os_error), or kept itself (entry) is a reparse point such as a junction to another drive, which is never followed. The read fails; the lookup of the previous walk stays.",
       "common_causes": "The kept folder replaced by a junction or symbolic link; access to the kept folder, or to a date folder or leaf in it, denied; kept made a file.",
       "handling": "Keep kept a plain folder on the state root's volume: move the frames back and remove the link, or restore read access, then read again."
+    },
+    "clock_slot_deferred": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "alias": "required",
+        "gate_code": "required",
+        "budget_dimension": "optional",
+        "occurrence_unix_ms": "required",
+        "window_end_unix_ms": "optional",
+        "next_eligible_unix_ms": "optional",
+        "next_occurrence_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A transient gate held back a due clock slot of a policy task on an instance (task_id, alias). An operator scheduling pause is recorded at first sight; a queue wait (a held instance, a retry backoff, an activity interval or any other deferral) or an unavailable instance only at an evaluation where the pair's activity window is closed, that is once the wait outlasted the window. gate_code is the gate's own code. Recorded once per task, instance and occurrence as a goal_missed planning signal whose signal_id is signal:clock_slot:deferred:<sha256 of task, alias and occurrence>; it carries the same values as clock_slot_refused. A later refusal of the same occurrence because its window closed is not recorded.",
+      "common_causes": "An operator paused scheduling across the slot; another claim held the instance until the activity window closed; the instance stayed unavailable until the window closed.",
+      "handling": "Nothing to repair for an operator pause. For a wait that outlasted the window, check what held the instance (actingctl status) or why it stayed unavailable."
+    },
+    "clock_slot_owed": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "alias": "required",
+        "occurrence_unix_ms": "required",
+        "window_start_unix_ms": "required",
+        "next_occurrence_unix_ms": "optional",
+        "first_run": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy dispatch selected for a task on an instance (task_id, alias) serves a clock occurrence (occurrence_unix_ms) from before the activity window it was selected in opened (window_start_unix_ms); for a daily-limited task it uses the new day's budget for an earlier slot. first_run is true when the pair had no earlier dispatch; next_occurrence_unix_ms is the next clock occurrence, so a reader can tell whether the run still served this occurrence. Recorded once, at the first cycle that selects the pair for that occurrence, as a goal_missed planning signal whose signal_id is signal:clock_slot:owed:<sha256 of task, alias and occurrence>.",
+      "common_causes": "The slot fell while the activity window was closed or the Runtime was not running; a gate held the slot back the day before; a catalog was activated with new task ids outside the window.",
+      "handling": "Nothing to repair for a single owed run. Owed runs every morning together with refusals of the day's own slot mean that the slot's daily budget is displaced: gate the slot with its own timeline window or move it to the window start."
+    },
+    "clock_slot_refused": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "alias": "required",
+        "gate_code": "required",
+        "budget_dimension": "optional",
+        "occurrence_unix_ms": "required",
+        "window_end_unix_ms": "optional",
+        "next_eligible_unix_ms": "optional",
+        "next_occurrence_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose fact_code is this code followed by key=value tokens and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
+      "common_causes": "A daily or window budget already used that day, often by an owed run that served the previous day's slot; the activity window closed before the slot could run; the task is paused after repeated failures; the task is disabled for the instance, or the instance lacks the operation or a matching activity profile.",
+      "handling": "Compare next_eligible_unix_ms with next_occurrence_unix_ms: below it, the slot runs later in the same or the next window; at or above it, the slot is lost to the next occurrence. Change the catalog (budget, slot times, activity window) or the instance configuration if the slot must run."
     },
     "dispatch_instance_contended": {
       "category": "info",

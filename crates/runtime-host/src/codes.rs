@@ -121,5 +121,23 @@ actingcommand_contract::outcome_codes! {
         /// `command.validated` (keys `instance_id`, `device_process_present`, and
         /// `stop_elapsed_ms`).
         EmulatorStopProcessUnverified => "emulator_stop_process_unverified": warning,
+        /// Warning. A persistent gate (a budget, a closed activity window, a task paused by
+        /// failure suspension, or the configuration) refused a due clock slot; recorded once
+        /// per (task, instance, occurrence) as a `goal_missed` planning signal (keys `task_id`,
+        /// `alias`, `gate_code`, `occurrence_unix_ms`, and `budget_dimension`,
+        /// `window_end_unix_ms`, `next_eligible_unix_ms`, `next_occurrence_unix_ms` when known;
+        /// Workflow #372 K2).
+        ClockSlotRefused => "clock_slot_refused": warning,
+        /// Info. A transient gate held a due clock slot back: an operator pause at first sight,
+        /// a queue wait or an unavailable instance only once the pair's activity window has
+        /// closed; recorded once per (task, instance, occurrence) as a `goal_missed` planning
+        /// signal (same keys as `clock_slot_refused`; Workflow #372 K2).
+        ClockSlotDeferred => "clock_slot_deferred": info,
+        /// Info. A selected dispatch serves a clock occurrence from before its activity window
+        /// opened; recorded once at the first cycle that selects it, as a `goal_missed`
+        /// planning signal (keys `task_id`, `alias`, `occurrence_unix_ms`,
+        /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
+        /// Workflow #372 K2).
+        ClockSlotOwed => "clock_slot_owed": info,
     }
 }

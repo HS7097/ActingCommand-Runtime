@@ -2846,6 +2846,7 @@ mod tests {
             evaluation: None,
             pending_dispatch_intents: Vec::new(),
             detection_planning_signals: Vec::new(),
+            clock_slot_signals: Vec::new(),
             measurement: None,
         }
     }
