@@ -8,18 +8,13 @@
 //! `GATE_WAIT` only bounds a broken run.
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
-use crate::held_runtime::GATE_WAIT;
+use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::{
     ClientActionKind, ClientPayload, EventActor, EventPayload, EventQuery, EventSource, EventType,
     ProjectionPayload, ProjectionProfile,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
-use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
-use std::thread;
+use serde_json::json;
 use tempfile::TempDir;
 
 /// The registered alias of the fake instance: neutral, with upper-case letters.
@@ -114,121 +109,4 @@ fn gate_mcp_pause_and_resume_record_the_client_action_of_an_upper_case_alias() {
     mcp.close_input();
     runtime.stop_clean();
     drop(mcp);
-}
-
-/// The tool result of an accepted call: `isError` false and `structuredContent.ok` true.
-#[track_caller]
-fn accepted<'a>(answer: &'a Value, tool: &str) -> &'a Value {
-    let result = &answer["result"];
-    assert!(
-        result["isError"] == json!(false) && result["structuredContent"]["ok"] == json!(true),
-        "{tool} was not accepted: {answer}"
-    );
-    &result["structuredContent"]["result"]
-}
-
-/// `actingctl mcp-serve` on one state root over pipes. Dropped, it is killed if still running.
-struct McpServer {
-    child: Child,
-    input: Option<ChildStdin>,
-    lines: Receiver<Result<String, String>>,
-}
-
-impl McpServer {
-    fn spawn(state_root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_actingctl"))
-            .arg("mcp-serve")
-            .arg("--state-root")
-            .arg(state_root)
-            .args(["--tier", "observer,operator"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn actingctl mcp-serve");
-        let input = child.stdin.take().expect("mcp-serve stdin");
-        let output = child.stdout.take().expect("mcp-serve stdout");
-        let (sender, lines) = mpsc::channel();
-        thread::spawn(move || {
-            for line in BufReader::new(output).lines() {
-                let failed = line.is_err();
-                if sender
-                    .send(line.map_err(|error| error.to_string()))
-                    .is_err()
-                    || failed
-                {
-                    return;
-                }
-            }
-        });
-        Self {
-            child,
-            input: Some(input),
-            lines,
-        }
-    }
-
-    fn send(&mut self, message: &Value) {
-        let input = self.input.as_mut().expect("mcp-serve stdin is open");
-        writeln!(input, "{message}").expect("write a message to mcp-serve");
-        input.flush().expect("flush mcp-serve stdin");
-    }
-
-    /// Sends one request and returns its answer; notifications in between are skipped.
-    fn request(&mut self, id: u64, method: &str, params: Value) -> Value {
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
-        loop {
-            let line = match self.lines.recv_timeout(GATE_WAIT) {
-                Ok(Ok(line)) => line,
-                Ok(Err(error)) => panic!("cannot read mcp-serve stdout: {error}"),
-                Err(error) => panic!("mcp-serve gave no answer to {method} (id {id}): {error}"),
-            };
-            let message = serde_json::from_str::<Value>(&line).unwrap_or_else(|error| {
-                panic!("mcp-serve wrote a line that is not JSON ({error}): {line}")
-            });
-            match message.get("id") {
-                None => {}
-                Some(answered) if *answered == json!(id) => return message,
-                Some(_) => panic!(
-                    "mcp-serve answered another request while {method} (id {id}) was open: {message}"
-                ),
-            }
-        }
-    }
-
-    fn initialize(&mut self) {
-        let answer = self.request(
-            1,
-            "initialize",
-            json!({
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {"name": "gate-test-client", "version": "0.0.0"},
-            }),
-        );
-        assert!(answer.get("result").is_some(), "initialize: {answer}");
-        self.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
-    }
-
-    fn call_tool(&mut self, id: u64, name: &str, arguments: Value) -> Value {
-        self.request(
-            id,
-            "tools/call",
-            json!({"name": name, "arguments": arguments}),
-        )
-    }
-
-    fn close_input(&mut self) {
-        drop(self.input.take());
-    }
-}
-
-impl Drop for McpServer {
-    fn drop(&mut self) {
-        drop(self.input.take());
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
-        }
-        let _ = self.child.wait();
-    }
 }
