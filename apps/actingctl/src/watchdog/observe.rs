@@ -60,10 +60,7 @@ impl Installation {
             )
         })?;
         let inherited = actingcommand_contract::process_installation().map_err(|error| {
-            Failure::misconfigured(
-                error.code().as_str(),
-                "the process installation is unreadable",
-            )
+            Failure::misconfigured(error.code(), "the process installation is unreadable")
         })?;
         let selected = match inherited {
             Some(selected) if selected.root() == root => selected.clone(),
@@ -90,7 +87,7 @@ impl Installation {
                 }
                 Err(error) => {
                     return Err(Failure::misconfigured(
-                        error.code().as_str(),
+                        error.code(),
                         "install\\active.json or its inputs are unreadable",
                     ));
                 }
@@ -119,7 +116,7 @@ impl Installation {
             Ok(Some(current)) => Ok(current.selection_json() == self.selection_json),
             Ok(None) => Ok(false),
             Err(error) => Err(Failure::misconfigured(
-                error.code().as_str(),
+                error.code(),
                 "install\\active.json is unreadable before the start",
             )),
         }
