@@ -6,6 +6,8 @@ use super::*;
 mod gate_381a;
 // Workflow #381 B: the emulator control receipt wait (test plan C-3).
 mod gate_381b;
+// #382 C-1: the R6 result classes and the receipt waits of existing operations (test plan C-1).
+mod gate_c1;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,
