@@ -139,6 +139,26 @@ tests = [
 ]
 incident = []
 
+# Frame retention view
+[[gate]]
+key = "14"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::retention::view::tests::an_error_window_keeps_thirty_seconds_and_drops_its_interior_duplicates",
+    "actingcommand-ledger::lib::global::retention::view::tests::exemptions_readings_due_times_and_running_frames",
+    "actingcommand-ledger::lib::global::retention::view::tests::lab_output_is_kept_and_lab_dedup_spares_lab_operation_evidence",
+    "actingcommand-ledger::lib::global::retention::view::tests::a_run_settles_after_its_release_and_its_neighbours_wait_for_its_terminal",
+    "actingcommand-ledger::lib::global::retention::view::tests::a_run_cut_short_keeps_its_last_thirty_seconds_under_the_restart",
+    "actingcommand-ledger::lib::global::retention::view::tests::the_lowest_sequence_window_owns_the_frame_and_names_its_folder",
+    "actingcommand-ledger::lib::global::retention::view::tests::cached_classes_follow_the_clock_only",
+    "actingcommand-ledger::lib::global::retention::view::tests::the_leaf_code_comes_from_the_owner_event_then_a_preceding_failure_terminal",
+    "actingcommand-ledger::lib::global::tests::missing_material::a_dedup_window_makes_the_interior_frame_a_duplicate_in_the_frame_view",
+    "actingcommand-ledger::lib::global::tests::gate_l2::gate_error_points_depend_only_on_outcome_severity_and_links",
+    "actingcommand-ledger::lib::global::tests::gate_l2::gate_an_event_on_no_instance_keeps_nothing_and_changes_no_frame",
+    "actingcommand-ledger::lib::global::tests::gate_l2::gate_a_renamed_failure_code_changes_only_the_leaf",
+]
+incident = ["#382 L-2"]
+
 # Cutover and maintenance
 [[gate]]
 key = "15"
