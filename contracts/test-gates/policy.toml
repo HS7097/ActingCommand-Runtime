@@ -20,11 +20,11 @@ incident = []
 key = "2"
 coverage = "Y"
 tests = [
-    "actingcommand-scheduler::lib::tests::zero_stagger_same_instance_has_one_grant_and_one_busy_denial",
-    "actingcommand-scheduler::lib::tests::different_instances_are_independent",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_r3_two_acquires_on_one_instance_grant_one_and_refuse_one_in_either_order",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_r3_acquires_on_two_instances_are_both_granted_in_either_order",
     "actingcommand-scheduler::lib::tests::queues_and_transfers_are_partitioned_by_instance",
 ]
-incident = []
+incident = ["#382 P-1"]
 
 # Fencing
 [[gate]]
@@ -47,6 +47,21 @@ tests = [
 ]
 incident = []
 
+# TTL (not written for now, coordinator-rulings-c-items.md:20: release_owned refusing Explicit,
+# Preempted and Expired)
+[[gate]]
+key = "5"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::per_acquire_ttl_is_bounded_exact_and_overflow_closed",
+    "actingcommand-scheduler::lib::tests::claim_ttl_is_granted_and_renewal_is_bounded",
+    "actingcommand-scheduler::lib::tests::expiry_and_disconnect_release_owned_leases",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g5_owned_releases_free_the_instance_for_each_owned_reason",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g5_a_lease_is_not_expired_one_millisecond_before_its_deadline",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g5_rollback_frees_the_instance_and_forgets_the_token",
+]
+incident = ["#382 P-1"]
+
 # Takeover cooldown
 [[gate]]
 key = "6"
@@ -68,9 +83,9 @@ tests = [
     "actingcommand-scheduler::lib::tests::expiry_cancellation_and_disconnect_are_visible_and_connection_bound",
     "actingcommand-scheduler::lib::tests::queue_timeout_and_request_identity_mismatches_fail_loudly",
     "actingcommand-scheduler::lib::tests::an_expired_head_is_skipped_and_the_next_eligible_entry_is_granted",
-    "actingcommand-scheduler::lib::tests::zero_stagger_queued_admission_has_one_grant_and_one_queue",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_r3_two_queued_requests_on_one_free_instance_grant_one_and_queue_one_in_either_order",
 ]
-incident = []
+incident = ["#382 P-1"]
 
 # Pause gate
 [[gate]]
@@ -80,6 +95,27 @@ tests = [
     "actingcommand-scheduler::lib::tests::closed_gate_skips_routine_entries_and_passes_operator_startup_and_continuation",
 ]
 incident = []
+
+# No jump
+[[gate]]
+key = "9"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::an_immediate_try_never_jumps_an_eligible_entry",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g2_the_policy_read_agrees_with_the_policy_admission",
+]
+incident = ["#382 P-1"]
+
+# Hand-off
+[[gate]]
+key = "10"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::hand_off_bypasses_and_keeps_the_queue",
+    "actingcommand-scheduler::lib::tests::holder_owned_continuation_is_exempt_from_gate_drain_and_capacity",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g1_a_failed_runs_key_stays_with_its_ladder_through_every_rung",
+]
+incident = ["#382 P-1"]
 
 # Destructive step
 [[gate]]
@@ -93,6 +129,36 @@ tests = [
 ]
 incident = []
 
+# Drain (install transition)
+[[gate]]
+key = "12"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::holder_owned_continuation_is_exempt_from_gate_drain_and_capacity",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g4_install_drain_keeps_only_the_continuation",
+]
+incident = ["#382 P-1"]
+
+# Fatality (not written for now, coordinator-rulings-c-items.md:20: the fatality of the identifier
+# and overflow errors)
+[[gate]]
+key = "13"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::invalid_cooldown_relation_is_fatal",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g3_scheduler_error_fatality_table",
+]
+incident = ["#382 P-1"]
+
+# S4 read queries
+[[gate]]
+key = "14"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g2_the_policy_read_agrees_with_the_policy_admission",
+]
+incident = ["#382 P-1"]
+
 # Claim-kind table
 [[gate]]
 key = "15"
@@ -101,6 +167,17 @@ tests = [
     "actingcommand-scheduler::lib::tests::claim_kind_tokens_are_unique_and_the_stopped_instance_kinds_skip_admission_checks",
 ]
 incident = []
+
+# Runtime fact store
+[[gate]]
+key = "16"
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g6_runtime_fact_store_follows_the_contract_record_rules",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g6_invalidate_instance_drops_only_the_named_families_of_that_instance",
+    "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g6_snapshot_plus_tail_rebuilds_the_live_store",
+]
+incident = ["#382 P-1"]
 
 # Bounds equal the published schemas
 [[gate]]
@@ -147,6 +224,15 @@ tests = [
     "actingcommand-policy::lib::evaluator::tests::record_list_fact_and_ttl_share_the_typed_predicate_surface",
 ]
 incident = []
+
+# A mistyped observation makes only its predicate Unknown (#355 D12)
+[[gate]]
+key = "23"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_p1::gate_p1_g7_a_mistyped_observation_makes_only_its_predicate_unknown",
+]
+incident = ["#382 P-1"]
 
 # Invalid snapshots fail loudly before any intent
 [[gate]]

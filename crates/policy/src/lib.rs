@@ -27,5 +27,6 @@ pub use strategy::*;
 #[cfg(test)]
 mod tests {
     mod gate_d2_s1;
+    mod gate_p1;
     mod selection_catalog;
 }

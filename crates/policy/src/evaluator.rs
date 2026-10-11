@@ -4602,11 +4602,11 @@ fn validate_instance_alias(value: &str) -> PolicyEvaluationResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{CatalogDocumentSource, CatalogSources, compile_catalog};
 
-    const NOW: u64 = 3_600_000;
+    pub(crate) const NOW: u64 = 3_600_000;
 
     // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
     #[test]
@@ -5442,7 +5442,6 @@ mod tests {
     }
 
     #[test]
-    // Also Workflow #308 RT-S1b/S1c (Alice 2026-09-29 answer 3): dynamic target scoring, release, instance isolation.
     fn aging_eventually_prevents_lower_priority_starvation() {
         let catalog = two_task_catalog(|tasks| {
             tasks[0]["priority"] = serde_json::json!(100);
@@ -5486,7 +5485,11 @@ mod tests {
             result.dispatch_intents[0].task_id,
             "fixture.observe-secondary"
         );
+    }
 
+    #[test]
+    // Also Workflow #308 RT-S1b/S1c (Alice 2026-09-29 answer 3): dynamic target scoring, release, instance isolation.
+    fn resource_target_scoring_release_override_and_instance_isolation() {
         // A resource target on instance A names the priority-0 task: the gap outranks the
         // 100-level priority difference, a closed gap releases it, an override supersedes a
         // manual offset, and instance B decides as if A had no policy.
@@ -5754,7 +5757,17 @@ mod tests {
                 instance_b(&evaluate_at(current, None, Some(-300_000)))
             );
         }
+    }
 
+    #[test]
+    fn resource_target_valuation_maps_milli_yields_before_rounding() {
+        let time = EvaluationTime {
+            unix_ms: NOW,
+            monotonic_ms: NOW,
+        };
+        let instance_a = || ScopeSelector::Instance {
+            instance_id: "fixture-instance-a".to_owned(),
+        };
         // WF345 R4 specification: milli-yields map before rounding, sum within and
         // across resources, and read the same fresh inventory facts for gap weights.
         for (amounts, other, weight, base_score, gap_score) in [
@@ -6981,7 +6994,7 @@ mod tests {
         }
     }
 
-    fn decision_for<'a>(
+    pub(crate) fn decision_for<'a>(
         evaluation: &'a PolicyEvaluation,
         task_id: &str,
         instance_id: &str,
@@ -7001,7 +7014,9 @@ mod tests {
         compile_documents(documents)
     }
 
-    fn two_task_catalog(mutator: impl FnOnce(&mut Vec<serde_json::Value>)) -> CompiledCatalog {
+    pub(crate) fn two_task_catalog(
+        mutator: impl FnOnce(&mut Vec<serde_json::Value>),
+    ) -> CompiledCatalog {
         let mut documents = example_documents();
         let mut second = documents.0["tasks"][0].clone();
         second["id"] = serde_json::json!("fixture.observe-secondary");
@@ -7072,14 +7087,14 @@ mod tests {
         .expect("compiled catalog")
     }
 
-    fn due_clock() -> serde_json::Value {
+    pub(crate) fn due_clock() -> serde_json::Value {
         serde_json::json!({
             "kind": "clock",
             "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 3600000, "anchor_ms": 0}
         })
     }
 
-    fn false_fact() -> serde_json::Value {
+    pub(crate) fn false_fact() -> serde_json::Value {
         serde_json::json!({
             "kind": "fact",
             "scope": {"kind": "instance", "instance_id": "fixture-instance-a"},
@@ -7090,7 +7105,7 @@ mod tests {
         })
     }
 
-    fn base_facts() -> EvaluationFacts {
+    pub(crate) fn base_facts() -> EvaluationFacts {
         EvaluationFacts {
             ledger_position: 42,
             fact_snapshot_id: "snapshot:fixture-a".to_owned(),
@@ -7119,7 +7134,7 @@ mod tests {
         }
     }
 
-    fn base_resources() -> EvaluationResources {
+    pub(crate) fn base_resources() -> EvaluationResources {
         EvaluationResources {
             pools: vec![PoolValueSnapshot {
                 pool_id: "fixture-pool-a".to_owned(),
