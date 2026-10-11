@@ -51,6 +51,8 @@ SUMMARY = re.compile(
     r"(?P<ignored>\d+) ignored; (?P<measured>\d+) measured; (?P<filtered>\d+) filtered out;"
 )
 LIBTEST_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
+# trybuild's per-file line of a compile_fail UI test (`test tests/ui/<name>.rs ... ok|error`).
+TRYBUILD = re.compile(r"^test \S+\.rs \.\.\.(?: .*)?$")
 SHOULD_PANIC = " - should panic"
 LIB_KINDS = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
 
@@ -152,6 +154,8 @@ def parse_log(log, table):
     Each stream keeps its own order, and cargo runs every test binary before any doc test, so
     the k-th session belongs to the k-th `Running` header; the sessions after them are doc tests
     (one or two per `Doc-tests` header: rustdoc runs standalone and merged doc tests apart).
+    trybuild writes its `test tests/ui/<name>.rs ... ok` lines on stderr too, so one can land after
+    its binary's `test result:` (run 38122467672); it is no libtest result and is never attributed.
     """
     headers, sessions, failures = [], [], []
     session = None  # the open session, from its `running N tests` to its `test result:`
@@ -174,6 +178,9 @@ def parse_log(log, table):
                 session = Binary(None, None, None, number)
                 session.running = int(count["count"])
                 sessions.append(session)
+            elif TRYBUILD.match(line):
+                if sessions:
+                    sessions[-1].foreign += 1  # the session it followed, as inside a session
             elif result or summary or started:
                 failures.append(f"line {number}: a libtest line outside any session: {line}")
             continue
