@@ -168,10 +168,10 @@ An entry names a whole member (`item: None`), or one item of one file: a functio
 the findings inside it and in its signature, or a struct or variant field, named `Type.field` or
 `Enum::Variant.field`, which covers only that field's G2 finding. A method is named by its impl's
 self type, `Type::method` (also inside `impl Trait for Type`), or by its trait, `Trait::method`,
-so an entry allows exactly one function; a free or nested function keeps its bare name. A channel that a converted
-member cannot type yet, because another owner's code fills it or a later slice replaces it,
-stays a string behind such an item entry (a bridge); its reason names the slice that removes
-it.
+so an entry allows exactly one function; a free or nested function keeps its bare name. A
+channel that a converted member cannot type yet, because another owner's code fills it or a
+later slice replaces it, stays a string behind such an item entry (a bridge); its reason names
+the slice that removes it.
 
 ## Rust API (`actingcommand_contract::outcome`)
 
