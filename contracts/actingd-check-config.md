@@ -336,7 +336,8 @@ catalog plan startup would make (see "Catalog Lineage" in
 `contracts/scheduling/README.md` and the driver's approval rules in
 `contracts/client-interactions.md`), with the same decision and approval
 functions. It reads the state root's ledger without the owner lock and without
-referenced material (SQLite read-only). In one read transaction it
+referenced material (SQLite read-only), and without the whole-file
+`PRAGMA quick_check`. In one read transaction it
 authenticates the keyed head, checks that the stored sequences are exactly 1 to
 the head, and reads and authenticates only the head record and the records the
 plan uses: `state.migrated`, the four `catalog.*` transition types and
@@ -344,8 +345,11 @@ plan uses: `state.migrated`, the four `catalog.*` transition types and
 read, so the preview does not establish their integrity; startup and
 `actingd ledger-maintenance verify` check every record. A segment ledger is read
 whole. The command then reads the State documents through a read-only view of
-the same database and the catalog generations from their immutable directories;
-the configured catalog is compiled in memory, nothing is staged. The ledger read is bounded to
+the same database, opened the same way, and the catalog generations from their
+immutable directories; the configured catalog is compiled in memory, nothing is
+staged. Page-level damage in parts of the file the preview does not read is
+found by startup and `actingd ledger-maintenance verify`, which run
+`PRAGMA quick_check(1)` when they open the database. The ledger read is bounded to
 60 seconds, well under the 90 seconds `acsetup` gives this command, so a slow
 read fails with the reader's own `ledger_read_budget_exceeded` at stage
 `policy_state`. A missing state root is previewed as a fresh one; an existing root
@@ -367,11 +371,8 @@ The result carries `policy_plan`:
 - `approvals` lists the approval ids startup would record, approve again and
   revoke.
 - `phase_ms` is the time of each phase in milliseconds: `compile` (the
-  configured catalog), `ledger` (opening the database, including its whole-file
-  `PRAGMA quick_check(1)`, then the head, contiguity and the records above; the
-  check sets the cost, which grows with `runtime-state.sqlite`: about 24 ms per MB
-  when the file is not cached and about 1.2 ms per MB when it is, measured at
-  550 MB),
+  configured catalog), `ledger` (opening the database without its whole-file
+  check, then the head, contiguity and the records above),
   `projection` (the State documents, the catalog lineage and the active
   generation), `approvals` (the approval decisions, the plan and its approvals)
   and `total`. A fresh or absent state root reads no ledger.
@@ -693,7 +694,7 @@ then `R\tools\platform-tools\adb.exe`. Under the A/B layout an `actingd` in
 `<root>` that the lock names: its adb is `<root>\tools\platform-tools\adb.exe`,
 never a slot's (Workflow #359). acsetup runs `check-config` with the `actingd`
 of the slot it prepares, so that check sees and hashes the root's adb; acsetup
-runs nothing from its staging directory. A development build, the H3 check of
+runs nothing from its staging directory. A development build, the boot smoke of
 the exact-SHA build and a staging directory named after the zip files (older
 acsetup) are no install root and behave as before.
 

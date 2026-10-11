@@ -1,0 +1,3 @@
+# Known-unbootable main: the machine-readable copy of REG-0 (Workflow #390), which is the source; the exact-SHA build's Boot smoke reads it through `ci/gate_check.py known-unbootable`.
+# Rows are `[[unbootable]]` with exactly four non-empty strings: `slice`, `stage` (config_read, ledger_open, takeover or ready), `expected_code` (^[a-z][a-z0-9_]*$, once per file) and `restored_by`.
+# The coordinator registers a row in #390 REG-0 first; the slice that leaves main unbootable then adds the identical row here in its own PR, and the slice that restores boot deletes it in its own PR.

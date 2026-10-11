@@ -4,6 +4,8 @@ use super::*;
 
 // Workflow #381 A: the session deadline of a run (#672 review M3).
 mod gate_381a;
+// Workflow #381 B: the emulator control receipt wait (test plan C-3).
+mod gate_381b;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,
@@ -2590,7 +2592,7 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
 fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host(&root, Arc::clone(&state), 1_000);
+    let host = host(&root, Arc::clone(&state), 5_000);
     let client = client(&root);
 
     assert_eq!(
@@ -2725,7 +2727,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
         input_close_delay: Duration::from_millis(200),
         ..FakeState::default()
     });
-    let host = self::host(&root, Arc::clone(&state), 1_000);
+    let host = self::host(&root, Arc::clone(&state), 5_000);
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
             .with_io_timeout(Duration::from_millis(100))

@@ -1,0 +1,328 @@
+# Gate map, host fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
+# Keys are the ids of rd-1009/tests/inventory-host.md. One `[[gate]]` row per key with exactly
+# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
+# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
+# appended to; a row leaves only when its feature retires.
+
+# One owner per state root; a clean restart gets a new epoch
+[[gate]]
+key = "1"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::lifecycle::second_owner_is_rejected_and_clean_restart_gets_a_new_epoch",
+]
+incident = []
+
+# Teardown keeps the session until host close; an unconfirmed teardown retains the owner
+[[gate]]
+key = "6"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::teardown::task_end_keeps_instance_session_until_host_close",
+    "actingcommand-runtime-host::lib::tests::teardown::readonly_sessions_close_through_real_resource_leases_without_input",
+    "actingcommand-runtime-host::lib::tests::teardown::unconfirmed_teardown_retains_owner_handle_and_rejects_work",
+    "actingcommand-runtime-host::lib::tests::teardown::required_failure_events_preserve_cleanup_detail",
+]
+incident = []
+
+# One grant per instance
+[[gate]]
+key = "11"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::lease_queue::zero_stagger_host_requests_produce_one_grant_and_one_busy_denial",
+]
+incident = []
+
+# Every fencing field is checked before backend use
+[[gate]]
+key = "12"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::lease_fencing::every_fencing_field_is_checked_before_backend_use",
+]
+incident = []
+
+# Acquire, renew and release are idempotent after connection-cache loss
+[[gate]]
+key = "13"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::lease_fencing::acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache",
+    "actingcommand-runtime-host::lib::tests::lease_fencing::renew_and_release_idempotency_survive_connection_cache_loss",
+]
+incident = []
+
+# A disconnect or expiry revokes the lease once and promotes the queue once
+[[gate]]
+key = "14"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::lease_queue::lease_expiry_promotes_the_queue_and_fences_the_expired_token",
+    "actingcommand-runtime-host::lib::tests::lease_queue::exact_lease_expiry_checkpoint_promotes_queue_once_and_replays",
+    "actingcommand-runtime-host::lib::tests::lease_queue::poll_vs_expiry_sweep_recovers_one_terminal_for_stale_and_missing_context",
+    "actingcommand-runtime-host::lib::tests::lease_queue::cancel_vs_expiry_sweep_recovers_one_terminal_for_stale_and_missing_context",
+    "actingcommand-runtime-host::lib::tests::lease_queue::cancel_before_expiry_sweep_replays_one_cancelled_terminal",
+]
+incident = []
+
+# A transfer only after its durable fact; preemption waits for the durable input outcome
+[[gate]]
+key = "15"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::lease_queue::queued_release_transfers_only_after_the_durable_transfer_fact",
+    "actingcommand-runtime-host::lib::tests::lease_queue::high_priority_preemption_waits_for_the_durable_input_outcome",
+]
+incident = []
+
+# One queue per instance
+[[gate]]
+key = "16"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::lease_queue::a_queued_runtime_claim_is_granted_when_the_holder_releases",
+    "actingcommand-runtime-host::lib::tests::lease_queue::an_enqueue_racing_a_lease_end_is_recorded_before_its_transfer",
+    "actingcommand-runtime-host::lib::tests::policy_admission::a_held_instance_defers_its_candidates_while_another_instance_dispatches",
+    "actingcommand-runtime-host::lib::tests::policy_admission::an_admission_that_meets_a_holder_is_rejected_held_at_info",
+    "actingcommand-runtime-host::lib::tests::policy_admission::a_takeover_cooldown_defers_candidates_with_a_wake_at_its_end",
+]
+incident = []
+
+# Admission revalidates pins and trusted context and replays without side effects
+[[gate]]
+key = "25"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::policy_admission::policy_host_revalidates_admission_pins_versions_and_replays_without_side_effects",
+    "actingcommand-runtime-host::lib::tests::policy_admission::policy_admission_rejects_stale_and_tampered_trusted_context",
+    "actingcommand-runtime-host::lib::tests::policy_admission::fact_replacement_invalidates_an_already_evaluated_dispatch",
+]
+incident = []
+
+# Runtime-owned budgets
+[[gate]]
+key = "26"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::policy_control::tests::runtime_owned_daily_budget_cannot_be_bypassed",
+    "actingcommand-runtime-host::lib::policy_control::tests::runtime_owned_window_and_runtime_budgets_cannot_be_bypassed",
+    "actingcommand-runtime-host::lib::tests::policy_budget::policy_budget_recovery_keeps_the_window_count_across_runtime_restarts",
+    "actingcommand-runtime-host::lib::tests::policy_budget::policy_completion_charges_runtime_owned_monotonic_elapsed_time",
+    "actingcommand-runtime-host::lib::tests::policy_budget::policy_completion_rejects_runtime_monotonic_clock_regression",
+    "actingcommand-runtime-host::lib::tests::policy_budget::accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget",
+]
+incident = []
+
+# Failure control
+[[gate]]
+key = "27"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::policy_control::tests::recoverable_failures_back_off_then_escalate_same_error",
+    "actingcommand-runtime-host::lib::policy_control::tests::performance_pressure_exempts_escalation_but_not_bounded_retry_count",
+    "actingcommand-runtime-host::lib::policy_control::tests::interrupted_settlement_does_not_hold_the_pair",
+    "actingcommand-runtime-host::lib::policy_control::tests::sensitive_failure_never_schedules_an_automatic_retry",
+    "actingcommand-runtime-host::lib::policy_control::tests::failure_streak_requires_the_same_class_and_error",
+    "actingcommand-runtime-host::lib::policy_control::tests::zero_configured_backoff_still_schedules_a_bounded_delay",
+    "actingcommand-runtime-host::lib::policy_control::tests::exhausted_retry_limit_uses_the_declared_continue_or_pause_action",
+]
+incident = []
+
+# Exactly one outcome after a crash at any append boundary
+[[gate]]
+key = "28"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::crash_recovery::policy_dispatch_crash_child_process",
+    "actingcommand-runtime-host::lib::tests::crash_recovery::exact_lifecycle_checkpoint_recovers_scheduled_failure_once",
+    "actingcommand-runtime-host::lib::tests::crash_recovery::policy_pending_crash_child_process",
+    "actingcommand-runtime-host::lib::tests::crash_recovery::orphaned_policy_admission_is_reconciled_after_real_process_kill",
+    "actingcommand-runtime-host::lib::tests::crash_recovery::policy_dispatch_accepts_one_late_outcome_after_process_crash",
+    "actingcommand-runtime-host::lib::tests::crash_recovery::first_policy_execution_append_failure_recovers_each_scheduled_outcome_once",
+    "actingcommand-runtime-host::lib::tests::crash_recovery::split_policy_outcome_append_boundaries_recover_completion_exactly_once",
+    "actingcommand-runtime-host::lib::tests::crash_recovery::nonempty_pending_policy_work_is_rebuilt_after_real_process_crash",
+]
+incident = []
+
+# Scheduled runs
+[[gate]]
+key = "29"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_policy_checkpoint_is_exact_thread_bound_one_shot_and_clock_independent",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_policy_run_failure_records_terminal_outcome_and_completion",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_recognition_and_guard_failures_settle_on_the_admitted_run",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_identity_and_package_mismatches_fail_before_io",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_expired_lease_is_fenced_and_settled_on_the_original_run",
+    "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_failure_chain_retries_five_times_and_stops_on_sixth",
+    "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_guarded_retry_stops_after_third_attempt_success",
+    "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_declared_error_page_skips_ordinary_retry",
+    "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_non_retryable_destination_observation_is_fail_closed_and_no_destination_remains_compatible",
+    "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_fresh_retry_observation_target_prevents_second_effect",
+    "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_fresh_retry_observation_error_page_prevents_second_effect",
+]
+incident = []
+
+# A mapped run has one disposition; the latest run wins
+[[gate]]
+key = "30"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_keys",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::latest_failed_mapped_run_clears_the_prior_successful_outcome",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::newer_success_replaces_an_older_failed_mapped_run",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::policy_evaluation_rejects_future_observed_outcome",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::mapped_startup_outcome_is_rejected_before_policy_dispatch",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::mapped_consumer_projection_failures_are_typed_and_dispatch_nothing",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::concurrent_mapped_terminals_commit_exactly_one_disposition",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::comparison_selected_outcome_reuses_mapped_terminal_owner_and_conflicts_fail_closed",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::unmapped_generic_terminals_preserve_success_failure_and_cancelled_outcomes",
+    "actingcommand-runtime-host::lib::tests::mapped_recovery::mapped_recovery_fails_loud_for_missing_terminal_and_partial_links",
+    "actingcommand-runtime-host::lib::tests::mapped_recovery::mapped_failed_completion_without_a_terminal_recovers_without_an_outcome",
+    "actingcommand-runtime-host::lib::tests::mapped_recovery::mapped_completion_request_identity_is_bound_to_the_admission_event",
+    "actingcommand-runtime-host::lib::tests::mapped_recovery::authoritative_outcome_state_advances_only_from_ordered_exact_run_projections",
+    "actingcommand-runtime-host::lib::tests::mapped_recovery::mapped_terminal_append_failure_returns_no_success_or_disposition",
+    "actingcommand-runtime-host::lib::tests::mapped_validation::mapped_catalog_requires_the_exact_package_declaration_before_effect",
+    "actingcommand-runtime-host::lib::tests::mapped_validation::mapped_terminal_page_conflicts_and_error_pages_fail_without_success",
+    "actingcommand-runtime-host::lib::tests::mapped_validation::duplicate_designated_effects_fail_before_terminal_and_downstream_dispatch",
+    "actingcommand-runtime-host::lib::tests::mapped_validation::mapped_terminal_requires_a_final_page_and_same_run_final_observation",
+]
+incident = []
+
+# Catalog approval lineage and rollback
+[[gate]]
+key = "32"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::approvals::approval_decision_is_authoritative_target_bound_and_revocable",
+    "actingcommand-runtime-host::lib::tests::approvals::approval_history_compacts_without_losing_durable_target_identity",
+    "actingcommand-runtime-host::lib::tests::approvals::governance_authority_requires_an_accepted_identity_card_and_is_connection_bound",
+    "actingcommand-runtime-host::lib::tests::approvals::historical_agent_approval_poisoning_is_fatal_during_recovery",
+    "actingcommand-runtime-host::lib::tests::approvals::catalog_lineage_switch_and_rollbacks_replay_with_reapprovals",
+    "actingcommand-runtime-host::lib::tests::approvals::catalog_rollback_then_forward_again_keeps_the_later_approval",
+    "actingcommand-runtime-host::lib::catalog_plan::tests::catalog_transition_decision_table",
+]
+incident = []
+
+# Server facts shared, instance facts isolated, exact invalidation
+[[gate]]
+key = "33"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::fact_store::tests::server_fact_is_shared_and_instance_fact_remains_isolated",
+    "actingcommand-runtime-host::lib::fact_store::tests::event_invalidation_removes_only_the_matching_snapshot",
+    "actingcommand-runtime-host::lib::fact_store::tests::policy_snapshot_identity_covers_every_evaluator_fact_dimension",
+    "actingcommand-runtime-host::lib::fact_store::tests::fact_tombstones_compact_in_memory_without_losing_durable_rejection",
+]
+incident = []
+
+# Facts are rebuilt from the ledger
+[[gate]]
+key = "34"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::facts::runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger",
+    "actingcommand-runtime-host::lib::tests::facts::agent_adapter_publish_fact_uses_authoritative_fact_owner_once",
+    "actingcommand-runtime-host::lib::tests::facts::policy_evaluation_consumes_runtime_owned_fact_projection",
+    "actingcommand-runtime-host::lib::tests::facts::fact_snapshot_catches_up_with_critical_ledger_events",
+    "actingcommand-runtime-host::lib::tests::facts::runtime_startup_materializes_a_missed_critical_fact_invalidation",
+]
+incident = []
+
+# Resident monitor
+[[gate]]
+key = "36"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::monitor::runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state",
+    "actingcommand-runtime-host::lib::tests::monitor::resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle",
+    "actingcommand-runtime-host::lib::tests::monitor::resident_monitor_uses_completion_based_cadence_without_a_tight_loop",
+    "actingcommand-runtime-host::lib::tests::monitor::monitor_recovery_is_scheduler_admitted_without_executing_an_effect",
+    "actingcommand-runtime-host::lib::tests::monitor::monitor_recovery_is_deferred_by_an_active_fenced_lease",
+    "actingcommand-runtime-host::lib::tests::monitor::monitor_capture_failure_is_persisted_without_fake_success",
+    "actingcommand-runtime-host::lib::tests::monitor::missing_monitor_evidence_never_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::monitor::invalid_monitor_provider_observation_poison_runtime_after_recording_failure",
+    "actingcommand-runtime-host::lib::tests::monitor::corrupt_monitor_registry_fails_runtime_startup",
+    "actingcommand-runtime-host::lib::tests::monitor::enabled_performance_monitor_collects_runtime_capture_pipeline_events",
+    "actingcommand-runtime-host::lib::tests::monitor::performance_stutter_is_ledger_visible_and_enriches_policy_failure",
+    "actingcommand-runtime-host::lib::monitor::tests::monitor_registry_recovers_ledger_state_and_preserves_import_source",
+    "actingcommand-runtime-host::lib::monitor::tests::monitor_registry_rejects_corrupt_or_unknown_persisted_state",
+    "actingcommand-runtime-host::lib::monitor::tests::due_probe_completion_does_not_overwrite_a_newer_policy",
+    "actingcommand-runtime-host::lib::monitor::tests::due_probe_batches_are_bounded_and_deterministic",
+]
+incident = []
+
+# Performance buffers, sampler degradation and bounded control
+[[gate]]
+key = "37"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::performance::tests::b3_process_peak_is_os_observation_with_creation_identity",
+    "actingcommand-runtime-host::lib::performance::tests::b3_ledger_windows_bound_monotonic_counts_and_reset",
+    "actingcommand-runtime-host::lib::performance::tests::b3_summary_samples_before_own_commit_and_reads_legacy",
+    "actingcommand-runtime-host::lib::performance::tests::deterministic_pressure_counter_starts_and_ends_once",
+    "actingcommand-runtime-host::lib::performance::tests::owned_process_registry_includes_runtime_within_the_declared_bound",
+    "actingcommand-runtime-host::lib::performance::tests::pressure_injection_and_pipeline_stutter_enter_failure_context",
+    "actingcommand-runtime-host::lib::performance::tests::pipeline_probes_synthesize_responsiveness_without_faking_missing_samples",
+    "actingcommand-runtime-host::lib::performance::tests::incomplete_process_coverage_propagates_unknown_third_party_pressure",
+    "actingcommand-runtime-host::lib::performance::tests::sampler_failures_do_not_relabel_old_control_evidence_as_fresh",
+    "actingcommand-runtime-host::lib::performance::tests::typed_pipeline_events_collect_capture_recognition_and_effect_latency",
+    "actingcommand-runtime-host::lib::performance::tests::raw_buffers_never_exceed_declared_bounds",
+    "actingcommand-runtime-host::lib::performance::tests::out_of_order_pipeline_signal_fails_without_mutating_the_ring",
+    "actingcommand-runtime-host::lib::performance::tests::pipeline_monitor_failure_is_explicitly_degraded_and_related_to_the_trigger",
+    "actingcommand-runtime-host::lib::performance::tests::pipeline_monitor_recovers_only_after_a_successful_observation",
+    "actingcommand-runtime-host::lib::performance::tests::repeated_sampler_failure_degrades_then_stops_bounded_sampling",
+    "actingcommand-runtime-host::lib::performance_control::tests::escalation_is_bounded_by_hysteresis_and_cooldown",
+    "actingcommand-runtime-host::lib::performance_control::tests::duplicate_sample_identity_cannot_advance_hysteresis",
+    "actingcommand-runtime-host::lib::performance_control::tests::third_party_contention_is_independent_and_presence_alone_is_not_pressure",
+    "actingcommand-runtime-host::lib::performance_control::tests::recovery_releases_only_one_instance_per_transition",
+    "actingcommand-runtime-host::lib::performance_control::tests::clock_jump_preserves_control_state_and_resets_transition_evidence",
+    "actingcommand-runtime-host::lib::performance_control::tests::resource_overlay_caps_heavy_concurrency",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t01_levels_below_suspended_allow_dispatch",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t01_dispatch_paused_admission_records_no_rejection",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t02_suspended_urgent_dispatch_defers_without_deadline_failure",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t03_qos_reduced_keeps_host_budget_for_light",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t04_capture_latency_alone_scores_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t05_fast_acquire_and_touch_score_full",
+]
+incident = ["#385 P-0"]
+
+# Coverage semantics of host metrics
+[[gate]]
+key = "41"
+coverage = "Y"
+tests = [
+    "actingcommand-host-metrics::lib::windows::tests::audited_protected_processes_are_excluded_from_coverage",
+    "actingcommand-host-metrics::lib::windows::tests::ordinary_access_denials_remain_unknown_and_hide_process_pressure",
+    "actingcommand-host-metrics::lib::windows::tests::only_access_denied_with_audited_protection_is_excluded",
+    "actingcommand-host-metrics::lib::windows::tests::insufficient_readable_coverage_makes_process_metrics_partial",
+    "actingcommand-host-metrics::lib::windows::tests::mid_enumeration_failure_is_not_a_complete_sample",
+]
+incident = []
+
+# Bounded conversions
+[[gate]]
+key = "42"
+coverage = "Y"
+tests = [
+    "actingcommand-host-metrics::lib::windows::tests::ratio_basis_points_is_bounded_and_deterministic",
+    "actingcommand-host-metrics::lib::windows::tests::counter_unit_conversions_clamp_invalid_ranges",
+]
+incident = []
+
+# Startup recovery reads bounded pages and never the whole ledger
+[[gate]]
+key = "46"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::agent_sessions::startup_recovery_reads_bounded_pages_and_no_whole_ledger_query",
+    "actingcommand-runtime-host::lib::tests::agent_sessions::agent_dispatcher_paged_recovery_matches_the_whole_ledger_fold",
+]
+incident = ["#381 A R4a"]

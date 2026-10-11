@@ -103,6 +103,24 @@ actingcommand_contract::outcome_codes! {
         /// links). The start carries on: the dispatch stays open, out of the active workloads,
         /// and the run's instance is paused with this code as its reason.
         PolicySettlementDispatchUnsettled => "policy_settlement_dispatch_unsettled": error,
+        /// Error. An operator emulator restart whose Stop phase was not confirmed; after a
+        /// Stop whose readiness wait expired its Start still ran (Workflow #381 B F3). The
+        /// request's one failure record (keys `restart_phase`, `stop_result`,
+        /// `stop_elapsed_ms`, `start_dispatched`, `device_process_present`, and
+        /// `start_elapsed_ms`, `process_started`, `android_started`, `adb_port_present` when
+        /// known). Until A2 makes it a `caused_by` link, the Stop's control failure travels as
+        /// the token `cause=<code>` (`emulator_control_wait_timeout` or
+        /// `emulator_control_failed`).
+        EmulatorRestartStopFailed => "emulator_restart_stop_failed": error,
+        /// Error. An operator emulator restart whose Stop phase was confirmed and whose Start
+        /// phase failed (Workflow #381 B F4); same keys, `start_elapsed_ms` always present, and
+        /// the Start's control failure as the token `cause=<code>`.
+        EmulatorRestartStartFailed => "emulator_restart_start_failed": error,
+        /// Warning. A Stop confirmed by `info` alone because its process listing failed
+        /// (Workflow #381 B F2, D6): once per Stop under the request's links, before
+        /// `command.validated` (keys `instance_id`, `device_process_present`, and
+        /// `stop_elapsed_ms`).
+        EmulatorStopProcessUnverified => "emulator_stop_process_unverified": warning,
         /// Warning. A persistent gate (a budget, a closed activity window, a task paused by
         /// failure suspension, or the configuration) refused a due clock slot; recorded once
         /// per (task, instance, occurrence) as a `goal_missed` planning signal (keys `task_id`,

@@ -63,13 +63,29 @@ use crate::test_observation::{
 };
 
 const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
-/// Receipt wait for `ControlEmulatorInstance`: the host bounds the provider `control` command
-/// at 60 s and the readiness wait at 120 s for start, restart and stop alike
+/// Receipt wait for a `ControlEmulatorInstance` start or stop: the host bounds the provider
+/// `control` command at 60 s and the readiness wait at 120 s for both
 /// (`MUMU_MANAGER_STATE_WAIT_START` = `MUMU_MANAGER_STATE_WAIT_STOP` = 120 s); the last 1 s
-/// poll may straddle the deadline by its own 10 s bound, and after `start` / `restart` the
-/// host waits up to 30 s more for the ADB baseline (#316-B3), so the worst case is
-/// 60 + 120 + 10 + 30 = 220 s; 230 s covers it plus the IO margin.
+/// poll may straddle the deadline by its own 10 s bound. A start then waits up to 30 s more
+/// for the ADB baseline (#316-B3): 60 + 120 + 10 + 30 = 220 s. A stop's last process listing
+/// may straddle the deadline by its own 10 s bound and a failure adds one 10 s state read
+/// (Workflow #381 B F2, review M3): 60 + 120 + 10 + 10 + 10 = 210 s. 230 s covers either plus
+/// the IO margin.
 const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(230);
+/// Receipt wait for a `ControlEmulatorInstance` restart (Workflow #381 B F1′, coordinator
+/// answer D3): a Stop phase (at most 210 s) and then a Start phase (at most 220 s), plus the IO
+/// margin: 210 + 220 + 10 = 440 s.
+const EMULATOR_RESTART_RESPONSE_TIMEOUT: Duration = Duration::from_secs(440);
+
+/// The receipt wait of one `ControlEmulatorInstance` action (Workflow #381 B, test plan C-3).
+pub(crate) fn emulator_control_response_timeout(action: EmulatorInstanceAction) -> Duration {
+    match action {
+        EmulatorInstanceAction::Start | EmulatorInstanceAction::Stop => {
+            EMULATOR_CONTROL_RESPONSE_TIMEOUT
+        }
+        EmulatorInstanceAction::Restart => EMULATOR_RESTART_RESPONSE_TIMEOUT,
+    }
+}
 /// Receipt wait for `DiscoverInstances`: the provider runs two vendor commands (`version`,
 /// then `info -v all`), each bounded at 10 s (`MUMU_MANAGER_COMMAND_TIMEOUT`); 25 s covers
 /// both plus the IO margin.
@@ -1116,7 +1132,7 @@ impl RuntimeClient {
     /// Starts, stops or restarts the emulator instance through the Runtime (no lease is
     /// acquired; the host fences the instance itself). Returns the
     /// `RuntimeResult::EmulatorInstanceControlled` result verbatim. The receipt wait is
-    /// `EMULATOR_CONTROL_RESPONSE_TIMEOUT` because the host waits for readiness.
+    /// `emulator_control_response_timeout(action)` because the host waits for readiness.
     pub fn control_emulator_instance(
         &self,
         instance_alias: &str,
@@ -1130,7 +1146,7 @@ impl RuntimeClient {
                 action,
             },
             correlation,
-            Some(EMULATOR_CONTROL_RESPONSE_TIMEOUT),
+            Some(emulator_control_response_timeout(action)),
         )?;
         match receipt.result() {
             Some(

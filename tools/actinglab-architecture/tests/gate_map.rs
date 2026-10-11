@@ -17,10 +17,20 @@
 //! ci.yml keeps these as one-line forms, so the guard needs no YAML parser. Tests are found by
 //! walking each target's module tree (`mod`, `#[path]`, item-level `include!`); a `#[test]`
 //! written by a macro is not seen.
+//!
+//! Guards 2 and 3 (Batch 0b):
+//! - `gate_map_names_live_tests`: the gate map `contracts/test-gates/<module>.toml` has only the
+//!   six inventory fragments, well-formed rows, and every name it holds is a live `#[test]`.
+//! - `gate_tests_are_deterministic`: the gate files read no wall clock and sleep nowhere; their
+//!   bounded waits take only `GATE_WAIT`.
 
+use proc_macro2::{TokenStream, TokenTree};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
+use syn::visit::Visit;
 
 const CI_WORKFLOW: &str = ".github/workflows/ci.yml";
 const FLAKY_MIRROR: &str = "ci/flaky-tests.toml";
@@ -436,6 +446,613 @@ fn gate_ci_jobs_cover_every_member() {
         "CI job coverage violations (test plan v2.2 §2.1 guard 1):\n{}",
         violations.join("\n")
     );
+}
+
+/// The gate map: one fragment per inventory group (contracts/README.md, "test-gates/").
+const GATE_MAP: &str = "contracts/test-gates";
+const GATE_FRAGMENTS: &[&str] = &["contract", "ledger", "host", "policy", "exec", "apps"];
+const GATE_ROW_KEYS: &[&str] = &["coverage", "incident", "key", "tests"];
+/// The contract inventory numbers its keys per kind (`K1`, `R1`, `O1`, `A1`); the other five
+/// inventories use plain numbers.
+const CONTRACT_KEY_KINDS: [char; 4] = ['K', 'R', 'O', 'A'];
+
+/// Test plan v2.2 §2.1 guard 2: every name of the gate map is a live `#[test]` (not `#[ignore]`)
+/// of its package and target, and every fragment is well-formed. A key row leaves only when its
+/// feature retires (said in the PR body); `ci/gate_check.py` holds the key count against the base.
+#[test]
+fn gate_map_names_live_tests() {
+    let root = workspace_root();
+    let members = workspace_members(&root);
+    let mut tests: BTreeMap<String, Result<Vec<TestCase>, String>> = BTreeMap::new();
+    let mut violations = Vec::new();
+
+    let directory = root.join(GATE_MAP);
+    let entries = fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()));
+    let mut fragments = Vec::new();
+    for entry in entries {
+        let path = entry
+            .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+            .path();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match name.strip_suffix(".toml") {
+            Some(module) if path.is_file() && GATE_FRAGMENTS.contains(&module) => {
+                fragments.push((module.to_owned(), path));
+            }
+            _ => violations.push(format!(
+                "{GATE_MAP}/{name} is not one of the fragments {GATE_FRAGMENTS:?} (`<module>.toml`)"
+            )),
+        }
+    }
+    fragments.sort();
+    if fragments.is_empty() {
+        violations.push(format!("{GATE_MAP} holds no fragment"));
+    }
+
+    let wanted: BTreeSet<&str> = GATE_ROW_KEYS.iter().copied().collect();
+    for (module, path) in &fragments {
+        let fragment = format!("{GATE_MAP}/{module}.toml");
+        let document = match toml::from_str::<toml::Table>(&read(path)) {
+            Ok(document) => document,
+            Err(error) => {
+                violations.push(format!("{fragment} does not parse: {error}"));
+                continue;
+            }
+        };
+        for key in document.keys().filter(|key| *key != "gate") {
+            violations.push(format!(
+                "{fragment} holds `{key}`; a fragment holds only `[[gate]]` rows"
+            ));
+        }
+        let Some(rows) = document.get("gate").and_then(toml::Value::as_array) else {
+            violations.push(format!("{fragment} has no `[[gate]]` rows"));
+            continue;
+        };
+        let mut keys = BTreeSet::new();
+        for (index, row) in rows.iter().enumerate() {
+            let at = format!("{fragment} row {}", index + 1);
+            let Some(row) = row.as_table() else {
+                violations.push(format!("{at} is not a table"));
+                continue;
+            };
+            let found: BTreeSet<&str> = row.keys().map(String::as_str).collect();
+            if found != wanted {
+                violations.push(format!("{at} has keys {found:?}, not exactly {wanted:?}"));
+                continue;
+            }
+            let Some(key) = row.get("key").and_then(toml::Value::as_str) else {
+                violations.push(format!("{at}: `key` is not a string"));
+                continue;
+            };
+            let at = format!("{fragment} key `{key}`");
+            if !gate_key_form(module, key) {
+                violations.push(format!(
+                    "{at} is not an id of inventory-{module} (`K1`, `R1`, `O1` or `A1` for \
+                     contract, a plain number such as `31` for the other five)"
+                ));
+            }
+            if !keys.insert(key.to_owned()) {
+                violations.push(format!("{at} has a second row"));
+            }
+            match row.get("coverage").and_then(toml::Value::as_str) {
+                Some("Y" | "P") => {}
+                other => {
+                    violations.push(format!("{at}: `coverage` is {other:?}, not \"Y\" or \"P\""))
+                }
+            }
+            match string_list(row.get("incident")) {
+                Some(incidents) => {
+                    if incidents.iter().any(|incident| incident.trim().is_empty()) {
+                        violations.push(format!("{at}: `incident` holds an empty string"));
+                    }
+                    if incidents.iter().collect::<BTreeSet<_>>().len() != incidents.len() {
+                        violations.push(format!("{at}: `incident` lists a label twice"));
+                    }
+                }
+                None => violations.push(format!(
+                    "{at}: `incident` is not a list of strings (`[]` when none)"
+                )),
+            }
+            let Some(names) = string_list(row.get("tests")) else {
+                violations.push(format!("{at}: `tests` is not a list of strings"));
+                continue;
+            };
+            if names.is_empty() {
+                violations.push(format!("{at}: `tests` is empty"));
+            }
+            if names.iter().collect::<BTreeSet<_>>().len() != names.len() {
+                violations.push(format!("{at}: `tests` names a test twice"));
+            }
+            for name in &names {
+                let Some((package, target, path)) = split_test_name(name) else {
+                    violations.push(format!(
+                        "{at}: `{name}` is not <package>::<target>::<libtest path>"
+                    ));
+                    continue;
+                };
+                if !members.contains_key(package) {
+                    violations.push(format!(
+                        "{at}: `{name}` belongs to `{package}`, which is no workspace member"
+                    ));
+                    continue;
+                }
+                match tests_of(&mut tests, &root, &members, package) {
+                    Ok(found) => match found
+                        .iter()
+                        .find(|case| case.target == target && case.path == path)
+                    {
+                        Some(case) if case.ignored => {
+                            violations.push(format!("{at}: `{name}` is #[ignore]"));
+                        }
+                        Some(_) => {}
+                        None => violations.push(format!("{at}: `{name}` names no #[test]")),
+                    },
+                    Err(error) => violations.push(format!("{at}: {error}")),
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "gate map violations (test plan v2.2 §2.1 guard 2):\n{}",
+        violations.join("\n")
+    );
+}
+
+fn gate_key_form(module: &str, key: &str) -> bool {
+    let number = |digits: &str| {
+        !digits.is_empty() && !digits.starts_with('0') && digits.bytes().all(|b| b.is_ascii_digit())
+    };
+    if module == "contract" {
+        key.strip_prefix(CONTRACT_KEY_KINDS).is_some_and(number)
+    } else {
+        number(key)
+    }
+}
+
+fn string_list(value: Option<&toml::Value>) -> Option<Vec<String>> {
+    value?
+        .as_array()?
+        .iter()
+        .map(|item| item.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// `<package>::<target>::<libtest path>`, as the flaky mirror writes names.
+fn split_test_name(name: &str) -> Option<(&str, &str, &str)> {
+    let (package, rest) = name.split_once("::")?;
+    let (target, path) = rest.split_once("::")?;
+    (!package.is_empty() && !target.is_empty() && !path.is_empty())
+        .then_some((package, target, path))
+}
+
+/// Wall-clock calls a gate file may not make: `(type or module, function)`.
+const CLOCK_CALLS: &[(&str, &str)] = &[
+    ("thread", "sleep"),
+    ("Instant", "now"),
+    ("SystemTime", "now"),
+];
+/// Names a gate file may not import, since a call through the import hides the clock.
+const CLOCK_IMPORTS: &[&str] = &["sleep", "now"];
+/// Bounded waits; their duration is the last argument and must be `GATE_WAIT`.
+const BOUNDED_WAITS: &[&str] = &["recv_timeout", "wait_timeout"];
+const GATE_WAIT: &str = "GATE_WAIT";
+/// `(file, enclosing function, token)`: each entry allows exactly one finding. The only entry is
+/// the ruling of the #672 acceptance (Workflow #381 comment 6084712633, point 2): this
+/// `Instant::now` only anchors the expected deadline and measures nothing.
+const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[(
+    "apps/actingctl/src/gate_381a.rs",
+    "gate_the_run_client_carries_one_deadline_from_the_runs_start",
+    "Instant::now",
+)];
+
+/// Test plan v2.2 §2.1 guard 3: gate files are deterministic by construction. They call no
+/// `thread::sleep`, `Instant::now` or `SystemTime::now` (also not through an import of `sleep` or
+/// `now`), and `recv_timeout` / `wait_timeout` take only the constant `GATE_WAIT`. The files are
+/// parsed, so comments and strings do not count. Gate files (D3): every `gate_*.rs` under a
+/// member's `src/` and every `.rs` under its `tests/gate/`; `#[path]` support files are not
+/// scanned. An allow-list entry that matches nothing fails, and so does an empty scan.
+#[test]
+fn gate_tests_are_deterministic() {
+    let root = workspace_root();
+    let members = workspace_members(&root);
+    let mut violations = Vec::new();
+    let mut findings = Vec::new();
+
+    let files = gate_files(&root, &members);
+    if files.is_empty() {
+        violations.push(
+            "no gate file found (`gate_*.rs` under a member's src/, `.rs` under its tests/gate/)"
+                .to_owned(),
+        );
+    }
+    for file in &files {
+        let relative = file
+            .strip_prefix(&root)
+            .unwrap_or(file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        match syn::parse_file(&read(file)) {
+            Ok(parsed) => {
+                let mut visitor = DeterminismVisitor::new(&relative, &parsed);
+                visitor.visit_file(&parsed);
+                findings.extend(visitor.findings);
+            }
+            Err(error) => violations.push(format!("{relative}: does not parse: {error}")),
+        }
+    }
+
+    let mut matched = vec![0_usize; DETERMINISM_ALLOWLIST.len()];
+    for finding in findings {
+        let entry = DETERMINISM_ALLOWLIST
+            .iter()
+            .position(|(file, function, token)| {
+                finding.file == *file
+                    && finding.function.as_deref() == Some(*function)
+                    && finding.token == *token
+            });
+        if let Some(index) = entry {
+            matched[index] += 1;
+            if matched[index] == 1 {
+                continue;
+            }
+        }
+        violations.push(format!(
+            "{}:{} in fn `{}`: {}",
+            finding.file,
+            finding.line,
+            finding.function.as_deref().unwrap_or("<none>"),
+            finding.token
+        ));
+    }
+    for ((file, function, token), count) in DETERMINISM_ALLOWLIST.iter().zip(&matched) {
+        if *count == 0 {
+            violations.push(format!(
+                "allow-list entry ({file}, fn `{function}`, `{token}`) matches nothing"
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "gate-file determinism violations (test plan v2.2 §2.1 guard 3):\n{}",
+        violations.join("\n")
+    );
+}
+
+/// D3: every `gate_*.rs` under a member's `src/`, and every `.rs` under its `tests/gate/`.
+fn gate_files(root: &Path, members: &BTreeMap<String, PathBuf>) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for member in members.values() {
+        let member = root.join(member);
+        files.extend(rust_files(&member.join("src"), "gate_"));
+        files.extend(rust_files(&member.join("tests").join("gate"), ""));
+    }
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// Every `.rs` file under `directory` whose name starts with `prefix`.
+fn rust_files(directory: &Path, prefix: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    if !directory.is_dir() {
+        return found;
+    }
+    let entries = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()));
+    for entry in entries {
+        let path = entry
+            .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+            .path();
+        if path.is_dir() {
+            found.extend(rust_files(&path, prefix));
+        } else if path.extension().is_some_and(|extension| extension == "rs")
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+struct ClockFinding {
+    file: String,
+    function: Option<String>,
+    token: String,
+    line: usize,
+}
+
+struct DeterminismVisitor<'a> {
+    file: &'a str,
+    /// Local name → the full path a `use` gives it, for the whole file.
+    imports: BTreeMap<String, Vec<String>>,
+    functions: Vec<String>,
+    findings: Vec<ClockFinding>,
+}
+
+impl<'a> DeterminismVisitor<'a> {
+    fn new(file: &'a str, parsed: &syn::File) -> Self {
+        let mut imports = ImportCollector::default();
+        imports.visit_file(parsed);
+        let mut visitor = Self {
+            file,
+            imports: imports.aliases,
+            functions: Vec::new(),
+            findings: Vec::new(),
+        };
+        for (token, line) in imports.forbidden {
+            visitor.record(token, line);
+        }
+        visitor
+    }
+
+    fn record(&mut self, token: String, line: usize) {
+        self.findings.push(ClockFinding {
+            file: self.file.to_owned(),
+            function: self.functions.last().cloned(),
+            token,
+            line,
+        });
+    }
+
+    /// The clock call a path names, after resolving its first segment through the imports.
+    fn clock_call(&self, segments: &[String]) -> Option<String> {
+        let (first, rest) = segments.split_first()?;
+        let mut full = self
+            .imports
+            .get(first)
+            .cloned()
+            .unwrap_or_else(|| vec![first.clone()]);
+        full.extend(rest.iter().cloned());
+        let function = full.pop()?;
+        let owner = full.pop()?;
+        CLOCK_CALLS
+            .iter()
+            .any(|(clock_owner, clock_function)| {
+                owner == *clock_owner && function == *clock_function
+            })
+            .then(|| format!("{owner}::{function}"))
+    }
+
+    fn check_wait(
+        &mut self,
+        wait: &str,
+        arguments: &Punctuated<syn::Expr, syn::Token![,]>,
+        line: usize,
+    ) {
+        let duration = arguments.last();
+        let constant = matches!(
+            duration,
+            Some(syn::Expr::Path(syn::ExprPath { qself: None, path, .. }))
+                if path.segments.last().is_some_and(|segment| {
+                    segment.ident == GATE_WAIT && segment.arguments.is_none()
+                })
+        );
+        if !constant {
+            let shown = duration
+                .and_then(|expr| expr.span().source_text())
+                .unwrap_or_else(|| "<no duration>".to_owned());
+            self.record(
+                format!("{wait}({shown}) instead of {wait}({GATE_WAIT})"),
+                line,
+            );
+        }
+    }
+
+    /// A macro whose body is not a comma list of expressions: scan its tokens for a clock path
+    /// and refuse any bounded wait, which this guard cannot check there.
+    fn scan_tokens(&mut self, tokens: TokenStream) {
+        let flat: Vec<TokenTree> = tokens.into_iter().collect();
+        let mut index = 0;
+        while index < flat.len() {
+            match &flat[index] {
+                TokenTree::Group(group) => self.scan_tokens(group.stream()),
+                TokenTree::Ident(ident) => {
+                    let line = ident.span().start().line;
+                    let mut segments = vec![ident.to_string()];
+                    let mut next = index + 1;
+                    while let (
+                        Some(TokenTree::Punct(first)),
+                        Some(TokenTree::Punct(second)),
+                        Some(TokenTree::Ident(segment)),
+                    ) = (flat.get(next), flat.get(next + 1), flat.get(next + 2))
+                    {
+                        if first.as_char() != ':' || second.as_char() != ':' {
+                            break;
+                        }
+                        segments.push(segment.to_string());
+                        next += 3;
+                    }
+                    let called = match flat.get(next) {
+                        Some(TokenTree::Group(group)) => {
+                            group.delimiter() == proc_macro2::Delimiter::Parenthesis
+                        }
+                        _ => false,
+                    };
+                    if let Some(token) = self.clock_call(&segments) {
+                        self.record(token, line);
+                    } else if let [name] = segments.as_slice()
+                        && called
+                        && CLOCK_IMPORTS.contains(&name.as_str())
+                    {
+                        self.record(format!("{name}() through an import"), line);
+                    }
+                    if segments
+                        .iter()
+                        .any(|segment| BOUNDED_WAITS.contains(&segment.as_str()))
+                    {
+                        self.record(
+                            format!(
+                                "{} inside a macro this guard cannot parse",
+                                segments.join("::")
+                            ),
+                            line,
+                        );
+                    }
+                    index = next;
+                    continue;
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for DeterminismVisitor<'_> {
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.functions.push(item.sig.ident.to_string());
+        syn::visit::visit_item_fn(self, item);
+        self.functions.pop();
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        self.functions.push(item.sig.ident.to_string());
+        syn::visit::visit_impl_item_fn(self, item);
+        self.functions.pop();
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
+        self.functions.push(item.sig.ident.to_string());
+        syn::visit::visit_trait_item_fn(self, item);
+        self.functions.pop();
+    }
+
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        let segments: Vec<String> = expr
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect();
+        if let Some(token) = self.clock_call(&segments) {
+            self.record(token, expr.span().start().line);
+        }
+        syn::visit::visit_expr_path(self, expr);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(function) = &*call.func {
+            let segments: Vec<String> = function
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            let line = call.span().start().line;
+            if let [name] = segments.as_slice()
+                && CLOCK_IMPORTS.contains(&name.as_str())
+                && self.clock_call(&segments).is_none()
+            {
+                self.record(format!("{name}() through an import"), line);
+            }
+            if let Some(wait) = segments.last()
+                && BOUNDED_WAITS.contains(&wait.as_str())
+            {
+                self.check_wait(wait, &call.args, line);
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let method = call.method.to_string();
+        if BOUNDED_WAITS.contains(&method.as_str()) {
+            self.check_wait(&method, &call.args, call.method.span().start().line);
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        match mac.parse_body_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated) {
+            Ok(arguments) => arguments
+                .iter()
+                .for_each(|argument| self.visit_expr(argument)),
+            Err(_) => self.scan_tokens(mac.tokens.clone()),
+        }
+    }
+}
+
+/// The file's `use` aliases, and the imports a gate file may not make.
+#[derive(Default)]
+struct ImportCollector {
+    aliases: BTreeMap<String, Vec<String>>,
+    forbidden: Vec<(String, usize)>,
+}
+
+impl ImportCollector {
+    fn collect(&mut self, prefix: &mut Vec<String>, tree: &syn::UseTree) {
+        match tree {
+            syn::UseTree::Path(path) => {
+                prefix.push(path.ident.to_string());
+                self.collect(prefix, &path.tree);
+                prefix.pop();
+            }
+            syn::UseTree::Name(name) => {
+                let ident = name.ident.to_string();
+                let (local, full) = if ident == "self" {
+                    (prefix.last().cloned().unwrap_or_default(), prefix.clone())
+                } else {
+                    let mut full = prefix.clone();
+                    full.push(ident.clone());
+                    (ident, full)
+                };
+                self.import(local, full, name.ident.span().start().line);
+            }
+            syn::UseTree::Rename(rename) => {
+                let mut full = prefix.clone();
+                full.push(rename.ident.to_string());
+                self.import(
+                    rename.rename.to_string(),
+                    full,
+                    rename.ident.span().start().line,
+                );
+            }
+            syn::UseTree::Glob(glob) => {
+                if prefix.last().is_some_and(|last| last == "thread") {
+                    self.forbidden.push((
+                        format!("use {}::* imports sleep", prefix.join("::")),
+                        glob.span().start().line,
+                    ));
+                }
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.collect(prefix, item);
+                }
+            }
+        }
+    }
+
+    fn import(&mut self, local: String, full: Vec<String>, line: usize) {
+        if full
+            .last()
+            .is_some_and(|name| CLOCK_IMPORTS.contains(&name.as_str()))
+        {
+            self.forbidden.push((
+                format!("use {} imports a clock name", full.join("::")),
+                line,
+            ));
+        }
+        self.aliases.insert(local, full);
+    }
+}
+
+impl<'ast> Visit<'ast> for ImportCollector {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        let mut prefix = Vec::new();
+        if item.leading_colon.is_some() {
+            prefix.push(String::new());
+        }
+        self.collect(&mut prefix, &item.tree);
+    }
 }
 
 fn presence(job: &str, key: &str) -> Presence {
