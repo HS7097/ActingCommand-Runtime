@@ -2796,3 +2796,10 @@ pub(super) mod sqlite_contract;
 mod sqlite_prefix;
 #[path = "tests/sqlite_selection.rs"]
 mod sqlite_selection;
+
+#[path = "tests/fixture.rs"]
+mod fixture;
+#[path = "tests/gate_l2.rs"]
+mod gate_l2;
+#[path = "tests/retention_events.rs"]
+mod retention_events;
