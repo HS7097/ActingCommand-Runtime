@@ -955,7 +955,10 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
     let projection_error = client
         .summarize_run(run_id)
         .expect_err("an incomplete admitted run must not produce a success-looking report");
-    assert_eq!(projection_error.code(), "run_summary_event_count_invalid");
+    assert_eq!(
+        projection_error.code().as_str(),
+        "run_summary_event_count_invalid"
+    );
     for event_type in [
         EventType::LabRequest,
         EventType::TaskRequested,
@@ -1400,7 +1403,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         let missing = client
             .summarize_run(unknown_run_id)
             .expect_err("unknown run must not produce a success-looking summary");
-        assert_eq!(missing.code(), "run_summary_not_found", "{case}");
+        assert_eq!(missing.code().as_str(), "run_summary_not_found", "{case}");
         let (missing_status, missing_envelope) =
             run_actinglab_summary(&actinglab_binary, root.path(), unknown_run_id, case);
         assert!(
@@ -1440,7 +1443,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         let denied = device_client
             .observe_readonly(INSTANCE_ALIAS)
             .expect_err("fixture provider must be isolated from normal device operations");
-        assert_eq!(denied.code(), "runtime_request_rejected");
+        assert_eq!(denied.code().as_str(), "runtime_request_rejected");
         assert_eq!(
             denied.projection().map(|projection| projection.code),
             Some(RuntimeErrorCode::InvalidRequest)
