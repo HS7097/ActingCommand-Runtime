@@ -42,6 +42,24 @@ actingcommand_contract::outcome_codes! {
     }
 }
 
+// Workflow #398 RD-5a: the device-state checks of a handset (begin).
+actingcommand_contract::outcome_codes! {
+    /// Workflow #398 RD-5a (model-398 v1.1 §7, §10.1): the read-only device-state checks of a
+    /// handset and its screen check (`crate::device_state`). Every entry is pending.
+    pub enum DeviceStateCode {
+        /// A device-state read failed or answered a shape the parser does not know (value
+        /// `device_state_probe`; link `foreign_adb_error` when adb answered).
+        DeviceStateUnreadable => "device_state_unreadable": error,
+        /// The screen was still not awake after one wake key and the settle time.
+        DeviceWakeFailed => "device_wake_failed": error,
+        /// A keyguard without a credential still showed after one dismissal and the settle time.
+        DeviceKeyguardDismissFailed => "device_keyguard_dismiss_failed": error,
+        /// A keyguard waits for a person: it asks for a credential, or the policy is `wait`.
+        DeviceLocked => "device_locked": warning,
+    }
+}
+// Workflow #398 RD-5a (end).
+
 actingcommand_contract::outcome_locations! {
     /// The device layer's own operations and steps that a device error's diagnostic context or
     /// developer text names: the adb shell input backend's connect steps, the Nemu capture

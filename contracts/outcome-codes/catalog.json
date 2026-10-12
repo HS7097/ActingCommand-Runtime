@@ -1396,6 +1396,10 @@
     "device_process_present": {
       "type": "vocab:device_process_presence",
       "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
+    },
+    "device_state_probe": {
+      "type": "vocab:device_state_probe",
+      "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
     }
   },
   "vocabularies": {
@@ -4030,6 +4034,36 @@
         },
         "unknown": {
           "description": "No listing answered: it failed, passed its bound or never ran."
+        }
+      }
+    },
+    "device_state_probe": {
+      "description": "A device-state read of a handset (model-398 section 7.1).",
+      "source": {
+        "file": "crates/device/src/device_state.rs",
+        "enum": "DeviceStateProbe"
+      },
+      "tokens": {
+        "power": {
+          "description": "dumpsys power: the wakefulness."
+        },
+        "keyguard": {
+          "description": "dumpsys window policy: the keyguard section."
+        },
+        "battery": {
+          "description": "dumpsys battery."
+        },
+        "thermal": {
+          "description": "dumpsys thermalservice: the thermal status."
+        },
+        "foreground": {
+          "description": "The foreground query (dumpsys activity activities)."
+        },
+        "home": {
+          "description": "cmd package resolve-activity for the home intent."
+        },
+        "settings": {
+          "description": "settings get of a screen-timeout setting."
         }
       }
     }

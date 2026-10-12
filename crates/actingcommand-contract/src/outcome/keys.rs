@@ -332,4 +332,6 @@ outcome_keys! {
     android_started: boolean,
     adb_port_present: boolean,
     device_process_present: vocab(device_process_presence),
+    // Workflow #398 RD-5a: the device-state read of a handset that failed.
+    device_state_probe: vocab(device_state_probe),
 }
