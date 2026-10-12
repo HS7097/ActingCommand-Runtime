@@ -245,7 +245,12 @@ stdout is one JSON object:
  "repeating":[{"task_id":"...","instance_id":"...","error_code":"...","failure_code":"...",
    "step":{},"latest":{"execution_sequence":0,"run_id":"..."},
    "previous":{"execution_sequence":0,"run_id":"..."},"detail":null}],
- "warnings":[]}
+ "warnings":[],
+ "clock_slots":[{"code":"clock_slot_refused","task_id":"...","instance_id":"...",
+   "gate_code":"policy_budget_exhausted","budget_dimension":"task_daily",
+   "occurrence_unix_ms":0,"window_end_unix_ms":0,"next_eligible_unix_ms":0,"next_occurrence_unix_ms":0,
+   "slot_fate":"next_window","slot_fate_settled":true,
+   "recorded_sequence":0,"recorded_at_unix_ms":0,"next_dispatch":{"sequence":0,"admitted_at_unix_ms":0}}]}
 ```
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
@@ -268,6 +273,27 @@ stdout is one JSON object:
   configuration file changed after it, `daemon_start_unknown` without it,
   `error_code_unparsed:<task>/<instance>` for a code that looks like an identity and does not
   parse (judged on its main digest only), `task_not_in_catalog:<task>/<instance>`.
+- `clock_slots` (Workflow #372 K3): the clock-slot records (`scheduling/README.md`, "Clock-slot
+  records") whose event time is within 48 h of the ledger's latest event, newest first, at most
+  200; `clock_slots_total` is added with their number when the list is cut. A record is a
+  `policy.planning_signal_observed` of kind `goal_missed` whose `signal_id` starts with
+  `signal:clock_slot:`; it is selected by these two, never by its `fact_code`.
+  - Its `fact_code` token is read back into `code` and the token's values; `task_id` and
+    `instance_id` are the record's own. Absent values are left out. `recorded_sequence` and
+    `recorded_at_unix_ms` place the record in the ledger.
+  - `next_dispatch` is the pair's first `policy.dispatch_admitted` after the record, as its
+    `sequence` and `admitted_at_unix_ms` (D); it is left out when there is none. The reference
+    time is the ledger's latest event time.
+  - A refused or deferred record, with E its `window_end_unix_ms` and X its
+    `next_occurrence_unix_ms`: `slot_fate` is `collapsed` when D ≥ X, `same_window` when D < E,
+    and `next_window` otherwise, with `slot_fate_settled` true. Without D it is `collapsed` and
+    settled once the reference time reaches X; before that it is unsettled and shows the fate
+    its `next_eligible_unix_ms` predicts by the same rule, or `pending` without it.
+  - An owed record: `served` when D < X; `absorbed` when D ≥ X, or without D once the reference
+    time reaches X; both settled. Otherwise `pending`, unsettled.
+  - A token that does not read back (an unknown key, a value of the wrong type, a missing
+    required value) gives `{"parse_state":"unparsed","signal_id":"...","raw_token":"..."}`
+    and no warning.
 
 Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 `FATAL actingd: <code>` on stderr; once the configuration is loaded, stdout also carries

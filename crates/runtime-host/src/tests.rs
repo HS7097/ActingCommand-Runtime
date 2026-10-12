@@ -102,6 +102,7 @@ mod approvals;
 mod capture_failure;
 mod capture_sequence;
 mod client_events;
+mod clock_slot_report;
 mod contained_tasks;
 mod crash_recovery;
 mod detection;
