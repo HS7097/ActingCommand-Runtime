@@ -368,3 +368,79 @@ The per-instance read (`actingctl facts` without `--program`) is not built.
 The seeds are visible as `fact.published` events of origin module `fact-store`
 and source `runtime` in the ledger, and through `RuntimeHost::instance_fact_snapshot`
 for one instance context.
+
+## Pack schedule facts
+
+Workflow #386 slice SR-11 (scheduling model v1.4.2 §6.1). A person or an agent states, as a
+state and not as a one-off command, during which periods a task package may be scheduled on an
+instance. The state is stored in this store as one record of the `session.` family per scope.
+
+**Status.** Written ahead of its code (documentation slice SR-0); slice SR-11 implements it.
+Until then a `session.pack.schedule` record is an ordinary `session.` record that nothing reads.
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `session.pack.schedule` | `record_list`, one row `{ "package_id": <string>, "from_unix_ms": <timestamp_ms>, "until_unix_ms": <timestamp_ms>, "schedulable": <boolean> }` per period | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
+
+**Rows.** A row says "from `from_unix_ms` until `until_unix_ms` (half-open), the task package
+`package_id` is schedulable or not". `package_id` is the task package's id as the procedure
+manifest names it; the granularity is the task package, so every catalog task of one package
+opens and closes together, never one task and never a whole standard package. A row whose
+`until_unix_ms` is not after its `from_unix_ms`, rows of one `package_id` that overlap, or a
+value of another shape are refused as the non-fatal request error
+`session_pack_schedule_invalid` (`fact_key`, `field` pointing at the member). One scope holds at
+most the `record_list` bound of 256 rows, for all its packages together.
+
+**Writing.** One observation writes a scope's whole list, atomically. The publisher chooses the
+lifetime: no `expires_at_unix_ms` never expires. Publishing an empty list withdraws every row of
+the scope; publishing the list without a package's rows withdraws only those. The writers are
+`actingctl pack-schedule set` and `pack-schedule get`, the MCP general tools
+`ac_pack_schedule_set` and `ac_pack_schedule_get` (no tier), and the UI console (slice UI-2);
+they write the same rows. Under Workflow #389 the key is in the general key family
+(`fact_key_family`, `contracts/runtime-interface.md`), so all three counters may write it, and
+an observation that mixes it with keys of another family is refused as `fact_origin_mixed`.
+Before #389's slice U-6 removes the origin exception, SR-11 accepts it like a priority offset:
+from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. There is no offline writer: a write goes
+through a running actingd, like `actingctl task-offset`.
+
+**Which row applies.** For instance `I`, task package `P` and time `t`:
+
+1. the instruction layer: the `session.pack.schedule` record that applies to `I`, the most
+   specific scope first (instance over server over game, per key: an instance record replaces
+   the server and game records as a whole); a row of `P` that covers `t` decides;
+2. otherwise the standard package layer: the default rows the instance's standard package
+   declares in a data file at its root, compiled when the catalog is activated. The Runtime
+   only reads them and never stores them here; the file's name and format belong to the
+   standard-package data-file model of Workflow #373 (NAV-M). A default row should not close a
+   recognition maintenance package;
+3. otherwise `P` is schedulable.
+
+Schedulable does not mean that it runs: the task's own trigger, budgets, cooldown and blackouts
+still decide, and a task that runs only on request still runs only on request.
+
+**Evaluation.** When `P` is not schedulable for `I` at the evaluation instant, every candidate of
+`P` on `I` is deferred with `pack_schedule_closed` (info; `package_id`, and
+`next_eligible_unix_ms` the end of the covering row). Its place in the order of deferrals is
+after an active blackout and after `pack_registry_not_loaded` of Workflow #389
+(`scheduling-blackout.md`, "Order of the deferrals"). A row of a package that #389 has unloaded
+stays stored and takes effect again when the package is loaded. A changed record wakes the
+evaluation (`FactsChanged`); a row boundary wakes it through the deferral's wake time.
+
+**Unknown packages.** A row naming a package that no task of the active catalog uses is not an
+error: a cycle evaluated by `evaluate_policy_cycle` reports it once as
+`pack_schedule_unknown_package` (info; `package_id`) and the row has no effect.
+
+**Identity.** As for priority offsets, `combined_policy_snapshot_id` hashes the records the
+projection consumed, so a record written after an evaluation and before its admission refuses
+the intent as `policy_facts_stale` and a just-closed package is never dispatched. Without any
+such record the hashed input is exactly the previous one, so identities do not change.
+
+**Capacity and ledger.** The key takes one active fact identity per scope that uses it (the
+instance, its server, its game), counted in the store's shared capacity of 256 active facts
+(Workflow #383 AO-0 keeps the capacity ledger); when the store is full the write fails as today
+and nothing is evicted. A write is an ordinary `fact.published` event of the publishing request;
+like every key of this store it is a tagged record that the start loads from the ledger
+(Workflow #383).
+
+**Codes.** `pack_schedule_closed` and `pack_schedule_unknown_package` (policy),
+`session_pack_schedule_invalid` (runtime-host); none of them triggers the recovery ladder.
