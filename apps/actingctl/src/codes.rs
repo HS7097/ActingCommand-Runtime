@@ -110,5 +110,10 @@ actingcommand_contract::outcome_codes! {
         ExitedDuringStartup => "exited_during_startup": error,
         StartTimeout => "start_timeout": error,
         ProcessProbeFailed => "process_probe_failed": error,
+        // ---- #389 U-0 registrations (pending), emitted from U-3
+        // (contracts/runtime-interface.md, "Outcome codes").
+        LabToolOptionDisabled => "lab_tool_option_disabled": error,
+        McpTierRetired => "mcp_tier_retired": warning,
+        // ---- end of #389 U-0 registrations
     }
 }

@@ -1074,6 +1074,53 @@ actingcommand_contract::outcome_codes! {
         TaskIdTooLongForFacts => "task_id_too_long_for_facts": error,
         TerminalAlreadyCommitted => "terminal_already_committed": error,
         UnknownEmulatorCapability => "unknown_emulator_capability": error,
+        // ---- #389 U-0 registrations (pending): the unified interface's host codes, registered
+        // ahead of the slices that emit them (contracts/runtime-interface.md, "Outcome codes").
+        /// Error. From U-6, an unbound connection sent a request other than the handshake;
+        /// receipt only, no ledger record (keys `operation`).
+        ChannelBindingMissing => "channel_binding_missing": error,
+        /// Error. A second BindChannel on one connection (keys `channel`). Emitted from U-2.
+        ChannelBindingExists => "channel_binding_exists": error,
+        /// Error. From U-6, the gate does not take this request kind on this channel (keys
+        /// `operation`, `channel`).
+        ChannelRequestRefused => "channel_request_refused": error,
+        /// Error. From U-6, the Lab channel while neither Lab option is installed (keys
+        /// `operation`).
+        LabModuleNotInstalled => "lab_module_not_installed": error,
+        /// Error. From U-6, a request kind of the Lab option that is not installed (keys
+        /// `operation`, `lab_option`).
+        LabModuleOptionDisabled => "lab_module_option_disabled": error,
+        /// Success. UpgradeState enter: drained and its own close accepted (keys
+        /// `transition_id`). Emitted from U-4, as are the four codes below.
+        UpgradeStateEntered => "upgrade_state_entered": success,
+        /// Success. UpgradeState cancel during the drain (keys `transition_id`).
+        UpgradeStateCancelled => "upgrade_state_cancelled": success,
+        /// Success. UpgradeState leave released the held Runtime (keys `transition_id`).
+        UpgradeStateReleased => "upgrade_state_released": success,
+        /// Warning. The enter connection closed before the close was accepted; handled as
+        /// cancel and written as the aborted transition's `failure_code` (keys
+        /// `transition_id`).
+        UpgradeStateRequesterDisconnected => "upgrade_state_requester_disconnected": warning,
+        /// Error. The reply to an enter that a cancel withdrew during the drain (keys
+        /// `transition_id`).
+        UpgradeStateAborted => "upgrade_state_aborted": error,
+        /// Success. LoadPack (keys `package_id`). Emitted from U-3, as are the five codes below.
+        PackRegistryLoaded => "pack_registry_loaded": success,
+        /// Success. UnloadPack, after stopping the runs that used the package (keys
+        /// `package_id`).
+        PackRegistryUnloaded => "pack_registry_unloaded": success,
+        /// Error. The package is neither in the loaded-pack table nor in the configuration
+        /// (keys `package_id`).
+        PackRegistryEntryUnknown => "pack_registry_entry_unknown": error,
+        /// Error. A replacing binding changes the entry's run mode (keys `package_id`).
+        PackRegistryEntryInvalid => "pack_registry_entry_invalid": error,
+        /// Info. A Runtime requester met an unloaded package: deferred or skipped (keys
+        /// `package_id`; optional `instance_id`).
+        PackRegistryNotLoaded => "pack_registry_not_loaded": info,
+        /// Info. An unload withdrew an admitted, unstarted dispatch (keys `package_id`;
+        /// optional `request_id`, `instance_id`).
+        PackRegistryDispatchWithdrawn => "pack_registry_dispatch_withdrawn": info,
+        // ---- end of #389 U-0 registrations
     }
 }
 
