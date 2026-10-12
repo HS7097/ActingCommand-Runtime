@@ -1226,5 +1226,113 @@ mod tests {
             refusal.contains("unknown_identity=readable_attributes"),
             "{refusal}"
         );
+
+        // The kernel reports the refusal under its code: a dry run checks the same document,
+        // given as an override, against the step's layout.
+        let task = select_task(identity_layout("readable_attributes"));
+        let facts = SelectionFactSnapshot::from_fact_records("snapshot-a", 1_000_000, &[]);
+        let error = dry_run_select(
+            &task,
+            "pick",
+            &home_frame(),
+            &facts,
+            1_000_000,
+            Some(&policy),
+        )
+        .expect_err("the document does not apply to the layout");
+        assert_eq!(
+            error.code().as_str(),
+            "contained_task_select_policy_mismatch"
+        );
+    }
+
+    /// A prepared task whose one select step `pick` runs from the home page on `layout`, with
+    /// the keyed document as its sealed policy.
+    fn select_task(layout: CandidateLayout) -> PreparedContainedTask {
+        let control: TaskControl = serde_json::from_value(serde_json::json!({
+            "schema_version": "Lab-1y.control.v1",
+            "package_id": "neutral.semantic.task",
+            "execution_mode": "navigable_route",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 2, "height": 1},
+            "entry_task_id": "task",
+            "capture_interval_ms": 1,
+            "step_timeout_ms": 2
+        }))
+        .expect("task control");
+        let mut program: TaskProgram = serde_json::from_value(serde_json::json!({
+            "schema_version": "0.6",
+            "task_id": "task",
+            "game": "neutral",
+            "coordinate_space": {"width": 2, "height": 1},
+            "operations": [{
+                "id": "pick", "from": "home",
+                "select": {"layout_id": "layout-list",
+                           "policy": {"path": "policies/list.json", "sha256": "0".repeat(64)}}
+            }]
+        }))
+        .expect("task program");
+        program.operations[0].prepared_select = Some(Box::new(PreparedSelect {
+            layout_id: "layout-list".to_owned(),
+            path: "operations/task/policies/list.json".to_owned(),
+            package_sha256: "0".repeat(64),
+            policy: keyed_policy(),
+        }));
+        let mut pack: actingcommand_recognition_pack::RecognitionPack =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": "0.7",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 2, "height": 1},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": [
+                    {"type": "color", "id": "page/home",
+                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                     "expected": [255, 0, 0]},
+                    {"type": "ocr", "id": "candidate/name",
+                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                     "languages": ["en"], "timeout_ms": 2000, "match_mode": "exact",
+                     "expected": ["a"], "case_sensitive": true, "minimum_confidence": 0.8,
+                     "model_ref": "PP-OCRv6_medium", "model_sha256": "a".repeat(64)}
+                ]
+            }))
+            .expect("recognition pack");
+        pack.candidate_layouts = vec![layout];
+        let evaluator = RecognitionEvaluator::new(std::path::PathBuf::new(), pack)
+            .expect("recognition evaluator");
+        let page_set: actingcommand_page_detector::PageSet =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": "0.3",
+                "pages": [{"id": "neutral/home", "required": ["page/home"]}]
+            }))
+            .expect("page set");
+        let detector =
+            actingcommand_page_detector::PageDetector::new(page_set).expect("page detector");
+        PreparedContainedTask {
+            control,
+            program,
+            evaluator,
+            detector,
+            entry_page: None,
+            scheduling_outcome: None,
+            post_admission_ocr: None,
+            post_admission_fields: None,
+            package_sha256: "fixture-sha256".into(),
+            entry_count: 1,
+            task_count: 1,
+        }
+    }
+
+    /// The home page of [`select_task`].
+    fn home_frame() -> Frame {
+        Frame::from_pixels(
+            2,
+            1,
+            [255, 0, 0, 0, 0, 0].to_vec(),
+            actingcommand_device::PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .expect("fixture frame")
     }
 }

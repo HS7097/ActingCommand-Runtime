@@ -386,5 +386,44 @@ mod tests {
         domain.validate().expect("a 1024-entry domain validates");
         assert_eq!(domain.domain().len(), 1_024);
         assert!(declaration(MAX_IDENTITY_ENTRIES + 1).validate().is_err());
+
+        // The pack that declares the domain in a layout is admitted at 1024 entries and
+        // refused at 1025 under the pack's refusal code.
+        let pack = |size: usize| -> crate::RecognitionPack {
+            serde_json::from_value(serde_json::json!({
+                "schema_version": "0.7",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": [{
+                    "type": "ocr", "id": "candidate/name",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "languages": ["en"], "timeout_ms": 2000, "match_mode": "exact",
+                    "expected": ["member 0000"], "case_sensitive": true,
+                    "minimum_confidence": 0.8, "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "a".repeat(64)
+                }],
+                "candidate_layouts": [{
+                    "id": "layout-list", "page_id": "neutral/home", "kind": "fixed_slots",
+                    "features": [{"name": "member", "value": "identity",
+                                  "identity": declaration(size)}],
+                    "slots": [{"rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                               "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                               "targets": {"member": "candidate/name"}}]
+                }]
+            }))
+            .expect("pack decodes")
+        };
+        crate::RecognitionEvaluator::new(std::path::PathBuf::new(), pack(MAX_IDENTITY_ENTRIES))
+            .expect("a pack with a 1024-entry domain is admitted");
+        let refusal = crate::RecognitionEvaluator::new(
+            std::path::PathBuf::new(),
+            pack(MAX_IDENTITY_ENTRIES + 1),
+        )
+        .expect_err("a pack with a 1025-entry domain is refused");
+        assert_eq!(
+            refusal.code(),
+            crate::RecognitionPackErrorCode::InvalidPackage
+        );
     }
 }
