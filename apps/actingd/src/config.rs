@@ -2274,11 +2274,13 @@ mod tests {
         use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
         use actingcommand_runtime_host::RuntimeHost;
 
+        // Workflow #398 RD-1a: a configured serial is bound for the whole test process and
+        // redacted wherever it appears, so the configured values are neutral fake serials.
         for (capture, endpoint) in [
-            (false, "127.0.0.1:16384"),
-            (true, "198.51.100.42:16416"),
-            (true, "[2001:db8::42]:16416"),
-            (true, "device.example.test:16416"),
+            (false, "TESTSERIAL0006"),
+            (true, "TESTSERIAL0007"),
+            (true, "TESTSERIAL0008"),
+            (true, "TESTSERIAL0009"),
         ] {
             let root = TempDir::new().expect("tempdir");
             let id = IdentifierIssuer::new()

@@ -5152,9 +5152,10 @@ mod tests {
                 adb_path: original_adb.clone(),
                 command_timeout: Duration::from_secs(1),
             },
+            // A neutral fake serial: a bound serial is redacted for the whole test process.
             DeviceTarget {
                 serial: Some(crate::DeviceSerial::handset(
-                    "127.0.0.1:16416",
+                    "TESTSERIAL0005",
                     "neutral.instance",
                 )),
                 ..DeviceTarget::default()
@@ -5169,7 +5170,7 @@ mod tests {
             |_, _, _| panic!("generic explicit Nemu capture must bind the running target"),
             |configured_adb, target_serial, instance_id, explicit_root, explicit_dll| {
                 assert_eq!(configured_adb, generic_adb);
-                assert_eq!(target_serial, "127.0.0.1:16416");
+                assert_eq!(target_serial, "TESTSERIAL0005");
                 assert_eq!(instance_id, None);
                 assert_eq!(explicit_root, None);
                 assert_eq!(explicit_dll, None);

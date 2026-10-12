@@ -533,8 +533,9 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .transition_capture_after_input
             .store(successful, Ordering::Release);
         let configured_instance = instance_id();
+        // A neutral fake serial: a bound serial is redacted for the whole test process.
         let target = DeviceTarget {
-            serial: Some(DeviceSerial::handset("127.0.0.1:16384", "neutral.instance")),
+            serial: Some(DeviceSerial::handset("TESTSERIAL0003", "neutral.instance")),
             ..DeviceTarget::default()
         };
         let adb = AdbConfig {
@@ -898,9 +899,10 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             mumu: None,
         });
         let configured_instance = instance_id();
+        // A neutral fake serial: a bound serial is redacted for the whole test process.
         let target_config = DeviceTarget {
             serial: Some(DeviceSerial::handset(
-                "neutral-recovery",
+                "TESTSERIAL0004",
                 "fixture01.instance",
             )),
             ..DeviceTarget::default()

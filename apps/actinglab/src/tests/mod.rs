@@ -2763,14 +2763,7 @@ fn bare_instance_argument_is_used_as_adb_serial_without_config_entry() {
     };
     let (_adb_dir, config) = user_config_with_test_adb();
     let resolved = device_config(&global, &config).expect("device config");
-    assert_eq!(
-        resolved
-            .target
-            .serial
-            .as_ref()
-            .map(|serial| serial.adb_arg()),
-        Some("127.0.0.1:16416")
-    );
+    assert_eq!(resolved.adb_serial.as_deref(), Some("127.0.0.1:16416"));
 }
 
 #[test]
@@ -2791,14 +2784,7 @@ fn device_config_uses_instance_capture_backend_default() {
 
     let resolved = device_config(&global, &config).expect("device config");
 
-    assert_eq!(
-        resolved
-            .target
-            .serial
-            .as_ref()
-            .map(|serial| serial.adb_arg()),
-        Some("127.0.0.1:16416")
-    );
+    assert_eq!(resolved.adb_serial.as_deref(), Some("127.0.0.1:16416"));
     assert_eq!(resolved.capture_backend, CaptureBackendChoice::NemuIpc);
 }
 
