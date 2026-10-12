@@ -4748,6 +4748,9 @@
       "ledger-forensics",
       "runtime-host"
     ],
+    "digest_": [
+      "execution-kernel"
+    ],
     "direct_": [
       "contract",
       "scheduler"
@@ -5091,6 +5094,9 @@
       "runtime-database",
       "runtime-host"
     ],
+    "heavy_": [
+      "policy"
+    ],
     "highest_": [
       "actinglab"
     ],
@@ -5105,6 +5111,12 @@
       "actingctl",
       "actingd",
       "runtime-host"
+    ],
+    "host_budget_": [
+      "policy"
+    ],
+    "host_capacity_": [
+      "policy"
     ],
     "hsv_": [
       "pack-containment"

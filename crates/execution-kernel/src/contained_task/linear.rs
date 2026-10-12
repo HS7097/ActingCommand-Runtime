@@ -24,6 +24,9 @@ use super::{
     selection,
 };
 use crate::RunOperationPolicy;
+use crate::codes::ExecutionKernelCode;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ApplicationLifecycleAction, PHASED_CONTROL_SCHEMA, TaskTimingBoundary, TaskTimingCheckPosition,
     TaskTimingFailure, TaskTimingScope, TaskTimingStage,
@@ -37,11 +40,13 @@ use std::time::{Duration, Instant};
 
 /// The control `execution_mode` of a linear task.
 pub(super) const LINEAR_STEPS: &str = "linear_steps";
-const LINEAR_INVALID: &str = "contained_task_linear_invalid";
-const ENTRY_UNMATCHED: &str = "contained_task_linear_entry_unmatched";
-const INTERMEDIATE_UNOBSERVED: &str = "contained_task_linear_intermediate_unobserved";
-const APPLICATION_UNCONFIRMED: &str = "contained_task_linear_application_unconfirmed";
-const PAGE_CONFIRMATION_FAILED: &str = "page_confirmation_failed";
+const LINEAR_INVALID: Code = ExecutionKernelCode::ContainedTaskLinearInvalid.code();
+const ENTRY_UNMATCHED: Code = ExecutionKernelCode::ContainedTaskLinearEntryUnmatched.code();
+const INTERMEDIATE_UNOBSERVED: Code =
+    ExecutionKernelCode::ContainedTaskLinearIntermediateUnobserved.code();
+const APPLICATION_UNCONFIRMED: Code =
+    ExecutionKernelCode::ContainedTaskLinearApplicationUnconfirmed.code();
+const PAGE_CONFIRMATION_FAILED: Code = ExecutionKernelCode::PageConfirmationFailed.code();
 const UNRECOGNIZED_PAGE: &str = "<unrecognized>";
 /// The `from` / `entry_page` of an application entry: any screen, never a detector page.
 pub(super) const ANY_PAGE: &str = "any";
@@ -159,7 +164,7 @@ impl LinearPlan {
             let limit_ms = limit_ms.min(control.task_timeout().milliseconds);
             if required_ms > limit_ms {
                 return Err(ContainedTaskError::with_detail(
-                    "recognition_sample_budget_insufficient",
+                    ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
                     format!(
                         "phase={phase} pages={} requires {required_ms}ms across page calls and waits; limit={limit_ms}ms",
                         pages.join(",")
@@ -511,7 +516,9 @@ impl TaskProgram {
         for (index, operation) in self.operations.iter().enumerate() {
             operation.validate(control, self.defaults, &self.schema_version)?;
             if !operation_ids.insert(operation.id.as_str()) {
-                return Err(ContainedTaskError::new("contained_task_program_invalid"));
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+                ));
             }
             if operation.select.is_some() || operation.on_error.is_some() {
                 return Err(invalid("operation_effect", Some(operation)));
@@ -688,7 +695,9 @@ impl TaskProgram {
             .map_err(|(reason, index)| invalid(reason, Some(&self.operations[index])))?;
         if let Some(declaration) = &self.scheduling_outcome {
             declaration.validate().map_err(|_| {
-                ContainedTaskError::new("contained_task_outcome_declaration_invalid")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
+                )
             })?;
             if declaration.designated_operation().is_some() {
                 return Err(invalid("designated_operation", None));
@@ -777,7 +786,7 @@ impl PreparedContainedTask {
         let first = plan
             .steps
             .first()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         // An application entry captures nothing before its effect (R24): no frame, no wait.
         let mut observation = match &first.from {
             LinearFrom::Any => None,
@@ -810,7 +819,8 @@ impl PreparedContainedTask {
         // optional operation writes nothing. The next operation follows from the page that
         // passed, never from a comparison with the target page. Without an optional operation
         // every operation runs in order and `dispatched` is the operation index.
-        let state_invalid = || ContainedTaskError::new("contained_task_state_invalid");
+        let state_invalid =
+            || ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code());
         let mut current = 0;
         let mut dispatched = 0_u32;
         let mut handled = BTreeSet::new();
@@ -924,9 +934,9 @@ impl PreparedContainedTask {
                 .map_err(ContainedTaskRunError::Boundary)?;
             match step.effect {
                 LinearEffect::Click => {
-                    let frame = observation
-                        .as_ref()
-                        .ok_or_else(|| ContainedTaskError::new("contained_task_page_unknown"))?;
+                    let frame = observation.as_ref().ok_or_else(|| {
+                        ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
+                    })?;
                     self.linear_input(runtime, run, step_index, operation, frame, step_timing)?;
                 }
                 LinearEffect::Application(action) => {
@@ -987,7 +997,9 @@ impl PreparedContainedTask {
             // The retry decision (§5.5): the gate first, then this step's own page. The gate is
             // the intermediate page, or every candidate (Workflow #339 §3.5).
             let LinearFrom::Page(own_page) = &step.from else {
-                return Err(ContainedTaskError::new("contained_task_state_invalid").into());
+                return Err(
+                    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into(),
+                );
             };
             self.linear_retry_delay(runtime, run, retry_interval)?;
             let decision_started = Instant::now();
@@ -1115,10 +1127,9 @@ impl PreparedContainedTask {
         let action_seed = runtime
             .action_seed(step_index, &operation.id)
             .map_err(ContainedTaskRunError::operation::<R>)?;
-        let click = operation
-            .click
-            .as_ref()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+        let click = operation.click.as_ref().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })?;
         let (action, sampling) =
             click.input_action(&self.control.resolution, target.as_ref(), action_seed)?;
         runtime
@@ -1131,7 +1142,10 @@ impl PreparedContainedTask {
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         if observation.sampling.is_some() && Instant::now() >= step_timing.deadline() {
-            return Err(ContainedTaskError::new("recognition_sample_deadline_exceeded").into());
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+            )
+            .into());
         }
         if Instant::now() >= deadline {
             return Err(self
@@ -1168,7 +1182,7 @@ impl PreparedContainedTask {
             ApplicationEffectSupport::Performed => {}
             ApplicationEffectSupport::Unsupported => {
                 return Err(ContainedTaskError::with_detail(
-                    "application_effect_requires_assigned_application",
+                    SharedCode::ApplicationEffectRequiresAssignedApplication.code(),
                     format!("operation={}", operation.id),
                 )
                 .into());
@@ -1359,7 +1373,7 @@ impl PreparedContainedTask {
         let skip_target = *candidates
             .pages
             .last()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let settle = candidates.settle;
         let started = Instant::now();
         loop {

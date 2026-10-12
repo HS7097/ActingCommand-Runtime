@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::PolicyCode;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
@@ -101,6 +104,39 @@ pub enum CatalogDiagnosticCode {
     ApprovalMissing,
     PrioritySelectionWithoutDocument,
     PrioritySelectionPercentileInvalid,
+}
+
+impl CatalogDiagnosticCode {
+    /// The registered code that this diagnostic's spelling names (Workflow #378 A2d, decision
+    /// CD-8): the closed type and its serde spellings stay; the spellings that other owners
+    /// also use are the contract's (`SharedCode`), the others are the policy's.
+    pub const fn code(self) -> Code {
+        match self {
+            Self::DocumentTooLarge => SharedCode::DocumentTooLarge.code(),
+            Self::CatalogTooLarge => PolicyCode::CatalogTooLarge.code(),
+            Self::InvalidJson => SharedCode::InvalidJson.code(),
+            Self::DuplicateKey => SharedCode::DuplicateKey.code(),
+            Self::UnsupportedSchemaVersion => SharedCode::UnsupportedSchemaVersion.code(),
+            Self::UnknownField => PolicyCode::UnknownField.code(),
+            Self::DescriptorMismatch => PolicyCode::DescriptorMismatch.code(),
+            Self::LimitExceeded => SharedCode::LimitExceeded.code(),
+            Self::DuplicateId => SharedCode::DuplicateId.code(),
+            Self::DanglingReference => SharedCode::DanglingReference.code(),
+            Self::TypeMismatch => SharedCode::TypeMismatch.code(),
+            Self::MissingRequiredField => SharedCode::MissingRequiredField.code(),
+            Self::PredicateUnreachable => PolicyCode::PredicateUnreachable.code(),
+            Self::PredicateUncomputable => PolicyCode::PredicateUncomputable.code(),
+            Self::LoopBudgetMissing => PolicyCode::LoopBudgetMissing.code(),
+            Self::EffectIncompatible => PolicyCode::EffectIncompatible.code(),
+            Self::ApprovalMissing => PolicyCode::ApprovalMissing.code(),
+            Self::PrioritySelectionWithoutDocument => {
+                PolicyCode::PrioritySelectionWithoutDocument.code()
+            }
+            Self::PrioritySelectionPercentileInvalid => {
+                PolicyCode::PrioritySelectionPercentileInvalid.code()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -11,16 +11,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     FactScalar as ContractFactScalar, MAX_RESOURCE_TARGETS, MAX_RESOURCE_TARGETS_DOCUMENT_BYTES,
     NotTargetableResource, RESOURCE_TARGETS_FACT_KEY, ResourceTargetCondition,
     ResourceTargetConditionState, ResourceTargetObservation, ResourceTargetPendingReason,
-    ResourceTargetsRejection, ResourceTargetsRejectionReason, TargetableResource,
+    ResourceTargetsRejection, ResourceTargetsRejectionReason, RuntimeErrorCode, TargetableResource,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
+use crate::codes::PolicyCode;
 use crate::evaluator::{activity_scope_specificity, project_time_validity, scope_matches_instance};
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
@@ -250,7 +253,7 @@ pub enum ResourceTargetsError {
     /// The time-validity projection shared with the evaluator failed.
     Evaluation(PolicyEvaluationError),
     /// A result the parser or the canonical encoder cannot produce for a valid input.
-    Internal(&'static str),
+    Internal(Code),
 }
 
 /// Parses the raw document with the scheduling declaration parser and checks everything that
@@ -362,7 +365,9 @@ fn declaration_rejection(diagnostic: CatalogDiagnostic) -> ResourceTargetsError 
         CatalogDiagnosticCode::MissingRequiredField => Reason::MissingField,
         CatalogDiagnosticCode::TypeMismatch => Reason::InvalidType,
         _ => {
-            return ResourceTargetsError::Internal("resource_targets_parser_code_unexpected");
+            return ResourceTargetsError::Internal(
+                PolicyCode::ResourceTargetsParserCodeUnexpected.code(),
+            );
         }
     };
     rejected(
@@ -527,8 +532,9 @@ pub fn check_resource_targets(
                 .map_err(|(reason, path)| at(format!("/targets/{index}{path}"), reason))?,
         );
     }
-    let canonical = canonical_serialized(document)
-        .map_err(|_| ResourceTargetsError::Internal("resource_targets_canonical_encode_failed"))?;
+    let canonical = canonical_serialized(document).map_err(|_| {
+        ResourceTargetsError::Internal(PolicyCode::ResourceTargetsCanonicalEncodeFailed.code())
+    })?;
     let policy_sha256 = format!("sha256:{:x}", Sha256::digest(canonical));
     let projected =
         project_time_validity(catalog, facts, time).map_err(ResourceTargetsError::Evaluation)?;
@@ -607,8 +613,9 @@ fn check_resource_targets_v2(
                 .map_err(|(reason, path)| at(format!("/targets/{index}{path}"), reason))?,
         );
     }
-    let canonical = canonical_serialized(document)
-        .map_err(|_| ResourceTargetsError::Internal("resource_targets_canonical_encode_failed"))?;
+    let canonical = canonical_serialized(document).map_err(|_| {
+        ResourceTargetsError::Internal(PolicyCode::ResourceTargetsCanonicalEncodeFailed.code())
+    })?;
     let policy_sha256 = format!("sha256:{:x}", Sha256::digest(canonical));
     let projected =
         project_time_validity(catalog, facts, time).map_err(ResourceTargetsError::Evaluation)?;
@@ -1034,11 +1041,11 @@ pub(crate) enum RowsDecodeError {
 }
 
 impl RowsDecodeError {
-    pub(crate) const fn code(self) -> &'static str {
+    pub(crate) const fn code(self) -> Code {
         match self {
-            Self::UnsupportedSchemaVersion => "unsupported_schema_version",
-            Self::MalformedRows => "malformed_rows",
-            Self::InstanceMismatch => "instance_mismatch",
+            Self::UnsupportedSchemaVersion => SharedCode::UnsupportedSchemaVersion.code(),
+            Self::MalformedRows => PolicyCode::MalformedRows.code(),
+            Self::InstanceMismatch => RuntimeErrorCode::InstanceMismatch.code(),
         }
     }
 }
@@ -1436,7 +1443,7 @@ pub(crate) enum TargetPolicyState {
         targets: Vec<ResourceTargetSpec>,
     },
     Unreadable {
-        code: &'static str,
+        code: Code,
     },
     /// An active v2 policy (Workflow #335 S2b): the only state that enables resource weights.
     ActiveV2 {
@@ -1676,7 +1683,7 @@ pub enum StoredResourceTargets {
     None,
     /// The stored record cannot be read; `code` is the evaluator's degradation code.
     Unreadable {
-        code: &'static str,
+        code: Code,
     },
     Policy(Box<StoredResourceTargetPolicy>),
 }
@@ -1713,8 +1720,9 @@ pub fn active_resource_targets(
         condition: TargetCondition,
     ) -> Result<StoredTarget, ResourceTargetsError> {
         let TargetCondition::AtLeast { amount } = condition;
-        let document = serde_json::to_value(target)
-            .map_err(|_| ResourceTargetsError::Internal("resource_targets_view_encode_failed"))?;
+        let document = serde_json::to_value(target).map_err(|_| {
+            ResourceTargetsError::Internal(PolicyCode::ResourceTargetsViewEncodeFailed.code())
+        })?;
         Ok((document, id.to_owned(), resource.to_owned(), amount))
     }
     let state = instance_target_policies(facts, time)
@@ -1824,7 +1832,7 @@ pub(crate) enum TargetEffect {
     None,
     /// The instance's stored policy cannot be read; every candidate of the instance.
     PolicyUnreadable {
-        code: &'static str,
+        code: Code,
     },
     /// The instance's policy has expired; only the candidates it names.
     PolicyExpired {
@@ -1909,7 +1917,7 @@ impl ResourceTerm {
         let mut reasons = Vec::with_capacity(4);
         if !self.targets.is_empty() {
             reasons.push(DecisionReason {
-                code: "resource_targets".to_owned(),
+                code: PolicyCode::ResourceTargets.as_str().to_owned(),
                 detail: bounded_list(String::new(), &self.targets, "; "),
             });
         }
@@ -1951,7 +1959,7 @@ impl ResourceTerm {
                 })
                 .collect::<Vec<_>>();
             reasons.push(DecisionReason {
-                code: "resource_weights".to_owned(),
+                code: PolicyCode::ResourceWeights.as_str().to_owned(),
                 detail: bounded_list(
                     format!(
                         "policy={}@{} term={}{} items=",
@@ -2119,7 +2127,7 @@ pub(crate) struct InstanceTargets {
 #[derive(Debug)]
 enum ResolvedPolicy {
     None,
-    Unreadable(&'static str),
+    Unreadable(Code),
     Expired {
         policy_sha256: String,
         applied_at_unix_ms: u64,
@@ -2256,7 +2264,7 @@ pub(crate) fn resolve_instance_targets(
 ) -> Result<InstanceTargets, &'static str> {
     let resolved = match &policy.state {
         None => ResolvedPolicy::None,
-        Some(TargetPolicyState::Unreadable { code }) => ResolvedPolicy::Unreadable(code),
+        Some(TargetPolicyState::Unreadable { code }) => ResolvedPolicy::Unreadable(*code),
         Some(TargetPolicyState::Expired {
             policy_sha256,
             applied_at_unix_ms,
@@ -2767,7 +2775,7 @@ impl InstanceTargets {
     pub(crate) fn effect(&self, task_id: &str) -> TargetEffect {
         match &self.policy {
             ResolvedPolicy::None => TargetEffect::None,
-            ResolvedPolicy::Unreadable(code) => TargetEffect::PolicyUnreadable { code },
+            ResolvedPolicy::Unreadable(code) => TargetEffect::PolicyUnreadable { code: *code },
             ResolvedPolicy::Expired {
                 policy_sha256,
                 applied_at_unix_ms,
@@ -2805,7 +2813,7 @@ impl InstanceTargets {
     ) -> Vec<DecisionReason> {
         let policy_reason = if let Some((scope_kind, observed_at_unix_ms)) = self.ignored {
             Some(DecisionReason {
-                code: "resource_target_policy_ignored".to_owned(),
+                code: PolicyCode::ResourceTargetPolicyIgnored.as_str().to_owned(),
                 detail: format!(
                     "a {scope_kind} scoped {RESOURCE_TARGETS_FACT_KEY} record (observed_at={observed_at_unix_ms}) was not written by the formal entry and is ignored"
                 ),
@@ -2813,7 +2821,9 @@ impl InstanceTargets {
         } else {
             match (effect, &self.policy) {
                 (TargetEffect::PolicyUnreadable { code }, _) => Some(DecisionReason {
-                    code: "resource_target_policy_unreadable".to_owned(),
+                    code: PolicyCode::ResourceTargetPolicyUnreadable
+                        .as_str()
+                        .to_owned(),
                     detail: format!(
                         "stored policy cannot be read ({code}); instance runs base scheduling"
                     ),
@@ -2826,20 +2836,24 @@ impl InstanceTargets {
                     },
                     _,
                 ) => Some(DecisionReason {
-                    code: "resource_target_policy_expired".to_owned(),
+                    code: PolicyCode::ResourceTargetPolicyExpired.as_str().to_owned(),
                     detail: format!(
                         "policy={policy_sha256} applied_at={applied_at_unix_ms} valid_until={valid_until_unix_ms}"
                     ),
                 }),
                 (_, ResolvedPolicy::Active { unevaluable, .. }) if !unevaluable.is_empty() => {
                     Some(DecisionReason {
-                        code: "resource_target_tasks_unevaluable".to_owned(),
+                        code: PolicyCode::ResourceTargetTasksUnevaluable
+                            .as_str()
+                            .to_owned(),
                         detail: unevaluable_detail(unevaluable),
                     })
                 }
                 (_, ResolvedPolicy::ActiveV2(resolved)) if !resolved.unevaluable.is_empty() => {
                     Some(DecisionReason {
-                        code: "resource_target_tasks_unevaluable".to_owned(),
+                        code: PolicyCode::ResourceTargetTasksUnevaluable
+                            .as_str()
+                            .to_owned(),
                         detail: bounded_list(String::new(), &resolved.unevaluable, ","),
                     })
                 }

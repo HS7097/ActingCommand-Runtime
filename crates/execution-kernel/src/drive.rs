@@ -2,7 +2,10 @@
 
 //! Pure semantic-drive planning owned by the execution kernel.
 
+use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::InputAction;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_recognition_pack::PackRect;
 use serde::Serialize;
 use serde_json::Value;
@@ -20,7 +23,7 @@ pub enum DriveDecisionErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriveDecisionError {
     kind: DriveDecisionErrorKind,
-    code: &'static str,
+    code: Code,
     message: String,
     required_conditions: Vec<&'static str>,
 }
@@ -29,14 +32,14 @@ impl DriveDecisionError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
             kind: DriveDecisionErrorKind::InvalidInput,
-            code: "drive_plan_invalid",
+            code: ExecutionKernelCode::DrivePlanInvalid.code(),
             message: message.into(),
             required_conditions: Vec::new(),
         }
     }
 
     fn safety(
-        code: &'static str,
+        code: Code,
         message: impl Into<String>,
         required_conditions: Vec<&'static str>,
     ) -> Self {
@@ -51,7 +54,7 @@ impl DriveDecisionError {
     fn package(message: impl Into<String>) -> Self {
         Self {
             kind: DriveDecisionErrorKind::PackageInvalid,
-            code: "drive_package_invalid",
+            code: ExecutionKernelCode::DrivePackageInvalid.code(),
             message: message.into(),
             required_conditions: Vec::new(),
         }
@@ -61,7 +64,7 @@ impl DriveDecisionError {
         self.kind
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
@@ -288,7 +291,7 @@ impl DriveNavigationGraph {
                     && rects_intersect(rect, other.rect)
             }) {
                 return Err(DriveDecisionError::safety(
-                    "navigation_destructive_overlap",
+                    SharedCode::NavigationDestructiveOverlap.code(),
                     format!(
                         "navigation edge '{}' overlaps a destructive action region",
                         edge.id
@@ -322,7 +325,7 @@ pub fn reject_dangerous_semantic_id(label: &str, value: &str) -> Result<(), Driv
     ];
     if dangerous.iter().any(|word| lower.contains(word)) {
         return Err(DriveDecisionError::safety(
-            "semantic_action_requires_destructive_opt_in",
+            SharedCode::SemanticActionRequiresDestructiveOptIn.code(),
             format!("{label} '{value}' looks destructive and requires --allow-destructive"),
             vec!["navigation_only"],
         ));
@@ -637,14 +640,16 @@ mod tests {
         assert_eq!(
             reject_dangerous_semantic_id("navigation edge", edge.id())
                 .expect_err("dangerous id")
-                .code(),
+                .code()
+                .as_str(),
             "semantic_action_requires_destructive_opt_in"
         );
         assert_eq!(
             graph
                 .validate_resolved_input(&edge, edge.input())
                 .expect_err("overlap")
-                .code(),
+                .code()
+                .as_str(),
             "navigation_destructive_overlap"
         );
     }

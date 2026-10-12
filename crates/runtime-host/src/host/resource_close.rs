@@ -563,7 +563,7 @@ impl HostShared {
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<ExecutionKernelError> {
-        if primary.code() == "execution_session_close_pending" {
+        if primary.code().as_str() == "execution_session_close_pending" {
             return Ok(primary);
         }
         let Some(instance_id) = primary.instance_id() else {
@@ -973,7 +973,7 @@ impl HostShared {
         // failures. Only typed ordinary acquisition failures with confirmed temporary-resource
         // disposal qualify; invalid parameter/configuration observations never qualify.
         let recoverable = opened.as_ref().is_some_and(|result| result.as_ref().is_err_and(|error| {
-            actingcommand_contract::is_preparation_recovery_trigger(error.code())
+            actingcommand_contract::is_preparation_recovery_trigger(error.code().as_str())
                 && error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
                 && error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
                     "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native"))
@@ -1010,7 +1010,7 @@ impl HostShared {
                 }
                 (
                     error.failure_context().backend_open_observations().to_vec(),
-                    Some(error.code()),
+                    Some(error.code().as_str()),
                 )
             }
         };
@@ -1052,7 +1052,7 @@ impl HostShared {
                 )
                 .into_fatal());
             }
-            failure_code = failure_code.or(Some(close_error.code()));
+            failure_code = failure_code.or(Some(close_error.code().as_str()));
         }
         // An open failure is already a `failed` self-check; any other failing step (a failed
         // open without reports, a failed close) still leaves the instance unavailable.

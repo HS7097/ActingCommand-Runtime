@@ -851,7 +851,7 @@ impl RuntimeContainedTask<'_> {
                 final_page: outcome.final_page.clone(),
             },
             Err(ContainedTaskRunError::Task(error)) => TaskDiagnosticTerminalData::TaskError {
-                code: error.code().to_owned(),
+                code: error.code().as_str().to_owned(),
                 detail: error.detail().map(str::to_owned),
                 executed_steps: self.executed_steps,
                 timing: error.timing().cloned(),

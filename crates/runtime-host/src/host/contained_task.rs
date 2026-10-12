@@ -1461,7 +1461,7 @@ impl RuntimeContainedTask<'_> {
         }
         let (trigger, primary) = match execution {
             Err(ContainedTaskRunError::Task(error)) => {
-                let trigger = match error.code() {
+                let trigger = match error.code().as_str() {
                     "contained_task_recognition_failed" => {
                         TaskGeometryRecheckTrigger::RecognitionFailed
                     }
@@ -1469,7 +1469,7 @@ impl RuntimeContainedTask<'_> {
                     _ => return,
                 };
                 let mut primary = RuntimeHostError::request(
-                    error.code(),
+                    error.code().as_str(),
                     "run_contained_task",
                     RuntimeErrorCode::BackendOperationFailed,
                 );
@@ -3114,7 +3114,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         && self.execution_provenance == ExecutionBackendProvenance::PhysicalDevice
                         && runtime_error.is_fatal()
                         && matches!(
-                            error.code(),
+                            error.code().as_str(),
                             "capture_backend_open_failed" | "capture_backend_operation_failed"
                         )
                     {
@@ -3140,7 +3140,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             // idle session went stale. It is closed above; the task fails
                             // nonfatal and the next capture opens a new session.
                             Ok(())
-                                if error.code() == "capture_backend_operation_failed"
+                                if error.code().as_str() == "capture_backend_operation_failed"
                                     && error
                                         .failure_context()
                                         .backend_open_observations()
@@ -4154,8 +4154,8 @@ fn contained_task_declaration_failure(
     request: &ContainedTaskRequest,
     error: actingcommand_execution_kernel::ContainedTaskError,
 ) -> RequestFailure {
-    let mut failure = contained_task_package_failure(error.code());
-    if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail()) {
+    let mut failure = contained_task_package_failure(error.code().as_str());
+    if let Some(detail) = resource_reading_failure_detail(error.code().as_str(), error.detail()) {
         let refused = *failure.error;
         failure.error = Box::new(refused.with_native_detail(detail));
     }
@@ -5618,7 +5618,7 @@ impl HostShared {
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
-                runtime.record_post_admission_ocr_failure(error.code(), error.detail())
+                runtime.record_post_admission_ocr_failure(error.code().as_str(), error.detail())
             }
             _ => Ok(()),
         };
@@ -5650,7 +5650,7 @@ impl HostShared {
                     primary.with_related_failure(
                         "prior_task",
                         &RuntimeHostError::request(
-                            error.code(),
+                            error.code().as_str(),
                             "run_contained_task",
                             RuntimeErrorCode::BackendOperationFailed,
                         ),
@@ -5862,7 +5862,7 @@ impl HostShared {
             }
             Err(ContainedTaskRunError::Task(error)) => {
                 if matches!(
-                    error.code(),
+                    error.code().as_str(),
                     "contained_task_guard_refused"
                         | "contained_task_guard_evaluation_failed"
                         | "contained_task_guard_target_missing"
@@ -5901,7 +5901,7 @@ impl HostShared {
                         intent_already_recorded: finalizing.is_some(),
                         final_page: None,
                         executed_steps,
-                        failure_code: Some(error.code()),
+                        failure_code: Some(error.code().as_str()),
                         failure_severity,
                         projection_failure_severity: None,
                         scheduling_outcome: None,
@@ -5912,9 +5912,9 @@ impl HostShared {
                     },
                 )?;
                 let mut task_error = RuntimeHostError::request(
-                    error.code(),
+                    error.code().as_str(),
                     "run_contained_task",
-                    if error.code() == "application_effect_requires_assigned_application" {
+                    if error.code().as_str() == "application_effect_requires_assigned_application" {
                         RuntimeErrorCode::InvalidRequest
                     } else {
                         RuntimeErrorCode::BackendOperationFailed
@@ -5925,13 +5925,14 @@ impl HostShared {
                 // #371-2: so does a page-graph step whose confirmation failed.
                 let detailed = prepared.execution_mode() == "linear_steps"
                     || matches!(
-                        error.code(),
+                        error.code().as_str(),
                         prerequisite::INCOMPATIBLE
                             | "contained_task_step_unconfirmed"
                             | "contained_task_error_page_reached"
                             | "page_confirmation_failed"
                     );
-                if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail())
+                if let Some(detail) =
+                    resource_reading_failure_detail(error.code().as_str(), error.detail())
                 {
                     task_error = task_error.with_native_detail(detail);
                 } else if detailed && let Some(detail) = error.detail() {
@@ -5941,7 +5942,7 @@ impl HostShared {
                 }
                 let mut failure = RequestFailure::request(
                     task_error,
-                    if error.code() == "application_effect_requires_assigned_application" {
+                    if error.code().as_str() == "application_effect_requires_assigned_application" {
                         RuntimeReceiptState::Denied
                     } else {
                         RuntimeReceiptState::Failed
@@ -5949,7 +5950,7 @@ impl HostShared {
                     Some(terminal(&event)),
                 );
                 failure.task_failure = failure_severity.map(|severity| TaskFailureEvidence {
-                    code: error.code(),
+                    code: error.code().as_str(),
                     severity,
                 });
                 // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime
@@ -6207,7 +6208,7 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return Err(ContainedTaskRunError::Task(
                     actingcommand_execution_kernel::ContainedTaskError::with_detail(
-                        prerequisite::INCOMPATIBLE,
+                        actingcommand_contract::codes::SharedCode::ContainedTaskPrerequisiteIncompatible,
                         detail,
                     ),
                 ));
@@ -6260,11 +6261,11 @@ impl HostShared {
             Ok(outcome) => outcome,
             Err(ContainedTaskRunError::Task(error)) => {
                 if matches!(
-                    error.code(),
+                    error.code().as_str(),
                     "contained_task_recognition_failed" | "contained_task_page_unknown"
                 ) {
                     let mut primary = RuntimeHostError::request(
-                        error.code(),
+                        error.code().as_str(),
                         "run_contained_task",
                         RuntimeErrorCode::BackendOperationFailed,
                     );
@@ -6279,10 +6280,10 @@ impl HostShared {
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: recovery_sha256,
-                        failure_code: error.code().to_owned(),
+                        failure_code: error.code().as_str().to_owned(),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
-                return fail_contained_task_entry(runtime, error.code());
+                return fail_contained_task_entry(runtime, error.code().as_str());
             }
             Err(
                 ContainedTaskRunError::Boundary(failure)

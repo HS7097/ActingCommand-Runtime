@@ -16,7 +16,7 @@ pub(super) fn compile(
 ) -> ContainmentResult<(MemoryPackage, Value)> {
     use source::{Bundle, OperationParser, ParseFiles, SourceFile, SourceRead};
     if Instant::now() >= deadline {
-        return Err(source_error("source_tree_deadline"));
+        return Err(source_error(PackContainmentCode::SourceTreeDeadline));
     }
     let control: LabControl = read_json_entry(&entries, "control.json")?;
     let resources = read_json_value_entry(&entries, "resources/operations/resources.json")?;
@@ -32,10 +32,12 @@ pub(super) fn compile(
             .and_then(|path| path.strip_suffix("/task.json"))
         {
             if task.contains('/') || !safe_source_path(task) {
-                return Err(source_error("source_operation_path_invalid"));
+                return Err(source_error(
+                    PackContainmentCode::SourceOperationPathInvalid,
+                ));
             }
             let data = serde_json::from_slice(bytes)
-                .map_err(|_| source_error("source_operation_invalid"))?;
+                .map_err(|_| source_error(PackContainmentCode::SourceOperationInvalid))?;
             bundles.push(Bundle {
                 task_id: task.to_owned(),
                 dir: PathBuf::from(format!("resources/operations/{task}")),
@@ -48,19 +50,19 @@ pub(super) fn compile(
     let entry = bundles
         .iter()
         .find(|bundle| bundle.task_id == control.entry_task_id)
-        .ok_or_else(|| source_error("source_entry_operation_missing"))?;
+        .ok_or_else(|| source_error(PackContainmentCode::SourceEntryOperationMissing))?;
     let required = |key: &str| {
         entry
             .data
             .get(key)
             .cloned()
-            .ok_or_else(|| source_error("source_conversion_metadata_missing"))
+            .ok_or_else(|| source_error(PackContainmentCode::SourceConversionMetadataMissing))
     };
     let locale = entry
         .data
         .get("locale")
         .and_then(Value::as_str)
-        .ok_or_else(|| source_error("source_locale_missing"))?;
+        .ok_or_else(|| source_error(PackContainmentCode::SourceLocaleMissing))?;
     let stem = format!("{}.{}", control.game, control.server);
     let projection_path = format!("resources/navigation/{stem}.projection.json");
     let files = ParseFiles {
@@ -104,15 +106,15 @@ pub(super) fn compile(
     let parser = OperationParser {
         root: PathBuf::from("resources"),
         game: source::canonical_game(&control.game)
-            .map_err(|_| source_error("source_game_invalid"))?,
+            .map_err(|_| source_error(PackContainmentCode::SourceGameInvalid))?,
         server: source::canonical_server(&control.server)
-            .map_err(|_| source_error("source_server_invalid"))?,
+            .map_err(|_| source_error(PackContainmentCode::SourceServerInvalid))?,
         locale: source::canonical_locale(locale)
-            .map_err(|_| source_error("source_locale_invalid"))?,
+            .map_err(|_| source_error(PackContainmentCode::SourceLocaleInvalid))?,
         coordinate_space: required("coordinate_space")?,
         defaults: required("defaults")?,
         resource_ids: source::resource_ids(&resources)
-            .map_err(|_| source_error("source_resources_invalid"))?,
+            .map_err(|_| source_error(PackContainmentCode::SourceResourcesInvalid))?,
         existing_navigation: Some(
             serde_json::json!({"control_points": resources.get("control_points").cloned().unwrap_or_else(|| serde_json::json!([]))}),
         ),
@@ -132,10 +134,10 @@ pub(super) fn compile(
             message: error.to_string(),
         })?;
     let operation_bytes = serde_json::to_vec(&operation)
-        .map_err(|_| source_error("source_conversion_encode_failed"))?
+        .map_err(|_| source_error(PackContainmentCode::SourceConversionEncodeFailed))?
         .len() as u64;
     if operation_bytes > limits.max_entry_bytes {
-        return Err(source_error("source_compiled_entry_limit"));
+        return Err(source_error(PackContainmentCode::SourceCompiledEntryLimit));
     }
     drop(files);
     let generated = [
@@ -162,19 +164,23 @@ pub(super) fn compile(
     ];
     for (path, value) in generated {
         if Instant::now() >= deadline {
-            return Err(source_error("source_tree_deadline"));
+            return Err(source_error(PackContainmentCode::SourceTreeDeadline));
         }
         if entries.contains_key(&path) {
-            return Err(source_error("source_contains_derived_output"));
+            return Err(source_error(
+                PackContainmentCode::SourceContainsDerivedOutput,
+            ));
         }
         entries.insert(
             path,
             serde_json::to_vec(&value)
-                .map_err(|_| source_error("source_conversion_encode_failed"))?,
+                .map_err(|_| source_error(PackContainmentCode::SourceConversionEncodeFailed))?,
         );
     }
     if entries.contains_key("resources/manifest.json") {
-        return Err(source_error("source_contains_derived_output"));
+        return Err(source_error(
+            PackContainmentCode::SourceContainsDerivedOutput,
+        ));
     }
     // This in-memory index preserves the existing projection dependency guards;
     // the admitted package identity remains the verified source reference.
@@ -190,24 +196,24 @@ pub(super) fn compile(
         serde_json::to_vec(
             &serde_json::json!({"entry_task_id":control.entry_task_id,"hashes":hashes}),
         )
-        .map_err(|_| source_error("source_conversion_encode_failed"))?,
+        .map_err(|_| source_error(PackContainmentCode::SourceConversionEncodeFailed))?,
     );
     // Projection declarations remain the exact verified source bytes; build_all
     // has already checked them against the generated catalog.
     let mut resident_bytes = operation_bytes;
     for bytes in entries.values() {
         if bytes.len() as u64 > limits.max_entry_bytes {
-            return Err(source_error("source_compiled_entry_limit"));
+            return Err(source_error(PackContainmentCode::SourceCompiledEntryLimit));
         }
         resident_bytes = resident_bytes
             .checked_add(bytes.len() as u64)
-            .ok_or_else(|| source_error("source_compiled_size_limit"))?;
+            .ok_or_else(|| source_error(PackContainmentCode::SourceCompiledSizeLimit))?;
     }
     if entries.len() > limits.max_entry_count
         || resident_bytes > limits.max_total_decompressed_bytes
         || resident_bytes > limits.max_resident_bytes_per_instance
     {
-        return Err(source_error("source_compiled_size_limit"));
+        return Err(source_error(PackContainmentCode::SourceCompiledSizeLimit));
     }
     Ok((
         MemoryPackage {

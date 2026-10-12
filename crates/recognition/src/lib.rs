@@ -8,7 +8,10 @@ use std::error::Error;
 use std::fmt;
 use std::time::{Duration, Instant};
 
+mod codes;
 pub mod color_digest;
+
+pub use codes::ColorDigestErrorCode;
 
 pub type RecognitionResult<T> = Result<T, RecognitionError>;
 

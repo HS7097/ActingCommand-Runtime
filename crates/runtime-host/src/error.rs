@@ -393,7 +393,7 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn execution(operation: &'static str, error: &ExecutionKernelError) -> Self {
-        let runtime_code = match error.code() {
+        let runtime_code = match error.code().as_str() {
             "frame_workspace_unavailable" => RuntimeErrorCode::InvalidRequest,
             "input_backend_open_failed" => RuntimeErrorCode::BackendOpenFailed,
             "input_backend_operation_failed" => RuntimeErrorCode::BackendOperationFailed,
@@ -416,7 +416,7 @@ impl RuntimeHostError {
             _ => RuntimeErrorCode::RuntimeFatal,
         };
         let runtime_error = Self {
-            code: error.code(),
+            code: error.code().as_str(),
             operation,
             projection: Box::new(RuntimeErrorProjection::new(runtime_code, error.is_fatal())),
             lifecycle: Box::new(RuntimeHostFailureContext {
@@ -435,7 +435,7 @@ impl RuntimeHostError {
 
     pub(crate) fn readonly_capture(error: &ExecutionKernelError) -> Self {
         let mut result = Self::execution("execute_capture_backend", error);
-        if error.code() == "capture_frame_invalid"
+        if error.code().as_str() == "capture_frame_invalid"
             && error.secondary_code().is_none()
             && error.lifecycle_causes().is_empty()
             && error.cleanup_cause().is_none()

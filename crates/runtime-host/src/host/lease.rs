@@ -2802,7 +2802,7 @@ impl HostShared {
             .execution()?
             .resolve(&registered.instance_alias)
             .map_err(|error| {
-                if error.code() == "execution_instance_unknown" {
+                if error.code().as_str() == "execution_instance_unknown" {
                     RequestFailure::request(
                         RuntimeHostError::request(
                             "instance_unknown",

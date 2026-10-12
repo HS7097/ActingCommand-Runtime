@@ -58,7 +58,7 @@ pub(crate) fn content_reference(digest: &str) -> ContentDirectory {
 
 fn containment_code(error: &ContainmentError) -> Option<&'static str> {
     match error {
-        ContainmentError::SourceTree { code } => Some(*code),
+        ContainmentError::SourceTree { code } => Some(code.as_str()),
         _ => None,
     }
 }
@@ -122,7 +122,7 @@ pub(crate) fn admit(
             "admission",
             format!("the generated package is not admitted: {error}"),
             json!({
-                "loader_code": error.code(),
+                "loader_code": error.code().as_str(),
                 "detail": error.detail(),
                 "declaration": error.declaration_issue().map(|issue| json!({
                     "file": issue.declaration_file,
@@ -208,7 +208,7 @@ pub(crate) fn first_decision(
             admission_failed(
                 "first_decision",
                 format!("the offline simulation failed: {error}"),
-                json!({"code": error.code(), "detail": error.detail()}),
+                json!({"code": error.code().as_str(), "detail": error.detail()}),
             )
         })
     };
@@ -219,7 +219,7 @@ pub(crate) fn first_decision(
             .find_map(PlanStep::primary)
             .ok_or_else(|| invalid("validation_failed", "the package has no frame"))?;
         let result = simulate(frame)?;
-        let refused = matches!(&result.decision, OfflineDecision::Refused { code, .. } if code == APPLICATION_REFUSAL);
+        let refused = matches!(&result.decision, OfflineDecision::Refused { code, .. } if code.as_str() == APPLICATION_REFUSAL);
         if !refused || result.capture_count != 0 {
             return Err(admission_failed(
                 "first_decision",

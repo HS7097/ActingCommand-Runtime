@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::ExecutionKernelCode;
 use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorInstanceAction, FencedWrite, InstanceId, MonitorObservation,
 };
@@ -1374,7 +1376,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "observe_foreground_application",
+                    ContractLocation::ObserveForegroundApplication.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1395,7 +1397,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "control_instance",
+                    ContractLocation::ControlInstance.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
             0,
@@ -1415,7 +1417,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "read_instance_state",
+                    ContractLocation::ReadInstanceState.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1439,7 +1441,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "rebind_discovered_endpoint",
+                    ContractLocation::RebindDiscoveredEndpoint.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1452,7 +1454,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         &self,
     ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
         Err(Box::new(InstanceDiscoveryFailure {
-            code: "instance_discovery_unavailable",
+            code: SharedCode::InstanceDiscoveryUnavailable.as_str(),
             error: DeviceError::fatal("instance discovery unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
@@ -1460,7 +1462,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "discover_instances",
+                    ContractLocation::DiscoverInstances.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         }))
@@ -1477,7 +1479,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         _frame: &Frame,
     ) -> ExecutionKernelResult<MonitorObservation> {
         Err(ExecutionKernelError::fatal(
-            "monitor_observation_unavailable",
+            ExecutionKernelCode::MonitorObservationUnavailable.code(),
         ))
     }
 }

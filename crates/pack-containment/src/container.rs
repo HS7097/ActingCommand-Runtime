@@ -55,7 +55,7 @@ pub(super) fn expand(
     deadline: Option<Instant>,
 ) -> ContainmentResult<BTreeMap<String, Vec<u8>>> {
     if bytes.len() as u64 > limits.max_compressed_bytes {
-        return Err(source_error("content_container_size_limit"));
+        return Err(source_error(PackContainmentCode::ContentContainerSizeLimit));
     }
     match container {
         ContentContainer::Zip => expand_zip(bytes, limits, deadline),
@@ -68,8 +68,8 @@ fn expand_zip(
     limits: ContainmentLimits,
     deadline: Option<Instant>,
 ) -> ContainmentResult<BTreeMap<String, Vec<u8>>> {
-    let mut archive =
-        ZipArchive::new(Cursor::new(bytes)).map_err(|_| source_error("content_zip_invalid"))?;
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|_| source_error(PackContainmentCode::ContentZipInvalid))?;
     let mut table = EntryTable::new(limits);
     for index in 0..archive.len() {
         if let Some(deadline) = deadline {
@@ -78,11 +78,11 @@ fn expand_zip(
         // A damaged or encrypted entry has no readable bytes.
         let mut entry = archive
             .by_index(index)
-            .map_err(|_| source_error("content_zip_invalid"))?;
+            .map_err(|_| source_error(PackContainmentCode::ContentZipInvalid))?;
         // The raw name bytes read as UTF-8, never the CP437 reading of an entry without the
         // UTF-8 flag: the same path has the same digest in a directory and in a ZIP.
         let name = std::str::from_utf8(entry.name_raw())
-            .map_err(|_| source_error("content_zip_entry_invalid"))?
+            .map_err(|_| source_error(PackContainmentCode::ContentZipEntryInvalid))?
             .to_owned();
         if name.ends_with('/') {
             continue;
@@ -92,18 +92,19 @@ fn expand_zip(
             .unix_mode()
             .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o100000))
         {
-            return Err(source_error("content_zip_entry_invalid"));
+            return Err(source_error(PackContainmentCode::ContentZipEntryInvalid));
         }
-        validate_relative_ref(&name).map_err(|_| source_error("content_zip_entry_invalid"))?;
+        validate_relative_ref(&name)
+            .map_err(|_| source_error(PackContainmentCode::ContentZipEntryInvalid))?;
         table.add(name, |limit| {
             if entry.size() > limit {
-                return Err(source_error("content_directory_size_limit"));
+                return Err(source_error(PackContainmentCode::ContentDirectorySizeLimit));
             }
             let mut data = Vec::new();
             Read::by_ref(&mut entry)
                 .take(limit.saturating_add(1))
                 .read_to_end(&mut data)
-                .map_err(|_| source_error("content_zip_invalid"))?;
+                .map_err(|_| source_error(PackContainmentCode::ContentZipInvalid))?;
             Ok(data)
         })?;
     }
@@ -119,7 +120,13 @@ fn expand_json(
     let files = ContentJson { refusal: &refusal }
         .deserialize(&mut deserializer)
         .and_then(|files| deserializer.end().map(|()| files))
-        .map_err(|_| source_error(refusal.get().unwrap_or("content_json_invalid")))?;
+        .map_err(|_| {
+            source_error(
+                refusal
+                    .get()
+                    .unwrap_or(PackContainmentCode::ContentJsonInvalid.code()),
+            )
+        })?;
     let mut table = EntryTable::new(limits);
     for (relative, text) in files {
         table.add(relative, |_| Ok(text.into_bytes()))?;
@@ -129,7 +136,7 @@ fn expand_json(
 
 /// The document: exactly `schema_version`, equal to `CONTENT_JSON_V1`, and a non-empty `files`.
 struct ContentJson<'a> {
-    refusal: &'a Cell<Option<&'static str>>,
+    refusal: &'a Cell<Option<Code>>,
 }
 
 impl<'de> DeserializeSeed<'de> for ContentJson<'_> {
@@ -157,7 +164,7 @@ impl<'de> Visitor<'de> for ContentJson<'_> {
             match key.as_str() {
                 "schema_version" if !schema => {
                     if map.next_value::<String>()? != CONTENT_JSON_V1 {
-                        return Err(de::Error::custom("content_json_invalid"));
+                        return Err(de::Error::custom(PackContainmentCode::ContentJsonInvalid));
                     }
                     schema = true;
                 }
@@ -166,12 +173,12 @@ impl<'de> Visitor<'de> for ContentJson<'_> {
                         refusal: self.refusal,
                     })?);
                 }
-                _ => return Err(de::Error::custom("content_json_invalid")),
+                _ => return Err(de::Error::custom(PackContainmentCode::ContentJsonInvalid)),
             }
         }
         match files {
             Some(files) if schema && !files.is_empty() => Ok(files),
-            _ => Err(de::Error::custom("content_json_invalid")),
+            _ => Err(de::Error::custom(PackContainmentCode::ContentJsonInvalid)),
         }
     }
 }
@@ -179,11 +186,11 @@ impl<'de> Visitor<'de> for ContentJson<'_> {
 /// `files`: one string per path. A repeated path, which a plain map would let the later value
 /// overwrite silently, and any value other than a string are refused with their own codes.
 struct ContentJsonFiles<'a> {
-    refusal: &'a Cell<Option<&'static str>>,
+    refusal: &'a Cell<Option<Code>>,
 }
 
 impl ContentJsonFiles<'_> {
-    fn refuse<E: de::Error>(&self, code: &'static str) -> E {
+    fn refuse<E: de::Error>(&self, code: Code) -> E {
         self.refusal.set(Some(code));
         E::custom(code)
     }
@@ -212,11 +219,11 @@ impl<'de> Visitor<'de> for ContentJsonFiles<'_> {
         let mut seen = BTreeSet::new();
         while let Some(path) = map.next_key::<String>()? {
             if !seen.insert(path.clone()) {
-                return Err(self.refuse("content_json_duplicate_path"));
+                return Err(self.refuse(PackContainmentCode::ContentJsonDuplicatePath.code()));
             }
             match map.next_value::<Value>()? {
                 Value::String(text) => files.push((path, text)),
-                _ => return Err(self.refuse("content_json_file_not_string")),
+                _ => return Err(self.refuse(PackContainmentCode::ContentJsonFileNotString.code())),
             }
         }
         Ok(files)

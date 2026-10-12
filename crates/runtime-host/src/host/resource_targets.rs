@@ -224,7 +224,7 @@ impl HostShared {
                     RESOURCE_TARGET_VIEW_OPERATION,
                     RuntimeErrorCode::LedgerFailure,
                 )
-                .with_native_detail(code.to_owned()));
+                .with_native_detail(code.as_str().to_owned()));
             }
             StoredResourceTargets::Policy(stored) => {
                 let scope = FactScope::Instance {
@@ -322,7 +322,7 @@ fn resource_targets_error(error: ResourceTargetsError) -> RuntimeHostError {
         )
         .with_native_detail(error.to_string()),
         ResourceTargetsError::Internal(code) => RuntimeHostError::fatal(
-            code,
+            code.as_str(),
             RESOURCE_TARGETS_OPERATION,
             RuntimeErrorCode::RuntimeFatal,
         ),

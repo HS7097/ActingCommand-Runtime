@@ -27,7 +27,7 @@ impl HostShared {
             let assessment = assess_predictive_maintenance(&evidence, query.trend_policy())
                 .map_err(|error| {
                     RuntimeHostError::request(
-                        error.code(),
+                        error.code().as_str(),
                         "assess_predictive_maintenance",
                         RuntimeErrorCode::InvalidRequest,
                     )

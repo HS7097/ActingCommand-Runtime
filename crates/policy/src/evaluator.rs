@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_selection_policy::{
     Candidate, CollectedVerdict, ScalarValue, SelectionFactEntry, SelectionFactSnapshot,
     SelectionPolicy, UnknownInput, UnknownReason, ValueRef,
@@ -419,12 +421,12 @@ pub struct PolicyEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyEvaluationError {
-    code: &'static str,
+    code: Code,
     message: String,
 }
 
 impl PolicyEvaluationError {
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> Code {
         self.code
     }
 
@@ -434,35 +436,35 @@ impl PolicyEvaluationError {
 
     fn invalid(message: impl Into<String>) -> Self {
         Self {
-            code: "policy_evaluation_input_invalid",
+            code: PolicyCode::PolicyEvaluationInputInvalid.code(),
             message: message.into(),
         }
     }
 
     fn type_mismatch(message: impl Into<String>) -> Self {
         Self {
-            code: "policy_evaluation_fact_type_mismatch",
+            code: PolicyCode::PolicyEvaluationFactTypeMismatch.code(),
             message: message.into(),
         }
     }
 
     fn overflow(message: impl Into<String>) -> Self {
         Self {
-            code: "policy_evaluation_numeric_overflow",
+            code: PolicyCode::PolicyEvaluationNumericOverflow.code(),
             message: message.into(),
         }
     }
 
     fn score_overflow(message: impl Into<String>) -> Self {
         Self {
-            code: "score_overflow",
+            code: PolicyCode::ScoreOverflow.code(),
             message: message.into(),
         }
     }
 
     fn selection_invalid(message: impl Into<String>) -> Self {
         Self {
-            code: "selection_policy_invalid",
+            code: PolicyCode::SelectionPolicyInvalid.code(),
             message: message.into(),
         }
     }
@@ -782,7 +784,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
             work.push(TaskWork::blocked_without_instance(
                 task.id.clone(),
                 reason(
-                    "scope_without_instance",
+                    PolicyCode::ScopeWithoutInstance.as_str(),
                     "no runtime instance matches the task scope",
                 ),
             ));
@@ -817,7 +819,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                 trigger.truth = PredicateTruth::True;
                 trigger.suggestions.clear();
                 task_work.reasons.push(reason(
-                    "failure_retry_immediate",
+                    PolicyCode::FailureRetryImmediate.as_str(),
                     "the latest failure is rerun at once: its trigger and cooldown are not awaited",
                 ));
             }
@@ -843,14 +845,14 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                     task_work.eligibility = EligibilityState::False;
                     task_work.state = SchedulingDecisionState::Blocked;
                     task_work.reasons.push(reason(
-                        "trigger_false",
+                        PolicyCode::TriggerFalse.as_str(),
                         "the task trigger evaluated to false for this instance",
                     ));
                 }
                 PredicateTruth::Unknown => {
                     task_work.suggestions = trigger.suggestions;
                     task_work.reasons.push(reason(
-                        "trigger_unknown",
+                        PolicyCode::TriggerUnknown.as_str(),
                         "the task trigger requires additional observations",
                     ));
                 }
@@ -939,14 +941,14 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             task_work.eligibility = EligibilityState::False;
                             task_work.state = SchedulingDecisionState::Blocked;
                             task_work.reasons.push(reason(
-                                "feedback_stop_true",
+                                PolicyCode::FeedbackStopTrue.as_str(),
                                 "the feedback stop predicate evaluated to true for this instance",
                             ));
                         }
                         PredicateTruth::Unknown => {
                             task_work.suggestions = stop.suggestions;
                             task_work.reasons.push(reason(
-                                "feedback_stop_unknown",
+                                PolicyCode::FeedbackStopUnknown.as_str(),
                                 "the feedback stop predicate requires additional observations",
                             ));
                         }
@@ -976,7 +978,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             if cooldown_until.is_some_and(|until| time.unix_ms < until) {
                                 task_work.state = SchedulingDecisionState::Deferred;
                                 task_work.reasons.push(reason(
-                                    "task_cooldown_active",
+                                    PolicyCode::TaskCooldownActive.as_str(),
                                     "the task-specific dispatch cooldown has not elapsed",
                                 ));
                                 task_work.next_wake_unix_ms =
@@ -1047,7 +1049,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     for candidate in candidates {
         if selected_instances.contains(candidate.instance_id.as_str()) {
             work[candidate.work_index].reasons.push(reason(
-                "instance_already_selected",
+                PolicyCode::InstanceAlreadySelected.as_str(),
                 "a higher-ranked task already owns this instance for the evaluation round",
             ));
             continue;
@@ -1065,12 +1067,12 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                 && host.active_heavy_dispatches >= host.heavy_dispatch_limit
             {
                 (
-                    "heavy_scene_budget_deferred",
+                    PolicyCode::HeavySceneBudgetDeferred.as_str(),
                     "the shared host heavy-scene concurrency budget was consumed by higher-ranked dispatches",
                 )
             } else {
                 (
-                    "host_budget_deferred",
+                    PolicyCode::HostBudgetDeferred.as_str(),
                     "the shared host budget was consumed by higher-ranked dispatches",
                 )
             };
@@ -1092,7 +1094,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         let mut reasons = work[candidate.work_index].reasons.clone();
         reasons.extend([
             reason(
-                "placement_selected",
+                PolicyCode::PlacementSelected.as_str(),
                 format!(
                     "instance '{}' satisfies scope, capability, affinity, and host budget",
                     candidate.instance_id
@@ -1413,11 +1415,11 @@ fn decision_record(
     }
     let mut reasons = Vec::with_capacity(2 + shown);
     reasons.push(reason(
-        "rank_breakdown",
+        PolicyCode::RankBreakdown.as_str(),
         bounded_detail(rank_breakdown_detail(rank, record, lead)),
     ));
     reasons.push(reason(
-        "decision_record",
+        PolicyCode::DecisionRecord.as_str(),
         bounded_detail(decision_record_detail(
             &target_policy_field(target_policies.get(instance_id)),
             related.len(),
@@ -1694,7 +1696,7 @@ fn build_candidate(
 ) -> PolicyEvaluationResult<PlacementResult> {
     if !instance.available {
         return Ok(PlacementResult::Blocked(reason(
-            "instance_unavailable",
+            PolicyCode::InstanceUnavailable.as_str(),
             "the instance is unavailable",
         )));
     }
@@ -1704,7 +1706,7 @@ fn build_candidate(
         .any(|operation| operation == &task.entrypoint.operation_id)
     {
         return Ok(PlacementResult::Blocked(reason(
-            "capability_missing",
+            PolicyCode::CapabilityMissing.as_str(),
             format!(
                 "instance '{}' does not provide operation '{}'",
                 instance.instance_id, task.entrypoint.operation_id
@@ -1721,14 +1723,14 @@ fn build_candidate(
         .is_some_and(|enabled| !enabled)
     {
         return Ok(PlacementResult::Blocked(reason(
-            "instance_override_disabled",
+            PolicyCode::InstanceOverrideDisabled.as_str(),
             "the task is disabled by its instance override",
         )));
     }
 
     let Some(activity_profile) = select_activity_profile(context.profiles, instance) else {
         return Ok(PlacementResult::Blocked(reason(
-            "activity_profile_missing",
+            PolicyCode::ActivityProfileMissing.as_str(),
             format!(
                 "instance '{}' has no matching activity profile",
                 instance.instance_id
@@ -1753,7 +1755,7 @@ fn build_candidate(
         let (code, detail) =
             if load.heavy && host.active_heavy_dispatches >= host.heavy_dispatch_limit {
                 (
-                    "heavy_scene_budget_exhausted",
+                    PolicyCode::HeavySceneBudgetExhausted.as_str(),
                     format!(
                         "host '{}' has no remaining heavy-scene concurrency budget",
                         instance.host_id
@@ -1761,7 +1763,7 @@ fn build_candidate(
                 )
             } else {
                 (
-                    "host_capacity_insufficient",
+                    PolicyCode::HostCapacityInsufficient.as_str(),
                     format!(
                         "host '{}' cannot satisfy the task load profile",
                         instance.host_id
@@ -2424,7 +2426,7 @@ fn apply_priority_selection(
             } => {
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.push(reason(
-                    "score_deferred",
+                    PolicyCode::ScoreDeferred.as_str(),
                     format!("{detail}; reevaluation at {wake_unix_ms}"),
                 ));
                 task_work.next_wake_unix_ms =
@@ -2432,13 +2434,15 @@ fn apply_priority_selection(
             }
             ScoreDisposition::Promoted { detail } => {
                 candidate.promoted = true;
-                task_work.reasons.push(reason("score_promoted", detail));
+                task_work
+                    .reasons
+                    .push(reason(PolicyCode::ScorePromoted.as_str(), detail));
                 ranked.push(candidate);
             }
             ScoreDisposition::AgingCap { aging_ms, cap_ms } => {
                 candidate.promoted = true;
                 task_work.reasons.push(reason(
-                    "score_aging_cap",
+                    PolicyCode::ScoreAgingCap.as_str(),
                     format!("aging_ms={aging_ms} cap_ms={cap_ms}"),
                 ));
                 ranked.push(candidate);
@@ -2623,7 +2627,8 @@ const fn unknown_token(unknown_reason: UnknownReason) -> &'static str {
         UnknownReason::FactLowConfidence => "fact_low_confidence",
         UnknownReason::FactNotScalar => "fact_not_scalar",
         UnknownReason::FieldMissing => "field_missing",
-        UnknownReason::TypeMismatch => "type_mismatch",
+        // The vocabulary token shares the registered code's spelling.
+        UnknownReason::TypeMismatch => SharedCode::TypeMismatch.as_str(),
         UnknownReason::LookupMiss => "lookup_miss",
     }
 }
@@ -3227,7 +3232,7 @@ fn evaluate_predicate(
             let availability = timeline_availability(event, time, applicable)?;
             if availability.state == EligibilityState::Unknown {
                 reasons.push(reason(
-                    "timeline_unavailable",
+                    PolicyCode::TimelineUnavailable.as_str(),
                     format!("event '{event_id}' has no positive applicable interval"),
                 ));
                 let mut result = PredicateEvaluation::known(false, None);
@@ -3237,7 +3242,7 @@ fn evaluate_predicate(
             let window = availability.active_interval;
             let next = availability.next_wake_unix_ms;
             reasons.push(reason(
-                "timeline_active",
+                PolicyCode::TimelineActive.as_str(),
                 format!(
                     "event '{event_id}' at {}: interval {window:?}; next boundary {next:?}",
                     time.unix_ms
@@ -3340,7 +3345,7 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: scope.clone(),
                     fact_key: fact_key.clone(),
-                    reason: "type_mismatch".to_owned(),
+                    reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             }
             Ok(PredicateEvaluation {
@@ -3414,7 +3419,7 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: scope.clone(),
                     fact_key: fact_key.clone(),
-                    reason: "type_mismatch".to_owned(),
+                    reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             };
             let cutoff = time.unix_ms.checked_add(*within_ms).ok_or_else(|| {
@@ -3440,7 +3445,7 @@ fn evaluate_predicate(
                     return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                         scope: scope.clone(),
                         fact_key: fact_key.clone(),
-                        reason: "type_mismatch".to_owned(),
+                        reason: SharedCode::TypeMismatch.as_str().to_owned(),
                     }));
                 };
                 if *deadline > time.unix_ms && *deadline <= cutoff {
@@ -3515,7 +3520,7 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: decision_scope.clone(),
                     fact_key: format!("outcome.{task_id}.{outcome_key}"),
-                    reason: "type_mismatch".to_owned(),
+                    reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             }
             let mut result = PredicateEvaluation::known(
@@ -4803,7 +4808,8 @@ pub(crate) mod tests {
                     &["unknown".into()]
                 )
                 .unwrap_err()
-                .code(),
+                .code()
+                .as_str(),
                 "policy_evaluation_input_invalid"
             );
         }
@@ -5001,7 +5007,7 @@ pub(crate) mod tests {
                 7,
             )
             .expect_err("overflow must fail visibly");
-            assert_eq!(error.code(), "policy_evaluation_numeric_overflow");
+            assert_eq!(error.code().as_str(), "policy_evaluation_numeric_overflow");
         }
         let event = &compiled.catalog().timeline.events[0];
         let result = timeline_window(
@@ -6967,7 +6973,7 @@ pub(crate) mod tests {
         )
         .expect_err("invalid host reference");
 
-        assert_eq!(error.code(), "policy_evaluation_input_invalid");
+        assert_eq!(error.code().as_str(), "policy_evaluation_input_invalid");
         assert!(error.message().contains("missing host"));
     }
 

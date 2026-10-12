@@ -5,6 +5,7 @@
 //! package's resource section: one hash-named directory per task pack and its versioned index.
 //! Both read through the loader's own snapshot and admit every pack in full.
 
+use crate::codes::ResourceToolingCode;
 use crate::{
     PackageBundleRequest, PackageBundleResponse, PackageDigestRequest, PackageDigestResponse,
 };
@@ -76,7 +77,7 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
     for path in [&out, &staging] {
         if fs::symlink_metadata(path).is_ok() {
             return Err(bundle_error(
-                "package_bundle_out_exists",
+                ResourceToolingCode::PackageBundleOutExists,
                 format!(
                     "{} already exists; package bundle only writes a new directory",
                     path.display()
@@ -86,7 +87,7 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
     }
     let applications_bytes = fs::read(&request.applications).map_err(|error| {
         bundle_error(
-            "package_bundle_applications_invalid",
+            ResourceToolingCode::PackageBundleApplicationsInvalid,
             format!("{}: {error}", request.applications.display()),
         )
     })?;
@@ -190,7 +191,7 @@ fn write_bundle(
         };
         if identity.game != applications.game || !applications.servers.contains(&identity.server) {
             return Err(bundle_error(
-                "package_bundle_pack_mismatch",
+                ResourceToolingCode::PackageBundlePackMismatch,
                 format!(
                     "{}: pack {} declares game {:?} and server {:?}; the applications table has game {:?} and servers {:?}",
                     directory.display(),
@@ -219,7 +220,7 @@ fn write_bundle(
             .any(|pack| &pack.package_id == package_id && &pack.server == server)
         {
             return Err(bundle_error(
-                "package_bundle_default_package_missing",
+                ResourceToolingCode::PackageBundleDefaultPackageMissing,
                 format!(
                     "servers.{server}.default_package_id {package_id:?} names no pack of server {server:?}"
                 ),
@@ -236,7 +237,10 @@ fn write_bundle(
                 maintenance,
             };
             validate_bundle_maintenance(&index, &descriptors).map_err(|error| {
-                bundle_error("package_bundle_maintenance_invalid", error.to_string())
+                bundle_error(
+                    ResourceToolingCode::PackageBundleMaintenanceInvalid,
+                    error.to_string(),
+                )
             })?;
             BundleIndex::V3(index)
         }
@@ -247,11 +251,18 @@ fn write_bundle(
             packs,
         }),
     };
-    index
-        .validate()
-        .map_err(|error| bundle_error("package_bundle_index_invalid", error.to_string()))?;
-    let mut encoded = serde_json::to_vec_pretty(&index)
-        .map_err(|error| bundle_error("package_bundle_index_invalid", error.to_string()))?;
+    index.validate().map_err(|error| {
+        bundle_error(
+            ResourceToolingCode::PackageBundleIndexInvalid,
+            error.to_string(),
+        )
+    })?;
+    let mut encoded = serde_json::to_vec_pretty(&index).map_err(|error| {
+        bundle_error(
+            ResourceToolingCode::PackageBundleIndexInvalid,
+            error.to_string(),
+        )
+    })?;
     encoded.push(b'\n');
     write_new(&staging.join("applications.json"), applications_bytes)?;
     write_new(&staging.join("bundle.json"), &encoded)?;
@@ -271,7 +282,7 @@ impl Applications {
     fn parse(bytes: &[u8]) -> LabResult<Self> {
         let invalid = |reason: String| {
             bundle_error(
-                "package_bundle_applications_invalid",
+                ResourceToolingCode::PackageBundleApplicationsInvalid,
                 format!("applications table: {reason}"),
             )
         };
@@ -319,7 +330,8 @@ impl Applications {
 
 /// Every entry of `packs_root` is one pack source directory, in name order.
 fn pack_directories(packs_root: &Path) -> LabResult<Vec<PathBuf>> {
-    let invalid = |message: String| bundle_error("package_bundle_packs_root_invalid", message);
+    let invalid =
+        |message: String| bundle_error(ResourceToolingCode::PackageBundlePacksRootInvalid, message);
     let mut directories = Vec::new();
     for entry in fs::read_dir(packs_root)
         .map_err(|error| invalid(format!("{}: {error}", packs_root.display())))?
@@ -431,11 +443,11 @@ fn pack_error(
 
 fn write_error(path: &Path, error: std::io::Error) -> LabError {
     bundle_error(
-        "package_bundle_write_failed",
+        ResourceToolingCode::PackageBundleWriteFailed,
         format!("{}: {error}", path.display()),
     )
 }
 
-fn bundle_error(code: &str, message: String) -> LabError {
-    LabError::new(LabErrorClass::UsageValidation, code, message, &[])
+fn bundle_error(code: ResourceToolingCode, message: String) -> LabError {
+    LabError::new(LabErrorClass::UsageValidation, code.as_str(), message, &[])
 }
