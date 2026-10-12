@@ -148,6 +148,8 @@ outcome_keys! {
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
     reader_problem: vocab(reader_problem),
+    // Workflow #373 NAV-3b: why a task's entry page set is refused.
+    entry_problem: vocab(entry_problem),
     pause_reason: name,
     expected_sha256: hash,
     actual_sha256: hash,

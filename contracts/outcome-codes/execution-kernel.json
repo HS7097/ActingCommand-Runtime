@@ -1135,6 +1135,21 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_entry_pages_invalid": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "entry_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admission refuses a contained task's entry page set (Workflow #373 NAV-3b): it is empty, names more than 16 pages, names a page twice, names any, names a page that is not exactly one page of the package, or a page of a phased route starts no stage or more than one.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_prerequisite_unbound": {
       "category": "error",
       "ladder_class": "declaration_error",

@@ -481,6 +481,26 @@ impl RunStateMachine {
         })
     }
 
+    /// Workflow #373 NAV-3b: a phased run whose matched entry page starts a later stage begins at
+    /// that stage, before its first step.
+    pub(crate) fn start_at_phase(&mut self, index: usize) -> Result<(), RunDecisionError> {
+        if self.terminal.is_some()
+            || self.executing_operation.is_some()
+            || self.completed_steps != 0
+            || self
+                .config
+                .phases
+                .as_ref()
+                .is_none_or(|phases| index >= phases.len())
+        {
+            return Err(RunDecisionError::invalid_transition(
+                "phase entry is not available",
+            ));
+        }
+        self.phase_index = index;
+        Ok(())
+    }
+
     pub fn observe_page(&mut self, current_page: Option<String>) -> Result<(), RunDecisionError> {
         if self.terminal.is_some() {
             return Err(RunDecisionError::invalid_transition(

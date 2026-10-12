@@ -570,6 +570,10 @@
       "type": "vocab:reader_problem",
       "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
     },
+    "entry_problem": {
+      "type": "vocab:entry_problem",
+      "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -2448,6 +2452,32 @@
         },
         "interval_exceeds_freshness": {
           "description": "The minimum reading interval exceeds the freshness the document or the mark requires."
+        }
+      }
+    },
+    "entry_problem": {
+      "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b).",
+      "tokens": {
+        "empty": {
+          "description": "The entry page set names no page."
+        },
+        "too_many": {
+          "description": "The entry page set names more than 16 pages."
+        },
+        "duplicate": {
+          "description": "The entry page set names one page twice."
+        },
+        "any_in_set": {
+          "description": "The entry page set names any, which only a single entry page may be."
+        },
+        "unresolved": {
+          "description": "A page of the entry page set is blank or is not exactly one page of the package's page set."
+        },
+        "phase_start_missing": {
+          "description": "No stage of the phased route lists an operation from a page of the entry page set."
+        },
+        "phase_start_ambiguous": {
+          "description": "More than one stage of the phased route lists an operation from a page of the entry page set."
         }
       }
     },
