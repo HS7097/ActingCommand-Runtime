@@ -451,7 +451,7 @@ field:
 - A `TaskEntryPreflight` fact belongs to the innermost prerequisite package that was opened by
   `EntryRecoveryPackageAdmitted` and not yet closed by `EntryRecoveryCompleted` or
   `EntryRecoveryFailed`; with none open it belongs to the dependent package. An
-  `EntryRecognition`'s `required_page` is that package's first step's page.
+  `EntryRecognition`'s `required_pages` is that package's first step's page alone.
 - The packages of one chain have different package ids, so their content references differ;
   each run prerequisite package has its own `EntryRecovery { package reference }` record.
 - Every package's step indices are a range of their own, as long as its
