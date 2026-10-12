@@ -4903,6 +4903,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("policy_catalog", &["HostShared"]),
     host_module("policy_dispatch", &["HostShared"]),
     host_module("policy_outcome", &["HostShared"]),
+    host_module("policy_wake", &["HostShared"]),
     host_module("ppocr_diagnostic", &["HostShared", "RuntimeContainedTask"]),
     host_module("prerequisite", &["HostShared"]),
     HostModule {
