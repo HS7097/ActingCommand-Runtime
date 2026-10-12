@@ -15,13 +15,13 @@ use actingcommand_vision_ffi::{
     ChannelOrder, DetectorResize, NnModelLoad, NnModelSpec, PpocrCtcParams, SpaceClass,
 };
 use actingcommand_vision_ffi::{
-    CudaDeviceIdentity, OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrEngine,
-    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
-    OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrModelLoad, OcrModelSpec,
-    OcrProviderBuildIdentity, OcrRuntimeBuildIdentity, OcrSessionBinding, OcrSessionId,
-    OcrSessionKey, OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider, VisionBackendKind,
-    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView, VisionModelLoader,
-    VisionPixelFormat, VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
+    CudaDeviceIdentity, OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrBlockMode, OcrDetectionCount,
+    OcrEngine, OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
+    OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrLineMerge, OcrModelLoad,
+    OcrModelSpec, OcrProviderBuildIdentity, OcrRuntimeBuildIdentity, OcrSessionBinding,
+    OcrSessionId, OcrSessionKey, OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider,
+    VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView,
+    VisionModelLoader, VisionPixelFormat, VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
     establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
     onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex, sha256_hex,
 };
@@ -561,17 +561,25 @@ impl PpocrCtcModel {
                 ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
             })?;
         let frame = &request.frame;
-        if !is_full_frame_region(frame, request.region) {
-            let decoded = recognize_region(
-                &mut self.recognizer,
-                &self.dictionary,
-                &self.params,
-                frame,
-                request.region,
-                remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
-            )?;
-            return Ok(canonical_roi_result(decoded, request.region));
-        }
+        let merge_gap_factor = match read_route(
+            frame,
+            request.region,
+            request.blocks,
+            self.params.detector.merge_gap_factor,
+        ) {
+            ReadRoute::Region => {
+                let decoded = recognize_region(
+                    &mut self.recognizer,
+                    &self.dictionary,
+                    &self.params,
+                    frame,
+                    request.region,
+                    remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
+                )?;
+                return Ok(canonical_roi_result(decoded, request.region));
+            }
+            ReadRoute::Detect { merge_gap_factor } => merge_gap_factor,
+        };
         if self.detector.is_none() {
             self.detector = Some(self.load_detector(diagnostics)?);
         }
@@ -584,13 +592,12 @@ impl PpocrCtcModel {
             &self.params,
             frame,
             request.region,
+            merge_gap_factor,
             remaining_inference_budget(inference_deadline, "PPOCR detector")?,
         )?;
+        let (detected, count) = keep_detected_boxes(detected, self.params.detector.max_boxes);
         let mut blocks = Vec::new();
-        for detected_box in detected
-            .iter()
-            .take(self.params.detector.max_boxes as usize)
-        {
+        for detected_box in &detected {
             let decoded = recognize_region(
                 &mut self.recognizer,
                 &self.dictionary,
@@ -620,6 +627,9 @@ impl PpocrCtcModel {
             confidence,
             backend: VisionBackendKind::FastDeployPpocr,
             warnings: Vec::new(),
+            // Only a request that chose `Detect` reports its count; an implicit full-frame
+            // read keeps its result as before (Workflow #396 REC-1).
+            detection: matches!(request.blocks, OcrBlockMode::Detect { .. }).then_some(count),
         })
     }
 
@@ -867,7 +877,64 @@ fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenc
         blocks,
         backend: VisionBackendKind::FastDeployPpocr,
         warnings: Vec::new(),
+        detection: None,
     }
+}
+
+// Workflow #396 REC-1: the read route of a request, the line merge it names and the count of
+// boxes the folder's `max_boxes` dropped.
+
+/// What a request runs: the recognizer over the whole region, or the detector inside the
+/// region followed by the recognizer on every box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadRoute {
+    Region,
+    /// `merge_gap_factor` replaces the folder's `detector.merge_gap_factor`; `None` merges no
+    /// boxes.
+    Detect {
+        merge_gap_factor: Option<u32>,
+    },
+}
+
+/// An implicit request keeps the rule it had before `blocks` existed: the detector for a
+/// full-frame region only, merged by the folder's factor. A request that chose `Region` or
+/// `Detect` gets exactly that, on any region.
+fn read_route(
+    frame: &VisionFrameView<'_>,
+    region: VisionRect,
+    blocks: OcrBlockMode,
+    folder_gap_factor: u32,
+) -> ReadRoute {
+    match blocks {
+        OcrBlockMode::Implicit if is_full_frame_region(frame, region) => ReadRoute::Detect {
+            merge_gap_factor: Some(folder_gap_factor),
+        },
+        OcrBlockMode::Implicit | OcrBlockMode::Region => ReadRoute::Region,
+        OcrBlockMode::Detect {
+            line_merge: OcrLineMerge::Never,
+        } => ReadRoute::Detect {
+            merge_gap_factor: None,
+        },
+        OcrBlockMode::Detect {
+            line_merge: OcrLineMerge::GapFactor(factor),
+        } => ReadRoute::Detect {
+            merge_gap_factor: Some(factor),
+        },
+    }
+}
+
+/// The first `max_boxes` boxes in reading order, and how many the detector found before that
+/// cut.
+fn keep_detected_boxes(
+    mut boxes: Vec<DetectedTextBox>,
+    max_boxes: u32,
+) -> (Vec<DetectedTextBox>, OcrDetectionCount) {
+    let count = OcrDetectionCount {
+        detected: u32::try_from(boxes.len()).unwrap_or(u32::MAX),
+        limit: max_boxes,
+    };
+    boxes.truncate(usize::try_from(max_boxes).unwrap_or(usize::MAX));
+    (boxes, count)
 }
 
 fn load_ort_session(
@@ -1036,11 +1103,14 @@ struct DetectedTextBox {
     confidence: f32,
 }
 
+/// The detector's boxes inside `region`, padded and clipped to the region, merged on a line
+/// with `merge_gap_factor` (`None` merges nothing), in reading order.
 fn detect_text_regions(
     session: &mut Session,
     params: &PpocrCtcParams,
     frame: &VisionFrameView<'_>,
     region: VisionRect,
+    merge_gap_factor: Option<u32>,
     timeout: Duration,
 ) -> Result<Vec<DetectedTextBox>, ProviderInvokeError> {
     let input_shape = select_detection_input_shape(session, region, params)?;
@@ -1065,13 +1135,12 @@ fn detect_text_regions(
         .try_extract_tensor::<f32>()
         .map_err(|err| format!("PPOCR detector first output is not an f32 tensor: {err}"))?;
     let map = detector_probability_map(output_shape.as_ref(), scores)?;
-    let boxes =
-        detect_text_boxes_from_probability_map(&map, region, frame.width, frame.height, params)?;
+    let boxes = detect_text_boxes_from_probability_map(&map, region, params)?;
     Ok(merge_detected_text_boxes(
         boxes,
-        frame.width,
-        frame.height,
+        region,
         params,
+        merge_gap_factor,
     ))
 }
 
@@ -1572,11 +1641,12 @@ fn to_probability(value: f32) -> f32 {
     }
 }
 
+/// The padded box of every text component of the region's probability map. Padding is clipped
+/// to the requested region (Workflow #396 REC-1); a full-frame region clips to the frame as
+/// before.
 fn detect_text_boxes_from_probability_map(
     map: &ProbabilityMap,
     region: VisionRect,
-    frame_width: u32,
-    frame_height: u32,
     params: &PpocrCtcParams,
 ) -> Result<Vec<DetectedTextBox>, String> {
     let threshold = params.detector.threshold;
@@ -1591,8 +1661,7 @@ fn detect_text_boxes_from_probability_map(
         if component.area < params.detector.min_area as usize {
             continue;
         }
-        let rect =
-            component_to_vision_rect(&component, map, region, frame_width, frame_height, padding)?;
+        let rect = component_to_vision_rect(&component, map, region, padding)?;
         boxes.push(DetectedTextBox {
             rect,
             confidence: component.max_score,
@@ -1672,8 +1741,6 @@ fn component_to_vision_rect(
     component: &MapComponent,
     map: &ProbabilityMap,
     region: VisionRect,
-    frame_width: u32,
-    frame_height: u32,
     padding: i32,
 ) -> Result<VisionRect, String> {
     let scale_x = region.width as f32 / map.width as f32;
@@ -1682,26 +1749,22 @@ fn component_to_vision_rect(
     let top = region.y + (component.min_y as f32 * scale_y).floor() as i32;
     let right = region.x + ((component.max_x + 1) as f32 * scale_x).ceil() as i32;
     let bottom = region.y + ((component.max_y + 1) as f32 * scale_y).ceil() as i32;
-    padded_rect(left, top, right, bottom, frame_width, frame_height, padding)
+    padded_rect(left, top, right, bottom, region, padding)
 }
 
+/// The box grown by `padding` on every side and clipped to `bounds`, the requested region.
 fn padded_rect(
     left: i32,
     top: i32,
     right: i32,
     bottom: i32,
-    frame_width: u32,
-    frame_height: u32,
+    bounds: VisionRect,
     padding: i32,
 ) -> Result<VisionRect, String> {
-    let frame_width =
-        i32::try_from(frame_width).map_err(|err| format!("invalid frame width: {err}"))?;
-    let frame_height =
-        i32::try_from(frame_height).map_err(|err| format!("invalid frame height: {err}"))?;
-    let x = (left - padding).max(0);
-    let y = (top - padding).max(0);
-    let right = (right + padding).min(frame_width);
-    let bottom = (bottom + padding).min(frame_height);
+    let x = (left - padding).max(bounds.x);
+    let y = (top - padding).max(bounds.y);
+    let right = (right + padding).min(rect_right(bounds));
+    let bottom = (bottom + padding).min(rect_bottom(bounds));
     if right <= x || bottom <= y {
         return Err("detected OCR box collapsed after clamping".to_string());
     }
@@ -1713,22 +1776,27 @@ fn padded_rect(
     })
 }
 
+/// Boxes on one line merge under the folder's rule with `merge_gap_factor` in place of the
+/// folder's factor; `None` merges no boxes. The result is in reading order `(y, x)`.
 fn merge_detected_text_boxes(
     mut boxes: Vec<DetectedTextBox>,
-    frame_width: u32,
-    frame_height: u32,
+    bounds: VisionRect,
     params: &PpocrCtcParams,
+    merge_gap_factor: Option<u32>,
 ) -> Vec<DetectedTextBox> {
+    let Some(merge_gap_factor) = merge_gap_factor else {
+        boxes.sort_by_key(|text_box| (text_box.rect.y, text_box.rect.x));
+        return boxes;
+    };
     boxes.sort_by_key(|text_box| (rect_center_y(text_box.rect), text_box.rect.x));
     let mut merged: Vec<DetectedTextBox> = Vec::new();
     for text_box in boxes {
         if let Some(last) = merged.last_mut()
-            && should_merge_text_boxes(last.rect, text_box.rect, params)
+            && should_merge_text_boxes(last.rect, text_box.rect, params, merge_gap_factor)
             && let Ok(rect) = union_rect(
                 last.rect,
                 text_box.rect,
-                frame_width,
-                frame_height,
+                bounds,
                 params.detector.box_padding as i32,
             )
         {
@@ -1742,7 +1810,12 @@ fn merge_detected_text_boxes(
     merged
 }
 
-fn should_merge_text_boxes(left: VisionRect, right: VisionRect, params: &PpocrCtcParams) -> bool {
+fn should_merge_text_boxes(
+    left: VisionRect,
+    right: VisionRect,
+    params: &PpocrCtcParams,
+    merge_gap_factor: u32,
+) -> bool {
     let detector = &params.detector;
     let vertical_overlap = (rect_bottom(left).min(rect_bottom(right)) - left.y.max(right.y)).max(0);
     let min_height = left.height.min(right.height).max(1);
@@ -1759,14 +1832,13 @@ fn should_merge_text_boxes(left: VisionRect, right: VisionRect, params: &PpocrCt
                 .height
                 .max(right.height)
                 .max(detector.merge_min_height as i32)
-                * detector.merge_gap_factor as i32
+                * merge_gap_factor as i32
 }
 
 fn union_rect(
     left: VisionRect,
     right: VisionRect,
-    frame_width: u32,
-    frame_height: u32,
+    bounds: VisionRect,
     padding: i32,
 ) -> Result<VisionRect, String> {
     padded_rect(
@@ -1774,8 +1846,7 @@ fn union_rect(
         left.y.min(right.y),
         rect_right(left).max(rect_right(right)),
         rect_bottom(left).max(rect_bottom(right)),
-        frame_width,
-        frame_height,
+        bounds,
         padding,
     )
 }
@@ -2363,25 +2434,272 @@ mod tests {
             values,
         };
 
-        let boxes = detect_text_boxes_from_probability_map(
-            &map,
-            VisionRect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 30,
-            },
-            80,
-            30,
+        let frame_region = VisionRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 30,
+        };
+        let boxes = detect_text_boxes_from_probability_map(&map, frame_region, &default_params())
+            .expect("boxes");
+        let merged = merge_detected_text_boxes(
+            boxes,
+            frame_region,
             &default_params(),
-        )
-        .expect("boxes");
-        let merged = merge_detected_text_boxes(boxes, 80, 30, &default_params());
+            Some(default_params().detector.merge_gap_factor),
+        );
 
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].rect.x, 0);
         assert!(merged[0].rect.width >= 60);
         assert!(merged[0].confidence > 0.89);
+    }
+
+    // Workflow #396 REC-1: pure-function tests of the read route, the per-request line merge,
+    // the clip to the requested region and the box count before truncation.
+
+    /// A probability map whose cells inside each `(x, y, width, height)` box are text.
+    fn text_map(
+        width: usize,
+        height: usize,
+        boxes: &[(usize, usize, usize, usize)],
+    ) -> ProbabilityMap {
+        let mut values = vec![0.0; width * height];
+        for (left, top, box_width, box_height) in boxes {
+            for y in *top..top + box_height {
+                for x in *left..left + box_width {
+                    values[y * width + x] = 0.9;
+                }
+            }
+        }
+        ProbabilityMap {
+            width,
+            height,
+            values,
+        }
+    }
+
+    fn rect_within(inner: VisionRect, outer: VisionRect) -> bool {
+        inner.x >= outer.x
+            && inner.y >= outer.y
+            && inner.x + inner.width <= outer.x + outer.width
+            && inner.y + inner.height <= outer.y + outer.height
+    }
+
+    fn rect_region() -> VisionRect {
+        VisionRect {
+            x: 40,
+            y: 40,
+            width: 400,
+            height: 100,
+        }
+    }
+
+    fn zero_frame(width: u32, height: u32) -> VisionFrame {
+        VisionFrame {
+            width,
+            height,
+            pixel_format: VisionPixelFormat::Rgb8,
+            pixels: vec![0; (width * height * 3) as usize],
+        }
+    }
+
+    #[test]
+    fn read_route_follows_the_declared_blocks() {
+        let frame = zero_frame(640, 360);
+        let full = VisionRect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 360,
+        };
+        let route = |region, blocks| read_route(&frame.view(), region, blocks, 3);
+
+        assert_eq!(
+            route(full, OcrBlockMode::Implicit),
+            ReadRoute::Detect {
+                merge_gap_factor: Some(3)
+            }
+        );
+        assert_eq!(
+            route(rect_region(), OcrBlockMode::Implicit),
+            ReadRoute::Region
+        );
+        assert_eq!(
+            route(rect_region(), OcrBlockMode::Region),
+            ReadRoute::Region
+        );
+        assert_eq!(
+            route(
+                rect_region(),
+                OcrBlockMode::Detect {
+                    line_merge: OcrLineMerge::GapFactor(0)
+                }
+            ),
+            ReadRoute::Detect {
+                merge_gap_factor: Some(0)
+            }
+        );
+        assert_eq!(
+            route(
+                rect_region(),
+                OcrBlockMode::Detect {
+                    line_merge: OcrLineMerge::Never
+                }
+            ),
+            ReadRoute::Detect {
+                merge_gap_factor: None
+            }
+        );
+    }
+
+    #[test]
+    fn rect_detect_reads_each_box_and_region_reads_one_block() {
+        let region = rect_region();
+        let map = text_map(400, 100, &[(20, 30, 80, 20), (250, 30, 80, 20)]);
+
+        let boxes =
+            detect_text_boxes_from_probability_map(&map, region, &default_params()).expect("boxes");
+        let detected = merge_detected_text_boxes(boxes, region, &default_params(), Some(0));
+
+        assert_eq!(detected.len(), 2, "each box keeps its own rectangle");
+        assert!(
+            detected
+                .iter()
+                .all(|text_box| rect_within(text_box.rect, region))
+        );
+        assert!(rect_within(
+            detected[0].rect,
+            VisionRect {
+                x: 40,
+                y: 40,
+                width: 200,
+                height: 100
+            }
+        ));
+        assert!(rect_within(
+            detected[1].rect,
+            VisionRect {
+                x: 240,
+                y: 40,
+                width: 200,
+                height: 100
+            }
+        ));
+
+        let whole = canonical_roi_result(
+            DecodedText {
+                text: "ALPHA BETA".to_string(),
+                confidence: Some(0.9),
+            },
+            region,
+        );
+        assert_eq!(whole.blocks.len(), 1, "a region read is one block");
+        assert_eq!(whole.blocks[0].rect, region);
+    }
+
+    #[test]
+    fn line_merge_follows_the_request() {
+        let region = VisionRect {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 100,
+        };
+        let params = default_params();
+        let merged = |gap: usize, factor: Option<u32>| {
+            let map = text_map(400, 100, &[(50, 40, 100, 20), (150 + gap, 40, 100, 20)]);
+            let boxes =
+                detect_text_boxes_from_probability_map(&map, region, &params).expect("boxes");
+            assert_eq!(boxes.len(), 2);
+            merge_detected_text_boxes(boxes, region, &params, factor).len()
+        };
+
+        // Two names 40 px apart: 8 px apart after the 16 px padding.
+        assert_eq!(
+            merged(40, Some(params.detector.merge_gap_factor)),
+            1,
+            "the folder's factor merges"
+        );
+        assert_eq!(merged(40, Some(0)), 2, "gap_factor 0 keeps them apart");
+        // 20 px apart: the padded boxes overlap.
+        assert_eq!(
+            merged(20, Some(0)),
+            1,
+            "gap_factor 0 merges overlapping boxes"
+        );
+        assert_eq!(merged(20, None), 2, "none merges nothing");
+    }
+
+    #[test]
+    fn padded_boxes_clip_to_the_requested_region() {
+        let region = rect_region();
+        let map = text_map(400, 100, &[(0, 0, 10, 10), (390, 90, 10, 10)]);
+
+        let boxes =
+            detect_text_boxes_from_probability_map(&map, region, &default_params()).expect("boxes");
+
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(
+            boxes[0].rect,
+            VisionRect {
+                x: 40,
+                y: 40,
+                width: 26,
+                height: 26
+            }
+        );
+        assert_eq!(
+            boxes[1].rect,
+            VisionRect {
+                x: 414,
+                y: 114,
+                width: 26,
+                height: 26
+            }
+        );
+        assert!(
+            boxes
+                .iter()
+                .all(|text_box| rect_within(text_box.rect, region))
+        );
+    }
+
+    #[test]
+    fn detection_count_reports_boxes_beyond_max_boxes() {
+        let boxes = |count: i32| {
+            (0..count)
+                .map(|index| DetectedTextBox {
+                    rect: VisionRect {
+                        x: index * 4,
+                        y: 0,
+                        width: 2,
+                        height: 2,
+                    },
+                    confidence: 0.9,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let (kept, count) = keep_detected_boxes(boxes(65), 64);
+        assert_eq!(kept.len(), 64);
+        assert_eq!(
+            count,
+            OcrDetectionCount {
+                detected: 65,
+                limit: 64
+            }
+        );
+
+        let (kept, count) = keep_detected_boxes(boxes(64), 64);
+        assert_eq!(kept.len(), 64);
+        assert_eq!(
+            count,
+            OcrDetectionCount {
+                detected: 64,
+                limit: 64
+            }
+        );
     }
 
     #[test]

@@ -723,11 +723,19 @@ impl Declaration<'_> {
                 "verify_template",
                 "color_probe",
                 "check",
+                "verify_text",
             ],
         )?;
         if object.contains_key("check") && !self.schema_0_6_or_later() {
             return Err(self.error(
                 &child(pointer, "check"),
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
+        // Workflow #396 REC-1: a locate OCR target guards the input from task schema `0.9`.
+        if object.contains_key("verify_text") && self.schema != Some("0.9") {
+            return Err(self.error(
+                &child(pointer, "verify_text"),
                 ResourceDeclarationReason::UnconsumedField,
             ));
         }
@@ -741,9 +749,60 @@ impl Declaration<'_> {
             self.required(object, pointer, "expected_rect")?,
             &child(pointer, "expected_rect"),
         )?;
-        for field in ["verify_template", "color_probe", "check"] {
+        for field in ["verify_template", "color_probe", "check", "verify_text"] {
             if let Some(value) = object.get(field).filter(|value| !value.is_null()) {
                 self.string(value, &child(pointer, field))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #396 REC-1: `ocr_targets[].locate` of task schema `0.9`. Its shape is checked
+    /// here; its values with the derived recognition pack (`contracts/ocr-fields.md`).
+    fn locate(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        const CELLS: [&str; 8] = [
+            "x", "y", "width", "height", "pitch_x", "pitch_y", "columns", "rows",
+        ];
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(
+            value,
+            pointer,
+            &["normalize", "blocks", "line_merge", "cells"],
+        )?;
+        for field in ["normalize", "blocks"] {
+            self.string(
+                self.required(object, pointer, field)?,
+                &child(pointer, field),
+            )?;
+        }
+        if let Some(line_merge) = object.get("line_merge") {
+            let line_merge_pointer = child(pointer, "line_merge");
+            if line_merge.is_object() {
+                let factor = self.object(line_merge, &line_merge_pointer, &["gap_factor"])?;
+                self.unsigned(
+                    self.required(factor, &line_merge_pointer, "gap_factor")?,
+                    &child(&line_merge_pointer, "gap_factor"),
+                )?;
+            } else {
+                self.string(line_merge, &line_merge_pointer)?;
+            }
+        }
+        if let Some(cells) = object.get("cells") {
+            let cells_pointer = child(pointer, "cells");
+            let cells = self.object(cells, &cells_pointer, &CELLS)?;
+            for field in CELLS {
+                if self
+                    .required(cells, &cells_pointer, field)?
+                    .as_i64()
+                    .is_none()
+                {
+                    return Err(self.error(
+                        &child(&cells_pointer, field),
+                        ResourceDeclarationReason::InvalidType,
+                    ));
+                }
             }
         }
         Ok(())
@@ -896,6 +955,7 @@ impl Declaration<'_> {
                 "model_ref",
                 "model_sha256",
                 "click",
+                "locate",
             ],
             _ => unreachable!("fixed declaration family"),
         };
@@ -929,6 +989,7 @@ impl Declaration<'_> {
                 "expected" => self.color(value, &pointer)?,
                 "max_distance" => self.max_distance(value, &pointer)?,
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
+                "locate" => self.locate(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 "mask" | "maskRange" => {

@@ -144,6 +144,9 @@ outcome_keys! {
     fact_key: token,
     gate_code: code,
     budget_dimension: vocab(budget_dimension),
+    // Workflow #396 REC-1.
+    target_id: id,
+    text_read_budget: vocab(text_read_budget),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),

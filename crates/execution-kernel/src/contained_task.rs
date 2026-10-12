@@ -46,6 +46,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 mod linear;
 mod selection;
+// Workflow #396 REC-1.
+#[cfg(test)]
+mod text_locate_tests;
 mod timing;
 pub use linear::linear_main_interface;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
@@ -2063,9 +2066,27 @@ impl PreparedContainedTask {
         let detector = bundle.detector().cloned().ok_or_else(|| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskPageSetMissing.code())
         })?;
-        detector.validate(&evaluator).map_err(|_| {
-            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskRecognitionInvalid.code())
-        })?;
+        detector
+            .validate(&evaluator)
+            .map_err(|error| match error.declaration_issue() {
+                // Workflow #396 REC-1: a page set whose text reads exceed one consumer's
+                // budget is a refused declaration, pointing at the page that exceeds it.
+                Some(issue) => {
+                    let mut refused = ContainedTaskError::with_detail(
+                        SharedCode::ResourceDeclarationInvalid.code(),
+                        error.to_string(),
+                    );
+                    let mut issue = issue.clone();
+                    if let Some(path) = bundle.pages_path() {
+                        issue.declaration_file = path.to_owned();
+                    }
+                    refused.declaration_issue = Some(Box::new(issue));
+                    refused
+                }
+                None => ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskRecognitionInvalid.code(),
+                ),
+            })?;
         evaluator
             .pack()
             .validate_candidate_layout_pages(|page_id| detector.contains_page(page_id))
@@ -2076,6 +2097,7 @@ impl PreparedContainedTask {
                 )
             })?;
         program.validate(&control, &bundle, &detector)?;
+        program.validate_text_reads(bundle.operation_path(), &evaluator)?;
         selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
         let admission_limit = control
             .step_timeout()
@@ -5147,6 +5169,50 @@ impl TaskProgram {
         Ok(())
     }
 
+    /// Workflow #396 REC-1: a `verify_text` guard names a locate OCR target, and the text
+    /// reads of every guard, one consumer each, stay within the static budget of
+    /// `contracts/ocr-fields.md`; an exceeded budget is a refused declaration at the guard.
+    fn validate_text_reads(
+        &self,
+        operation_path: &str,
+        evaluator: &RecognitionEvaluator,
+    ) -> Result<(), ContainedTaskError> {
+        for (index, operation) in self.operations.iter().enumerate() {
+            let Some(guard) = &operation.guard else {
+                continue;
+            };
+            if guard
+                .verify_text
+                .as_deref()
+                .is_some_and(|text| !evaluator.locates_text(text))
+            {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskGuardInvalid.code(),
+                    format!("operation={} verify_text={}", operation.id, guard.target_id),
+                ));
+            }
+            let mut count = actingcommand_recognition_pack::TextReadCount::default();
+            if let Err(overrun) = evaluator.count_text_reads(&mut count, &guard.target_id) {
+                let mut refused = ContainedTaskError::with_detail(
+                    SharedCode::ResourceDeclarationInvalid.code(),
+                    format!(
+                        "operation={} text_read_budget={} used={} limit={}",
+                        operation.id, overrun.budget, overrun.used, overrun.limit
+                    ),
+                );
+                refused.declaration_issue =
+                    Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                        declaration_file: operation_path.to_owned(),
+                        field_path: format!("/operations/{index}/guard"),
+                        schema_version: Some(self.schema_version.clone()),
+                        reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                    }));
+                return Err(refused);
+            }
+        }
+        Ok(())
+    }
+
     fn required_home_entry_page(
         &self,
         control: &TaskControl,
@@ -5479,14 +5545,8 @@ impl TaskProgram {
                     }));
                 error
             };
-            let matching = evaluator
-                .pack()
-                .targets
-                .iter()
-                .filter(|target| recognition_target_id(target) == reading.target_id)
-                .collect::<Vec<_>>();
-            if !matches!(matching.as_slice(), [RecognitionTarget::Ocr(_)]) {
-                return Err(invalid("target_not_ocr"));
+            if let Some(refusal) = reading_target_refusal(evaluator, &reading.target_id) {
+                return Err(invalid(refusal));
             }
             if detector.page_definitions().iter().any(|page| {
                 page.required
@@ -5830,6 +5890,25 @@ fn recognition_target_id(target: &RecognitionTarget) -> &str {
     }
 }
 
+/// A reading's target is exactly one OCR target that reads its text without locating it
+/// (Workflow #396 REC-1); otherwise the refusal's detail token.
+fn reading_target_refusal(
+    evaluator: &RecognitionEvaluator,
+    target_id: &str,
+) -> Option<&'static str> {
+    let matching = evaluator
+        .pack()
+        .targets
+        .iter()
+        .filter(|target| recognition_target_id(target) == target_id)
+        .collect::<Vec<_>>();
+    match matching.as_slice() {
+        [RecognitionTarget::Ocr(target)] if target.locate.is_some() => Some("target_locates_text"),
+        [RecognitionTarget::Ocr(_)] => None,
+        _ => Some("target_not_ocr"),
+    }
+}
+
 fn validate_post_admission_ocr_target(
     control: &TaskControl,
     evaluator: &RecognitionEvaluator,
@@ -5846,6 +5925,12 @@ fn validate_post_admission_ocr_target(
             ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInvalid.code(),
         ));
     };
+    // Workflow #396 REC-1: a field reads text; it never locates it.
+    if target.locate.is_some() {
+        return Err(ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInvalid.code(),
+        ));
+    }
     match &target.region {
         PackRegion::TemplateRelative(_) => {
             evaluator
@@ -6759,15 +6844,30 @@ impl TaskOperation {
             .record_guard_evaluation(Some(&guard.target_id), Some(&result), "evaluated")
             .map_err(ContainedTaskRunError::Boundary)?;
         let target = result.map_err(|error| {
+            // Workflow #396 REC-1: a text read that refused to conclude names its code as
+            // the `cause=` token until the kernel's errors carry `caused_by` links.
+            let detail = match error.outcome() {
+                Some(outcome) => format!("{error} cause={}", outcome.code().as_str()),
+                None => error.to_string(),
+            };
             ContainedTaskError::with_detail(
                 SharedCode::ContainedTaskGuardEvaluationFailed.code(),
-                error.to_string(),
+                detail,
             )
         })?;
         if !target.passed {
+            let detail = match &target.failure {
+                Some(failure) => format!(
+                    "operation={} target={} cause={}",
+                    self.id,
+                    guard.target_id,
+                    failure.code().as_str()
+                ),
+                None => format!("operation={} target={}", self.id, guard.target_id),
+            };
             return Err(ContainedTaskError::with_detail(
                 ExecutionKernelCode::ContainedTaskGuardRefused.code(),
-                format!("operation={} target={}", self.id, guard.target_id),
+                detail,
             )
             .into());
         }
@@ -6792,6 +6892,10 @@ struct OperationGuard {
     /// A named check (a `composite` target) guards the input (`selection-graph.md`).
     #[serde(default)]
     check: Option<String>,
+    /// Workflow #396 REC-1: a locate OCR target, the guard's own target, guards the input and
+    /// gives a `target` or `offset` click its box.
+    #[serde(default)]
+    verify_text: Option<String>,
 }
 
 impl OperationGuard {
@@ -6805,7 +6909,12 @@ impl OperationGuard {
             || !crate::page_anchor_matches(&control.game, &self.page_id, &operation.from)
             || (self.verify_template.is_none()
                 && self.color_probe.is_none()
-                && self.check.is_none())
+                && self.check.is_none()
+                && self.verify_text.is_none())
+            || self
+                .verify_text
+                .as_deref()
+                .is_some_and(|text| text != self.target_id)
         {
             return Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskGuardInvalid.code(),
@@ -6946,7 +7055,10 @@ impl TaskClick {
                 let guard = guard.ok_or_else(|| {
                     ContainedTaskError::new(ExecutionKernelCode::ContainedTaskGuardMissing.code())
                 })?;
-                if guard.verify_template.is_none()
+                // Workflow #396 REC-1: a located text gives a `target` or `offset` box; a text
+                // target never takes `target_center`, a fixed point.
+                if (guard.verify_template.is_none() && guard.verify_text.is_none())
+                    || (self.kind == "target_center" && guard.verify_text.is_some())
                     || self
                         .target_id
                         .as_deref()
@@ -7080,17 +7192,12 @@ impl TaskClick {
                         ExecutionKernelCode::ContainedTaskGuardTargetMissing.code(),
                     )
                 })?;
-                let template = target.template.ok_or_else(|| {
-                    ContainedTaskError::new(
-                        ExecutionKernelCode::ContainedTaskGuardTargetInvalid.code(),
-                    )
-                })?;
-                let mut rect = ClickRect {
-                    x: template.x,
-                    y: template.y,
-                    width: template.width,
-                    height: template.height,
-                };
+                let (mut rect, located_text) = target_click_box(target)?;
+                if located_text && self.kind == "target_center" {
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    ));
+                }
                 if self.kind == "offset" {
                     let offset = self.offset.ok_or_else(|| {
                         ContainedTaskError::new(
@@ -7162,6 +7269,40 @@ impl TaskClick {
         }
         Ok((action, sampling))
     }
+}
+
+/// The box a `target`, `target_center` or `offset` click starts from: the matched template
+/// rectangle, or (Workflow #396 REC-1) the declared cell holding a located text, else its
+/// block. The flag tells a located text.
+fn target_click_box(target: &TargetEvaluation) -> Result<(ClickRect, bool), ContainedTaskError> {
+    if let Some(template) = target.template {
+        return Ok((
+            ClickRect {
+                x: template.x,
+                y: template.y,
+                width: template.width,
+                height: template.height,
+            },
+            false,
+        ));
+    }
+    let located = target
+        .ocr
+        .as_ref()
+        .and_then(|ocr| ocr.located)
+        .ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskGuardTargetInvalid.code())
+        })?;
+    let rect = located.cell_rect.unwrap_or(located.rect);
+    Ok((
+        ClickRect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        },
+        true,
+    ))
 }
 
 fn target_kind_name(kind: TargetKind) -> &'static str {
@@ -7548,6 +7689,7 @@ mod post_admission_ocr_tests {
                     })
                     .collect(),
                 confidence: Some(0.9),
+                detection: None,
             },
             execution: Some(execution(invocation_id)),
         }
@@ -11753,6 +11895,7 @@ mod retry_wiring_tests {
             sample_evaluations: Vec::new(),
             sampling: None,
             message: "matched".to_string(),
+            failure: None,
         };
         for click in [
             serde_json::from_value::<TaskClick>(json!({
@@ -11897,6 +12040,7 @@ mod retry_wiring_tests {
             sample_evaluations: Vec::new(),
             sampling: None,
             message: "matched".to_string(),
+            failure: None,
         };
         let target_center: TaskClick = serde_json::from_value(json!({
             "kind": "target_center",

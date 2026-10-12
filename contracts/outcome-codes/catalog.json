@@ -554,6 +554,14 @@
       "type": "vocab:budget_dimension",
       "description": "The policy budget dimension that is exhausted."
     },
+    "target_id": {
+      "type": "id",
+      "description": "A recognition target's ID in its recognition pack."
+    },
+    "text_read_budget": {
+      "type": "vocab:text_read_budget",
+      "description": "Which per-consumer text read budget ran out."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -3078,6 +3086,21 @@
         },
         "activity_runtime": {
           "description": "Activity runtime."
+        }
+      }
+    },
+    "text_read_budget": {
+      "description": "Which per-consumer text read budget of located OCR text ran out (Workflow #396 REC-1).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "TextReadBudget"
+      },
+      "tokens": {
+        "calls": {
+          "description": "The provider calls of one consumer."
+        },
+        "area": {
+          "description": "The summed region area of one consumer, in pixels."
         }
       }
     },
@@ -6550,6 +6573,12 @@
     ],
     "text_": [
       "pack-containment"
+    ],
+    "text_locate_": [
+      "recognition-pack"
+    ],
+    "text_read_": [
+      "recognition-pack"
     ],
     "third_": [
       "contract"
