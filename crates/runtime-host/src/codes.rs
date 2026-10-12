@@ -1381,6 +1381,8 @@ actingcommand_contract::outcome_locations! {
         OpenNemuSession => "open_nemu_session",
         OpenObservationPackage => "open_observation_package",
         OpenOwnerFile => "open_owner_file",
+        // Workflow #383 AO-7: the daemon's policy monitor opens the host's business notifications.
+        OpenPolicyWakes => "open_policy_wakes",
         OpenRecoveryLadderWindow => "open_recovery_ladder_window",
         OpenSuspensionLedger => "open_suspension_ledger",
         PauseGlobalScheduling => "pause_global_scheduling",

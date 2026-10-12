@@ -11,6 +11,12 @@
 //! `policy_monitor_request_retried`; the next one is reported as
 //! `policy_monitor_retries_exhausted` and ends actingd with the request's failure. Every other
 //! failure, and a request that went to another owner epoch or process, ends actingd at once.
+//!
+//! Workflow #383 AO-7: the policy monitor now wakes the driver from the host's business
+//! notifications and sends no request to its Runtime, so nothing outside the tests (`gate_397`)
+//! calls the retry. `policy.monitor` is still read, checked and reported; retiring it with this
+//! retry, its codes and its tests is left to the coordinator (ORD 376-B2).
+#![cfg_attr(not(test), allow(dead_code))]
 
 use crate::codes::ActingdCode;
 use actingcommand_contract::outcome::{IoKind, Location, Outcome};

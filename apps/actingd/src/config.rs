@@ -804,9 +804,6 @@ pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
     pub(super) provider: ConfiguredProvider,
     pub(super) policy: Option<PolicyBootstrap>,
-    /// Workflow #397: `policy.monitor`, resolved; every default without a `policy` section,
-    /// where no policy monitor runs.
-    pub(super) policy_monitor: PolicyMonitorSettings,
     /// The manifest handed to `host`; `check-config` prints it.
     pub(super) manifest: RuntimeConfigManifest,
     /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
@@ -1323,10 +1320,6 @@ impl ActingdConfigFile {
         if let Some(dispatcher) = self.agent_dispatcher {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
-        let policy_monitor = policy
-            .as_ref()
-            .map(|policy| policy.monitor.settings)
-            .unwrap_or_default();
         let policy = if let Some(policy) = policy {
             // Workflow #369 E3 (#670 ruling 1): a restart closes a scheduled dispatch whose run
             // was cut before its first task event; the host tells them apart by these refs.
@@ -1350,7 +1343,6 @@ impl ActingdConfigFile {
             host,
             provider,
             policy,
-            policy_monitor,
             manifest,
             resource_packages,
             ignored_env_overrides,

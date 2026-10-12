@@ -1691,8 +1691,9 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint.clone();
         let outcome_links = links.clone();
         let failure_links = links;
+        // Workflow #383 AO-7: the committed `lease.released` wakes the policy driver.
         let result = execute_critical(
-            &self.ledger,
+            &self.policy_waking_ledger(),
             self.events.fingerprinter(),
             plan,
             || match self.complete_explicit_release(request_id, token, connection_id) {
@@ -2355,8 +2356,10 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint.clone();
         let outcome_links = links.clone();
         let failure_links = links;
+        // Workflow #383 AO-7: the committed `lease.released` or `lease.expired` wakes the
+        // policy driver.
         let result = execute_critical(
-            &self.ledger,
+            &self.policy_waking_ledger(),
             self.events.fingerprinter(),
             plan,
             || {

@@ -15032,6 +15032,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: open owner file."
     },
+    "open_policy_wakes": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: open the host's business notifications that wake the policy driver (Workflow #383 AO-7)."
+    },
     "open_recovery_ladder_window": {
       "owner": "runtime-host",
       "layer": "host",

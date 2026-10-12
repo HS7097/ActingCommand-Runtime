@@ -186,6 +186,8 @@ mod planning;
 mod policy_catalog;
 mod policy_dispatch;
 mod policy_outcome;
+// Workflow #383 AO-7: the host's business notifications that wake the policy driver.
+mod policy_wake;
 mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
@@ -239,6 +241,9 @@ use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
+// Workflow #383 AO-7.
+pub(crate) use policy_wake::PolicyWakeSignal;
+pub use policy_wake::{PolicyWakes, policy_trigger_for_event, policy_trigger_for_family};
 use recovery_ladder::with_recovery_ladder_staging;
 use requests::{
     ActionFailure, ConnectionFailureContext, ConnectionFailureStage, RequestFailure,
@@ -1211,11 +1216,14 @@ impl RuntimeHost {
             }
             return Err(original);
         }
+        // Workflow #383 AO-7: the capacity monitor's records raise wakes too.
+        let policy_wakes = Arc::new(PolicyWakeSignal::default());
         let performance = (|| {
             PerformanceMonitor::preflight_capacity(
                 crate::performance::CapacityPreflightConfig {
                     performance: config.performance_monitor.clone(),
                     thresholds: config.capacity_thresholds,
+                    policy_wakes: Arc::clone(&policy_wakes),
                 },
                 crate::performance::CapacityRoots::new(
                     owner_epoch,
@@ -1452,6 +1460,9 @@ impl RuntimeHost {
             agent_dispatcher_config: config.agent_dispatcher.clone(),
             agent_dispatcher: Mutex::new(AgentDispatcherState::default()),
             events,
+            policy_wakes,
+            #[cfg(any(test, feature = "test-hooks"))]
+            event_subscriptions_for_test: AtomicU64::new(0),
             execution: OnceLock::new(),
             registered_instances: Mutex::new(BTreeMap::new()),
             monitor_registry: OnceLock::new(),
@@ -3855,6 +3866,12 @@ struct HostShared {
     agent_dispatcher: Mutex<AgentDispatcherState>,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
+    /// Workflow #383 AO-7: the policy driver's wakes raised at the append points and not yet
+    /// taken by the daemon's policy monitor.
+    policy_wakes: Arc<PolicyWakeSignal>,
+    /// Workflow #383 AO7-c, tests only: the event subscriptions (`SubscribeEvents`) served.
+    #[cfg(any(test, feature = "test-hooks"))]
+    event_subscriptions_for_test: AtomicU64,
     execution: OnceLock<ExecutionKernel>,
     registered_instances: Mutex<BTreeMap<InstanceId, RegisteredInstance>>,
     monitor_registry: OnceLock<Mutex<MonitorRegistry>>,

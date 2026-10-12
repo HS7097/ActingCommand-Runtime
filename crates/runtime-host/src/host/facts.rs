@@ -633,6 +633,9 @@ impl HostShared {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             ledger_error(HostLocation::AppendRuntimeEvent)
         })?;
+        // Workflow #383 AO-7: the record is committed; its wake, if any, reaches the driver
+        // from here, not from the ledger.
+        self.policy_wakes.raise(event.event_type());
         if let Some(value) = observation.as_mut() {
             value.device_diagnostics.begin();
         }
@@ -682,6 +685,8 @@ impl HostShared {
                         }
                         error
                     })?;
+                // Workflow #383 AO-7: a committed invalidation changes the instance fact store.
+                self.policy_wakes.raise(persisted.event_type());
                 facts
                     .acknowledge_generated_invalidation(&invalidation.data, persisted.sequence())
                     .and_then(|()| self.observe_device_diagnostics_under_fact_gate(&persisted))
