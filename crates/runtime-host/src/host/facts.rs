@@ -4,7 +4,10 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::fact_store::{priority_offset_milli, valid_priority_offset_task_id};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::{RESOURCE_TARGETS_FACT_KEY, priority_offset_task_id};
+use actingcommand_contract::{
+    CaptureExtent, CaptureGeometryObservation, CaptureRotation, CaptureRotationObservation,
+    RESOURCE_TARGETS_FACT_KEY, priority_offset_task_id,
+};
 
 /// `source_detector` of the three configuration-seeded policy instance facts.
 const POLICY_INSTANCE_SEED_DETECTOR: &str = "runtime.policy-configuration";
@@ -13,6 +16,110 @@ const POLICY_INSTANCE_SEED_SCHEMA: &str = "fact.v1";
 /// records a failed backend self-check publishes (Workflow #317 sc2).
 const BACKEND_SELFCHECK_AVAILABILITY_DETECTOR: &str = "runtime.backend-selfcheck";
 pub(super) const BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX: &str = "backend_selfcheck:";
+
+// Workflow #392 DA-A (model 392 v1.1, section 8.1): the instance's display, recorded and never
+// checked. `display.aspect` has no reader in the Runtime (architecture guard DA-A-T3).
+/// `source_detector` of the instance display facts.
+const DISPLAY_FACT_DETECTOR: &str = "runtime.display-adapter";
+const DISPLAY_FACT_SCHEMA: &str = "fact.v1";
+/// The device frame: one `record_list` row `{width, height}`.
+const DISPLAY_FRAME_EXTENT_FACT_KEY: &str = "display.frame_extent";
+/// The display rotation: `r0`, `r90`, `r180`, `r270` or `unknown`.
+const DISPLAY_ROTATION_FACT_KEY: &str = "display.rotation";
+/// The frame's orientation: `landscape`, `portrait` or `square`.
+const DISPLAY_ORIENTATION_FACT_KEY: &str = "display.orientation";
+/// The frame's aspect ratio: one `record_list` row `{width, height}` reduced by their greatest
+/// common divisor.
+const DISPLAY_ASPECT_FACT_KEY: &str = "display.aspect";
+
+/// The display of one device frame (Workflow #392 DA-A, model 392 section 8.1).
+struct DisplayFacts {
+    width: u32,
+    height: u32,
+    rotation: &'static str,
+    orientation: &'static str,
+    aspect_width: u32,
+    aspect_height: u32,
+}
+
+impl DisplayFacts {
+    /// The frame's extent and its display's rotation (`None`: the source does not provide it).
+    fn new(extent: CaptureExtent, rotation: Option<CaptureRotation>) -> Self {
+        let (width, height) = (extent.width(), extent.height());
+        let (mut divisor, mut remainder) = (width.max(height), width.min(height));
+        while remainder != 0 {
+            (divisor, remainder) = (remainder, divisor % remainder);
+        }
+        Self {
+            width,
+            height,
+            rotation: match rotation {
+                Some(CaptureRotation::R0) => "r0",
+                Some(CaptureRotation::R90) => "r90",
+                Some(CaptureRotation::R180) => "r180",
+                Some(CaptureRotation::R270) => "r270",
+                None => "unknown",
+            },
+            orientation: match width.cmp(&height) {
+                std::cmp::Ordering::Greater => "landscape",
+                std::cmp::Ordering::Less => "portrait",
+                std::cmp::Ordering::Equal => "square",
+            },
+            aspect_width: width / divisor,
+            aspect_height: height / divisor,
+        }
+    }
+
+    /// One `record_list` row `{width, height}`.
+    fn extent_value(width: u32, height: u32) -> ContractFactValue {
+        ContractFactValue::RecordList(vec![BTreeMap::from([
+            ("width".to_owned(), FactScalar::Integer(i64::from(width))),
+            ("height".to_owned(), FactScalar::Integer(i64::from(height))),
+        ])])
+    }
+
+    /// The four facts, in the key order of model 392 section 8.1.
+    fn values(&self) -> [(&'static str, ContractFactValue); 4] {
+        [
+            (
+                DISPLAY_FRAME_EXTENT_FACT_KEY,
+                Self::extent_value(self.width, self.height),
+            ),
+            (
+                DISPLAY_ROTATION_FACT_KEY,
+                ContractFactValue::String(self.rotation.to_owned()),
+            ),
+            (
+                DISPLAY_ORIENTATION_FACT_KEY,
+                ContractFactValue::String(self.orientation.to_owned()),
+            ),
+            (
+                DISPLAY_ASPECT_FACT_KEY,
+                Self::extent_value(self.aspect_width, self.aspect_height),
+            ),
+        ]
+    }
+
+    /// Lowercase hex SHA-256 of the instance alias and the four values: the observation's
+    /// `source_snapshot_id` (`display:<digest>`) and `resource_bundle_hash`.
+    fn digest(&self, instance_alias: &str) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(
+                format!(
+                    "{instance_alias}\n{}x{}\n{}\n{}\n{}x{}",
+                    self.width,
+                    self.height,
+                    self.rotation,
+                    self.orientation,
+                    self.aspect_width,
+                    self.aspect_height
+                )
+                .as_bytes()
+            )
+        )
+    }
+}
 
 /// One `record_list` row per identifier, each holding the single string field `field`.
 fn policy_instance_string_list_value(field: &str, identifiers: &[String]) -> ContractFactValue {
@@ -441,6 +548,85 @@ impl HostShared {
             resource_bundle_hash: digest,
             invalidate_on: Vec::new(),
         })
+        .map(|_| ())
+    }
+
+    /// Workflow #392 DA-A (model 392 v1.1, sections 8.1 and 12.1): records the display of a
+    /// task's first frame whose geometry passed as the four instance facts `display.frame_extent`,
+    /// `display.rotation`, `display.orientation` and `display.aspect`. Nothing checks or refuses
+    /// them. Only an instance bound to a device (physical provenance with a device endpoint, the
+    /// instances whose connection is self-checked) has a display to record; any other instance
+    /// records nothing. When the instance's active records already hold these four values,
+    /// nothing is appended; otherwise the four records are one new observation at the host
+    /// clock, through [`Self::publish_facts`] (source `runtime`, system links), whose snapshot
+    /// id `display:<digest>` and `resource_bundle_hash` are the SHA-256 of the instance alias
+    /// and the values. A refusal is returned to the caller.
+    pub(super) fn publish_display_facts(
+        &self,
+        instance_id: InstanceId,
+        instance_alias: &str,
+        extent: CaptureExtent,
+        geometry: &CaptureGeometryObservation,
+    ) -> RuntimeHostResult<()> {
+        let device_bound = lock(
+            &self.registered_instances,
+            HostLocation::ObserveTaskGeometry,
+        )?
+        .get(&instance_id)
+        .is_some_and(RegisteredInstance::device_self_checked);
+        if !device_bound {
+            return Ok(());
+        }
+        let rotation = match geometry {
+            CaptureGeometryObservation::Observed(geometry) => match geometry.rotation {
+                CaptureRotationObservation::Observed { rotation, .. } => Some(rotation),
+                CaptureRotationObservation::NotProvidedBySource => None,
+            },
+            CaptureGeometryObservation::Unknown(_)
+            | CaptureGeometryObservation::NotApplicable(_) => None,
+        };
+        let display = DisplayFacts::new(extent, rotation);
+        let values = display.values();
+        let scope = FactScope::Instance {
+            instance_id: instance_alias.to_owned(),
+        };
+        let recorded = {
+            let _gate = lock(&self.fact_write_gate, HostLocation::ObserveTaskGeometry)?;
+            let stored = lock(&self.facts, HostLocation::ObserveTaskGeometry)?;
+            values.iter().all(|(key, value)| {
+                stored.active_record(&scope, key).is_some_and(|record| {
+                    matches!(&record.content, FactContent::Inline { value: active } if active == value)
+                })
+            })
+        };
+        if recorded {
+            return Ok(());
+        }
+        let digest = display.digest(instance_alias);
+        let observed_at_unix_ms = self.clock.sample()?.unix_ms;
+        self.publish_facts(
+            actingcommand_contract::FactObservation {
+                records: values
+                    .into_iter()
+                    .map(|(key, value)| FactRecord {
+                        scope: scope.clone(),
+                        key: key.to_owned(),
+                        content: FactContent::Inline { value },
+                        observed_at_unix_ms,
+                        expires_at_unix_ms: None,
+                        ttl_policy: None,
+                        confidence_milli: 1_000,
+                        source_detector: DISPLAY_FACT_DETECTOR.to_owned(),
+                        source_snapshot_id: format!("display:{digest}"),
+                        schema_version: DISPLAY_FACT_SCHEMA.to_owned(),
+                        resource_bundle_hash: digest.clone(),
+                        invalidate_on: Vec::new(),
+                    })
+                    .collect(),
+            },
+            None,
+            FactPublicationPurpose::Ordinary,
+        )
         .map(|_| ())
     }
 
