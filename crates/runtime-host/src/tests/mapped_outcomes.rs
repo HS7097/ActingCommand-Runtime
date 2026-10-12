@@ -1749,6 +1749,80 @@ fn start_outcome_reference_host(
     .expect("catalog-switch runtime host")
 }
 
+/// Workflow #399: `sources` with `approval_id` as the catalog's only approval reference. An
+/// approval id names one catalog generation for good (another target is refused with
+/// `approval_target_identity_conflict`), so each later catalog a run is admitted under names
+/// its own id.
+fn with_catalog_approval_ref(mut sources: CatalogSources, approval_id: &str) -> CatalogSources {
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&source.bytes).expect("catalog approval fixture JSON");
+        document["catalog"]["approval_refs"] = serde_json::json!([approval_id]);
+        source.bytes =
+            serde_json::to_vec_pretty(&document).expect("catalog approval fixture bytes");
+    }
+    sources
+}
+
+/// Workflow #399: a person approves the catalog generation `intent` was evaluated under,
+/// through each approval id that catalog names.
+fn approve_intent_catalog(case: &str, host: &RuntimeHost, intent: &DispatchIntent) {
+    let mut client = TestClient::connect(host);
+    client.declare_governance_identity();
+    for approval_id in &intent.approval_refs {
+        let decision = ApprovalDecisionRecord::new(
+            approval_id.as_str(),
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: intent.catalog_hash.clone(),
+                catalog_version: intent.catalog_version,
+            },
+            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                .expect("approval reason"),
+        )
+        .expect("catalog approval decision");
+        let request =
+            client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
+        assert_eq!(
+            client.send(&request).state(),
+            RuntimeReceiptState::Completed,
+            "{case}: approve catalog version {} through {approval_id}",
+            intent.catalog_version
+        );
+    }
+}
+
+/// Workflow #399: evaluates the policy at `unix_ms` and admits the producer under the active
+/// catalog, approved through that catalog's own approval id.
+fn admit_producer_at(
+    case: &str,
+    host: &RuntimeHost,
+    outcome_key: &str,
+    unix_ms: u64,
+    seed: u64,
+) -> Box<PolicyRunContext> {
+    let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
+    sample_capacity().expect("capacity sample for the producer's admission time");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, unix_ms, true),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms,
+                monotonic_ms: unix_ms,
+            },
+            seed,
+            PolicyTrigger::Reconciliation,
+        )
+        .unwrap_or_else(|error| panic!("{case}: producer evaluation: {error}"));
+    admit_evaluated_producer(case, host, &cycle)
+}
+
 /// Workflow #399: admits the producer intent of `cycle`.
 fn admit_evaluated_producer(
     case: &str,
@@ -1780,7 +1854,7 @@ fn admit_evaluated_producer(
         .find(|chain| chain.id == intent.reason_chain_id)
         .unwrap_or_else(|| panic!("{case}: producer reason chain"))
         .clone();
-    record_policy_approval(host, &intent);
+    approve_intent_catalog(case, host, &intent);
     let PolicyDispatchAdmission::Granted { context } = host
         .admit_policy_dispatch(&intent, &reasons, &policy_context(host, &intent))
         .unwrap_or_else(|error| panic!("{case}: producer admission: {error}"))
@@ -1887,7 +1961,10 @@ fn a_catalog_first_referencing_an_earlier_run_outcome_reads_it_as_unknown_until_
             POLICY_RESTART_UNIX_MS,
         );
         restarted
-            .activate_policy_catalog(&mapped_policy_sources(2, outcome_key))
+            .activate_policy_catalog(&with_catalog_approval_ref(
+                mapped_policy_sources(2, outcome_key),
+                "approval:fixture-a2",
+            ))
             .unwrap_or_else(|error| panic!("{case}: activate catalog v2: {error}"));
         let recovered = restarted
             .evaluate_policy_cycle(PolicyTrigger::Recovery)
@@ -1961,11 +2038,19 @@ fn an_outcome_referenced_again_after_an_unreferenced_run_does_not_bring_back_the
         "v1 references the outcome, so its run gives one"
     );
 
-    host.activate_policy_catalog(&budget_policy_sources(2))
-        .expect("activate catalog v2 without the reference");
+    host.activate_policy_catalog(&with_catalog_approval_ref(
+        budget_policy_sources(2),
+        "approval:fixture-a2",
+    ))
+    .expect("activate catalog v2 without the reference");
     let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
-    let (second_context, _) =
-        admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 39_911);
+    let second_context = admit_producer_at(
+        "not referenced",
+        &host,
+        outcome_key,
+        timeline.second_policy_unix_ms,
+        39_911,
+    );
     state.input_count.store(0, Ordering::Release);
     let second_receipt = host
         .run_scheduled_contained_task(&second_context, &request)
