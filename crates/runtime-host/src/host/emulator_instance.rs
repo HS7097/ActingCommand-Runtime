@@ -140,7 +140,7 @@ impl ControlMode<'_> {
     fn token(&self) -> &LeaseToken {
         match self {
             Self::Operator(key) | Self::RestartPhase(key) => &key.token,
-            Self::Ladder(token) => *token,
+            Self::Ladder(token) => token,
         }
     }
 

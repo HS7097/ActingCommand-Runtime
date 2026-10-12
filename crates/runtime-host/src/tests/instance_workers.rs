@@ -1197,7 +1197,7 @@ fn only_one<'a>(events: &[&'a PersistedEvent], event_type: EventType) -> &'a Per
     let [event] = matching.as_slice() else {
         panic!("one {event_type:?}: {matching:#?}");
     };
-    **event
+    event
 }
 
 /// The `lease.transferred` that took the lease `from`.
