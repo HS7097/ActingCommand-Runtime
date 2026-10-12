@@ -3,6 +3,7 @@
   "codes": {
     "execution_instance_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -20,6 +21,7 @@
     },
     "execution_instance_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -37,6 +39,7 @@
     },
     "execution_kernel_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -54,6 +57,7 @@
     },
     "execution_kernel_state_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -71,6 +75,7 @@
     },
     "execution_session_spawn_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -88,6 +93,7 @@
     },
     "execution_session_panicked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -105,6 +111,7 @@
     },
     "execution_session_state_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -122,6 +129,7 @@
     },
     "execution_session_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -139,6 +147,7 @@
     },
     "execution_session_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -156,6 +165,7 @@
     },
     "execution_session_response_lost": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -173,6 +183,7 @@
     },
     "execution_session_close_pending": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -190,6 +201,7 @@
     },
     "execution_session_close_in_progress": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -207,6 +219,7 @@
     },
     "execution_session_generation_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -224,6 +237,7 @@
     },
     "execution_resource_close_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -241,6 +255,7 @@
     },
     "execution_endpoint_rebind_session_open": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -258,6 +273,7 @@
     },
     "execution_endpoint_rebind_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -275,6 +291,7 @@
     },
     "preparation_deadline_exceeded": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -292,6 +309,7 @@
     },
     "input_plan_preparation_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -309,6 +327,7 @@
     },
     "input_backend_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -326,6 +345,7 @@
     },
     "input_backend_close_failed": {
       "category": "error",
+      "ladder_class": "stability_warning",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -343,6 +363,7 @@
     },
     "input_frame_capture_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -360,6 +381,7 @@
     },
     "input_frame_not_committed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -377,6 +399,7 @@
     },
     "input_frame_session_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -394,6 +417,7 @@
     },
     "capture_backend_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -411,6 +435,7 @@
     },
     "capture_backend_close_failed": {
       "category": "error",
+      "ladder_class": "stability_warning",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -428,6 +453,7 @@
     },
     "nemu_input_frame_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -445,6 +471,7 @@
     },
     "nemu_input_fencing_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -462,6 +489,7 @@
     },
     "nemu_session_close_failed": {
       "category": "error",
+      "ladder_class": "stability_warning",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -479,6 +507,7 @@
     },
     "application_frame_invalidation_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -496,6 +525,7 @@
     },
     "application_resource_close_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -513,6 +543,7 @@
     },
     "application_adb_baseline_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -530,6 +561,7 @@
     },
     "capture_geometry_kernel_busy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -547,6 +579,7 @@
     },
     "capture_geometry_kernel_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -564,6 +597,7 @@
     },
     "capture_geometry_session_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -581,6 +615,7 @@
     },
     "capture_geometry_session_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -598,6 +633,7 @@
     },
     "capture_geometry_session_busy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -615,6 +651,7 @@
     },
     "capture_geometry_session_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -632,6 +669,7 @@
     },
     "capture_geometry_queue_full": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -649,6 +687,7 @@
     },
     "capture_geometry_deadline_elapsed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -666,6 +705,7 @@
     },
     "capture_geometry_read_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -683,6 +723,7 @@
     },
     "monitor_observation_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -700,6 +741,7 @@
     },
     "monitor_observation_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -717,6 +759,7 @@
     },
     "contained_task_admission_failed": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -734,6 +777,7 @@
     },
     "contained_task_vision_provider_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -751,6 +795,7 @@
     },
     "contained_task_vision_provider_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -768,6 +813,7 @@
     },
     "content_directory_digest_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -785,6 +831,7 @@
     },
     "resource_declaration_diagnostic_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -802,6 +849,7 @@
     },
     "bundle_maintenance_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -819,6 +867,7 @@
     },
     "contained_task_control_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -836,6 +885,7 @@
     },
     "contained_task_control_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -853,6 +903,7 @@
     },
     "contained_task_resolution_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -870,6 +921,7 @@
     },
     "contained_task_program_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -887,6 +939,7 @@
     },
     "contained_task_phases_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -904,6 +957,7 @@
     },
     "contained_task_page_set_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -921,6 +975,7 @@
     },
     "contained_task_page_set_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -938,6 +993,7 @@
     },
     "contained_task_recognition_pack_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -955,6 +1011,7 @@
     },
     "contained_task_recognition_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -972,6 +1029,7 @@
     },
     "contained_task_recognition_target_region_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -989,6 +1047,7 @@
     },
     "contained_task_recognition_targets_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1006,6 +1065,7 @@
     },
     "contained_task_operation_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1023,6 +1083,7 @@
     },
     "contained_task_operation_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1040,6 +1101,7 @@
     },
     "contained_task_destination_conflict": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1057,6 +1119,7 @@
     },
     "contained_task_primitive_unsupported": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1074,6 +1137,7 @@
     },
     "contained_task_guard_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1091,6 +1155,7 @@
     },
     "contained_task_guard_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1108,6 +1173,7 @@
     },
     "contained_task_guard_target_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1125,6 +1191,7 @@
     },
     "contained_task_guard_target_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1142,6 +1209,7 @@
     },
     "contained_task_recovery_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1159,6 +1227,7 @@
     },
     "contained_task_recovery_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1176,6 +1245,7 @@
     },
     "contained_task_sampling_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1193,6 +1263,7 @@
     },
     "contained_task_outcome_declaration_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1210,6 +1281,7 @@
     },
     "contained_task_outcome_declaration_incomplete": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1227,6 +1299,7 @@
     },
     "contained_task_resource_reading_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1244,6 +1317,7 @@
     },
     "contained_task_linear_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1261,6 +1335,7 @@
     },
     "contained_task_select_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1278,6 +1353,7 @@
     },
     "contained_task_select_policy_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1295,6 +1371,7 @@
     },
     "contained_task_select_policy_hash_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1312,6 +1389,7 @@
     },
     "contained_task_select_policy_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1329,6 +1407,7 @@
     },
     "contained_task_select_policy_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1346,6 +1425,7 @@
     },
     "contained_task_requires_scheduler": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1363,6 +1443,7 @@
     },
     "contained_task_home_entry_not_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1380,6 +1461,7 @@
     },
     "contained_task_prerequisite_unbound": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1397,6 +1479,7 @@
     },
     "contained_task_prerequisite_cycle": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1414,6 +1497,7 @@
     },
     "contained_task_prerequisite_depth_exceeded": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1431,6 +1515,7 @@
     },
     "contained_task_prerequisite_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1448,6 +1533,7 @@
     },
     "contained_task_prerequisite_entry_unmatched": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1465,6 +1551,7 @@
     },
     "contained_task_return_home_entry_unmatched": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1482,6 +1569,7 @@
     },
     "contained_task_linear_entry_unmatched": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1499,6 +1587,7 @@
     },
     "contained_task_timeout": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1516,6 +1605,7 @@
     },
     "contained_task_record_boundary": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1533,6 +1623,7 @@
     },
     "contained_task_frame_invalid": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1550,6 +1641,7 @@
     },
     "contained_task_frame_resolution_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1567,6 +1659,7 @@
     },
     "contained_task_input_out_of_bounds": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1584,6 +1677,7 @@
     },
     "contained_task_recognition_conflict": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1601,6 +1695,7 @@
     },
     "contained_task_guard_refused": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1618,6 +1713,7 @@
     },
     "contained_task_step_unconfirmed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1635,6 +1731,7 @@
     },
     "contained_task_error_page_reached": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1652,6 +1749,7 @@
     },
     "contained_task_linear_intermediate_unobserved": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1669,6 +1767,7 @@
     },
     "contained_task_linear_application_unconfirmed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1686,6 +1785,7 @@
     },
     "page_confirmation_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1703,6 +1803,7 @@
     },
     "contained_task_resource_reading_unresolved": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1720,6 +1821,7 @@
     },
     "contained_task_stability_capture_invalid": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1737,6 +1839,7 @@
     },
     "contained_task_stability_comparison_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1754,6 +1857,7 @@
     },
     "contained_task_stability_counter_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1771,6 +1875,7 @@
     },
     "contained_task_stability_counter_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1788,6 +1893,7 @@
     },
     "recognition_samples_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1805,6 +1911,7 @@
     },
     "recognition_sampling_runtime_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1822,10 +1929,13 @@
     },
     "recognition_sample_budget_insufficient": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "required_ms": "required",
+        "remaining_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -1833,16 +1943,20 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The time budget cannot cover the recognition samples a phase needs.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A running task had less time left (remaining_ms) than the next page recognition needs (required_ms), so it ended before sampling. Only for a run in progress; at admission the same condition is recognition_sample_budget_invalid. A scheduled run that ends with it settles as a condition termination and is rerun. Not a recovery ladder trigger.",
+      "common_causes": "Slow steps or long waits earlier in the run used up the task time; host load lengthened the run.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows. Repeated occurrences at stage s0 mean the task timeout is too tight for its declared sampling."
     },
     "recognition_sample_deadline_exceeded": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "attempts": "required",
+        "timeout_ms": "required",
+        "stage": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -1850,12 +1964,13 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Recognition sampling passed its deadline.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A recognition observation (capture, multi-frame sampling and recognition) did not finish within its window, and every observe-only retry (attempts: the configured base plus the pacing curve's extra retries) ran out too; stage names the observation. A retry never repeats an input. A scheduled run that ends with it settles as a condition termination and is rerun after the condition lifts (contracts/policy-suspension.md). Not a recovery ladder trigger.",
+      "common_causes": "A slow or stalled emulator under host load; a page whose consensus needs more frames than its window allows at the current pacing.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows. Repeated occurrences at stage s0 mean the package's sampling or timeouts are too tight."
     },
     "recognition_sample_deadline_or_permission_lost": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1873,6 +1988,7 @@
     },
     "recognition_sample_geometry_changed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1890,6 +2006,7 @@
     },
     "candidate_sampling_runtime_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1907,10 +2024,13 @@
     },
     "candidate_sample_budget_insufficient": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "required_ms": "required",
+        "remaining_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -1918,16 +2038,19 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The time budget cannot cover the candidate samples a select step needs.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A running selection step had less time left (remaining_ms) than its candidate sampling needs (required_ms). Settles like recognition_sample_budget_insufficient: a condition termination with a rerun. Not a recovery ladder trigger.",
+      "common_causes": "Earlier steps used up the task time; host load lengthened the run.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows."
     },
     "candidate_sample_deadline_exceeded": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "attempts": "required",
+        "timeout_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -1935,12 +2058,13 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Candidate sampling passed its deadline.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A candidate sampling of a selection step did not finish within its window, and every observe-only retry (attempts) ran out too. Same rule as recognition_sample_deadline_exceeded: a new timing context per retry, no repeated input, a condition termination with a rerun. Not a recovery ladder trigger.",
+      "common_causes": "A slow or stalled emulator under host load.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows."
     },
     "candidate_sample_page_or_geometry_changed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1958,6 +2082,7 @@
     },
     "selection_state_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1975,6 +2100,7 @@
     },
     "selection_fact_context_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -1992,6 +2118,7 @@
     },
     "selection_evaluation_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2009,6 +2136,7 @@
     },
     "selection_not_selected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2026,6 +2154,7 @@
     },
     "selection_page_changed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2043,6 +2172,7 @@
     },
     "selection_projection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2060,6 +2190,7 @@
     },
     "selection_confirmation_capture_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2077,6 +2208,7 @@
     },
     "select_page_mismatch": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2094,6 +2226,7 @@
     },
     "ocr_fields_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2111,6 +2244,7 @@
     },
     "ocr_fields_dictionary_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2128,6 +2262,7 @@
     },
     "ocr_fields_dictionary_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2145,6 +2280,7 @@
     },
     "ocr_fields_dictionary_hash_or_limit_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2162,6 +2298,7 @@
     },
     "contained_task_post_admission_ocr_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2179,6 +2316,7 @@
     },
     "contained_task_post_admission_ocr_outcome_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2196,6 +2334,7 @@
     },
     "contained_task_post_admission_ocr_outcome_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2213,6 +2352,7 @@
     },
     "contained_task_post_admission_ocr_page_gate_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2230,6 +2370,7 @@
     },
     "contained_task_post_admission_ocr_page_gate_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2247,6 +2388,7 @@
     },
     "contained_task_post_admission_ocr_target_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2264,6 +2406,7 @@
     },
     "contained_task_post_admission_ocr_target_in_page_gate": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2281,6 +2424,7 @@
     },
     "contained_task_post_admission_ocr_target_out_of_bounds": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2298,6 +2442,7 @@
     },
     "contained_task_post_admission_ocr_truth_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2315,6 +2460,7 @@
     },
     "contained_task_post_admission_ocr_truth_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2332,6 +2478,7 @@
     },
     "contained_task_post_admission_ocr_truth_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2349,6 +2496,7 @@
     },
     "contained_task_post_admission_ocr_limit_exceeded": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2366,6 +2514,7 @@
     },
     "contained_task_post_admission_ocr_candidate_work_exceeded": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2383,6 +2532,7 @@
     },
     "contained_task_post_admission_ocr_observation_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2400,6 +2550,7 @@
     },
     "contained_task_post_admission_ocr_evidence_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2417,6 +2568,7 @@
     },
     "offline_fixture_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2434,6 +2586,7 @@
     },
     "offline_decision_fingerprint_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2451,6 +2604,7 @@
     },
     "offline_simulation_executed_step_invariant": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2468,6 +2622,7 @@
     },
     "offline_simulation_effect_intent_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2485,6 +2640,7 @@
     },
     "offline_simulation_confirmation_frame_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2502,6 +2658,7 @@
     },
     "offline_simulation_frame_copy_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2519,6 +2676,7 @@
     },
     "offline_simulation_action_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2536,6 +2694,7 @@
     },
     "offline_simulation_multiple_effects": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2553,6 +2712,7 @@
     },
     "observation_containment_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2570,6 +2730,7 @@
     },
     "observation_resources_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2587,6 +2748,7 @@
     },
     "observation_frame_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2604,6 +2766,7 @@
     },
     "observation_fact_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2621,6 +2784,7 @@
     },
     "observation_projection_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2638,6 +2802,7 @@
     },
     "earlier_target_failed": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2655,6 +2820,7 @@
     },
     "run_decision_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2672,6 +2838,7 @@
     },
     "run_transition_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2689,6 +2856,7 @@
     },
     "drive_plan_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2706,6 +2874,7 @@
     },
     "drive_package_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2723,6 +2892,7 @@
     },
     "detect_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2740,6 +2910,7 @@
     },
     "action_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2757,6 +2928,7 @@
     },
     "png_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2774,6 +2946,7 @@
     },
     "size_changed": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2791,6 +2964,7 @@
     },
     "digest_cells_changed": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2808,6 +2982,7 @@
     },
     "schema_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2825,6 +3000,7 @@
     },
     "scope_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2842,6 +3018,7 @@
     },
     "detector_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2859,6 +3036,7 @@
     },
     "resource_hash_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2876,6 +3054,7 @@
     },
     "missing_key": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2893,6 +3072,7 @@
     },
     "unsafe_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2910,6 +3090,7 @@
     },
     "unallowed_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2927,6 +3108,7 @@
     },
     "invalid_pointer": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2944,6 +3126,7 @@
     },
     "undeclared_key": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -2958,6 +3141,88 @@
       "description": "An environment detection result carries an undeclared key.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "recognition_sample_budget_invalid": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "required_ms": "required",
+        "limit_ms": "required",
+        "pack_operation_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admission refused a task package whose declared sampling needs more time (required_ms) than the smaller of its step and task timeouts (limit_ms); pack_operation_id names the operation when one operation exceeds it. It is a suspend code by default: the Runtime suspends the task package until its content or the Runtime build changes (contracts/policy-suspension.md). Not a recovery ladder trigger.",
+      "common_causes": "A package written for an older kernel whose budget rule was looser; a package whose consensus or candidate sampling declarations outgrew its timeouts.",
+      "handling": "Raise the package's step or task timeout, or reduce its declared sampling, and replace the package; the suspension lifts when its content hash changes."
+    },
+    "contained_task_feature_locked": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run recognised a page (page_id) that its task's feature_locks declaration names as the sign of a locked feature, and stopped there with no input. The host publishes the instance fact fact_key (a session.feature. key) as false for the configured time. Not a failure streak and not a recovery ladder trigger.",
+      "common_causes": "The account has not unlocked the feature the task needs.",
+      "handling": "Nothing to repair: the task is not scheduled on the instance while the fact says locked. Publish true for the key once the feature is unlocked."
+    },
+    "cost_commit_time_insufficient": {
+      "category": "warning",
+      "ladder_class": "budget_or_permission",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "required_ms": "required",
+        "remaining_ms": "required",
+        "step_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Before the input of the step its cost_commit declaration names (step_id), the run had less task budget or wall-clock time left (remaining_ms) than the declared time to finish plus the margin (required_ms), so it stopped with nothing spent. Settles as a condition termination with a rerun. Not a recovery ladder trigger.",
+      "common_causes": "Earlier steps or host load used up the time; the declaration's after_ms is larger than the time left in the task.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows. Frequent occurrences mean after_ms or the task timeout needs another look (contracts/cost-commit.md)."
+    },
+    "cost_commit_declaration_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "field": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A task package's cost_commit declaration breaks a rule (field points at the member): step_id is not a step of the task, after_ms is 0 or longer than the task timeout, or the package's maintenance use is recognition. check-config reports it.",
+      "common_causes": "A typo in step_id; an after_ms copied from another task; a recognition maintenance package that declares cost_commit.",
+      "handling": "Fix the declaration in the resource repository and replace the package."
     }
   },
   "locations": {

@@ -281,8 +281,10 @@ fn write_text(output: &mut impl Write, text: &str) -> io::Result<()> {
     output.flush()
 }
 
-// Test-only: Workflow #382 MCP-T1 (test plan A-5a), the result envelope, budget and jobs gate.
+// Test-only: Workflow #382 MCP-T1 (test plan A-5a), the result envelope, budget and jobs gate;
+// Workflow #372 K3, ac_diagnose's clock-slot rows.
 #[cfg(test)]
 mod tests {
+    mod clock_slots;
     mod gate_mcpt1;
 }

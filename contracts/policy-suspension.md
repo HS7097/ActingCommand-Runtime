@@ -8,6 +8,10 @@ here uses the existing policy `on_failure`, the existing `policy.execution_recor
 payload field or enum value is added, and a ledger written this way is read and replayed by
 older builds.
 
+The last three sections ("Task package suspension", "Condition termination and owed reruns" and
+their configuration) are the scheduling rules of Workflow #386, specified ahead of their code;
+unlike the rest of this document, the condition termination adds one persisted member.
+
 ## Catalog
 
 The recommended `on_failure` of a linear task is
@@ -245,7 +249,12 @@ stdout is one JSON object:
  "repeating":[{"task_id":"...","instance_id":"...","error_code":"...","failure_code":"...",
    "step":{},"latest":{"execution_sequence":0,"run_id":"..."},
    "previous":{"execution_sequence":0,"run_id":"..."},"detail":null}],
- "warnings":[]}
+ "warnings":[],
+ "clock_slots":[{"code":"clock_slot_refused","task_id":"...","instance_id":"...",
+   "gate_code":"policy_budget_exhausted","budget_dimension":"task_daily",
+   "occurrence_unix_ms":0,"window_end_unix_ms":0,"next_eligible_unix_ms":0,"next_occurrence_unix_ms":0,
+   "slot_fate":"next_window","slot_fate_settled":true,
+   "recorded_sequence":0,"recorded_at_unix_ms":0,"next_dispatch":{"sequence":0,"admitted_at_unix_ms":0}}]}
 ```
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
@@ -268,6 +277,27 @@ stdout is one JSON object:
   configuration file changed after it, `daemon_start_unknown` without it,
   `error_code_unparsed:<task>/<instance>` for a code that looks like an identity and does not
   parse (judged on its main digest only), `task_not_in_catalog:<task>/<instance>`.
+- `clock_slots` (Workflow #372 K3): the clock-slot records (`scheduling/README.md`, "Clock-slot
+  records") whose event time is within 48 h of the ledger's latest event, newest first, at most
+  200; `clock_slots_total` is added with their number when the list is cut. A record is a
+  `policy.planning_signal_observed` of kind `goal_missed` whose `signal_id` starts with
+  `signal:clock_slot:`; it is selected by these two, never by its `fact_code`.
+  - Its `fact_code` token is read back into `code` and the token's values; `task_id` and
+    `instance_id` are the record's own. Absent values are left out. `recorded_sequence` and
+    `recorded_at_unix_ms` place the record in the ledger.
+  - `next_dispatch` is the pair's first `policy.dispatch_admitted` after the record, as its
+    `sequence` and `admitted_at_unix_ms` (D); it is left out when there is none. The reference
+    time is the ledger's latest event time.
+  - A refused or deferred record, with E its `window_end_unix_ms` and X its
+    `next_occurrence_unix_ms`: `slot_fate` is `collapsed` when D ≥ X, `same_window` when D < E,
+    and `next_window` otherwise, with `slot_fate_settled` true. Without D it is `collapsed` and
+    settled once the reference time reaches X; before that it is unsettled and shows the fate
+    its `next_eligible_unix_ms` predicts by the same rule, or `pending` without it.
+  - An owed record: `served` when D < X; `absorbed` when D ≥ X, or without D once the reference
+    time reaches X; both settled. Otherwise `pending`, unsettled.
+  - A token that does not read back (an unknown key, a value of the wrong type, a missing
+    required value) gives `{"parse_state":"unparsed","signal_id":"...","raw_token":"..."}`
+    and no warning.
 
 Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 `FATAL actingd: <code>` on stderr; once the configuration is loaded, stdout also carries
@@ -290,3 +320,175 @@ Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 - The startup reconciliation records the original code, so the next failure starts a new
   streak and is rerun once more; an interrupted settlement is recorded as a pause and, when it is
   the first of its pair in a row, lifted by the same restart (Workflow #361 M6).
+
+## Task package suspension (Workflow #386 SR-3)
+
+**Status.** Written ahead of its code (documentation slice SR-0, scheduling model v1.4.2 §2.4
+with option 丙 of board #336); slice SR-3 implements it, after PKG-S3 provides the content
+hash. Until then a package that admission refuses is prepared and refused again at every due
+dispatch.
+
+**What is suspended.** When admission refuses a task package with a code listed in
+`scheduling.pack_admission.suspend_codes` (default only `recognition_sample_budget_invalid`:
+the package's declared sampling needs more than the smaller of its step and task timeouts), the
+Runtime suspends that task package, identified by its `package_id`, under the Runtime build that
+refused it. Admission depends only on the package's content and the kernel, so the object is
+neither a (task, instance) pair nor a standard package: a standard package is always installed
+and activated whole. Right after the refusal the Runtime measures the package's content hash
+once (the `content-directory.v1` computation, or the SHA-256 of the file for a legacy assembled
+ZIP). Admission itself never computes it.
+
+**Where it is found.** One rule, three places:
+
+1. check-config (`scheduling.pack_admission.check_in_check_config`, default true) runs this
+   Runtime's full admission on every package of `policy.procedure_manifest`. A refusal with a
+   suspend code becomes a `pack_admission_suspended` note and the configuration stays valid;
+   any other refusal is handled as before (at dispatch). check-config reads the ledger
+   read-only and writes nothing; acsetup prints its warning unchanged, installs the standard
+   package and lists that task package as suspended.
+2. After actingd has started (`scheduling.pack_admission.check_after_start`, default true), a
+   background thread runs the same check outside the start window. It only suspends.
+3. Dispatch preparation: the first refusal with a suspend code suspends the package.
+
+**While suspended.** Every task bound to the package, on every instance, is deferred in the
+evaluation with `pack_admission_suspended` (third in the order of deferrals,
+`scheduling-blackout.md`): no intent and no further preparation. The other task packages of the
+same standard package are scheduled as usual. The refused dispatch keeps its execution record;
+no record shape changes.
+
+**Lifting.** A suspension lifts when the package's content hash differs from the recorded one
+(the package was fixed in place) or the Runtime build differs. The hash is measured again after
+actingd starts (in the background), when the package is loaded (Workflow #389 LoadPack), and
+when the evaluation finds a task of the package due while it is suspended, at most once per
+package per minimum interval (a configuration key that Workflow #383 AO-0 registers, default
+60 s). No restart is needed. A package that cannot be measured at a check (removed, being
+replaced, unreadable) stays suspended, reports the warning `lift_check_hash_unmeasured`
+(`package_id`; M-PKG D18; spelling proposed here, registered by PKG-S3 with the lift check) and
+is checked again. After a lift the next preparation tries the package once; the same refusal
+under the same content hash and build suspends it again, so nothing loops. There is no manual
+lift.
+
+**Notices.** All are registered codes, never sentences:
+
+- `actingd suspended` gains the top-level list `packs` (an addition; `schema_version` is
+  unchanged): one entry per suspended package with `package_id`, `failure_code`,
+  `runtime_commit`, `paused_hash_prefix` and `current_hash_prefix`;
+- MCP `ac_diagnose` carries the `packs` that concern the instance, and the not-running reason of
+  `ac_overview` and of the instance status shows `pack_admission_suspended`;
+- the UI console shows it in the instance's status line (UI slice UI-1).
+
+**Ledger.** The probes copy what happened; there is no direct write. A suspension found by
+dispatch preparation is visible as that dispatch's execution record. One found by the
+background check is copied by the evaluation probe as one `pack_admission_suspended` outcome
+(`package_id`, `actual_digest` holding the content hash, `failure_code`, `runtime_commit`), and a
+lift as `pack_admission_lifted` (`package_id`, `actual_digest`, `runtime_commit`); which existing
+record type carries them is decided before SR-3 is dispatched. The suspension is an `error`: a
+person has to change the package, and the rest of the Runtime works on. It never triggers the
+recovery ladder.
+
+**Unlike `paused_task`.** The per-pair pause above needs every pair to fail on its own; this
+suspension holds every pair of the package at once.
+
+## Condition termination and owed reruns (Workflow #386 SR-2)
+
+**Status.** Written ahead of its code (documentation slice SR-0, scheduling model v1.4.2 §2.3,
+§4). Slice SR-2a (v0.12.0) reads the `condition` member below and settles a replay from it,
+so a later build's ledger stays readable within v0.12.x; it never writes the member. Slice
+SR-2b (v0.12.x, together with performance pacing slice P-s and after ledger slices AO-5 and
+AO-6) writes it and owes the reruns. Until SR-2b, these failures settle as before.
+
+**Which runs.** A policy run ends by a condition, not by a failure of the task, when its failure
+code is listed in `scheduling.rerun.condition_codes`. The default list is
+`recognition_sample_budget_insufficient`, `candidate_sample_budget_insufficient`,
+`recognition_sample_deadline_exceeded`, `candidate_sample_deadline_exceeded`,
+`blackout_run_stopped` (`scheduling-blackout.md`), `perf_run_yielded` and `perf_hold_expired`
+(Workflow #385) and `cost_commit_time_insufficient` (`cost-commit.md`). A sampling timeout ends a
+run only after its observe-only retries ran out: an observation that times out is repeated
+without repeating any input, `scheduling.recognition.sample_timeout_retries` times (default 2)
+plus the pacing curve's extra retries (slice SR-1). An operator pause (`contained_task_paused`)
+is not in the default list.
+
+**Decided once.** The live settlement decides it from the failure code, the configuration and
+the number of consecutive condition terminations of the pair in this occurrence, and writes the
+result into the failure part of the `policy.execution_recorded` record as the optional member
+`condition: {refunded, count, expires_at_unix_ms}` (absent for an ordinary failure). `count` is
+that consecutive number; `expires_at_unix_ms` is the end of the pair's bookkeeping window. A
+replay or a start reads the member and never the current configuration, so changing
+`condition_codes`, `max_per_occurrence` or `refund_counts` and restarting cannot make a replay
+disagree with its record. The member is a persisted shape change of v0.12.0, registered by
+Workflow #383 AO-0 with the other shapes of the new ledger; rolling a ledger that SR-2b wrote
+back to a v0.11 build fails at its start.
+
+**Settlement.** A run with `condition`:
+
+- adds to no failure streak and no escalation: the record keeps the previous counters and
+  `failure_streaks` is not updated, so the latest real failure identity (the one lifting a
+  `paused_task` compares) stays;
+- keeps the disposition `continue` (no new disposition value);
+- with `refunded` true (`scheduling.rerun.refund_counts`, default true) gives back the task
+  daily, task window, activity daily and activity window counts it took, so a task limited to
+  one run a day can still be rerun; what the task spent in the game is not given back
+  (`cost-commit.md`);
+- does not add its duration to the task or activity runtime, and is never re-judged as
+  `policy_runtime_budget_exceeded`;
+- while its rerun is owed, hides its `terminal_state` and `completed_window` from the task
+  runtime snapshot, so neither `dependency_completed(head, failed)` nor
+  `dependency_completed(head, succeeded)` of a chain becomes true; `last_dispatched_unix_ms`
+  still counts the occurrence as served.
+
+**The rerun.** An owed pair (`condition_reruns`: (task, instance) → `{failure_code, count,
+expires_at_unix_ms}`) is an input of the evaluation like the immediate rerun above: the pair is
+treated as triggered and past its cooldown with the reason `policy_rerun_owed`, and with
+`scheduling.rerun.promote` (default true) it ranks ahead of the instance's other candidates.
+Feedback stop, placement, blackouts, activity windows and budgets still apply. It is an ordinary
+policy dispatch in the instance's one queue (`policy_dispatch` claim); a held instance defers it
+with `dispatch_instance_held`, a wait and not a failure. Pacing gates it: an instance paused by
+pacing defers it with `perf_scheduling_paused` like every candidate, and a pacing stage above
+`scheduling.rerun.resume_stage` (default S2), or back at or below it for less than
+`resume_settle_ms` (default 60 s), defers it with `policy_rerun_waiting` (with `pacing_stage`).
+A stage change wakes the evaluation (`ResourcesChanged`); a blackout's end wakes it through the
+deferral's wake time. While performance pacing is observe-only the stage is always S0 and the
+rerun is let through at once.
+
+**Limits.** An owed rerun not served by `expires_at_unix_ms` expires with `policy_rerun_expired`
+(warning); the run's `Failed` terminal then appears in the snapshot and counts as an ordinary
+failure, and the missed round is not carried into the next day. A pair that ends by a condition
+more than `scheduling.rerun.max_per_occurrence` times (default 2) in one occurrence settles that
+run as an ordinary recoverable failure, without `condition`, and records
+`policy_rerun_exhausted` (warning).
+
+**After a restart.** Before ledger slices AO-5 and AO-6 the owed reruns are rebuilt from the
+execution records, as the failure streaks are. From AO-6 on they load from the pair's latest
+`policy.control_state_recorded` value record, whose `condition_reruns` holds `{failure_code,
+count, expires_at_unix_ms}` as the settlement wrote them; the `condition` member of execution
+records is then read only by replay. Value records are committed as they arrive. After a start
+that found a gap in the ledger, an owed rerun of an entry-cost task counts as not owed; any other
+pair keeps its last committed value. `actingd suspended` gains the list `reruns` (an addition)
+with the owed, waiting and expired reruns. It is read from the loaded rerun state, that is from
+the pairs' value records (L7 of the [v0.12.0 register](v012-register.md)): SR-2b depends on AO-5
+and AO-6, so no build with SR-2b derives the list from the execution records.
+
+None of these codes triggers the recovery ladder.
+
+## Configuration of the scheduling rules
+
+| Key | Default | Meaning |
+|---|---|---|
+| `scheduling.recognition.sample_timeout_retries` | 2 | Base number of observe-only retries of a timed-out observation |
+| `scheduling.rerun.condition_codes` | the eight codes above | Codes that end a run by a condition; read only at live settlement |
+| `scheduling.rerun.max_per_occurrence` | 2 | Condition terminations per occurrence before an ordinary failure; read only at live settlement |
+| `scheduling.rerun.resume_stage` | S2 | Highest pacing stage at which an owed rerun runs |
+| `scheduling.rerun.resume_settle_ms` | 60,000 | How long the stage must stay at or below the resume stage |
+| `scheduling.rerun.promote` | true | Rank owed reruns first |
+| `scheduling.rerun.refund_counts` | true | Give back the counts of a condition termination; read only at live settlement |
+| `scheduling.rerun.expires` | `window_end` | When an owed rerun expires (the only value) |
+| `scheduling.pack_admission.check_in_check_config` | true | check-config runs the full admission of the packages |
+| `scheduling.pack_admission.check_after_start` | true | The background check after start |
+| `scheduling.pack_admission.suspend_codes` | `["recognition_sample_budget_invalid"]` | Admission codes that suspend a task package |
+
+The defaults live in `distribution/windows/actingd.defaults.json` (Workflow #387) and arrive
+with the code that parses the keys: slice SR-1 parses the `recognition` and `rerun` keys and
+slice SR-3 the `pack_admission` keys. check-config lists each key with its effective value and
+source in `config_manifest.parameters`. A key the key table marks settable can also be changed
+while the Runtime runs (Workflow #387, `ConfigureSettings`); the others change through the
+configuration file and a restart.

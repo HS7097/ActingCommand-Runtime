@@ -3,6 +3,7 @@
   "codes": {
     "candidate_layout_unknown": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition-pack",
       "layer": "vision",
       "uncertain": false,
@@ -20,6 +21,7 @@
     },
     "candidate_feature_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "recognition-pack",
       "layer": "vision",
       "uncertain": false,
@@ -37,6 +39,7 @@
     },
     "candidate_feature_provider_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition-pack",
       "layer": "vision",
       "uncertain": false,
@@ -54,6 +57,7 @@
     },
     "candidate_samples_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "recognition-pack",
       "layer": "vision",
       "uncertain": false,
@@ -71,6 +75,7 @@
     },
     "candidate_sample_geometry_changed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "recognition-pack",
       "layer": "vision",
       "uncertain": false,
@@ -88,6 +93,7 @@
     },
     "candidate_sample_record_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "recognition-pack",
       "layer": "vision",
       "uncertain": false,

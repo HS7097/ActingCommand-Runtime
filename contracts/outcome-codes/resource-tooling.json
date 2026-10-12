@@ -3,6 +3,7 @@
   "codes": {
     "authoring_backup_rename_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "authoring_candidate_rename_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "authoring_cleanup_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "authoring_commit_cleanup_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "authoring_committed_target_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -68,6 +73,7 @@
     },
     "authoring_create_directory_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -81,6 +87,7 @@
     },
     "authoring_destination_has_no_parent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -94,6 +101,7 @@
     },
     "authoring_draft_empty": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -107,6 +115,7 @@
     },
     "authoring_failure_not_durable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "authoring_field_empty": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "authoring_file_create_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "authoring_file_sync_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -159,6 +171,7 @@
     },
     "authoring_file_write_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -172,6 +185,7 @@
     },
     "authoring_hash_metadata_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -185,6 +199,7 @@
     },
     "authoring_hash_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -198,6 +213,7 @@
     },
     "authoring_hash_scope_error": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -211,6 +227,7 @@
     },
     "authoring_injected_rename_failure": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -224,6 +241,7 @@
     },
     "authoring_journal_corrupt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -237,6 +255,7 @@
     },
     "authoring_journal_identity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -250,6 +269,7 @@
     },
     "authoring_journal_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -263,6 +283,7 @@
     },
     "authoring_journal_open_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -276,6 +297,7 @@
     },
     "authoring_journal_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -289,6 +311,7 @@
     },
     "authoring_journal_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -302,6 +325,7 @@
     },
     "authoring_journal_remove_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -315,6 +339,7 @@
     },
     "authoring_journal_schema_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -328,6 +353,7 @@
     },
     "authoring_journal_serialize_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -341,6 +367,7 @@
     },
     "authoring_journal_sync_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -354,6 +381,7 @@
     },
     "authoring_journal_transition_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -367,6 +395,7 @@
     },
     "authoring_journal_type_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -380,6 +409,7 @@
     },
     "authoring_journal_write_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -393,6 +423,7 @@
     },
     "authoring_metadata_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -406,6 +437,7 @@
     },
     "authoring_outcome_not_durable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -419,6 +451,7 @@
     },
     "authoring_path_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -432,6 +465,7 @@
     },
     "authoring_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -445,6 +479,7 @@
     },
     "authoring_recovery_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -458,6 +493,7 @@
     },
     "authoring_recovery_candidate_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -471,6 +507,7 @@
     },
     "authoring_recovery_candidate_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -484,6 +521,7 @@
     },
     "authoring_recovery_context_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -497,6 +535,7 @@
     },
     "authoring_recovery_oracle_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -510,6 +549,7 @@
     },
     "authoring_recovery_restore_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -523,6 +563,7 @@
     },
     "authoring_recovery_target_canonicalize_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -536,6 +577,7 @@
     },
     "authoring_recovery_target_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -549,6 +591,7 @@
     },
     "authoring_rollback_backup_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -562,6 +605,7 @@
     },
     "authoring_rollback_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -575,6 +619,7 @@
     },
     "authoring_rollback_restore_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -588,6 +633,7 @@
     },
     "authoring_scope_escape": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -601,6 +647,7 @@
     },
     "authoring_source_metadata_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -614,6 +661,7 @@
     },
     "authoring_source_not_regular_file": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -627,6 +675,7 @@
     },
     "authoring_source_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -640,6 +689,7 @@
     },
     "authoring_special_file_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -653,6 +703,7 @@
     },
     "authoring_stage_create_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -666,6 +717,7 @@
     },
     "authoring_symlink_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -679,6 +731,7 @@
     },
     "authoring_target_create_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -692,6 +745,7 @@
     },
     "authoring_target_has_no_name": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -705,6 +759,7 @@
     },
     "authoring_target_has_no_parent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -718,6 +773,7 @@
     },
     "authoring_target_not_directory": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -731,6 +787,7 @@
     },
     "authoring_target_parent_create_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -744,6 +801,7 @@
     },
     "authoring_target_symlink_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -757,6 +815,7 @@
     },
     "authoring_target_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -770,6 +829,7 @@
     },
     "authoring_transaction_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -783,6 +843,7 @@
     },
     "authoring_tree_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -796,6 +857,7 @@
     },
     "authoring_tree_remove_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -809,6 +871,7 @@
     },
     "authoring_tree_type_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -822,6 +885,7 @@
     },
     "authoring_validation_empty": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -835,6 +899,7 @@
     },
     "authoring_validation_package_hash_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -848,6 +913,7 @@
     },
     "record_promote_target_exists": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -861,6 +927,7 @@
     },
     "package_bundle_out_exists": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -874,6 +941,7 @@
     },
     "package_bundle_applications_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -887,6 +955,7 @@
     },
     "package_bundle_pack_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -900,6 +969,7 @@
     },
     "package_bundle_default_package_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -913,6 +983,7 @@
     },
     "package_bundle_maintenance_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -926,6 +997,7 @@
     },
     "package_bundle_index_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -939,6 +1011,7 @@
     },
     "package_bundle_packs_root_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -952,6 +1025,7 @@
     },
     "package_bundle_write_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
@@ -965,6 +1039,7 @@
     },
     "selection_policy_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,

@@ -5,14 +5,17 @@
 //! It reads the workspace as source and links no workspace crate. Its checks, and the slice
 //! that turns each on:
 //!
-//! - G1 registries = catalog fragments, both ways (A1);
+//! - G1 registries = catalog fragments, both ways (A1), the ladder class included (#387 D1a);
 //! - G2 string channels, G3 `json!` keys, G4 construction, G5 stray literals: every workspace
 //!   member starts on [`ALLOW_LIST`]; A2a-A2e remove members as they convert them and name the
 //!   channels that stay strings as bridges;
 //! - G6 persisted prose (A3) and G10 review (A8) are not implemented yet;
 //! - G7 key table and vocabularies = catalog (A1);
 //! - G8 naming and prefixes (A1);
-//! - G9 the merged file and the released contract (A1).
+//! - G9 the merged file and the released contract (A1), the ladder class included (#387 D1a).
+//!
+//! Loading the catalog also checks each code's `ladder_class` (#387 D1a): required, a token of
+//! the vocabulary `ladder_class`, and category warning or error for a `stability_warning` code.
 //!
 //! Crate roots come from each manifest (`[lib]`, `[[bin]]`) and Cargo's defaults. Code under
 //! `#[cfg(test)]` or `#[cfg(all(test, ...))]`, `#[test]` functions and files reached only through
@@ -2682,7 +2685,8 @@ pub fn merge(root: &Path) -> Result<String, Vec<String>> {
 }
 
 /// G1: every registry entry is an active fragment entry of the registry's own crate, with the
-/// same category; every active fragment entry is registered; no spelling is registered twice.
+/// same category and, for a code, the same ladder class; every active fragment entry is
+/// registered; no spelling is registered twice.
 pub fn check_registries(workspace: &Workspace) -> Vec<String> {
     let catalog = match &workspace.catalog {
         Ok(catalog) => catalog,
@@ -2740,6 +2744,16 @@ pub fn check_registries(workspace: &Workspace) -> Vec<String> {
                          its fragment",
                         entry.category.as_deref().unwrap_or("?"),
                         catalog::text(listed, "category").unwrap_or("?")
+                    ));
+                }
+                if !registry.locations
+                    && catalog::text(listed, "ladder_class") != entry.ladder_class.as_deref()
+                {
+                    violations.push(format!(
+                        "G1 {place}: code {spelling} has ladder_class {} in its registry and {} \
+                         in its fragment",
+                        entry.ladder_class.as_deref().unwrap_or("?"),
+                        catalog::text(listed, "ladder_class").unwrap_or("?")
                     ));
                 }
             }

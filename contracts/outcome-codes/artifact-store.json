@@ -3,6 +3,7 @@
   "codes": {
     "artifact_kept_walk_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -23,6 +24,7 @@
     },
     "artifact_cleanup_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -40,6 +42,7 @@
     },
     "artifact_collision": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -57,6 +60,7 @@
     },
     "artifact_directory_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -74,6 +78,7 @@
     },
     "artifact_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -91,6 +96,7 @@
     },
     "artifact_issue_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -108,6 +114,7 @@
     },
     "artifact_issuer_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -125,6 +132,7 @@
     },
     "artifact_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -142,6 +150,7 @@
     },
     "artifact_publish_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -159,6 +168,7 @@
     },
     "artifact_read_allocation_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -176,6 +186,7 @@
     },
     "artifact_read_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -193,6 +204,7 @@
     },
     "artifact_read_material_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -210,6 +222,7 @@
     },
     "artifact_restore_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -227,6 +240,7 @@
     },
     "artifact_root_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -244,6 +258,7 @@
     },
     "artifact_sync_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -261,6 +276,7 @@
     },
     "artifact_use_lock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -278,6 +294,7 @@
     },
     "artifact_use_lock_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -295,6 +312,7 @@
     },
     "artifact_writer_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -312,6 +330,7 @@
     },
     "capacity_admission_already_installed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -329,6 +348,7 @@
     },
     "capture_pipeline_not_paused": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -346,6 +366,7 @@
     },
     "capture_pipeline_paused": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -363,6 +384,7 @@
     },
     "duplicate_frame_index": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -380,6 +402,7 @@
     },
     "evidence_archive_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -397,6 +420,7 @@
     },
     "evidence_archive_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -414,6 +438,7 @@
     },
     "evidence_archive_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -431,6 +456,7 @@
     },
     "evidence_archive_publish_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -448,6 +474,7 @@
     },
     "evidence_archive_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -465,6 +492,7 @@
     },
     "evidence_archive_sync_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -482,6 +510,7 @@
     },
     "evidence_archive_write_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -499,6 +528,7 @@
     },
     "evidence_artifact_evicted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -516,6 +546,7 @@
     },
     "evidence_artifact_eviction_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -533,6 +564,7 @@
     },
     "evidence_artifact_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -550,6 +582,7 @@
     },
     "evidence_artifact_pending_eviction": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -567,6 +600,7 @@
     },
     "evidence_cleanup_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -584,6 +618,7 @@
     },
     "evidence_content_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -601,6 +636,7 @@
     },
     "evidence_count_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -618,6 +654,7 @@
     },
     "evidence_count_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -635,6 +672,7 @@
     },
     "evidence_entry_collision": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -652,6 +690,7 @@
     },
     "evidence_entry_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -669,6 +708,7 @@
     },
     "evidence_entry_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -686,6 +726,7 @@
     },
     "evidence_entry_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -703,6 +744,7 @@
     },
     "evidence_entry_set_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -720,6 +762,7 @@
     },
     "evidence_event_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -737,6 +780,7 @@
     },
     "evidence_json_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -754,6 +798,7 @@
     },
     "evidence_ledger_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -771,6 +816,7 @@
     },
     "evidence_ledger_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -788,6 +834,7 @@
     },
     "evidence_manifest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -805,6 +852,7 @@
     },
     "evidence_manifest_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -822,6 +870,7 @@
     },
     "evidence_output_collision": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -839,6 +888,7 @@
     },
     "evidence_output_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -856,6 +906,7 @@
     },
     "evidence_output_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -873,6 +924,7 @@
     },
     "evidence_package_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -890,6 +942,7 @@
     },
     "evidence_pinned_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -907,6 +960,7 @@
     },
     "evidence_retention_observation_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -924,6 +978,7 @@
     },
     "evidence_screenshot_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -941,6 +996,7 @@
     },
     "evidence_screenshot_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -958,6 +1014,7 @@
     },
     "evidence_summary_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -975,6 +1032,7 @@
     },
     "evidence_temp_cleanup_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -992,6 +1050,7 @@
     },
     "evidence_temp_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1009,6 +1068,7 @@
     },
     "evidence_terminal_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1026,6 +1086,7 @@
     },
     "frame_material_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1043,6 +1104,7 @@
     },
     "frame_material_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1060,6 +1122,7 @@
     },
     "frame_spill_material_pending": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1077,6 +1140,7 @@
     },
     "frame_store_device": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1094,6 +1158,7 @@
     },
     "frame_store_flush_reserve_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1111,6 +1176,7 @@
     },
     "frame_store_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1128,6 +1194,7 @@
     },
     "frame_store_memory_limit_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1145,6 +1212,7 @@
     },
     "frame_store_ratio_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1162,6 +1230,7 @@
     },
     "frame_store_usage": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1179,6 +1248,7 @@
     },
     "frame_store_watermarks_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1196,6 +1266,7 @@
     },
     "invalid_frame_store_config": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1213,6 +1284,7 @@
     },
     "invalid_pressure_skip": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1230,6 +1302,7 @@
     },
     "missing_frame_context": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1247,6 +1320,7 @@
     },
     "screenshot_directory_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1264,6 +1338,7 @@
     },
     "screenshot_name_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,
@@ -1281,6 +1356,7 @@
     },
     "sha256_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,

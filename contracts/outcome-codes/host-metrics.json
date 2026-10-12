@@ -3,6 +3,7 @@
   "codes": {
     "performance_sampler_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -20,6 +21,7 @@
     },
     "performance_process_snapshot_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -37,6 +39,7 @@
     },
     "performance_process_structure_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -54,6 +57,7 @@
     },
     "performance_process_enumeration_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -71,6 +75,7 @@
     },
     "performance_pdh_open_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -88,6 +93,7 @@
     },
     "performance_pdh_seed_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -105,6 +111,7 @@
     },
     "performance_system_counter_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -122,6 +129,7 @@
     },
     "performance_system_times_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -139,6 +147,7 @@
     },
     "performance_memory_structure_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -156,6 +165,7 @@
     },
     "performance_memory_status_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -173,6 +183,7 @@
     },
     "process_id_reserved": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -190,6 +201,7 @@
     },
     "process_query_refused": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -207,6 +219,7 @@
     },
     "process_open_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -224,6 +237,7 @@
     },
     "process_exit_code_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -241,6 +255,7 @@
     },
     "process_times_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -258,6 +273,7 @@
     },
     "process_creation_time_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,
@@ -275,6 +291,7 @@
     },
     "process_probe_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "host-metrics",
       "layer": "host",
       "uncertain": false,

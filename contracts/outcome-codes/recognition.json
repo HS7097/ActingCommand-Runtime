@@ -3,6 +3,7 @@
   "codes": {
     "color_digest_algorithm_unknown": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition",
       "layer": "vision",
       "uncertain": false,
@@ -20,6 +21,7 @@
     },
     "color_digest_grid_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition",
       "layer": "vision",
       "uncertain": false,
@@ -37,6 +39,7 @@
     },
     "color_digest_region_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition",
       "layer": "vision",
       "uncertain": false,
@@ -54,6 +57,7 @@
     },
     "color_digest_cells_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition",
       "layer": "vision",
       "uncertain": false,
@@ -71,6 +75,7 @@
     },
     "color_digest_exclude_cells_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition",
       "layer": "vision",
       "uncertain": false,
@@ -88,6 +93,7 @@
     },
     "color_digest_grid_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "recognition",
       "layer": "vision",
       "uncertain": false,

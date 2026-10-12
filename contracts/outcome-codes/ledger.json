@@ -3,6 +3,7 @@
   "codes": {
     "ledger_selection_query_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -20,6 +21,7 @@
     },
     "artifact_availability_proof_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -37,6 +39,7 @@
     },
     "artifact_event_links_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -54,6 +57,7 @@
     },
     "artifact_event_not_found": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -71,6 +75,7 @@
     },
     "artifact_eviction_close_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -88,6 +93,7 @@
     },
     "artifact_eviction_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -105,6 +111,7 @@
     },
     "artifact_eviction_failed_run_basis_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -122,6 +129,7 @@
     },
     "artifact_eviction_guard_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -139,6 +147,7 @@
     },
     "artifact_eviction_intent_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -156,6 +165,7 @@
     },
     "artifact_eviction_intent_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -173,6 +183,7 @@
     },
     "artifact_eviction_intent_pending": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -190,6 +201,7 @@
     },
     "artifact_eviction_not_eligible": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -207,6 +219,7 @@
     },
     "artifact_eviction_outcome_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -224,6 +237,7 @@
     },
     "artifact_eviction_outcome_guard_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -241,6 +255,7 @@
     },
     "artifact_eviction_root_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -258,6 +273,7 @@
     },
     "artifact_eviction_settlement_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -275,6 +291,7 @@
     },
     "artifact_eviction_settlement_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -292,6 +309,7 @@
     },
     "artifact_eviction_success_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -309,6 +327,7 @@
     },
     "artifact_eviction_summary_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -326,6 +345,7 @@
     },
     "artifact_eviction_summary_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -343,6 +363,7 @@
     },
     "artifact_eviction_task_not_successful": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -360,6 +381,7 @@
     },
     "artifact_eviction_terminal_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -377,6 +399,7 @@
     },
     "artifact_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -394,6 +417,7 @@
     },
     "artifact_lab_pin_release_request_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -411,6 +435,7 @@
     },
     "artifact_material_admission_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -428,6 +453,7 @@
     },
     "artifact_pin_not_releasable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -445,6 +471,7 @@
     },
     "artifact_pin_reason_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -462,6 +489,7 @@
     },
     "artifact_pin_release_not_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -479,6 +507,7 @@
     },
     "artifact_pin_release_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -496,6 +525,7 @@
     },
     "artifact_pin_trigger_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -513,6 +543,7 @@
     },
     "artifact_reference_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -530,6 +561,7 @@
     },
     "artifact_reference_not_found": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -547,6 +579,7 @@
     },
     "artifact_retention_clock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -564,6 +597,7 @@
     },
     "artifact_retention_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -581,6 +615,7 @@
     },
     "artifact_retention_links_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -598,6 +633,7 @@
     },
     "artifact_retention_origin_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -615,6 +651,7 @@
     },
     "artifact_retention_proof_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -632,6 +669,7 @@
     },
     "artifact_retention_recovery_pending": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -649,6 +687,7 @@
     },
     "artifact_retention_snapshot_gap": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -666,6 +705,7 @@
     },
     "artifact_retention_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -683,6 +723,7 @@
     },
     "artifact_snapshot_position_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -700,6 +741,7 @@
     },
     "artifact_store_verification_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -717,6 +759,7 @@
     },
     "artifact_store_verification_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -734,6 +777,7 @@
     },
     "artifact_store_verification_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -751,6 +795,7 @@
     },
     "candidate_production_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -768,6 +813,7 @@
     },
     "candidate_segment_root_present": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -785,6 +831,7 @@
     },
     "clock_before_epoch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -802,6 +849,7 @@
     },
     "corrupt_ledger_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -819,6 +867,7 @@
     },
     "corrupt_repair_journal": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -836,6 +885,7 @@
     },
     "corrupt_segment": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -853,6 +903,7 @@
     },
     "critical_action_id_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -870,6 +921,7 @@
     },
     "critical_correlation_id_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -887,6 +939,7 @@
     },
     "critical_duplicate_event_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -904,6 +957,7 @@
     },
     "critical_duplicate_event_type": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -921,6 +975,7 @@
     },
     "critical_effect_disposition_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -938,6 +993,7 @@
     },
     "critical_event_family_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -955,6 +1011,7 @@
     },
     "critical_event_not_durable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -972,6 +1029,7 @@
     },
     "critical_missing_action_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -989,6 +1047,7 @@
     },
     "critical_missing_correlation_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1006,6 +1065,7 @@
     },
     "critical_outcome_role_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1023,6 +1083,7 @@
     },
     "critical_payload_action_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1040,6 +1101,7 @@
     },
     "critical_stable_link_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1057,6 +1119,7 @@
     },
     "critical_unsupported_intent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1074,6 +1137,7 @@
     },
     "deferred_append_unconfirmed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1091,6 +1155,7 @@
     },
     "deferred_replies_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1108,6 +1173,7 @@
     },
     "duplicate_event_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1125,6 +1191,7 @@
     },
     "event_serialization_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1142,6 +1209,7 @@
     },
     "ingress_full": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1159,6 +1227,7 @@
     },
     "invalid_artifact_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1176,6 +1245,7 @@
     },
     "invalid_artifact_retention_fact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1193,6 +1263,7 @@
     },
     "invalid_artifact_selection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1210,6 +1281,7 @@
     },
     "invalid_cutover_marker": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1227,6 +1299,7 @@
     },
     "invalid_event_column": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1244,6 +1317,7 @@
     },
     "invalid_event_integer": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1261,6 +1335,7 @@
     },
     "invalid_event_link": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1278,6 +1353,7 @@
     },
     "invalid_event_query_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1295,6 +1371,7 @@
     },
     "invalid_evidence_prefix": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1312,6 +1389,7 @@
     },
     "invalid_ledger_config": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1329,6 +1407,7 @@
     },
     "invalid_page_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1346,6 +1425,7 @@
     },
     "invalid_query_page": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1363,6 +1443,7 @@
     },
     "invalid_redactor_config": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1380,6 +1461,7 @@
     },
     "invalid_repair_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1397,6 +1479,7 @@
     },
     "invalid_replay_page_size": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1414,6 +1497,7 @@
     },
     "invalid_sequence": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1431,6 +1515,7 @@
     },
     "invalid_sqlite_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1448,6 +1533,7 @@
     },
     "invalid_typed_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1465,6 +1551,7 @@
     },
     "joint_event_type_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1482,6 +1569,7 @@
     },
     "lab_pin_release_artifact_sealed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1499,6 +1587,7 @@
     },
     "lab_pin_release_artifact_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1516,6 +1605,7 @@
     },
     "lab_pin_release_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1533,6 +1623,7 @@
     },
     "lab_pin_release_pin_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1550,6 +1641,7 @@
     },
     "lab_pin_release_pin_not_lab": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1567,6 +1659,7 @@
     },
     "lab_pin_release_pin_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1584,6 +1677,7 @@
     },
     "lab_pin_release_request_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1601,6 +1695,7 @@
     },
     "lab_pin_release_request_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1618,6 +1713,7 @@
     },
     "ledger_candidate_not_production": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1633,8 +1729,75 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_capture_buffer_busy": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "segment_edge": "required",
+        "count": "optional",
+        "buffer_bytes": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The capture queue's memory segment crossed watermark tier 1 (segment_edge started) or fell back below its release line (ended, with the duration); the flush thread uses larger batches meanwhile (Workflow #383 AO-2).",
+      "common_causes": "A burst of records or a slow disk.",
+      "handling": "None while it ends soon."
+    },
+    "ledger_capture_buffer_overloaded": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "segment_edge": "required",
+        "count": "optional",
+        "buffer_bytes": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The capture queue crossed watermark tier 3: spilling does not keep up and everything but the batch in flight is spilled; business is not paused (Workflow #383 AO-2).",
+      "common_causes": "The disk is too slow for the record rate, or it is failing.",
+      "handling": "Look at the disk now; if it fails, the Runtime stops with ledger_write_failed."
+    },
+    "ledger_capture_spilled": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "segment_edge": "required",
+        "count": "optional",
+        "buffer_bytes": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The capture queue crossed watermark tier 2: the oldest records are being spilled to the dump file (started) or spilling stopped (ended, with records and bytes spilled); nothing is dropped (Workflow #383 AO-2).",
+      "common_causes": "The flush thread cannot keep up, usually because the disk is slow or busy.",
+      "handling": "Check the disk that holds the state root if it recurs."
+    },
     "ledger_database_root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1650,8 +1813,136 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_dump_failed": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "paths": "required",
+        "io_kind": "optional",
+        "io_op": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "After a failed ledger write the dump could be written neither in the state root nor in the fallback folder (paths: both places tried); the unflushed records are lost and the next start writes a tail gap (Workflow #383 AO-1).",
+      "common_causes": "Both the state root's disk and the system disk are full or unwritable.",
+      "handling": "Free space or repair the disks, then start the Runtime again."
+    },
+    "ledger_dump_imported": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "duplicate_count": "required",
+        "dump_sealed": "required",
+        "dump_sha256": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At start the ledger imported a dump file left by an earlier run: count records appended, duplicate_count skipped because their event id was already in the ledger; dump_sealed tells whether the dump ended with its trailer. The dump file is deleted after this record is committed (Workflow #383 AO-1).",
+      "common_causes": "The previous run stopped after a failed ledger write, or crashed while records were spilled to the dump.",
+      "handling": "None; look for the cause of the previous stop."
+    },
+    "ledger_dump_incomplete": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "gap_start_unix_ms": "required",
+        "gap_end_unix_ms": "required",
+        "count": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A dump file without its trailer ended in a truncated line: its verified part was imported and a gap record covers the rest, from the last verified record to the dump's last modification; the number of lost records is unknown (Workflow #383 AO-1).",
+      "common_causes": "The process ended while it was spilling records to the dump.",
+      "handling": "None for the ledger; the gap record marks the time range whose records are missing."
+    },
+    "ledger_dump_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "gap_start_unix_ms": "required",
+        "gap_end_unix_ms": "required",
+        "kept_path": "required",
+        "count": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A line in the middle of a dump file does not match its hash: the verified prefix was imported, a gap record covers the rest and the file was renamed to kept_path, unchanged (Workflow #383 AO-1).",
+      "common_causes": "The dump file was damaged on disk or edited.",
+      "handling": "Keep the renamed file for inspection and check the disk; the Runtime keeps working."
+    },
+    "ledger_dump_unsupported": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "dump_version": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The dump file at path declares a dump_version newer than this build reads; the Runtime refuses to start and leaves the file untouched (Workflow #383 AO-1).",
+      "common_causes": "A newer Runtime wrote the dump and an older one was started on the same state root.",
+      "handling": "Start the Runtime build that wrote the dump so that it imports it."
+    },
+    "ledger_flush_delayed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "segment_edge": "required",
+        "elapsed_ms": "required",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The oldest unflushed record became older than flush_lag_warn_ms (started) or the lag fell back (ended) (Workflow #383 AO-8).",
+      "common_causes": "A slow disk or long reads that delay the writer.",
+      "handling": "None while it ends soon; check the disk if it recurs."
+    },
     "ledger_format_marker_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1669,6 +1960,7 @@
     },
     "ledger_index_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1686,6 +1978,7 @@
     },
     "ledger_initialization_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1703,6 +1996,7 @@
     },
     "ledger_insert_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1720,6 +2014,7 @@
     },
     "ledger_io": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1737,6 +2032,7 @@
     },
     "ledger_joint_transaction_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1754,6 +2050,7 @@
     },
     "ledger_meta_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1771,6 +2068,7 @@
     },
     "ledger_meta_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1788,6 +2086,7 @@
     },
     "ledger_migration_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1805,6 +2104,7 @@
     },
     "ledger_not_an_empty_root": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1822,6 +2122,7 @@
     },
     "ledger_prefix_beyond_head": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1839,6 +2140,7 @@
     },
     "ledger_prefix_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1856,6 +2158,7 @@
     },
     "ledger_prefix_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1871,8 +2174,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_probe_done": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "at_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The ledger's consistency probe ran and found nothing; shown in the status only, never written to the ledger (Workflow #383 AO-8).",
+      "common_causes": "The periodic probe.",
+      "handling": "None."
+    },
     "ledger_read_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1890,6 +2213,7 @@
     },
     "ledger_record_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1907,6 +2231,7 @@
     },
     "ledger_record_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1922,8 +2247,31 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_record_rejected": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "event_id": "required",
+        "ledger_source": "optional",
+        "source_lineage": "optional",
+        "source_revision": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "One captured record failed assembly or sanitizing on the flush thread and was not written; a single-record gap takes its place. For a revisioned source the gap names its revision so the continuity check accepts the hole (Workflow #383 AO-2).",
+      "common_causes": "A Runtime bug: a payload the ledger refuses to store.",
+      "handling": "Report it as a Runtime bug with the event id; business continued."
+    },
     "ledger_schema_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1941,6 +2289,7 @@
     },
     "ledger_snapshot_boundary_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1958,6 +2307,7 @@
     },
     "ledger_snapshot_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1975,6 +2325,7 @@
     },
     "ledger_source_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1992,6 +2343,7 @@
     },
     "ledger_sql_selection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2009,6 +2361,7 @@
     },
     "ledger_sqlite_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2026,6 +2379,7 @@
     },
     "ledger_statistics_identity_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2043,6 +2397,7 @@
     },
     "ledger_statistics_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2058,8 +2413,177 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_store_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "ledger_source": "required",
+        "fact_key": "required",
+        "source_revision": "optional",
+        "expected_revision": "optional",
+        "expected_sha256": "optional",
+        "actual_sha256": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A sampled key's current value in a memory store (actual) differs from the latest committed record of that key in the ledger index (expected), at a revision already committed; neither side is changed and each stretch is reported once (Workflow #383 AO-8).",
+      "common_causes": "A Runtime bug: a store change that was not captured, or a capture that does not match the change.",
+      "handling": "Report it as a Runtime bug with the key and both revisions."
+    },
+    "ledger_store_revision_skipped": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "ledger_source": "required",
+        "source_lineage": "required",
+        "expected_revision": "required",
+        "source_revision": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A revisioned source's records in the ledger jumped from expected_revision to source_revision without a gap record covering the hole: a business change reached the store without passing its gate (Workflow #383 AO-2, AO-8).",
+      "common_causes": "A Runtime bug: a write path that bypasses the capture interface.",
+      "handling": "Report it as a Runtime bug; the store and the ledger are left as they are."
+    },
+    "ledger_tag_index_mismatch": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "event_id": "optional",
+        "expected_sha256": "optional",
+        "actual_sha256": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An index row of the ledger points at a record whose key or value hash differs from the row; the persisted state breaks an invariant and the Runtime refuses to start (Workflow #383 AO-6).",
+      "common_causes": "A damaged or edited state root, or a Runtime bug in index maintenance.",
+      "handling": "Restore the state root from a backup or report it as a Runtime bug; do not edit the database by hand."
+    },
+    "ledger_tag_key_unclassified": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A workbench key matched neither ledger_observer.tag.workbench_patterns nor tag.reobserve_prefixes, so it is not tagged and will not survive a restart; reported once per prefix (Workflow #383 AO-5).",
+      "common_causes": "A new workbench key was added without classifying it.",
+      "handling": "Add the key to one of the two configuration lists."
+    },
+    "ledger_tagged_entries_dropped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At start count tagged entries of instances that are no longer in the configuration were not loaded (Workflow #383 AO-6).",
+      "common_causes": "An instance was removed from the configuration.",
+      "handling": "None."
+    },
+    "ledger_tagged_state_loaded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "elapsed_ms": "required",
+        "event_count": "optional",
+        "source_counts": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At start the memory stores were loaded from the ledger index and the records it points to: count keys, event_count records read, per source in source_counts (Workflow #383 AO-6).",
+      "common_causes": "Every start.",
+      "handling": "None."
+    },
+    "ledger_tagged_state_seeded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The first start of a build with tagged loading on a ledger with history replayed the history once and wrote count value records for the tagged keys (Workflow #383 AO-5).",
+      "common_causes": "Upgrading to the build that brings tagged loading.",
+      "handling": "None."
+    },
+    "ledger_tail_unconfirmed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "gap_start_unix_ms": "required",
+        "gap_end_unix_ms": "required",
+        "owner_epoch": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The previous run ended without a close record and without a complete dump: a gap record covers the time from its last committed record to this start; the number of lost records is unknown (Workflow #383 AO-2).",
+      "common_causes": "The process was killed, crashed or lost power.",
+      "handling": "None for the ledger; effects done just before the end may have no record."
+    },
     "ledger_transaction_owner_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2077,6 +2601,7 @@
     },
     "ledger_view_schema_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2092,8 +2617,53 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_write_failed": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "io_kind": "optional",
+        "io_op": "optional",
+        "timeout_ms": "optional",
+        "path": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Every configured attempt to write a batch failed, or one attempt stalled beyond flush_attempt_stall_ms (then timeout_ms is set). The ledger wrote every unflushed record to the dump file (path) and the Runtime stopped; the next start imports the dump (Workflow #383 AO-1).",
+      "common_causes": "A full disk, a broken file system, a ledger file another program holds or a hung storage device.",
+      "handling": "Repair the disk or the ledger file, then start the Runtime again; it imports the dump before it opens for work. Do not delete the dump file."
+    },
+    "ledger_write_retried": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "io_kind": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Writing a batch of captured records failed and was retried after reading the ledger back; the batch was committed in the end. Reported once per stretch of retries with the number of attempts (Workflow #383 AO-1).",
+      "common_causes": "A short I/O error, a busy database or a slow disk.",
+      "handling": "No action while it stays rare; frequent reports point at the disk that holds the state root."
+    },
     "malformed_owner_metadata": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2111,6 +2681,7 @@
     },
     "migration_binding_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2128,6 +2699,7 @@
     },
     "migration_canonical_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2145,6 +2717,7 @@
     },
     "migration_completion_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2162,6 +2735,7 @@
     },
     "migration_identity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2179,6 +2753,7 @@
     },
     "migration_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2196,6 +2771,7 @@
     },
     "migration_prefix_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2213,6 +2789,7 @@
     },
     "migration_prefix_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2230,6 +2807,7 @@
     },
     "migration_prefix_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2247,6 +2825,7 @@
     },
     "migration_projection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2264,6 +2843,7 @@
     },
     "migration_record_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2281,6 +2861,7 @@
     },
     "migration_requires_import_transaction": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2298,6 +2879,7 @@
     },
     "migration_source_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2315,6 +2897,7 @@
     },
     "migration_source_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2332,6 +2915,7 @@
     },
     "migration_source_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2349,6 +2933,7 @@
     },
     "outcome_projection_admission_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2366,6 +2951,7 @@
     },
     "outcome_projection_admission_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2383,6 +2969,7 @@
     },
     "outcome_projection_identity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2400,6 +2987,7 @@
     },
     "outcome_projection_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2417,6 +3005,7 @@
     },
     "outcome_projection_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2434,6 +3023,7 @@
     },
     "outcome_projection_lease_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2451,6 +3041,7 @@
     },
     "outcome_projection_position_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2468,6 +3059,7 @@
     },
     "outcome_projection_terminal_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2485,6 +3077,7 @@
     },
     "outcome_projection_terminal_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2502,6 +3095,7 @@
     },
     "owner_checkpoint_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2519,6 +3113,7 @@
     },
     "owner_compaction_incomplete_tail": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2536,6 +3131,7 @@
     },
     "owner_compaction_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2553,6 +3149,7 @@
     },
     "owner_compaction_repair_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2570,6 +3167,7 @@
     },
     "owner_journal_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2587,6 +3185,7 @@
     },
     "owner_metadata_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2604,6 +3203,7 @@
     },
     "owner_metadata_serialization_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2621,6 +3221,7 @@
     },
     "owner_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2638,6 +3239,7 @@
     },
     "owner_record_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2655,6 +3257,7 @@
     },
     "owner_tail_sync_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2672,6 +3275,7 @@
     },
     "owner_tail_truncate_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2689,6 +3293,7 @@
     },
     "payload_schema_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2706,6 +3311,7 @@
     },
     "payload_type_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2723,6 +3329,7 @@
     },
     "planning_recovery_interval_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2740,6 +3347,7 @@
     },
     "planning_recovery_interval_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2757,6 +3365,7 @@
     },
     "planning_recovery_sequence_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2774,6 +3383,7 @@
     },
     "planning_recovery_upper_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2791,6 +3401,7 @@
     },
     "prior_epoch_close_admission_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2808,6 +3419,7 @@
     },
     "prior_epoch_close_deadline": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2825,6 +3437,7 @@
     },
     "prior_epoch_close_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2842,6 +3455,7 @@
     },
     "prior_epoch_cursor_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2859,6 +3473,7 @@
     },
     "prior_epoch_identifier_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2876,6 +3491,7 @@
     },
     "prior_epoch_import_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2893,6 +3509,7 @@
     },
     "prior_epoch_import_prefix_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2910,6 +3527,7 @@
     },
     "prior_epoch_import_source_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2927,6 +3545,7 @@
     },
     "prior_epoch_native_proof_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2944,6 +3563,7 @@
     },
     "prior_epoch_native_proof_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2961,6 +3581,7 @@
     },
     "prior_epoch_sanitize_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2978,6 +3599,7 @@
     },
     "prior_epoch_scope_prefix_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2995,6 +3617,7 @@
     },
     "prior_epoch_scope_range_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3012,6 +3635,7 @@
     },
     "prior_epoch_scope_source_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3029,6 +3653,7 @@
     },
     "prior_epoch_startup_barrier_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3046,6 +3671,7 @@
     },
     "prior_epoch_unproven_unclassified": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3063,6 +3689,7 @@
     },
     "prior_epoch_writer_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3080,6 +3707,7 @@
     },
     "recovery_event_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3097,6 +3725,7 @@
     },
     "release_baseline_source_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3114,6 +3743,7 @@
     },
     "release_ledger_source_reference_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3131,6 +3761,7 @@
     },
     "release_ledger_source_reference_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3148,6 +3779,7 @@
     },
     "release_ledger_source_storage_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3165,6 +3797,7 @@
     },
     "release_ledger_source_type_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3182,6 +3815,7 @@
     },
     "repair_recovery_event_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3199,6 +3833,7 @@
     },
     "repair_recovery_event_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3216,6 +3851,7 @@
     },
     "repair_state_inconsistent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3233,6 +3869,7 @@
     },
     "repair_tail_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3250,6 +3887,7 @@
     },
     "runtime_event_query_cursor_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3267,6 +3905,7 @@
     },
     "scheduled_execution_recovery_admission_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3284,6 +3923,7 @@
     },
     "scheduled_execution_recovery_clock_regressed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3301,6 +3941,7 @@
     },
     "scheduled_execution_recovery_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3318,6 +3959,7 @@
     },
     "scheduled_execution_recovery_draft_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3335,6 +3977,7 @@
     },
     "scheduled_execution_recovery_draft_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3352,6 +3995,7 @@
     },
     "scheduled_execution_recovery_fact_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3369,6 +4013,7 @@
     },
     "scheduled_execution_recovery_failure_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3386,6 +4031,7 @@
     },
     "scheduled_execution_recovery_failure_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3403,6 +4049,7 @@
     },
     "scheduled_execution_recovery_failure_severity_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3420,6 +4067,7 @@
     },
     "scheduled_execution_recovery_intent_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3437,6 +4085,7 @@
     },
     "scheduled_execution_recovery_interruption_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3454,6 +4103,7 @@
     },
     "scheduled_execution_recovery_lease_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3471,6 +4121,7 @@
     },
     "scheduled_execution_recovery_links_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3488,6 +4139,7 @@
     },
     "scheduled_execution_recovery_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3505,6 +4157,7 @@
     },
     "scheduled_execution_recovery_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3522,6 +4175,7 @@
     },
     "scheduled_execution_recovery_outcome_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3539,6 +4193,7 @@
     },
     "scheduled_execution_recovery_payload_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3556,6 +4211,7 @@
     },
     "scheduled_execution_recovery_refused_for_test": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3573,6 +4229,7 @@
     },
     "scheduled_execution_recovery_release_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3590,6 +4247,7 @@
     },
     "scheduled_execution_recovery_release_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3607,6 +4265,7 @@
     },
     "scheduled_execution_recovery_severity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3624,6 +4283,7 @@
     },
     "scheduled_execution_recovery_success_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3641,6 +4301,7 @@
     },
     "scheduled_execution_recovery_task_request_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3658,6 +4319,7 @@
     },
     "scheduled_execution_recovery_terminal_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3675,6 +4337,7 @@
     },
     "scheduled_execution_recovery_time_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3692,6 +4355,7 @@
     },
     "scheduled_recovery_action_id_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3709,6 +4373,7 @@
     },
     "scheduled_recovery_admission_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3726,6 +4391,7 @@
     },
     "scheduled_recovery_completion_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3743,6 +4409,7 @@
     },
     "scheduled_recovery_completion_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3760,6 +4427,7 @@
     },
     "scheduled_recovery_draft_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3777,6 +4445,7 @@
     },
     "scheduled_recovery_event_id_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3794,6 +4463,7 @@
     },
     "scheduled_recovery_execution_links_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3811,6 +4481,7 @@
     },
     "scheduled_recovery_execution_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3828,6 +4499,7 @@
     },
     "scheduled_recovery_fact_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3845,6 +4517,7 @@
     },
     "scheduled_recovery_intent_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3862,6 +4535,7 @@
     },
     "scheduled_recovery_lease_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3879,6 +4553,7 @@
     },
     "scheduled_recovery_links_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3896,6 +4571,7 @@
     },
     "scheduled_recovery_payload_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3913,6 +4589,7 @@
     },
     "scheduled_recovery_release_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3930,6 +4607,7 @@
     },
     "scheduled_recovery_release_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3947,6 +4625,7 @@
     },
     "scheduled_recovery_sanitize_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3964,6 +4643,7 @@
     },
     "scheduled_settlement_continuation_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3981,6 +4661,7 @@
     },
     "segment_discontinuity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3998,6 +4679,7 @@
     },
     "sequence_discontinuity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4015,6 +4697,7 @@
     },
     "sequence_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4032,6 +4715,7 @@
     },
     "signature_catalog_byte_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4049,6 +4733,7 @@
     },
     "signature_catalog_event_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4066,6 +4751,7 @@
     },
     "signature_catalog_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4083,6 +4769,7 @@
     },
     "signature_cursor_out_of_range": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4100,6 +4787,7 @@
     },
     "signature_cursor_snapshot_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4117,6 +4805,7 @@
     },
     "signature_definition_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4134,6 +4823,7 @@
     },
     "signature_input_scope_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4151,6 +4841,7 @@
     },
     "signature_page_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4168,6 +4859,7 @@
     },
     "signature_prefix_byte_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4185,6 +4877,7 @@
     },
     "signature_prefix_encoding_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4202,6 +4895,7 @@
     },
     "signature_prefix_event_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4219,6 +4913,7 @@
     },
     "signature_registration_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4236,6 +4931,7 @@
     },
     "signature_registration_not_active": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4253,6 +4949,7 @@
     },
     "signature_result_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4270,6 +4967,7 @@
     },
     "signature_through_zero": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4287,6 +4985,7 @@
     },
     "source_writer_not_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4304,6 +5003,7 @@
     },
     "subscription_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4321,6 +5021,7 @@
     },
     "subscription_lagged": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4338,6 +5039,7 @@
     },
     "subscription_replay_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4355,6 +5057,7 @@
     },
     "subscription_sequence_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4372,6 +5075,7 @@
     },
     "subscription_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4389,6 +5093,7 @@
     },
     "unsupported_event_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4406,6 +5111,7 @@
     },
     "unsupported_repair_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4423,6 +5129,7 @@
     },
     "unsupported_writer_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4440,6 +5147,7 @@
     },
     "writer_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4457,6 +5165,7 @@
     },
     "writer_lock_unsafe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4474,6 +5183,7 @@
     },
     "writer_metadata_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4491,6 +5201,7 @@
     },
     "writer_metadata_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4508,6 +5219,7 @@
     },
     "writer_panicked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4525,6 +5237,7 @@
     },
     "writer_response_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4542,6 +5255,7 @@
     },
     "writer_spawn_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4559,6 +5273,7 @@
     },
     "writer_start_cancelled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -4576,6 +5291,7 @@
     },
     "writer_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,

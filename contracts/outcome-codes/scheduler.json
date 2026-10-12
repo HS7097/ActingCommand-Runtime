@@ -3,6 +3,7 @@
   "codes": {
     "invalid_scheduler_config": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -23,6 +24,7 @@
     },
     "invalid_connection_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -43,6 +45,7 @@
     },
     "identifier_issuance_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -63,6 +66,7 @@
     },
     "lease_expiry_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -83,6 +87,7 @@
     },
     "lease_not_expired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -103,6 +108,7 @@
     },
     "lease_queue_full": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -123,6 +129,7 @@
     },
     "lease_queue_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -143,6 +150,7 @@
     },
     "lease_queue_request_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -163,6 +171,7 @@
     },
     "lease_queue_timeout_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -183,6 +192,7 @@
     },
     "lease_queue_sequence_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -203,6 +213,7 @@
     },
     "lease_step_sequence_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -223,6 +234,7 @@
     },
     "lease_transfer_not_safe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -243,6 +255,7 @@
     },
     "destructive_state_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
@@ -263,6 +276,7 @@
     },
     "resource_close_only": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "scheduler",
       "layer": "scheduler",
       "uncertain": false,
