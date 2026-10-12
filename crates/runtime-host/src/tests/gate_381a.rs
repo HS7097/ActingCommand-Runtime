@@ -24,7 +24,7 @@ const EXPIRED_TIMEOUT_MS: u64 = 1;
 enum AtPreparing {
     ReportHead,
     Continue,
-    Latch(&'static str),
+    Latch(actingcommand_contract::outcome::Location),
 }
 
 /// A held start on its own thread, stopped by the test hook at `Preparing` until told to go on.
@@ -273,7 +273,9 @@ fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_
     start.reached(PreparationCheckpoint::Held);
     let installer = start.release(RELEASE_TIMEOUT_MS);
     start.reached(PreparationCheckpoint::Preparing);
-    start.go_on(AtPreparing::Latch("append_runtime_event"));
+    start.go_on(AtPreparing::Latch(
+        crate::codes::HostLocation::AppendRuntimeEvent.location(),
+    ));
     let stopped = start.finish().err().expect("the held start stops");
     drop(installer);
 

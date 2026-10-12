@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::BackendObservationStatus;
 use actingcommand_device::BackendOpenObservation;
 
@@ -21,7 +22,7 @@ impl HostShared {
         .map_err(|writer| {
             writer.with_complete_failure(
                 crate::error::RuntimeFailureRelation::DiagnosticArchive,
-                RuntimeHostError::execution("backend_open_source", error),
+                RuntimeHostError::execution(HostLocation::BackendOpenSource, error),
             )
         })
     }
@@ -36,9 +37,12 @@ impl HostShared {
         if observations.is_empty() {
             return Ok(());
         }
-        let gate = lock(&self.fact_write_gate, "append_backend_open_observations")?;
+        let gate = lock(
+            &self.fact_write_gate,
+            HostLocation::AppendBackendOpenObservations,
+        )?;
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error("append_backend_open_observations"));
+            return Err(ledger_error(HostLocation::AppendBackendOpenObservations));
         }
         let mut persisted = Vec::new();
         let mut recorded = Vec::new();
@@ -98,8 +102,8 @@ impl HostShared {
         // physical policy instance is available only while its self-check passes (sc3).
         let instance_id = *links.instance_id().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "backend_selfcheck_instance_missing",
-                "record_backend_selfcheck_facts",
+                HostCode::BackendSelfcheckInstanceMissing,
+                HostLocation::RecordBackendSelfcheckFacts,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;

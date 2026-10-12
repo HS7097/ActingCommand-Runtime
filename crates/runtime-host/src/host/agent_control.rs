@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Location;
 
 impl HostShared {
     pub(super) fn expire_agent_sessions(&self) -> RuntimeHostResult<()> {
@@ -9,9 +12,9 @@ impl HostShared {
             return Ok(());
         }
         let now_unix_ms = unix_ms_now()?;
-        let _gate = lock(&self.agent_write_gate, "expire_agent_sessions")?;
-        let expired =
-            lock(&self.agent_dispatcher, "expire_agent_sessions")?.expired_sessions(now_unix_ms)?;
+        let _gate = lock(&self.agent_write_gate, HostLocation::ExpireAgentSessions)?;
+        let expired = lock(&self.agent_dispatcher, HostLocation::ExpireAgentSessions)?
+            .expired_sessions(now_unix_ms)?;
         for data in expired {
             let links = self
                 .events
@@ -26,7 +29,8 @@ impl HostShared {
                 links.event_links(),
                 AgentPayloadDraft::session_escalated(data, AuditInput::new()),
             )?;
-            lock(&self.agent_dispatcher, "commit_agent_timeout")?.apply_event(&persisted, None)?;
+            lock(&self.agent_dispatcher, HostLocation::CommitAgentTimeout)?
+                .apply_event(&persisted, None)?;
         }
         Ok(())
     }
@@ -37,8 +41,8 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         wake_id: AgentWakeId,
     ) -> Result<OperationSuccess, RequestFailure> {
-        self.require_agent_dispatcher("start_agent_session")?;
-        let _gate = lock(&self.agent_write_gate, "start_agent_session")
+        self.require_agent_dispatcher(ContractLocation::StartAgentSession)?;
+        let _gate = lock(&self.agent_write_gate, ContractLocation::StartAgentSession)
             .map_err(RequestFailure::poison_without_terminal)?;
         let session_id = self
             .events
@@ -47,7 +51,7 @@ impl HostShared {
             .map(|issued| *issued.transport())
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
         let started_at_unix_ms = unix_ms_now().map_err(RequestFailure::poison_without_terminal)?;
-        let preparation = lock(&self.agent_dispatcher, "start_agent_session")?
+        let preparation = lock(&self.agent_dispatcher, ContractLocation::StartAgentSession)?
             .prepare_start(wake_id, session_id, started_at_unix_ms)
             .map_err(agent_request_failure)?;
         let (status, terminal) = match preparation {
@@ -61,9 +65,12 @@ impl HostShared {
                     validated.event_links(Some(data.status().instance_id()), None, None),
                     AgentPayloadDraft::session_started(data.clone(), AuditInput::new()),
                 )?;
-                lock(&self.agent_dispatcher, "commit_agent_session_start")?
-                    .apply_event(&persisted, None)
-                    .map_err(RequestFailure::poison_without_terminal)?;
+                lock(
+                    &self.agent_dispatcher,
+                    HostLocation::CommitAgentSessionStart,
+                )?
+                .apply_event(&persisted, None)
+                .map_err(RequestFailure::poison_without_terminal)?;
                 (data.status().clone(), Some(terminal(&persisted)))
             }
         };
@@ -83,11 +90,11 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         session_id: AgentSessionId,
     ) -> Result<OperationSuccess, RequestFailure> {
-        self.require_agent_dispatcher("resume_agent_session")?;
-        let _gate = lock(&self.agent_write_gate, "resume_agent_session")
+        self.require_agent_dispatcher(ContractLocation::ResumeAgentSession)?;
+        let _gate = lock(&self.agent_write_gate, ContractLocation::ResumeAgentSession)
             .map_err(RequestFailure::poison_without_terminal)?;
         let observed_at_unix_ms = unix_ms_now().map_err(RequestFailure::poison_without_terminal)?;
-        let preparation = lock(&self.agent_dispatcher, "resume_agent_session")?
+        let preparation = lock(&self.agent_dispatcher, ContractLocation::ResumeAgentSession)?
             .prepare_resume(
                 request.request_id(),
                 request.correlation_id(),
@@ -106,9 +113,12 @@ impl HostShared {
                     validated.event_links(Some(data.status().instance_id()), None, None),
                     AgentPayloadDraft::session_resumed(data.clone(), AuditInput::new()),
                 )?;
-                lock(&self.agent_dispatcher, "commit_agent_session_resume")?
-                    .apply_event(&persisted, None)
-                    .map_err(RequestFailure::poison_without_terminal)?;
+                lock(
+                    &self.agent_dispatcher,
+                    HostLocation::CommitAgentSessionResume,
+                )?
+                .apply_event(&persisted, None)
+                .map_err(RequestFailure::poison_without_terminal)?;
                 (data.status().clone(), terminal(&persisted))
             }
         };
@@ -126,8 +136,8 @@ impl HostShared {
         &self,
         session_id: AgentSessionId,
     ) -> Result<OperationSuccess, RequestFailure> {
-        self.require_agent_dispatcher("read_agent_session")?;
-        let status = lock(&self.agent_dispatcher, "read_agent_session")?
+        self.require_agent_dispatcher(HostLocation::ReadAgentSession)?;
+        let status = lock(&self.agent_dispatcher, HostLocation::ReadAgentSession)?
             .session(session_id)
             .map_err(agent_request_failure)?
             .clone();
@@ -147,13 +157,19 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         response: &AgentSessionResponse,
     ) -> Result<OperationSuccess, RequestFailure> {
-        self.require_agent_dispatcher("record_agent_response")?;
-        let _gate = lock(&self.agent_write_gate, "record_agent_response")
-            .map_err(RequestFailure::poison_without_terminal)?;
+        self.require_agent_dispatcher(ContractLocation::RecordAgentResponse)?;
+        let _gate = lock(
+            &self.agent_write_gate,
+            ContractLocation::RecordAgentResponse,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         let observed_at_unix_ms = unix_ms_now().map_err(RequestFailure::poison_without_terminal)?;
-        let preparation = lock(&self.agent_dispatcher, "record_agent_response")?
-            .prepare_response(request.request_id(), response, observed_at_unix_ms)
-            .map_err(agent_request_failure)?;
+        let preparation = lock(
+            &self.agent_dispatcher,
+            ContractLocation::RecordAgentResponse,
+        )?
+        .prepare_response(request.request_id(), response, observed_at_unix_ms)
+        .map_err(agent_request_failure)?;
         let (data, payload, severity) = match preparation {
             AgentResponsePreparation::Replay(status) => {
                 return Ok(OperationSuccess {
@@ -183,7 +199,7 @@ impl HostShared {
             validated.event_links(Some(data.status().instance_id()), None, None),
             payload,
         )?;
-        lock(&self.agent_dispatcher, "commit_agent_response")?
+        lock(&self.agent_dispatcher, HostLocation::CommitAgentResponse)?
             .apply_event(&persisted, None)
             .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
@@ -199,18 +215,22 @@ impl HostShared {
         &self,
         status: AgentSessionStatus,
     ) -> Result<AgentSessionContext, RequestFailure> {
-        lock(&self.agent_dispatcher, "project_agent_session")?
+        lock(&self.agent_dispatcher, HostLocation::ProjectAgentSession)?
             .context(&self.ledger, status)
             .map_err(agent_request_failure)
     }
 
-    fn require_agent_dispatcher(&self, operation: &'static str) -> Result<(), RequestFailure> {
+    fn require_agent_dispatcher(
+        &self,
+        operation: impl Into<Location>,
+    ) -> Result<(), RequestFailure> {
+        let operation: Location = operation.into();
         self.agent_dispatcher_config
             .as_ref()
             .map(|_| ())
             .ok_or_else(|| {
                 agent_request_failure(RuntimeHostError::request(
-                    "agent_dispatcher_disabled",
+                    HostCode::AgentDispatcherDisabled,
                     operation,
                     RuntimeErrorCode::InvalidRequest,
                 ))
@@ -236,7 +256,7 @@ pub(super) fn reconcile_agent_wakes(
                 RECOVERY_PAGE_EVENTS,
             )
         })
-        .map_err(|_| ledger_error("query_agent_wake_sources"))?;
+        .map_err(|_| ledger_error(HostLocation::QueryAgentWakeSources))?;
     for source in sources {
         if state.has_wake_for_trigger(source.event_id()) {
             continue;
@@ -246,8 +266,8 @@ pub(super) fn reconcile_agent_wakes(
         )) = source.payload()
         else {
             return Err(RuntimeHostError::fatal(
-                "agent_wake_source_invalid",
-                "reconcile_agent_wakes",
+                HostCode::AgentWakeSourceInvalid,
+                HostLocation::ReconcileAgentWakes,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
@@ -266,8 +286,8 @@ pub(super) fn reconcile_agent_wakes(
             .map(|instance| instance.instance_id)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "agent_wake_instance_unknown",
-                    "reconcile_agent_wakes",
+                    HostCode::AgentWakeInstanceUnknown,
+                    HostLocation::ReconcileAgentWakes,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -297,8 +317,8 @@ pub(super) fn append_agent_wake(
             )
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "agent_wake_trigger_invalid",
-                    "append_agent_wake",
+                    HostCode::AgentWakeTriggerInvalid,
+                    HostLocation::AppendAgentWake,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?,
@@ -307,8 +327,8 @@ pub(super) fn append_agent_wake(
         )
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "agent_wake_issue_failed",
-                "append_agent_wake",
+                HostCode::AgentWakeIssueFailed,
+                HostLocation::AppendAgentWake,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -322,7 +342,7 @@ pub(super) fn append_agent_wake(
     )?;
     let persisted = ledger
         .append(events.sanitize(draft)?)
-        .map_err(|_| ledger_error("append_agent_wake"))?;
+        .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
     state.apply_event(&persisted, None)?;
     Ok(persisted)
 }

@@ -274,7 +274,7 @@ fn gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start() {
     let installer = start.release(&state);
     start.reached(PreparationCheckpoint::Preparing);
     start.go_on(PreparationTestAction::LatchLedgerFailure {
-        operation: "append_runtime_event",
+        operation: actingcommand_runtime_host::HostLocation::AppendRuntimeEvent.location(),
     });
     let stopped = start.finish().err().expect("the held start stops");
     drop(installer);

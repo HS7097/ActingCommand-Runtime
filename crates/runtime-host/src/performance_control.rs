@@ -2,7 +2,9 @@
 
 //! Contention-driven Runtime control with bounded escalation and staged recovery.
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ArbitrationBasis, ArbitrationBasisKind, PerformanceControlEventData, PerformanceControlLevel,
     PerformanceControlReason, PerformanceDeadlineDisposition, RuntimeErrorCode,
@@ -94,8 +96,8 @@ impl PerformanceControlConfig {
             || self.pressured_heavy_dispatch_limit > self.normal_heavy_dispatch_limit
         {
             return Err(control_fatal(
-                "performance_control_config_invalid",
-                "validate_performance_control_config",
+                HostCode::PerformanceControlConfigInvalid,
+                HostLocation::ValidatePerformanceControlConfig,
             ));
         }
         Ok(())
@@ -121,8 +123,8 @@ impl PerformanceControlObservation {
                 .is_some_and(|value| value > BASIS_POINTS_MAX)
         {
             return Err(control_fatal(
-                "performance_control_observation_invalid",
-                "observe_performance_contention",
+                HostCode::PerformanceControlObservationInvalid,
+                HostLocation::ObservePerformanceContention,
             ));
         }
         Ok(())
@@ -160,7 +162,7 @@ pub struct PerformanceControlDirective {
 pub(crate) enum PerformanceDispatchGate {
     Allowed,
     Deferred {
-        reason: &'static str,
+        reason: Code,
         /// Always `None`: urgency no longer changes a deferral (Workflow #385 P-0).
         deadline_disposition: Option<PerformanceDeadlineDisposition>,
         /// Always `None`: a deferral records no balance event (Workflow #385 P-0).
@@ -226,8 +228,8 @@ impl PerformanceBalanceController {
                 return Ok(Vec::new());
             }
             return Err(control_fatal(
-                "performance_control_sample_identity_conflict",
-                "observe_performance_contention",
+                HostCode::PerformanceControlSampleIdentityConflict,
+                HostLocation::ObservePerformanceContention,
             ));
         }
         self.sync_workloads(workloads)?;
@@ -247,8 +249,8 @@ impl PerformanceBalanceController {
                     .checked_add(duration_ms(self.config.transition_cooldown)?)
                     .ok_or_else(|| {
                         control_fatal(
-                            "performance_control_time_overflow",
-                            "observe_performance_clock_jump",
+                            HostCode::PerformanceControlTimeOverflow,
+                            HostLocation::ObservePerformanceClockJump,
                         )
                     })?;
                 self.last_observed_at_unix_ms = Some(observation.observed_at_unix_ms);
@@ -285,8 +287,8 @@ impl PerformanceBalanceController {
     ) -> RuntimeHostResult<Vec<PerformanceControlEventData>> {
         if now_unix_ms == 0 {
             return Err(control_fatal(
-                "performance_control_tick_invalid",
-                "observe_performance_tick",
+                HostCode::PerformanceControlTickInvalid,
+                HostLocation::ObservePerformanceTick,
             ));
         }
         let previous_tick = self.last_tick_unix_ms;
@@ -315,8 +317,8 @@ impl PerformanceBalanceController {
                     .checked_add(duration_ms(self.config.transition_cooldown)?)
                     .ok_or_else(|| {
                         control_fatal(
-                            "performance_control_time_overflow",
-                            "observe_performance_tick_clock_jump",
+                            HostCode::PerformanceControlTimeOverflow,
+                            HostLocation::ObservePerformanceTickClockJump,
                         )
                     })?;
                 return Ok(vec![self.event(
@@ -373,8 +375,8 @@ impl PerformanceBalanceController {
             .checked_add(duration_ms(self.config.transition_cooldown)?)
             .ok_or_else(|| {
                 control_fatal(
-                    "performance_control_time_overflow",
-                    "transition_performance_control",
+                    HostCode::PerformanceControlTimeOverflow,
+                    HostLocation::TransitionPerformanceControl,
                 )
             })?;
         let previous = self.level;
@@ -435,8 +437,8 @@ impl PerformanceBalanceController {
         )
         .map_err(|_| {
             control_fatal(
-                "performance_heavy_count_overflow",
-                "apply_performance_control_resources",
+                HostCode::PerformanceHeavyCountOverflow,
+                HostLocation::ApplyPerformanceControlResources,
             )
         })?;
         for host in resources {
@@ -472,8 +474,8 @@ impl PerformanceBalanceController {
     ) -> RuntimeHostResult<PerformanceDispatchGate> {
         if urgency_milli > 1_000 || instance_id.is_empty() || observed_at_unix_ms == 0 {
             return Err(control_fatal(
-                "performance_dispatch_gate_invalid",
-                "gate_performance_dispatch",
+                HostCode::PerformanceDispatchGateInvalid,
+                HostLocation::GatePerformanceDispatch,
             ));
         }
         Ok(match self.directive(instance_id)?.level {
@@ -484,7 +486,7 @@ impl PerformanceBalanceController {
             | PerformanceControlLevel::QosReduced => PerformanceDispatchGate::Allowed,
             PerformanceControlLevel::Suspended | PerformanceControlLevel::ShutdownRequested => {
                 PerformanceDispatchGate::Deferred {
-                    reason: "performance_contention_dispatch_deferred",
+                    reason: HostCode::PerformanceContentionDispatchDeferred.code(),
                     deadline_disposition: None,
                     event: None,
                     retry_after_ms: None,
@@ -499,8 +501,8 @@ impl PerformanceBalanceController {
     ) -> RuntimeHostResult<PerformanceControlDirective> {
         if instance_id.is_empty() {
             return Err(control_fatal(
-                "performance_control_instance_invalid",
-                "read_performance_control_directive",
+                HostCode::PerformanceControlInstanceInvalid,
+                HostLocation::ReadPerformanceControlDirective,
             ));
         }
         let level = self
@@ -529,8 +531,8 @@ impl PerformanceBalanceController {
         for workload in workloads {
             if workload.instance_id.is_empty() || !active.insert(workload.instance_id.clone()) {
                 return Err(control_fatal(
-                    "performance_control_workload_invalid",
-                    "sync_performance_workloads",
+                    HostCode::PerformanceControlWorkloadInvalid,
+                    HostLocation::SyncPerformanceWorkloads,
                 ));
             }
             self.instance_levels
@@ -583,8 +585,8 @@ impl PerformanceBalanceController {
             .checked_add(duration_ms(self.config.transition_cooldown)?)
             .ok_or_else(|| {
                 control_fatal(
-                    "performance_control_time_overflow",
-                    "recover_performance_instance",
+                    HostCode::PerformanceControlTimeOverflow,
+                    HostLocation::RecoverPerformanceInstance,
                 )
             })?;
         Ok(self
@@ -617,8 +619,8 @@ impl PerformanceBalanceController {
         };
         let previous = *self.instance_levels.get(&instance_id).ok_or_else(|| {
             control_fatal(
-                "performance_control_instance_missing",
-                "recover_performance_instance",
+                HostCode::PerformanceControlInstanceMissing,
+                HostLocation::RecoverPerformanceInstance,
             )
         })?;
         let level = previous_level(previous).max(global);
@@ -663,8 +665,8 @@ impl PerformanceBalanceController {
             .insert(instance_id.clone(), step)
             .ok_or_else(|| {
                 control_fatal(
-                    "performance_control_instance_missing",
-                    "suspend_performance_instance",
+                    HostCode::PerformanceControlInstanceMissing,
+                    HostLocation::SuspendPerformanceInstance,
                 )
             })?;
         let mut event = self.event(
@@ -689,8 +691,8 @@ impl PerformanceBalanceController {
     ) -> RuntimeHostResult<Option<(String, ArbitrationBasis)>> {
         let count = u16::try_from(candidates.len()).map_err(|_| {
             control_fatal(
-                "performance_control_candidates_overflow",
-                "arbitrate_performance_instances",
+                HostCode::PerformanceControlCandidatesOverflow,
+                HostLocation::ArbitratePerformanceInstances,
             )
         })?;
         let ranked = candidates
@@ -876,13 +878,13 @@ fn is_heavy(profile: &LoadProfile) -> bool {
 fn duration_ms(duration: Duration) -> RuntimeHostResult<u64> {
     u64::try_from(duration.as_millis()).map_err(|_| {
         control_fatal(
-            "performance_control_duration_overflow",
-            "convert_performance_control_duration",
+            HostCode::PerformanceControlDurationOverflow,
+            HostLocation::ConvertPerformanceControlDuration,
         )
     })
 }
 
-fn control_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn control_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 

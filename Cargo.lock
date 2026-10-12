@@ -153,6 +153,7 @@ dependencies = [
 name = "actingcommand-host-metrics"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "windows-sys",
 ]
 

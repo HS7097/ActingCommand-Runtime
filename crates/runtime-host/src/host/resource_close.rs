@@ -3,6 +3,8 @@
 use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::RuntimeErrorCode;
 use actingcommand_contract::{CONNECTION_PREPARATION_CLAIM_WAIT_MS, SchedulingResumeSelfCheck};
 
 /// How a lease end treats the instance's device session (Workflow #191 H).
@@ -34,7 +36,7 @@ impl HostShared {
             .session_needs_close(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "inspect_lease_end_session",
+                    HostLocation::InspectLeaseEndSession,
                     &error,
                 ))
             })?;
@@ -45,7 +47,7 @@ impl HostShared {
         {
             return self.close_instance_resources(token, connection_id, EventLinksDraft::default());
         }
-        let step_active = lock(&self.scheduler, "read_lease_end_step")?
+        let step_active = lock(&self.scheduler, HostLocation::ReadLeaseEndStep)?
             .active_lease(instance_id)
             .is_some_and(|active| active.token() == token && active.destructive_step_active());
         if step_active {
@@ -55,7 +57,7 @@ impl HostShared {
             }
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::scheduler(
-                    "end_lease_device_use",
+                    HostLocation::EndLeaseDeviceUse,
                     &SchedulerError::DestructiveStateMismatch,
                 ),
             ));
@@ -65,7 +67,7 @@ impl HostShared {
             .has_owned_resources(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "inspect_execution_session",
+                    HostLocation::InspectExecutionSession,
                     &error,
                 ))
             })?
@@ -77,7 +79,7 @@ impl HostShared {
             .forget_input_frames(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "forget_lease_input_frames",
+                    HostLocation::ForgetLeaseInputFrames,
                     &error,
                 ))
             })
@@ -90,10 +92,13 @@ impl HostShared {
     /// input) each of them closes its session at every lease end as before. Every other
     /// instance keeps it, as does a registration without a device configuration (a fixture).
     pub(super) fn keeps_device_session(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
-        let registered = lock(&self.registered_instances, "read_device_session_gate")?
-            .values()
-            .map(|instance| (instance.instance_id, instance.instance_alias.clone()))
-            .collect::<Vec<_>>();
+        let registered = lock(
+            &self.registered_instances,
+            HostLocation::ReadDeviceSessionGate,
+        )?
+        .values()
+        .map(|instance| (instance.instance_id, instance.instance_alias.clone()))
+        .collect::<Vec<_>>();
         let mut nemu_instances = 0usize;
         let mut uses_nemu = false;
         for (registered_id, instance_alias) in registered {
@@ -101,7 +106,7 @@ impl HostShared {
                 .execution()?
                 .resolve(&instance_alias)
                 .map_err(|error| {
-                    RuntimeHostError::execution("resolve_device_session_gate", &error)
+                    RuntimeHostError::execution(HostLocation::ResolveDeviceSessionGate, &error)
                 })?;
             let nemu = resolved.configuration().is_some_and(|configuration| {
                 [&configuration.capture_backend, &configuration.input_backend]
@@ -175,8 +180,8 @@ impl HostShared {
     ) -> Result<(), RequestFailure> {
         let Some(witness) = step.and_then(|step| Arc::try_unwrap(step).ok()) else {
             let mut error = RuntimeHostError::fatal(
-                "fenced_step_not_reclaimed",
-                "finish_destructive_input",
+                HostCode::FencedStepNotReclaimed,
+                HostLocation::FinishDestructiveInput,
                 RuntimeErrorCode::RuntimeFatal,
             );
             error.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
@@ -184,30 +189,30 @@ impl HostShared {
                 .map_err(RequestFailure::poison_without_terminal)?;
             return Err(RequestFailure::poison_without_terminal(error));
         };
-        lock(&self.scheduler, "finish_destructive_input")?
+        lock(&self.scheduler, HostLocation::FinishDestructiveInput)?
             .finish_destructive_step(witness, connection_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "finish_destructive_input",
+                    HostLocation::FinishDestructiveInput,
                     &error,
                 ))
             })
     }
 
     pub(super) fn mark_resources_in_use(&self) -> RuntimeHostResult<MutexGuard<'_, OwnerGuard>> {
-        let mut owner = lock(&self.owner, "mark_owner_resources_in_use")?;
+        let mut owner = lock(&self.owner, HostLocation::MarkOwnerResourcesInUse)?;
         owner.set_resource_disposition(OwnerResourceDisposition::InUse)?;
         Ok(owner)
     }
 
     fn record_owner_resource_close(&self) -> RuntimeHostResult<OwnerResourceDisposition> {
         // The same owner lock spans InUse and session registration on every acquisition.
-        let mut owner = lock(&self.owner, "record_owner_resource_close")?;
+        let mut owner = lock(&self.owner, HostLocation::RecordOwnerResourceClose)?;
         if let Some(disposition) = owner.retained_resource_disposition()? {
             return Ok(disposition);
         }
         let has_sessions = self.execution()?.has_sessions().map_err(|error| {
-            RuntimeHostError::execution("inspect_remaining_execution_sessions", &error)
+            RuntimeHostError::execution(HostLocation::InspectRemainingExecutionSessions, &error)
         })?;
         let disposition = if has_sessions {
             OwnerResourceDisposition::InUse
@@ -233,7 +238,7 @@ impl HostShared {
             links,
             None,
         );
-        let retain_result = lock(&self.owner, "retain_unconfirmed_owner")
+        let retain_result = lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
             .and_then(|mut owner| owner.retain_unconfirmed());
         let fatal_result = self.fatal.mark(error.clone());
         lifecycle_result?;
@@ -251,7 +256,7 @@ impl HostShared {
         self.close_instance_resources_result(token, connection_id, links)?
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "close_execution_session",
+                    HostLocation::CloseExecutionSession,
                     &error,
                 ))
             })
@@ -295,7 +300,7 @@ impl HostShared {
             .unconfirmed_instance_close_error(token.instance_id())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "read_execution_close_result",
+                    HostLocation::ReadExecutionCloseResult,
                     &error,
                 ))
             })?
@@ -307,7 +312,7 @@ impl HostShared {
             .has_owned_resources(token.instance_id())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "inspect_execution_session",
+                    HostLocation::InspectExecutionSession,
                     &error,
                 ))
             })?;
@@ -316,11 +321,11 @@ impl HostShared {
             return Ok(Ok(()));
         }
         let witness = Arc::new(
-            lock(&self.scheduler, "begin_destructive_resource_close")?
+            lock(&self.scheduler, HostLocation::BeginDestructiveResourceClose)?
                 .begin_resource_close(token, connection_id, self.monotonic_ms()?)
                 .map_err(|error| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                        "begin_destructive_resource_close",
+                        HostLocation::BeginDestructiveResourceClose,
                         &error,
                     ))
                 })?,
@@ -364,8 +369,10 @@ impl HostShared {
                 Ok(Ok(()))
             }
             Err(execution_error) => {
-                let error =
-                    RuntimeHostError::execution("close_execution_session", &execution_error);
+                let error = RuntimeHostError::execution(
+                    HostLocation::CloseExecutionSession,
+                    &execution_error,
+                );
                 let lifecycle_result = self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&error),
@@ -373,7 +380,7 @@ impl HostShared {
                     None,
                 );
                 if error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed) {
-                    let retain_result = lock(&self.owner, "retain_unconfirmed_owner")
+                    let retain_result = lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
                         .and_then(|mut owner| owner.retain_unconfirmed());
                     let fatal_result = self.fatal.mark(error.clone());
                     lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
@@ -401,16 +408,19 @@ impl HostShared {
         connection_value: u64,
         kind: ClaimKind,
     ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
-        let resolved = lock(&self.registered_instances, "read_resource_close_instance")?
-            .get(&instance_id)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "resource_close_instance_missing",
-                    "acquire_resource_close_lease",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadResourceCloseInstance,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::ResourceCloseInstanceMissing,
+                HostLocation::AcquireResourceCloseLease,
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
         let request_id = self
             .events
             .issuer()
@@ -422,10 +432,10 @@ impl HostShared {
             .mint_holder_id()
             .map_err(|_| runtime_identifier_error())?;
         let connection_id = ConnectionId::new(connection_value).map_err(|error| {
-            RuntimeHostError::scheduler("build_resource_close_connection", &error)
+            RuntimeHostError::scheduler(HostLocation::BuildResourceCloseConnection, &error)
         })?;
         let gate = self.routine_gate(instance_id)?;
-        let preparation = lock(&self.scheduler, "prepare_resource_close_lease")?
+        let preparation = lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
             .prepare_dedicated_lease(
                 *request_id.transport(),
                 instance_id,
@@ -435,7 +445,9 @@ impl HostShared {
                 gate,
                 self.monotonic_ms()?,
             )
-            .map_err(|error| RuntimeHostError::scheduler("prepare_resource_close_lease", &error))?;
+            .map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
+            })?;
         let token = preparation.token().clone();
         let grant_request_id = *request_id.transport();
         let grant_links = self
@@ -465,18 +477,20 @@ impl HostShared {
         if !self
             .execution()?
             .has_owned_resources(instance_id)
-            .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
+            .map_err(|error| {
+                RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
+            })?
         {
             return Ok(Ok(()));
         }
-        let active = lock(&self.scheduler, "read_resource_close_lease")?
+        let active = lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
             .active_tokens()
             .into_iter()
             .find(|token| token.instance_id() == instance_id);
         let (token, connection_id, acquired) = if let Some(token) = active {
             if !reuse_active_lease {
                 return Err(RuntimeHostError::scheduler(
-                    "acquire_resource_close_lease",
+                    HostLocation::AcquireResourceCloseLease,
                     &SchedulerError::Busy {
                         holder_id: token.holder_id(),
                         lease_id: token.lease_id(),
@@ -484,10 +498,10 @@ impl HostShared {
                     },
                 ));
             }
-            let connection_id = lock(&self.scheduler, "read_resource_close_connection")?
+            let connection_id = lock(&self.scheduler, HostLocation::ReadResourceCloseConnection)?
                 .connection_for_token(&token)
                 .map_err(|error| {
-                    RuntimeHostError::scheduler("read_resource_close_connection", &error)
+                    RuntimeHostError::scheduler(HostLocation::ReadResourceCloseConnection, &error)
                 })?;
             (token, connection_id, false)
         } else {
@@ -526,7 +540,7 @@ impl HostShared {
             let instance_guard = self
                 .instance_guard(token.instance_id())
                 .map_err(|failure| *failure.error)?;
-            let _admission = lock(&instance_guard, "lock_instance_admission")?;
+            let _admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
             self.finish_destructive_input(step, connection_id)
                 .map_err(|failure| *failure.error)?;
             self.close_instance_resources_result(token, connection_id, links.clone())
@@ -536,7 +550,8 @@ impl HostShared {
             Ok(Ok(())) => Ok(primary),
             Ok(Err(cleanup)) => Ok(ExecutionKernelError::merge_cleanup(primary, cleanup)),
             Err(cleanup) => {
-                let primary = RuntimeHostError::execution("execute_input_backend", &primary);
+                let primary =
+                    RuntimeHostError::execution(HostLocation::ExecuteInputBackend, &primary);
                 self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&primary),
@@ -550,7 +565,7 @@ impl HostShared {
                     links,
                     None,
                 )?;
-                lock(&self.owner, "retain_unconfirmed_owner")?.retain_unconfirmed()?;
+                lock(&self.owner, HostLocation::RetainUnconfirmedOwner)?.retain_unconfirmed()?;
                 self.fatal.mark(cleanup.clone())?;
                 Err(cleanup)
             }
@@ -579,7 +594,8 @@ impl HostShared {
             Ok(Ok(())) => Ok(primary),
             Ok(Err(cleanup)) => Ok(ExecutionKernelError::merge_cleanup(primary, cleanup)),
             Err(cleanup) => {
-                let primary = RuntimeHostError::execution("finish_capture_failure", &primary);
+                let primary =
+                    RuntimeHostError::execution(HostLocation::FinishCaptureFailure, &primary);
                 self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&primary),
@@ -593,7 +609,7 @@ impl HostShared {
                     links,
                     None,
                 )?;
-                lock(&self.owner, "retain_unconfirmed_owner")?.retain_unconfirmed()?;
+                lock(&self.owner, HostLocation::RetainUnconfirmedOwner)?.retain_unconfirmed()?;
                 self.fatal.mark(cleanup.clone())?;
                 Err(cleanup)
             }
@@ -638,21 +654,26 @@ impl HostShared {
     /// `takeover_cooldown_ms`), which bounds the whole wait. A second refusal is recorded like
     /// the first.
     pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
-        let instances = lock(&self.registered_instances, "list_physical_instances")?
-            .values()
-            .filter(|instance| instance.device_self_checked())
-            .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
-            .collect::<Vec<_>>();
+        let instances = lock(
+            &self.registered_instances,
+            HostLocation::ListPhysicalInstances,
+        )?
+        .values()
+        .filter(|instance| instance.device_self_checked())
+        .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+        .collect::<Vec<_>>();
         let mut cooling = Vec::new();
         for (instance_alias, instance_id) in instances {
             self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
-            if lock(&self.scheduling_pause, "read_install_startup_pause")?
-                .instance_state(&instance_alias)
-                .is_some_and(|pause| {
-                    pause.stage == actingcommand_contract::InstancePauseStage::Released
-                })
-            {
+            if lock(
+                &self.scheduling_pause,
+                HostLocation::ReadInstallStartupPause,
+            )?
+            .instance_state(&instance_alias)
+            .is_some_and(|pause| {
+                pause.stage == actingcommand_contract::InstancePauseStage::Released
+            }) {
                 continue;
             }
             if let Some(cooldown_until) =
@@ -671,7 +692,10 @@ impl HostShared {
             {
                 self.require_install_selfcheck(
                     instance_id,
-                    &scheduling_resume_selfcheck(&[], Some("lease_cooldown")),
+                    &scheduling_resume_selfcheck(
+                        &[],
+                        Some(RuntimeErrorCode::LeaseCooldown.as_str()),
+                    ),
                 )?;
             }
         }
@@ -692,7 +716,7 @@ impl HostShared {
         let instance_guard = self
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         let (check, cooldown_until, _, _) = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
@@ -762,7 +786,7 @@ impl HostShared {
             .mint_holder_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?
             .transport();
-        let lease_ttl_ms = lock(&self.scheduler, "read_preparation_claim_ttl")?
+        let lease_ttl_ms = lock(&self.scheduler, HostLocation::ReadPreparationClaimTtl)?
             .config()
             .lease_ttl_ms;
         self.await_operator_claim(
@@ -881,10 +905,13 @@ impl HostShared {
         Option<TerminalEvent>,
         bool,
     )> {
-        lock(&self.recovery_ladders, "begin_preparation_attempt")?
-            .entry(instance_id)
-            .or_default()
-            .preparation = None;
+        lock(
+            &self.recovery_ladders,
+            HostLocation::BeginPreparationAttempt,
+        )?
+        .entry(instance_id)
+        .or_default()
+        .preparation = None;
         let frame_owner = self
             .events
             .issuer()
@@ -918,17 +945,21 @@ impl HostShared {
             Err(error) => {
                 let failure_code = error.code();
                 let cooldown_until = match error.projection().retry_after_ms {
-                    Some(retry_after_ms) if failure_code == "lease_cooldown" => Some(
-                        self.monotonic_ms()?
-                            .checked_add(retry_after_ms)
-                            .ok_or_else(|| {
-                                RuntimeHostError::fatal(
-                                    "connection_preparation_cooldown_overflow",
-                                    "prepare_instance_connection",
-                                    RuntimeErrorCode::RuntimeFatal,
-                                )
-                            })?,
-                    ),
+                    Some(retry_after_ms)
+                        if failure_code == RuntimeErrorCode::LeaseCooldown.as_str() =>
+                    {
+                        Some(
+                            self.monotonic_ms()?
+                                .checked_add(retry_after_ms)
+                                .ok_or_else(|| {
+                                    RuntimeHostError::fatal(
+                                        HostCode::ConnectionPreparationCooldownOverflow,
+                                        HostLocation::PrepareInstanceConnection,
+                                        RuntimeErrorCode::RuntimeFatal,
+                                    )
+                                })?,
+                        )
+                    }
                     _ => None,
                 };
                 self.record_connection_preparation_failure(instance_id, links, error)?;
@@ -949,8 +980,9 @@ impl HostShared {
         let retained_close = if self
             .execution()?
             .has_session(instance_id)
-            .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
-        {
+            .map_err(|error| {
+                RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
+            })? {
             self.close_instance_resources_result(&token, connection_id, links.clone())
                 .map_err(|failure| *failure.error)?
         } else {
@@ -1000,7 +1032,8 @@ impl HostShared {
                     OriginModule::DeviceProxy,
                 )?;
                 if error.resource_quiescence().is_some() {
-                    let failure = RuntimeHostError::execution("open_instance_backends", &error);
+                    let failure =
+                        RuntimeHostError::execution(HostLocation::OpenInstanceBackends, &error);
                     self.append_lifecycle_failure(
                         RuntimeLifecycleFailureStage::ConnectionPreparation,
                         RuntimeLifecycleFailure::Host(&failure),
@@ -1047,7 +1080,7 @@ impl HostShared {
             // marked the Runtime fatal, as on every close path.
             if close_error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
                 return Err(RuntimeHostError::execution(
-                    "close_prepared_instance_session",
+                    HostLocation::ClosePreparedInstanceSession,
                     &close_error,
                 )
                 .into_fatal());

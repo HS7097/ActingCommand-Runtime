@@ -4,8 +4,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod codes;
 pub mod facts;
 
+pub use codes::SchedulerCode;
+
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ContainedTaskRequest, FencedWrite, FencedWritePurpose, HolderId, IdentifierIssuer, InstanceId,
     LeaseId, LeasePriority, LeaseQueueStatus, LeaseToken, MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch,
@@ -368,33 +373,33 @@ pub enum SchedulerError {
 }
 
 impl SchedulerError {
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         match self {
-            Self::InvalidConfig => "invalid_scheduler_config",
-            Self::InvalidConnection => "invalid_connection_id",
-            Self::IdentifierIssuance => "identifier_issuance_failed",
-            Self::ExpiryOverflow => "lease_expiry_overflow",
-            Self::Busy { .. } | Self::QueueAhead { .. } => "lease_busy",
-            Self::Cooldown { .. } => "lease_cooldown",
-            Self::StaleOwnerEpoch => "stale_owner_epoch",
-            Self::LeaseMismatch => "lease_mismatch",
-            Self::InstanceMismatch => "instance_mismatch",
-            Self::HolderMismatch => "holder_mismatch",
-            Self::ConnectionMismatch => "connection_mismatch",
-            Self::LeaseExpired => "lease_expired",
-            Self::LeaseNotExpired => "lease_not_expired",
-            Self::LeaseMissing => "lease_missing",
-            Self::QueueFull => "lease_queue_full",
-            Self::QueueExpired => "lease_queue_expired",
-            Self::QueueMissing => "lease_queue_missing",
-            Self::QueueConnectionMismatch => "lease_queue_connection_mismatch",
-            Self::QueueRequestMismatch => "lease_queue_request_mismatch",
-            Self::QueueTimeoutInvalid => "lease_queue_timeout_invalid",
-            Self::QueueSequenceOverflow => "lease_queue_sequence_overflow",
-            Self::StepSequenceOverflow => "lease_step_sequence_overflow",
-            Self::TransferNotSafe => "lease_transfer_not_safe",
-            Self::DestructiveStateMismatch => "destructive_state_mismatch",
-            Self::ResourceCloseOnly => "resource_close_only",
+            Self::InvalidConfig => SchedulerCode::InvalidSchedulerConfig.code(),
+            Self::InvalidConnection => SchedulerCode::InvalidConnectionId.code(),
+            Self::IdentifierIssuance => SchedulerCode::IdentifierIssuanceFailed.code(),
+            Self::ExpiryOverflow => SchedulerCode::LeaseExpiryOverflow.code(),
+            Self::Busy { .. } | Self::QueueAhead { .. } => RuntimeErrorCode::LeaseBusy.code(),
+            Self::Cooldown { .. } => RuntimeErrorCode::LeaseCooldown.code(),
+            Self::StaleOwnerEpoch => RuntimeErrorCode::StaleOwnerEpoch.code(),
+            Self::LeaseMismatch => RuntimeErrorCode::LeaseMismatch.code(),
+            Self::InstanceMismatch => RuntimeErrorCode::InstanceMismatch.code(),
+            Self::HolderMismatch => RuntimeErrorCode::HolderMismatch.code(),
+            Self::ConnectionMismatch => RuntimeErrorCode::ConnectionMismatch.code(),
+            Self::LeaseExpired => RuntimeErrorCode::LeaseExpired.code(),
+            Self::LeaseNotExpired => SchedulerCode::LeaseNotExpired.code(),
+            Self::LeaseMissing => RuntimeErrorCode::LeaseMissing.code(),
+            Self::QueueFull => SchedulerCode::LeaseQueueFull.code(),
+            Self::QueueExpired => SharedCode::LeaseQueueExpired.code(),
+            Self::QueueMissing => SchedulerCode::LeaseQueueMissing.code(),
+            Self::QueueConnectionMismatch => SharedCode::LeaseQueueConnectionMismatch.code(),
+            Self::QueueRequestMismatch => SchedulerCode::LeaseQueueRequestMismatch.code(),
+            Self::QueueTimeoutInvalid => SchedulerCode::LeaseQueueTimeoutInvalid.code(),
+            Self::QueueSequenceOverflow => SchedulerCode::LeaseQueueSequenceOverflow.code(),
+            Self::StepSequenceOverflow => SchedulerCode::LeaseStepSequenceOverflow.code(),
+            Self::TransferNotSafe => SchedulerCode::LeaseTransferNotSafe.code(),
+            Self::DestructiveStateMismatch => SchedulerCode::DestructiveStateMismatch.code(),
+            Self::ResourceCloseOnly => SchedulerCode::ResourceCloseOnly.code(),
         }
     }
 

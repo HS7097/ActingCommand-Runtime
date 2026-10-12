@@ -302,8 +302,10 @@ tests = [
     "actingcommand-outcome-guard::guard::g7_reports_a_retyped_key_and_a_token_the_enum_lacks",
     "actingcommand-outcome-guard::guard::g8_reports_an_unowned_prefix_and_a_reserved_prefix",
     "actingcommand-outcome-guard::guard::gate_g2_reports_string_tuple_and_array_errors_and_a_non_test_include",
+    "actingcommand-outcome-guard::guard::gate_g8_reports_a_ui_prefix_under_a_longer_runtime_domain",
+    "actingcommand-outcome-guard::guard::gate_g7_reports_ui_prefixed_keys_on_either_side",
 ]
-incident = ["#378 A2a"]
+incident = ["#378 A2a", "#378 A2b"]
 
 # Dependency law
 [[gate]]

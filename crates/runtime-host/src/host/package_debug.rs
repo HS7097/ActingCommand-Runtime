@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
 
 impl HostShared {
     pub(super) fn debug_package(
@@ -46,7 +49,7 @@ impl HostShared {
             .and_then(|value| value.to_str())
             .ok_or_else(|| {
                 RequestFailure::request(
-                    debug_package_error("debug_package_name_invalid"),
+                    debug_package_error(HostCode::DebugPackageNameInvalid),
                     RuntimeReceiptState::Failed,
                     None,
                 )
@@ -58,12 +61,16 @@ impl HostShared {
         )
         .map_err(|error| {
             RequestFailure::request(
-                debug_package_error(error.code()),
+                RuntimeHostError::relayed_request(
+                    error.code(),
+                    ContractLocation::DebugPackage.as_str(),
+                    RuntimeErrorCode::PackageInvalid,
+                ),
                 RuntimeReceiptState::Failed,
                 None,
             )
         })?;
-        let mut debug_runs = lock(&self.debug_runs, "lock_runtime_debug_runs")?;
+        let mut debug_runs = lock(&self.debug_runs, HostLocation::LockRuntimeDebugRuns)?;
         let existing = debug_runs.get(&validated.correlation_id()).cloned();
         let context = match existing {
             Some(existing)
@@ -87,8 +94,8 @@ impl HostShared {
                 )?;
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(
-                        "runtime_debug_context_conflict",
-                        "debug_package",
+                        HostCode::RuntimeDebugContextConflict,
+                        ContractLocation::DebugPackage,
                         RuntimeErrorCode::PackageInvalid,
                     ),
                     RuntimeReceiptState::Denied,
@@ -98,15 +105,15 @@ impl HostShared {
             None => {
                 let run_id = self.events.issuer().mint_run_id().map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "run_id_issue_failed",
-                        "debug_package",
+                        HostCode::RunIdIssueFailed,
+                        ContractLocation::DebugPackage,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
                 let task_id = self.events.issuer().mint_task_id().map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "task_id_issue_failed",
-                        "debug_package",
+                        HostCode::TaskIdIssueFailed,
+                        ContractLocation::DebugPackage,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
@@ -168,41 +175,41 @@ impl HostShared {
 fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<PackageDebugSummary> {
     let path = Path::new(request.package_path());
     if !path.is_absolute() {
-        return Err(debug_package_error("debug_package_path_not_absolute"));
+        return Err(debug_package_error(HostCode::DebugPackagePathNotAbsolute));
     }
     let instance = ContainmentInstanceId::new("runtime-debug-package")
-        .map_err(|_| debug_package_error("debug_package_instance_invalid"))?;
+        .map_err(|_| debug_package_error(HostCode::DebugPackageInstanceInvalid))?;
     let mut containment = Containment::new();
     let bundle = if let Some(hash) = request.expected_sha256().legacy_sha256() {
-        let file =
-            fs::File::open(path).map_err(|_| debug_package_error("debug_package_open_failed"))?;
+        let file = fs::File::open(path)
+            .map_err(|_| debug_package_error(HostCode::DebugPackageOpenFailed))?;
         let metadata = file
             .metadata()
-            .map_err(|_| debug_package_error("debug_package_metadata_failed"))?;
+            .map_err(|_| debug_package_error(HostCode::DebugPackageMetadataFailed))?;
         if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
-            return Err(debug_package_error("debug_package_file_invalid"));
+            return Err(debug_package_error(HostCode::DebugPackageFileInvalid));
         }
         let mut bytes = Vec::new();
         file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
             .read_to_end(&mut bytes)
-            .map_err(|_| debug_package_error("debug_package_read_failed"))?;
+            .map_err(|_| debug_package_error(HostCode::DebugPackageReadFailed))?;
         if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-            return Err(debug_package_error("debug_package_file_too_large"));
+            return Err(debug_package_error(HostCode::DebugPackageFileTooLarge));
         }
         let expected = Sha256Hash::parse_hex(hash)
-            .map_err(|_| debug_package_error("debug_package_hash_invalid"))?;
+            .map_err(|_| debug_package_error(HostCode::DebugPackageHashInvalid))?;
         containment
             .load(&instance, &bytes, &expected)
-            .map_err(|_| debug_package_error("debug_package_containment_failed"))?
+            .map_err(|_| debug_package_error(HostCode::DebugPackageContainmentFailed))?
     } else {
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(
                 ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
             ))
-            .ok_or_else(|| debug_package_error("debug_package_deadline_overflow"))?;
+            .ok_or_else(|| debug_package_error(HostCode::DebugPackageDeadlineOverflow))?;
         containment
             .load_path(&instance, path, request.expected_sha256(), false, deadline)
-            .map_err(|_| debug_package_error("debug_package_containment_failed"))?
+            .map_err(|_| debug_package_error(HostCode::DebugPackageContainmentFailed))?
     };
     PackageDebugSummary::new(
         bundle.task_id().as_str(),
@@ -212,17 +219,21 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
             PackageLayout::Module => PackageDebugLayout::Module,
         },
         u32::try_from(bundle.entry_count())
-            .map_err(|_| debug_package_error("debug_package_entry_count_overflow"))?,
+            .map_err(|_| debug_package_error(HostCode::DebugPackageEntryCountOverflow))?,
         bundle.resident_bytes(),
         u32::try_from(bundle.task_count())
-            .map_err(|_| debug_package_error("debug_package_task_count_overflow"))?,
+            .map_err(|_| debug_package_error(HostCode::DebugPackageTaskCountOverflow))?,
         bundle.recognition_pack_path().is_some(),
         bundle.pages_path().is_some(),
         bundle.navigation_path().is_some(),
     )
-    .map_err(|_| debug_package_error("debug_package_summary_invalid"))
+    .map_err(|_| debug_package_error(HostCode::DebugPackageSummaryInvalid))
 }
 
-fn debug_package_error(code: &'static str) -> RuntimeHostError {
-    RuntimeHostError::request(code, "debug_package", RuntimeErrorCode::PackageInvalid)
+fn debug_package_error(code: impl Into<Code>) -> RuntimeHostError {
+    RuntimeHostError::request(
+        code,
+        ContractLocation::DebugPackage,
+        RuntimeErrorCode::PackageInvalid,
+    )
 }

@@ -16,6 +16,9 @@ pub const RELEASED_DIR: &str = "contracts/outcome-codes/released";
 pub const MERGED_FILE: &str = "contracts/outcome-codes.json";
 /// The owner the reserved UI prefixes map to; it owns no Runtime fragment.
 pub const UI_OWNER: &str = "ui";
+/// The prefixes reserved for the UI (spec amendment A-1..A-4): no Runtime code, location or key
+/// starts with one, however long the spelling.
+pub const UI_PREFIXES: [&str; 2] = ["setup_", "console_"];
 /// The vocabulary whose every token carries a category (record `severity` derives from it).
 pub const CATEGORIZED_VOCABULARY: &str = "event_type";
 /// The first release whose entries must follow the naming rule.
@@ -264,6 +267,15 @@ pub fn check_naming(catalog: &Catalog) -> Vec<String> {
                 ));
             }
             let owner = text(entry, "owner").unwrap_or_default();
+            if let Some(prefix) = ui_prefix(&catalog.domains, name) {
+                // A Runtime entry never takes a UI prefix, however long the spelling and
+                // whatever longer domain also matches it (Workflow #378, board comment
+                // 6108644961).
+                violations.push(format!(
+                    "G8 {label} {name}: the prefix {prefix} is reserved for the UI"
+                ));
+                continue;
+            }
             match longest_domain(&catalog.domains, name) {
                 None => violations.push(format!(
                     "G8 {label} {name}: no domain in {HEADER_FILE} covers its prefix"
@@ -763,6 +775,27 @@ fn type_is_valid(kind: &str, vocabularies: &Map<String, Value>) -> bool {
         return item != "evidence" && scalar_or_vocab(item, vocabularies);
     }
     scalar_or_vocab(kind, vocabularies)
+}
+
+/// The UI-reserved prefix `name` starts with: one of [`UI_PREFIXES`], or the shortest domain that
+/// lists the UI.
+fn ui_prefix<'a>(domains: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+    if let Some(prefix) = UI_PREFIXES
+        .into_iter()
+        .find(|prefix| name.starts_with(*prefix))
+    {
+        return Some(prefix);
+    }
+    domains
+        .iter()
+        .filter(|(prefix, owners)| {
+            name.starts_with(prefix.as_str())
+                && owners.as_array().is_some_and(|owners| {
+                    owners.iter().any(|owner| owner.as_str() == Some(UI_OWNER))
+                })
+        })
+        .map(|(prefix, _)| prefix.as_str())
+        .min_by_key(|prefix| prefix.len())
 }
 
 fn longest_domain<'a>(

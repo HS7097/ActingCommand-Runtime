@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::events::is_sanitization_failure;
 use crate::performance::rejected_event_code;
 use crate::planning::collect_maintenance_evidence;
+use actingcommand_contract::codes::ContractLocation;
 use actingcommand_policy::assess_predictive_maintenance;
 
 pub(super) enum CapacityUse {
@@ -26,9 +28,9 @@ impl HostShared {
             let evidence = collect_maintenance_evidence(&self.ledger, query)?;
             let assessment = assess_predictive_maintenance(&evidence, query.trend_policy())
                 .map_err(|error| {
-                    RuntimeHostError::request(
+                    RuntimeHostError::relayed_request(
                         error.code(),
-                        "assess_predictive_maintenance",
+                        ContractLocation::AssessPredictiveMaintenance.as_str(),
                         RuntimeErrorCode::InvalidRequest,
                     )
                 })?;
@@ -46,8 +48,8 @@ impl HostShared {
                     .max()
                     .ok_or_else(|| {
                         RuntimeHostError::fatal(
-                            "maintenance_evidence_timestamp_missing",
-                            "assess_predictive_maintenance",
+                            HostCode::MaintenanceEvidenceTimestampMissing,
+                            ContractLocation::AssessPredictiveMaintenance,
                             RuntimeErrorCode::RuntimeFatal,
                         )
                     })?;
@@ -56,7 +58,7 @@ impl HostShared {
                     instance_id: query.instance_id().to_owned(),
                     task_id: Some(query.task_id().to_owned()),
                     kind: actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted,
-                    fact_code: "maintenance_recheck_suggested".to_owned(),
+                    fact_code: HostCode::MaintenanceRecheckSuggested.as_str().to_owned(),
                     observed_at_unix_ms,
                     detection_budget: None,
                 })?;
@@ -74,9 +76,9 @@ impl HostShared {
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         // Drain-only confirmation of deferred appends on the tick that hosts the summary
         // producer; a failed reply ends the monitor through its existing fatal path.
-        self.confirm_deferred_appends(Duration::ZERO, "confirm_deferred_appends")?;
+        self.confirm_deferred_appends(Duration::ZERO, HostLocation::ConfirmDeferredAppends)?;
         let (tick, control_observation, pipeline_quiet) = {
-            let mut performance = lock(&self.performance, "sample_performance")?;
+            let mut performance = lock(&self.performance, HostLocation::SamplePerformance)?;
             let mut tick = if performance.counters_enabled() {
                 performance.tick(observed_at_unix_ms)?
             } else {
@@ -119,7 +121,7 @@ impl HostShared {
     pub(super) fn admit_capacity(
         &self,
     ) -> RuntimeHostResult<actingcommand_contract::CapacityDecision> {
-        lock(&self.performance, "admit_capacity")?.admit_capacity()
+        lock(&self.performance, HostLocation::AdmitCapacity)?.admit_capacity()
     }
 
     pub(super) fn require_business_capacity(
@@ -177,13 +179,16 @@ impl HostShared {
         &self,
         observation: crate::PerformanceControlObservation,
     ) -> RuntimeHostResult<()> {
-        let workloads =
-            lock(self.policy()?, "read_performance_workloads")?.active_performance_workloads()?;
-        let control_events = lock(&self.performance_control, "reconcile_performance_control")?
-            .observe(observation, &workloads)?
-            .into_iter()
-            .map(PerformanceSemanticEvent::BalanceChanged)
-            .collect::<Vec<_>>();
+        let workloads = lock(self.policy()?, HostLocation::ReadPerformanceWorkloads)?
+            .active_performance_workloads()?;
+        let control_events = lock(
+            &self.performance_control,
+            HostLocation::ReconcilePerformanceControl,
+        )?
+        .observe(observation, &workloads)?
+        .into_iter()
+        .map(PerformanceSemanticEvent::BalanceChanged)
+        .collect::<Vec<_>>();
         self.record_performance_events(&control_events)
     }
 
@@ -197,23 +202,30 @@ impl HostShared {
         // `observe_without_evidence` caller), so `raised` read here still holds below. Each
         // lock below is taken in its own statement: holding scheduler while taking policy
         // would add an edge against the existing policy -> scheduler order.
-        let raised = lock(&self.performance_control, "read_performance_control_raised")?.raised();
+        let raised = lock(
+            &self.performance_control,
+            HostLocation::ReadPerformanceControlRaised,
+        )?
+        .raised();
         let mut owned_work = !pipeline_quiet;
         if raised && !owned_work {
-            owned_work = !lock(&self.scheduler, "read_performance_owned_leases")?
+            owned_work = !lock(&self.scheduler, HostLocation::ReadPerformanceOwnedLeases)?
                 .active_instance_ids()
                 .is_empty();
         }
         if raised && !owned_work {
-            owned_work = !lock(self.policy()?, "read_performance_workloads")?
+            owned_work = !lock(self.policy()?, HostLocation::ReadPerformanceWorkloads)?
                 .active_performance_workloads()?
                 .is_empty();
         }
-        let control_events = lock(&self.performance_control, "reconcile_performance_tick")?
-            .observe_without_evidence(observed_at_unix_ms, owned_work)?
-            .into_iter()
-            .map(PerformanceSemanticEvent::BalanceChanged)
-            .collect::<Vec<_>>();
+        let control_events = lock(
+            &self.performance_control,
+            HostLocation::ReconcilePerformanceTick,
+        )?
+        .observe_without_evidence(observed_at_unix_ms, owned_work)?
+        .into_iter()
+        .map(PerformanceSemanticEvent::BalanceChanged)
+        .collect::<Vec<_>>();
         self.record_performance_events(&control_events)
     }
 
@@ -221,7 +233,7 @@ impl HostShared {
         &self,
         signal: PipelinePerformanceSignal,
     ) -> RuntimeHostResult<()> {
-        let events = lock(&self.performance, "record_pipeline_performance")?
+        let events = lock(&self.performance, HostLocation::RecordPipelinePerformance)?
             .record_pipeline_signal(signal)?;
         self.record_performance_events(&events)
     }
@@ -231,7 +243,7 @@ impl HostShared {
         instance_id: &str,
         observed_at_unix_ms: u64,
     ) -> RuntimeHostResult<PerformanceContext> {
-        lock(&self.performance, "read_performance_context")?
+        lock(&self.performance, HostLocation::ReadPerformanceContext)?
             .context(instance_id, observed_at_unix_ms)
     }
 
@@ -241,7 +253,7 @@ impl HostShared {
     ) -> RuntimeHostResult<PerformanceControlDirective> {
         lock(
             &self.performance_control,
-            "read_performance_control_directive",
+            HostLocation::ReadPerformanceControlDirective,
         )?
         .directive(instance_id)
     }
@@ -287,7 +299,10 @@ impl HostShared {
                 return Err(error);
             }
         };
-        let mut performance = lock(&self.performance, "record_performance_event_reference")?;
+        let mut performance = lock(
+            &self.performance,
+            HostLocation::RecordPerformanceEventReference,
+        )?;
         if !matches!(event, PerformanceSemanticEvent::BalanceChanged(_))
             || performance.counters_enabled()
         {
@@ -305,7 +320,7 @@ impl HostShared {
         rejection: RuntimeHostError,
     ) -> RuntimeHostResult<()> {
         let tick = {
-            let mut performance = lock(&self.performance, "degrade_performance_monitor")?;
+            let mut performance = lock(&self.performance, HostLocation::DegradePerformanceMonitor)?;
             if !performance.counters_enabled() {
                 return Err(rejection);
             }
@@ -322,28 +337,29 @@ impl HostShared {
 
     pub(super) fn observe_pipeline_event(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
         if !is_pipeline_event(event.event_type())
-            || !lock(&self.performance, "read_performance_monitor_state")?.accepts_pipeline_events()
+            || !lock(&self.performance, HostLocation::ReadPerformanceMonitorState)?
+                .accepts_pipeline_events()
         {
             return Ok(());
         }
         let result: RuntimeHostResult<Vec<PerformanceSemanticEvent>> = (|| {
             let instance_id = event.links().instance_id().ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "performance_pipeline_instance_missing",
-                    "observe_performance_pipeline_event",
+                    HostCode::PerformancePipelineInstanceMissing,
+                    HostLocation::ObservePerformancePipelineEvent,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
             let instance_alias = lock(
                 &self.registered_instances,
-                "resolve_performance_pipeline_instance",
+                HostLocation::ResolvePerformancePipelineInstance,
             )?
             .get(instance_id)
             .map(|instance| instance.instance_alias.clone())
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "performance_pipeline_instance_unknown",
-                    "observe_performance_pipeline_event",
+                    HostCode::PerformancePipelineInstanceUnknown,
+                    HostLocation::ObservePerformancePipelineEvent,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -366,24 +382,32 @@ impl HostShared {
                 touch_response_us,
                 capture_acquire_us,
             };
-            lock(&self.performance, "observe_performance_pipeline_event")?
-                .observe_pipeline_event(observation)
+            lock(
+                &self.performance,
+                HostLocation::ObservePerformancePipelineEvent,
+            )?
+            .observe_pipeline_event(observation)
         })();
         let semantic_events = match result {
             Ok(mut events) => {
-                let mut recovered =
-                    lock(&self.performance, "recover_performance_pipeline_monitor")?
-                        .record_pipeline_success(event.timestamp_unix_ms())?;
+                let mut recovered = lock(
+                    &self.performance,
+                    HostLocation::RecoverPerformancePipelineMonitor,
+                )?
+                .record_pipeline_success(event.timestamp_unix_ms())?;
                 events.append(&mut recovered);
                 events
             }
             Err(error) => {
-                let tick = lock(&self.performance, "degrade_performance_pipeline_monitor")?
-                    .record_monitor_failure(
-                        event.timestamp_unix_ms(),
-                        error.code(),
-                        Some(*event.event_id()),
-                    )?;
+                let tick = lock(
+                    &self.performance,
+                    HostLocation::DegradePerformancePipelineMonitor,
+                )?
+                .record_monitor_failure(
+                    event.timestamp_unix_ms(),
+                    error.code(),
+                    Some(*event.event_id()),
+                )?;
                 tick.events
             }
         };

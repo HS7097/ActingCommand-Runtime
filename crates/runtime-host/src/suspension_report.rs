@@ -10,11 +10,14 @@
 //! read-only and compared again for display; the recorded failure identity stays the verdict.
 
 use crate::RuntimeHostConfig;
+use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityLayer, SuspensionLiftView, failure_rows, failure_step,
     identifier_text, locate_error_frame,
 };
 use actingcommand_artifact_store::read_projected_verified;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
     PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord, PolicyPayload, RunId,
@@ -46,16 +49,16 @@ pub struct SuspensionReportRequest<'a> {
 /// A report that could not be produced, with its code and operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuspensionReportError {
-    code: &'static str,
-    operation: &'static str,
+    code: Code,
+    operation: Location,
     detail: Option<String>,
 }
 
 impl SuspensionReportError {
-    const fn new(code: &'static str, operation: &'static str) -> Self {
+    fn new(code: impl Into<Code>, operation: impl Into<Location>) -> Self {
         Self {
-            code,
-            operation,
+            code: code.into(),
+            operation: operation.into(),
             detail: None,
         }
     }
@@ -65,11 +68,11 @@ impl SuspensionReportError {
         self
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
-    pub const fn operation(&self) -> &'static str {
+    pub const fn operation(&self) -> Location {
         self.operation
     }
 
@@ -248,10 +251,16 @@ pub fn suspension_report(
     request: &SuspensionReportRequest<'_>,
 ) -> Result<Value, SuspensionReportError> {
     let manifest = request.host.procedure_manifest().ok_or_else(|| {
-        SuspensionReportError::new("suspended_policy_unconfigured", "read_suspension_config")
+        SuspensionReportError::new(
+            SharedCode::SuspendedPolicyUnconfigured,
+            ContractLocation::ReadSuspensionConfig,
+        )
     })?;
     let compiled = compile_catalog(request.catalog).map_err(|_| {
-        SuspensionReportError::new("policy_catalog_compile_failed", "read_suspension_config")
+        SuspensionReportError::new(
+            SharedCode::PolicyCatalogCompileFailed,
+            ContractLocation::ReadSuspensionConfig,
+        )
     })?;
     let procedure_refs = compiled
         .catalog()
@@ -263,8 +272,8 @@ pub fn suspension_report(
     let state_root = request.host.state_root();
     if !state_root.is_dir() {
         return Err(SuspensionReportError::new(
-            "suspended_ledger_unavailable",
-            "open_suspension_ledger",
+            HostCode::SuspendedLedgerUnavailable,
+            HostLocation::OpenSuspensionLedger,
         )
         .with_detail("state_root_missing"));
     }
@@ -273,13 +282,16 @@ pub fn suspension_report(
         |_| None,
     )
     .map_err(|error| {
-        SuspensionReportError::new("suspended_ledger_unavailable", "open_suspension_ledger")
-            .with_detail(error.code())
+        SuspensionReportError::new(
+            HostCode::SuspendedLedgerUnavailable,
+            HostLocation::OpenSuspensionLedger,
+        )
+        .with_detail(error.code())
     })?;
     if !ledger.is_complete() {
         return Err(SuspensionReportError::new(
-            "suspended_ledger_incomplete",
-            "open_suspension_ledger",
+            HostCode::SuspendedLedgerIncomplete,
+            HostLocation::OpenSuspensionLedger,
         ));
     }
     let snapshot = Snapshot {

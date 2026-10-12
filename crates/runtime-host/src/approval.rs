@@ -2,8 +2,11 @@
 
 //! Ledger-rebuilt approval projection used by Runtime policy admission.
 
+use crate::codes::{HostCode, HostLocation};
 use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalPayload, ApprovalTarget, EventActor, EventPayload, EventQuery,
     EventSource, EventType, OriginModule, RuntimeErrorCode,
@@ -46,7 +49,7 @@ impl ApprovalRecordsAt {
         ledger_position: u64,
     ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
         if ledger_position == 0 {
-            return Err(approval_fatal("approval_projection_position_invalid"));
+            return Err(approval_fatal(HostCode::ApprovalProjectionPositionInvalid));
         }
         // Taken before folding: a failed read keeps nothing, so the next read rebuilds.
         let projection = match self.built.take() {
@@ -88,7 +91,7 @@ impl ApprovalProjection {
                     RECOVERY_PAGE_EVENTS,
                 )
             })
-            .map_err(|_| approval_fatal("approval_projection_query_failed"))?;
+            .map_err(|_| approval_fatal(HostCode::ApprovalProjectionQueryFailed))?;
         let projection = Self::from_events(&events, state)?;
         if persist {
             projection
@@ -139,7 +142,7 @@ impl ApprovalProjection {
         loop {
             let page = ledger
                 .query_page(query.clone(), after, through, APPROVAL_PAGE_EVENTS)
-                .map_err(|_| approval_fatal("approval_projection_query_failed"))?;
+                .map_err(|_| approval_fatal(HostCode::ApprovalProjectionQueryFailed))?;
             let exhausted = page.len() < APPROVAL_PAGE_EVENTS;
             if let Some(last) = page.last() {
                 after = last.sequence();
@@ -158,22 +161,26 @@ impl ApprovalProjection {
             || event.origin().actor() != EventActor::User
             || event.origin().source() != EventSource::Ui
         {
-            return Err(approval_fatal("approval_projection_origin_invalid"));
+            return Err(approval_fatal(SharedCode::ApprovalProjectionOriginInvalid));
         }
         let EventPayload::Approval(ApprovalPayload::Decision(payload)) = event.payload() else {
-            return Err(approval_fatal("approval_projection_payload_mismatch"));
+            return Err(approval_fatal(
+                SharedCode::ApprovalProjectionPayloadMismatch,
+            ));
         };
         let decision = payload.decision();
         decision
             .validate()
-            .map_err(|_| approval_fatal("approval_projection_record_invalid"))?;
+            .map_err(|_| approval_fatal(SharedCode::ApprovalProjectionRecordInvalid))?;
         if let Some(previous) = self.latest.get(decision.approval_id()) {
             let EventPayload::Approval(ApprovalPayload::Decision(payload)) = previous.payload()
             else {
-                return Err(approval_fatal("approval_projection_payload_mismatch"));
+                return Err(approval_fatal(
+                    SharedCode::ApprovalProjectionPayloadMismatch,
+                ));
             };
             if payload.decision().target() != decision.target() {
-                return Err(approval_fatal("approval_target_identity_conflict"));
+                return Err(approval_fatal(SharedCode::ApprovalTargetIdentityConflict));
             }
         }
         self.latest
@@ -194,7 +201,7 @@ impl ApprovalProjection {
             .insert(event.sequence(), decision.approval_id().to_owned());
         while self.recent.len() > MAX_RECENT_APPROVAL_FACTS {
             let Some((sequence, approval_id)) = self.recent_order.pop_first() else {
-                return Err(approval_fatal("approval_projection_order_invalid"));
+                return Err(approval_fatal(SharedCode::ApprovalProjectionOrderInvalid));
             };
             if self
                 .recent
@@ -209,7 +216,7 @@ impl ApprovalProjection {
 
     fn validate_capacity(&self) -> RuntimeHostResult<()> {
         if self.active.len() > MAX_ACTIVE_APPROVAL_FACTS {
-            return Err(approval_fatal("approval_projection_capacity_exceeded"));
+            return Err(approval_fatal(HostCode::ApprovalProjectionCapacityExceeded));
         }
         Ok(())
     }
@@ -220,21 +227,25 @@ impl ApprovalProjection {
     ) -> RuntimeHostResult<()> {
         decision
             .validate()
-            .map_err(|_| approval_request("approval_decision_invalid"))?;
+            .map_err(|_| approval_request(SharedCode::ApprovalDecisionInvalid))?;
         if let Some(previous) = self.latest.get(decision.approval_id()) {
             let EventPayload::Approval(ApprovalPayload::Decision(payload)) = previous.payload()
             else {
-                return Err(approval_fatal("approval_projection_payload_mismatch"));
+                return Err(approval_fatal(
+                    SharedCode::ApprovalProjectionPayloadMismatch,
+                ));
             };
             if payload.decision().target() != decision.target() {
-                return Err(approval_request("approval_target_identity_conflict"));
+                return Err(approval_request(SharedCode::ApprovalTargetIdentityConflict));
             }
         }
         if decision.disposition().grants_authority()
             && !self.active.contains_key(decision.approval_id())
             && self.active.len() >= MAX_ACTIVE_APPROVAL_FACTS
         {
-            return Err(approval_request("approval_projection_capacity_exceeded"));
+            return Err(approval_request(
+                HostCode::ApprovalProjectionCapacityExceeded,
+            ));
         }
         Ok(())
     }
@@ -269,7 +280,9 @@ impl ApprovalProjection {
             return Ok(None);
         };
         let EventPayload::Approval(ApprovalPayload::Decision(payload)) = event.payload() else {
-            return Err(approval_fatal("approval_projection_payload_mismatch"));
+            return Err(approval_fatal(
+                SharedCode::ApprovalProjectionPayloadMismatch,
+            ));
         };
         Ok(Some(payload.decision().clone()))
     }
@@ -410,13 +423,21 @@ fn approval_work_error(
 pub(crate) fn approval_transaction_error(error: GlobalLedgerError) -> RuntimeHostError {
     if let Some(work) = error.rolled_back_work() {
         let mapped = if work.fatal {
-            RuntimeHostError::fatal(work.code, work.operation, RuntimeErrorCode::RuntimeFatal)
+            RuntimeHostError::relayed_fatal(
+                work.code,
+                work.operation,
+                RuntimeErrorCode::RuntimeFatal,
+            )
         } else {
-            RuntimeHostError::request(work.code, work.operation, RuntimeErrorCode::InvalidRequest)
+            RuntimeHostError::relayed_request(
+                work.code,
+                work.operation,
+                RuntimeErrorCode::InvalidRequest,
+            )
         };
         mapped.with_native_detail(work.detail.clone())
     } else {
-        RuntimeHostError::fatal(
+        RuntimeHostError::relayed_fatal(
             error.code(),
             error.operation(),
             RuntimeErrorCode::LedgerFailure,
@@ -438,18 +459,18 @@ fn target_matches_dispatch(target: &ApprovalTarget, intent: &DispatchIntent) -> 
     }
 }
 
-fn approval_request(code: &'static str) -> RuntimeHostError {
+fn approval_request(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::request(
         code,
-        "record_approval_decision",
+        ContractLocation::RecordApprovalDecision,
         RuntimeErrorCode::InvalidRequest,
     )
 }
 
-fn approval_fatal(code: &'static str) -> RuntimeHostError {
+fn approval_fatal(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
-        "rebuild_approval_projection",
+        HostLocation::RebuildApprovalProjection,
         RuntimeErrorCode::RuntimeFatal,
     )
 }

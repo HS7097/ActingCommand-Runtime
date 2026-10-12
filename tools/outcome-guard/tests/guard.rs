@@ -198,6 +198,68 @@ fn g8_reports_an_unowned_prefix_and_a_reserved_prefix() {
     assert_reported("G8", &violations, "prefix setup_ is reserved for the UI");
 }
 
+/// #378 A2b (board comment 6108644961, spec amendment A-1..A-4: `setup_` and `console_` are the
+/// UI's): a Runtime entry under a UI prefix is refused even when a longer domain that lists its
+/// owner also matches it.
+#[test]
+fn gate_g8_reports_a_ui_prefix_under_a_longer_runtime_domain() {
+    let mut changed = changed_workspace();
+    let catalog = changed.catalog.as_mut().expect("the catalog loads");
+    let mut entry = catalog
+        .codes
+        .get("runtime_restart_required")
+        .cloned()
+        .expect("the runtime-host fragment lists runtime_restart_required");
+    entry.insert("owner".to_owned(), serde_json::Value::from("runtime-host"));
+    catalog.domains.insert(
+        "setup_wizard_".to_owned(),
+        serde_json::json!(["runtime-host"]),
+    );
+    catalog
+        .codes
+        .insert("setup_wizard_step_failed".to_owned(), entry);
+    assert_reported(
+        "G8",
+        &check_naming(&changed),
+        "code setup_wizard_step_failed: the prefix setup_ is reserved for the UI",
+    );
+}
+
+/// #378 A2b (board comment 6108644961, spec amendment A-1..A-4: UI-only keys live only in the
+/// UI's table): a `setup_` or `console_` key is reported in the catalog key table and in
+/// `outcome_keys!` alike, never skipped.
+#[test]
+fn gate_g7_reports_ui_prefixed_keys_on_either_side() {
+    let mut changed = changed_workspace();
+    let catalog = changed.catalog.as_mut().expect("the catalog loads");
+    catalog.keys.insert(
+        "setup_step".to_owned(),
+        serde_json::json!({"type": "token", "description": "A UI-only key."}),
+    );
+    let table = changed
+        .files
+        .iter_mut()
+        .filter(|file| file.member == "crates/actingcommand-contract")
+        .find_map(|file| file.scan.facts.key_tables.first_mut())
+        .expect("the contract holds the outcome_keys! table");
+    table.push(actingcommand_outcome_guard::source::KeyLine {
+        name: "console_view".to_owned(),
+        kind: "token".to_owned(),
+        fields: Vec::new(),
+    });
+    let violations = check_keys(&changed);
+    assert_reported(
+        "G7",
+        &violations,
+        "G7 catalog key setup_step: the setup_ and console_ prefixes are the UI's",
+    );
+    assert_reported(
+        "G7",
+        &violations,
+        "G7 outcome_keys! key console_view: the setup_ and console_ prefixes are the UI's",
+    );
+}
+
 #[test]
 fn g9_reports_a_stale_merged_file_and_a_changed_settled_entry() {
     let mut changed = changed_workspace();

@@ -4,11 +4,14 @@ use super::{
     PerformanceMonitor, PerformanceMonitorConfig, PerformanceSemanticEvent, PerformanceTick,
     rejected_event_code, system_performance_sampler,
 };
+use crate::codes::{HostCode, HostLocation};
 use crate::events::{RuntimeEvents, is_sanitization_failure};
 use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
 };
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     AuditInput, CapacityAdmissionOutcome, CapacityAdmissionReason, CapacityDecision,
     CapacityFactReference, CapacityNativeCause, CapacityPurpose, CapacityState, CapacityThresholds,
@@ -41,10 +44,10 @@ impl CapacityRoots {
         artifacts: &Path,
     ) -> RuntimeHostResult<Self> {
         let exe = std::env::current_exe()
-            .map_err(|error| native_failure("capacity_installation_path_failed", error))?;
+            .map_err(|error| native_failure(HostCode::CapacityInstallationPathFailed, error))?;
         let installation = exe
             .parent()
-            .ok_or_else(|| failure("capacity_installation_path_failed"))?;
+            .ok_or_else(|| failure(HostCode::CapacityInstallationPathFailed))?;
         Ok(Self {
             owner_epoch,
             targets: vec![
@@ -96,7 +99,7 @@ impl CapacityProjection {
         let committed = self
             .committed
             .lock()
-            .map_err(|_| failure("capacity_projection_poisoned"))?
+            .map_err(|_| failure(HostCode::CapacityProjectionPoisoned))?
             .clone();
         let bindings = self
             .targets
@@ -213,7 +216,7 @@ impl CapacityProjection {
         *self
             .committed
             .lock()
-            .map_err(|_| failure("capacity_projection_poisoned"))? =
+            .map_err(|_| failure(HostCode::CapacityProjectionPoisoned))? =
             Some(CommittedCapacity { sample, reference });
         Ok(())
     }
@@ -223,11 +226,11 @@ impl CapacityProjection {
         let mut committed = self
             .committed
             .lock()
-            .map_err(|_| failure("capacity_projection_poisoned"))?;
+            .map_err(|_| failure(HostCode::CapacityProjectionPoisoned))?;
         let reference = committed
             .take()
             .map(|committed| committed.reference)
-            .ok_or_else(|| failure("capacity_recorded_fact_missing"))?;
+            .ok_or_else(|| failure(HostCode::CapacityRecordedFactMissing))?;
         *committed = Some(CommittedCapacity { sample, reference });
         Ok(())
     }
@@ -264,7 +267,7 @@ impl PerformanceMonitor {
         config
             .thresholds
             .validate()
-            .map_err(|_| failure("invalid_capacity_thresholds"))?;
+            .map_err(|_| failure(SharedCode::InvalidCapacityThresholds))?;
         let interval = config
             .performance
             .as_ref()
@@ -307,12 +310,12 @@ impl PerformanceMonitor {
         let capacity = self
             .capacity
             .as_ref()
-            .ok_or_else(|| failure("capacity_owner_missing"))?;
+            .ok_or_else(|| failure(SharedCode::CapacityOwnerMissing))?;
         let decision = capacity.projection.decide(None, 0)?;
         if !decision.outcome.allows() {
             let mut error = RuntimeHostError::request(
-                "capacity_admission_refused",
-                "admit_new_business",
+                SharedCode::CapacityAdmissionRefused,
+                HostLocation::AdmitNewBusiness,
                 RuntimeErrorCode::InvalidRequest,
             );
             error.lifecycle.capacity = Some(decision);
@@ -359,7 +362,7 @@ impl PerformanceMonitor {
                         None,
                         CapacityState::Unknown,
                         Some(CapacityNativeCause {
-                            operation: error.operation.into(),
+                            operation: error.operation.as_str().into(),
                             raw_os_error: error.raw_os_error,
                             detail: bounded_native(&error.detail),
                         }),
@@ -374,7 +377,7 @@ impl PerformanceMonitor {
                             .targets
                             .get(index)
                             .map(|(purpose, _)| *purpose)
-                            .ok_or_else(|| failure("invalid_capacity_sample_target"))
+                            .ok_or_else(|| failure(HostCode::InvalidCapacitySampleTarget))
                     })
                     .collect::<RuntimeHostResult<Vec<_>>>()?;
                 Ok(CapacityVolumeSample {
@@ -396,7 +399,7 @@ impl PerformanceMonitor {
         };
         sample
             .validate()
-            .map_err(|_| failure("invalid_capacity_sample"))?;
+            .map_err(|_| failure(SharedCode::InvalidCapacitySample))?;
         let unknown = sample
             .volumes
             .iter()
@@ -423,7 +426,7 @@ impl PerformanceMonitor {
             let capacity = self
                 .capacity
                 .as_mut()
-                .ok_or_else(|| failure("capacity_owner_missing"))?;
+                .ok_or_else(|| failure(SharedCode::CapacityOwnerMissing))?;
             capacity.projection.refresh(sample.clone())?;
             return capacity.record_transitions(&sample, now, ledger, events);
         }
@@ -445,12 +448,12 @@ impl PerformanceMonitor {
                     severity,
                     PerformancePayloadDraft::summary(summary.as_ref().clone(), AuditInput::new()),
                 ),
-                _ => Err(failure("capacity_summary_missing")),
+                _ => Err(failure(HostCode::CapacitySummaryMissing)),
             });
         let capacity = self
             .capacity
             .as_mut()
-            .ok_or_else(|| failure("capacity_owner_missing"))?;
+            .ok_or_else(|| failure(SharedCode::CapacityOwnerMissing))?;
         let event = match event {
             Ok(event) => event,
             Err(error) => {
@@ -459,7 +462,7 @@ impl PerformanceMonitor {
                     .projection
                     .committed
                     .lock()
-                    .map_err(|_| failure("capacity_projection_poisoned"))? = None;
+                    .map_err(|_| failure(HostCode::CapacityProjectionPoisoned))? = None;
                 // A summary the contract rejects degrades the monitor instead of ending the
                 // runtime; the cleared fact above is the existing failed-append disposition.
                 if !is_sanitization_failure(&error) || self.config.is_none() {
@@ -578,7 +581,7 @@ impl CapacityMonitor {
                         PerformanceMonitorStateEventData {
                             observed_at_unix_ms: now.unix_ms,
                             health: PerformanceMonitorHealth::Degraded,
-                            failure_code: Some("capacity_sample_unavailable".into()),
+                            failure_code: Some(HostCode::CapacitySampleUnavailable.as_str().into()),
                             consecutive_failures: self.consecutive_failures,
                             terminal: false,
                             unavailable_metrics: vec![PerformanceMetric::DiskCapacity],
@@ -613,7 +616,7 @@ impl CapacityMonitor {
             .iter()
             .filter_map(|volume| volume.available_bytes)
             .min()
-            .ok_or_else(|| failure("invalid_capacity_sample"))?;
+            .ok_or_else(|| failure(SharedCode::InvalidCapacitySample))?;
         if free < self.thresholds.soft_bytes {
             let peak_free = self
                 .pressure
@@ -696,7 +699,7 @@ fn append(
         payload,
     )?;
     ledger.append(events.sanitize(draft)?).map_err(|error| {
-        let mut result = RuntimeHostError::fatal(
+        let mut result = RuntimeHostError::relayed_fatal(
             error.code(),
             error.operation(),
             RuntimeErrorCode::LedgerFailure,
@@ -708,11 +711,15 @@ fn append(
     })
 }
 
-fn failure(code: &'static str) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, "sample_capacity", RuntimeErrorCode::RuntimeFatal)
+fn failure(code: impl Into<Code>) -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        code,
+        ContractLocation::SampleCapacity,
+        RuntimeErrorCode::RuntimeFatal,
+    )
 }
 
-fn native_failure(code: &'static str, error: std::io::Error) -> RuntimeHostError {
+fn native_failure(code: impl Into<Code>, error: std::io::Error) -> RuntimeHostError {
     let mut result = failure(code);
     result.lifecycle.raw_os_error = error.raw_os_error();
     result.with_native_failure_detail(bounded_native(&error.to_string()))

@@ -4562,6 +4562,9 @@
     "confirm_": [
       "ledger"
     ],
+    "confirm_deferred_": [
+      "runtime-host"
+    ],
     "confirmed_": [
       "runtime-host"
     ],
@@ -4983,6 +4986,9 @@
       "runtime-client"
     ],
     "finalize_": [
+      "runtime-host"
+    ],
+    "find_": [
       "runtime-host"
     ],
     "fingerprinter_": [
@@ -5794,6 +5800,9 @@
     "probe_": [
       "actinglab",
       "device"
+    ],
+    "probe_adb_": [
+      "runtime-host"
     ],
     "procedure_": [
       "actingd",

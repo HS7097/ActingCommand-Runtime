@@ -171,7 +171,7 @@ fn invalid_cooldown_relation_is_fatal() {
     .validate()
     .expect_err("equal cooldown must fail");
     assert!(error.is_fatal());
-    assert_eq!(error.code(), "invalid_scheduler_config");
+    assert_eq!(error.code().as_str(), "invalid_scheduler_config");
 }
 
 #[test]
@@ -1592,7 +1592,7 @@ fn an_immediate_try_never_jumps_an_eligible_entry() {
             position: 1,
         }
     );
-    assert_eq!(refused.code(), "lease_busy");
+    assert_eq!(refused.code().as_str(), "lease_busy");
     assert_eq!(refused.projection().code, RuntimeErrorCode::LeaseBusy);
     assert!(!refused.is_fatal());
 

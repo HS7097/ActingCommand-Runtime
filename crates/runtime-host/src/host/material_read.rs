@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
 use actingcommand_artifact_store::{ArtifactReader, open_projected_stream};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     ArtifactEvictionDisposition, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
     MAX_RUNTIME_MATERIAL_REPLY_BYTES, RUNTIME_MATERIAL_READ_BUDGET_MS, RuntimeMaterialChunk,
@@ -28,7 +30,11 @@ impl MaterialReadContext {
         Ok(Some(Self {
             deadline: Instant::now()
                 .checked_add(Duration::from_millis(RUNTIME_MATERIAL_READ_BUDGET_MS))
-                .ok_or_else(|| protocol_error("material_read_deadline_overflow"))?,
+                .ok_or_else(|| {
+                    protocol_error_at_code_spelling(
+                        SharedCode::MaterialReadDeadlineOverflow.as_str(),
+                    )
+                })?,
             max_reply_bytes: request
                 .max_reply_bytes
                 .min(maximum_frame_bytes)
@@ -112,15 +118,18 @@ impl HostShared {
             })
             .ok_or_else(|| {
                 MaterialReadError::Artifact(ArtifactStoreError::fatal(
-                    "artifact_read_range_invalid",
-                    "read_projected_artifact_range",
+                    SharedCode::ArtifactReadRangeInvalid.as_str(),
+                    ContractLocation::ReadProjectedArtifactRange.as_str(),
                     "range exceeds its committed material identity",
                 ))
             })?
             .min(current.byte_count);
-        let cached = lock(&self.verified_materials, "read_runtime_material")
-            .map_err(MaterialReadError::Cache)?
-            .get(current);
+        let cached = lock(
+            &self.verified_materials,
+            ContractLocation::ReadRuntimeMaterial,
+        )
+        .map_err(MaterialReadError::Cache)?
+        .get(current);
         let material = match cached {
             Some(cached) => cached,
             None => {
@@ -132,9 +141,12 @@ impl HostShared {
                     return Err(verification_mismatch());
                 }
                 let material = Arc::<[u8]>::from(bytes);
-                lock(&self.verified_materials, "read_runtime_material")
-                    .map_err(MaterialReadError::Cache)?
-                    .insert(current.clone(), Arc::clone(&material));
+                lock(
+                    &self.verified_materials,
+                    ContractLocation::ReadRuntimeMaterial,
+                )
+                .map_err(MaterialReadError::Cache)?
+                .insert(current.clone(), Arc::clone(&material));
                 material
             }
         };
@@ -182,8 +194,8 @@ impl HostShared {
                 || current.links() != original.links()
             {
                 return Err(MaterialReadError::Identity(RuntimeHostError::fatal(
-                    "material_read_reference_changed",
-                    "read_runtime_material",
+                    SharedCode::MaterialReadReferenceChanged,
+                    ContractLocation::ReadRuntimeMaterial,
                     RuntimeErrorCode::RuntimeFatal,
                 )));
             }
@@ -205,7 +217,9 @@ impl HostShared {
                 (offset, bytes)
             };
             let length = u32::try_from(bytes.len()).map_err(|_| {
-                MaterialReadError::Identity(protocol_error("material_read_length_overflow"))
+                MaterialReadError::Identity(protocol_error_at_code_spelling(
+                    SharedCode::MaterialReadLengthOverflow.as_str(),
+                ))
             })?;
             result.state = RuntimeMaterialReadState::Verified;
             result.chunk = Some(RuntimeMaterialChunk {
@@ -225,13 +239,13 @@ impl HostShared {
             let (state, limit, error, severity) = match error {
                 MaterialReadError::Ledger(error) => {
                     let mut host = if error.is_fatal() {
-                        RuntimeHostError::fatal(
+                        RuntimeHostError::relayed_fatal(
                             error.code(),
                             error.operation(),
                             RuntimeErrorCode::LedgerFailure,
                         )
                     } else {
-                        RuntimeHostError::request(
+                        RuntimeHostError::relayed_request(
                             error.code(),
                             error.operation(),
                             RuntimeErrorCode::InvalidRequest,
@@ -265,8 +279,8 @@ impl HostShared {
                     RuntimeMaterialReadState::Missing,
                     None,
                     RuntimeHostError::request(
-                        HostCode::MaterialReadMissing.as_str(),
-                        "read_runtime_material",
+                        HostCode::MaterialReadMissing,
+                        ContractLocation::ReadRuntimeMaterial,
                         RuntimeErrorCode::InvalidRequest,
                     )
                     .with_native_detail(format!(
@@ -279,10 +293,9 @@ impl HostShared {
                 MaterialReadError::Artifact(error) => {
                     let state = if error.code() == "artifact_read_budget_exceeded" {
                         RuntimeMaterialReadState::NotProvided
-                    } else if matches!(
-                        error.code(),
-                        "artifact_hash_mismatch" | "artifact_verify_failed"
-                    ) {
+                    } else if error.code() == "artifact_hash_mismatch"
+                        || error.code() == SharedCode::ArtifactVerifyFailed.as_str()
+                    {
                         RuntimeMaterialReadState::IntegrityFailed
                     } else {
                         RuntimeMaterialReadState::ReadFailed
@@ -346,7 +359,7 @@ impl HostShared {
                 "material_read",
                 "attempt",
                 "committed_reference",
-                "read_runtime_material",
+                ContractLocation::ReadRuntimeMaterial.as_str(),
                 serde_json::json!({
                     "event": selection.event,
                     "artifact_id": selection.artifact_id,
@@ -392,13 +405,13 @@ impl HostShared {
         {
             body.clear();
             let code = if limit == RuntimeMaterialReadLimit::ReplyBytes {
-                "material_read_reply_limit"
+                SharedCode::MaterialReadReplyLimit
             } else {
-                "material_read_budget_exceeded"
+                SharedCode::MaterialReadBudgetExceeded
             };
             let error = RuntimeHostError::request(
                 code,
-                "read_runtime_material",
+                ContractLocation::ReadRuntimeMaterial,
                 RuntimeErrorCode::InvalidRequest,
             );
             self.record_material_reply_failure(request, &receipt, &error)?;
@@ -413,8 +426,8 @@ impl HostShared {
         }
         if body.len() > context.max_reply_bytes {
             let error = RuntimeHostError::request(
-                "material_read_reply_limit",
-                "read_runtime_material",
+                SharedCode::MaterialReadReplyLimit,
+                ContractLocation::ReadRuntimeMaterial,
                 RuntimeErrorCode::ProtocolInvalid,
             );
             self.record_material_reply_failure(request, &receipt, &error)?;
@@ -431,7 +444,7 @@ impl HostShared {
         match serde_json::to_vec(receipt) {
             Ok(body) => Ok(body),
             Err(_) => {
-                let error = protocol_error("material_read_reply_encode_failed");
+                let error = protocol_error(HostLocation::MaterialReadReplyEncodeFailed);
                 self.record_material_reply_failure(request, receipt, &error)?;
                 Err(error)
             }
@@ -504,8 +517,8 @@ fn set_retention_result(result: &mut RuntimeMaterialReadResult) -> bool {
 
 fn verification_mismatch() -> MaterialReadError {
     MaterialReadError::Identity(RuntimeHostError::fatal(
-        "material_read_verification_mismatch",
-        "read_runtime_material",
+        SharedCode::MaterialReadVerificationMismatch,
+        ContractLocation::ReadRuntimeMaterial,
         RuntimeErrorCode::RuntimeFatal,
     ))
 }

@@ -6,7 +6,10 @@
 //! record; applying the plan is the first catalog write.
 
 use crate::approval::ApprovalProjection;
+use crate::codes::{HostCode, HostLocation};
 use crate::{CatalogGeneration, RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, RuntimeErrorCode,
 };
@@ -161,10 +164,10 @@ impl CatalogTransitionPlan {
     }
 }
 
-fn refused(code: &'static str) -> RuntimeHostError {
+fn refused(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::request(
         code,
-        "plan_policy_catalog_transition",
+        HostLocation::PlanPolicyCatalogTransition,
         RuntimeErrorCode::InvalidRequest,
     )
 }
@@ -191,7 +194,7 @@ pub(crate) fn decide_catalog_transition(
     let Some(active) = active else {
         return match request {
             None => Ok(CatalogTransitionPlanKind::First),
-            Some(_) => Err(refused("catalog_transition_expectation_mismatch")),
+            Some(_) => Err(refused(HostCode::CatalogTransitionExpectationMismatch)),
         };
     };
     if active.catalog_hash() == configured.catalog_hash() {
@@ -207,7 +210,7 @@ pub(crate) fn decide_catalog_transition(
     }
     match expects_active {
         // Review P6: the refusal names the explicit transition that would apply instead.
-        None => Err(refused("catalog_activation_not_newer").with_native_detail(format!(
+        None => Err(refused(HostCode::CatalogActivationNotNewer).with_native_detail(format!(
             "active catalog {} v{} ({}); configured catalog {} v{} ({}) is not a higher version \
              of the active catalog id; to switch the catalog id or roll back to a generation \
              that was active, set policy.catalog_transition {{\"kind\":\"replace\",\
@@ -220,7 +223,7 @@ pub(crate) fn decide_catalog_transition(
             configured.catalog_hash(),
             active.catalog_hash(),
         ))),
-        Some(false) => Err(refused("catalog_transition_expectation_mismatch")),
+        Some(false) => Err(refused(HostCode::CatalogTransitionExpectationMismatch)),
         Some(true) if lineage.contains(configured.catalog_hash()) => {
             Ok(CatalogTransitionPlanKind::Rollback)
         }
@@ -232,7 +235,7 @@ pub(crate) fn decide_catalog_transition(
         {
             Ok(CatalogTransitionPlanKind::Switch)
         }
-        Some(true) => Err(refused("catalog_replace_version_not_newer")),
+        Some(true) => Err(refused(HostCode::CatalogReplaceVersionNotNewer)),
     }
 }
 
@@ -295,7 +298,7 @@ pub(crate) fn plan_catalog_approvals(
                         reason,
                     )
                 })
-                .map_err(|_| refused("policy_catalog_approval_invalid"))?;
+                .map_err(|_| refused(SharedCode::PolicyCatalogApprovalInvalid))?;
         let latest = match approvals {
             Some(approvals) => approvals.latest_decision(approval_id)?,
             None => None,
@@ -312,7 +315,7 @@ pub(crate) fn plan_catalog_approvals(
                 plan.reapprove.push(decision);
             }
             // A persisted rejection or revocation cannot be silently replaced by startup config.
-            Some(_) => return Err(refused("policy_catalog_approval_conflict")),
+            Some(_) => return Err(refused(HostCode::PolicyCatalogApprovalConflict)),
         }
     }
     let superseded = approvals
@@ -329,7 +332,7 @@ pub(crate) fn plan_catalog_approvals(
                         reason,
                     )
                 })
-                .map_err(|_| refused("policy_catalog_revocation_invalid"))?,
+                .map_err(|_| refused(HostCode::PolicyCatalogRevocationInvalid))?,
         );
     }
     Ok(plan)

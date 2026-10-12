@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeClock, RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ActionId, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
     EventSeverity, EventSource, IdentifierIssuer, InstanceId, LeaseId, LeaseToken, OriginModule,
@@ -23,16 +25,16 @@ impl RuntimeEvents {
     ) -> RuntimeHostResult<Self> {
         let issuer = IdentifierIssuer::new().map_err(|_| {
             RuntimeHostError::fatal(
-                "event_issuer_failed",
-                "initialize_runtime_events",
+                SharedCode::EventIssuerFailed,
+                HostLocation::InitializeRuntimeEvents,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         let fingerprinter =
             Sha256SecretFingerprinter::new(secret_fingerprint_salt).map_err(|_| {
                 RuntimeHostError::fatal(
-                    "event_fingerprinter_failed",
-                    "initialize_runtime_events",
+                    HostCode::EventFingerprinterFailed,
+                    HostLocation::InitializeRuntimeEvents,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -57,8 +59,8 @@ impl RuntimeEvents {
             .map(|value| *value.transport())
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "action_id_issue_failed",
-                    "build_runtime_event",
+                    HostCode::ActionIdIssueFailed,
+                    HostLocation::BuildRuntimeEvent,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })
@@ -104,15 +106,15 @@ impl RuntimeEvents {
         )
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "synthetic_request_invalid",
-                "build_runtime_event",
+                HostCode::SyntheticRequestInvalid,
+                HostLocation::BuildRuntimeEvent,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         let validated = request.validate().map_err(|_| {
             RuntimeHostError::fatal(
-                "synthetic_request_invalid",
-                "build_runtime_event",
+                HostCode::SyntheticRequestInvalid,
+                HostLocation::BuildRuntimeEvent,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -148,7 +150,7 @@ impl RuntimeEvents {
     pub(crate) fn sanitize(&self, draft: EventDraft) -> RuntimeHostResult<SanitizedEventDraft> {
         draft.sanitize(&self.fingerprinter).map_err(|error| {
             RuntimeHostError::fatal(
-                error.code().as_str(),
+                error.code(),
                 SANITIZE_RUNTIME_EVENT,
                 RuntimeErrorCode::LedgerFailure,
             )
@@ -162,17 +164,17 @@ impl RuntimeEvents {
 }
 
 /// The operation every `RuntimeEvents::sanitize` failure carries.
-pub(crate) const SANITIZE_RUNTIME_EVENT: &str = "sanitize_runtime_event";
+pub(crate) const SANITIZE_RUNTIME_EVENT: HostLocation = HostLocation::SanitizeRuntimeEvent;
 
 /// True when `error` is a draft rejected by contract sanitization.
 pub(crate) fn is_sanitization_failure(error: &RuntimeHostError) -> bool {
-    error.operation() == SANITIZE_RUNTIME_EVENT
+    error.operation() == SANITIZE_RUNTIME_EVENT.as_str()
 }
 
 fn id_error() -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "event_id_issue_failed",
-        "build_runtime_event",
+        HostCode::EventIdIssueFailed,
+        HostLocation::BuildRuntimeEvent,
         RuntimeErrorCode::RuntimeFatal,
     )
 }

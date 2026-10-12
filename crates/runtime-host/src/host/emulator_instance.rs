@@ -50,15 +50,18 @@
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
 use crate::{DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, InstanceState};
+use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode};
 use actingcommand_contract::{EmulatorInstanceAction, FactValue};
 
-const CONTROL_OPERATION: &str = "control_emulator_instance";
+const CONTROL_OPERATION: ContractLocation = ContractLocation::ControlEmulatorInstance;
 pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
 /// The provider control's readiness wait expired (`mumu_manager.wait_timeout`).
-pub(super) const EMULATOR_CONTROL_WAIT_TIMEOUT: &str = "emulator_control_wait_timeout";
+pub(super) const EMULATOR_CONTROL_WAIT_TIMEOUT: &str =
+    HostCode::EmulatorControlWaitTimeout.as_str();
 /// Every other failure of the provider control once it was dispatched or refused by the tool.
-const EMULATOR_CONTROL_FAILED: &str = "emulator_control_failed";
+const EMULATOR_CONTROL_FAILED: &str = HostCode::EmulatorControlFailed.as_str();
 /// Longest wait for adbd after the vendor reports the instance running (#316-B3).
 const ADB_BASELINE_WAIT: Duration = Duration::from_secs(30);
 const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -136,7 +139,7 @@ struct ProviderControlFailure {
 /// A restart phase whose provider control failed with one of the two codes an operator
 /// restart reports under its own codes (F4): the cause, its effect and the device failure.
 struct WrappedFailure {
-    code: &'static str,
+    code: HostCode,
     effect: EffectDisposition,
     provider: ProviderControlFailure,
 }
@@ -146,10 +149,13 @@ impl UnrecordedControl {
     /// failure (a busy fence, a session close, a rebinding, an ADB baseline), which a restart
     /// records as it stands.
     fn into_wrapped(self: Box<Self>) -> Result<WrappedFailure, Box<Self>> {
-        let code = self.error.code();
-        if code != EMULATOR_CONTROL_WAIT_TIMEOUT && code != EMULATOR_CONTROL_FAILED {
-            return Err(self);
-        }
+        let code = match self.error.code() {
+            relayed if relayed == EMULATOR_CONTROL_WAIT_TIMEOUT => {
+                HostCode::EmulatorControlWaitTimeout
+            }
+            relayed if relayed == EMULATOR_CONTROL_FAILED => HostCode::EmulatorControlFailed,
+            _ => return Err(self),
+        };
         let failure = *self;
         match failure.provider {
             Some(provider) => Ok(WrappedFailure {
@@ -304,7 +310,7 @@ impl HostShared {
     ) -> Result<EmulatorControlDriven, RequestFailure> {
         let instance_id = resolved.instance_id();
         let instance_guard = self.instance_guard(instance_id)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         let mut driven = self.drive_emulator_control_while_guarded(
             resolved,
             links,
@@ -338,7 +344,7 @@ impl HostShared {
         let instance_id = resolved.instance_id();
         let instance_alias = resolved.instance_alias.as_str();
         let instance_guard = self.instance_guard(instance_id)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         let stop_started = Instant::now();
         let stop = self.drive_restart_phase(
             instance_alias,
@@ -352,7 +358,7 @@ impl HostShared {
         let stop = match stop {
             Ok(stopped) => Ok(stopped),
             Err(failure) => match failure.into_wrapped() {
-                Ok(wrapped) if wrapped.code == EMULATOR_CONTROL_WAIT_TIMEOUT => Err(wrapped),
+                Ok(wrapped) if wrapped.code == HostCode::EmulatorControlWaitTimeout => Err(wrapped),
                 // F3: no Start after any other Stop failure.
                 Ok(wrapped) => {
                     return Err(self.report_stop_failed(
@@ -552,7 +558,7 @@ impl HostShared {
                 mode,
                 links,
                 record_action,
-                busy_error(instance_id, fence_reason_code(fence.reason)),
+                busy_error(instance_id, fence.reason),
                 RuntimeReceiptState::Denied,
                 EffectDisposition::NotPerformed,
                 None,
@@ -569,8 +575,10 @@ impl HostShared {
         ) {
             Ok(Ok(())) => {}
             Ok(Err(close_error)) => {
-                let mut error =
-                    RuntimeHostError::execution("close_emulator_device_session", &close_error);
+                let mut error = RuntimeHostError::execution(
+                    HostLocation::CloseEmulatorDeviceSession,
+                    &close_error,
+                );
                 error.lifecycle.instance_id = Some(instance_id);
                 return Err(self.control_failed(
                     mode,
@@ -587,7 +595,7 @@ impl HostShared {
                     mode,
                     links,
                     record_action,
-                    busy_error(instance_id, "active_lease"),
+                    busy_error(instance_id, MonitorRecoveryCoordinationReason::ActiveLease),
                     RuntimeReceiptState::Denied,
                     EffectDisposition::NotPerformed,
                     None,
@@ -895,7 +903,7 @@ impl HostShared {
         let stage = diagnostic.map_or("mumu_manager.control", |diagnostic| diagnostic.stage());
         let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
         let mut error = RuntimeHostError::request(
-            code,
+            report.code,
             CONTROL_OPERATION,
             RuntimeErrorCode::BackendOperationFailed,
         )
@@ -903,7 +911,7 @@ impl HostShared {
             category,
             stage,
             "mumu_manager",
-            "control_instance",
+            ContractLocation::ControlInstance.as_str(),
             message,
             Sensitivity::Sensitive,
         ))
@@ -944,7 +952,7 @@ impl HostShared {
                     "emulator_control",
                     "mumu_manager.process_list",
                     "mumu_manager",
-                    "control_instance",
+                    ContractLocation::ControlInstance.as_str(),
                     format!(
                         "{code}: instance_id={} device_process_present={} stop_elapsed_ms={stop_elapsed_ms}",
                         instance_token(instance_id),
@@ -981,9 +989,12 @@ impl HostShared {
                 self.record_observed_stopped(instance_id)
             }
             Some(state) if state.running() => {
-                let bound_port = lock(&self.registered_instances, "read_observed_binding")?
-                    .get(&instance_id)
-                    .and_then(|record| record.bound_adb_endpoint().map(|endpoint| endpoint.port()));
+                let bound_port = lock(
+                    &self.registered_instances,
+                    HostLocation::ReadObservedBinding,
+                )?
+                .get(&instance_id)
+                .and_then(|record| record.bound_adb_endpoint().map(|endpoint| endpoint.port()));
                 if let Some(port) = state.adb_port.filter(|port| bound_port != Some(*port)) {
                     let rebound = self.bind_observed_endpoint(instance_id, Some(port))?;
                     self.append_event_raw(
@@ -1028,14 +1039,16 @@ impl HostShared {
         own: &LeaseToken,
     ) -> RuntimeHostResult<bool> {
         let now = self.monotonic_ms()?;
-        Ok(lock(&self.scheduler, "fence_own_emulator_control")?
-            .active_lease(instance_id)
-            .is_some_and(|lease| {
-                lease.token().lease_id() == own.lease_id()
-                    && lease.token().holder_id() == own.holder_id()
-                    && lease.token().expires_at_monotonic_ms() > now
-                    && !lease.destructive_step_active()
-            }))
+        Ok(
+            lock(&self.scheduler, HostLocation::FenceOwnEmulatorControl)?
+                .active_lease(instance_id)
+                .is_some_and(|lease| {
+                    lease.token().lease_id() == own.lease_id()
+                        && lease.token().holder_id() == own.holder_id()
+                        && lease.token().expires_at_monotonic_ms() > now
+                        && !lease.destructive_step_active()
+                }),
+        )
     }
 
     /// Polls the ADB baseline of the freshly bound endpoint until adbd answers `device`
@@ -1083,7 +1096,7 @@ impl HostShared {
         }
         let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut error = RuntimeHostError::request(
-            "emulator_control_adb_not_ready",
+            HostCode::EmulatorControlAdbNotReady,
             CONTROL_OPERATION,
             RuntimeErrorCode::BackendOperationFailed,
         )
@@ -1125,7 +1138,7 @@ impl HostShared {
             || binding.is_none_or(|binding| binding.instance_index() != outcome.instance_index)
         {
             let mut error = RuntimeHostError::request(
-                "emulator_control_instance_unconfirmed",
+                HostCode::EmulatorControlInstanceUnconfirmed,
                 CONTROL_OPERATION,
                 RuntimeErrorCode::BackendOperationFailed,
             );
@@ -1137,7 +1150,7 @@ impl HostShared {
             EmulatorInstanceAction::Start | EmulatorInstanceAction::Restart => {
                 let Some(adb_port) = outcome.adb_port.filter(|port| *port != 0) else {
                     let mut error = RuntimeHostError::request(
-                        "emulator_control_endpoint_unresolved",
+                        HostCode::EmulatorControlEndpointUnresolved,
                         CONTROL_OPERATION,
                         RuntimeErrorCode::BackendOperationFailed,
                     )
@@ -1161,25 +1174,31 @@ impl HostShared {
         instance_id: InstanceId,
         adb_port: Option<u16>,
     ) -> RuntimeHostResult<RegisteredInstance> {
-        let mut registry = lock(&self.registered_instances, "rebind_instance_endpoint")?;
+        let mut registry = lock(
+            &self.registered_instances,
+            HostLocation::RebindInstanceEndpoint,
+        )?;
         let record = registry.get_mut(&instance_id).ok_or_else(|| {
             RuntimeHostError::fatal(
-                "runtime_instance_registry_incomplete",
-                "rebind_instance_endpoint",
+                HostCode::RuntimeInstanceRegistryIncomplete,
+                HostLocation::RebindInstanceEndpoint,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         self.execution()?
             .rebind_discovered_endpoint(&record.instance_alias, adb_port)
             .map_err(|error| {
-                let mut error = RuntimeHostError::execution("rebind_instance_endpoint", &error);
+                let mut error =
+                    RuntimeHostError::execution(HostLocation::RebindInstanceEndpoint, &error);
                 error.lifecycle.instance_id = Some(instance_id);
                 error
             })?;
         let rebound = self
             .execution()?
             .resolve(&record.instance_alias)
-            .map_err(|error| RuntimeHostError::execution("rebind_instance_endpoint", &error))?;
+            .map_err(|error| {
+                RuntimeHostError::execution(HostLocation::RebindInstanceEndpoint, &error)
+            })?;
         record.audit_endpoint = rebound.audit_endpoint().to_owned();
         record.adb_endpoint = rebound.adb_endpoint().cloned();
         Ok(record.clone())
@@ -1240,7 +1259,7 @@ impl HostShared {
             RuntimeFactInvalidationReason::DeviceClosed,
         ) {
             Ok(_) => Ok(()),
-            Err(error) if error.code() == "runtime_fact_missing" => Ok(()),
+            Err(error) if error.code() == HostCode::RuntimeFactMissing.as_str() => Ok(()),
             Err(error) => Err(error),
         }
     }
@@ -1291,22 +1310,22 @@ fn emulator_control_error(
     let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
     let (code, runtime_code, state) = match stage {
         "emulator_control.unavailable" | "emulator_control.unregistered" => (
-            "emulator_control_unavailable",
+            HostCode::EmulatorControlUnavailable,
             RuntimeErrorCode::InvalidRequest,
             RuntimeReceiptState::Denied,
         ),
         "emulator_control.unsupported" => (
-            "emulator_control_unsupported",
+            HostCode::EmulatorControlUnsupported,
             RuntimeErrorCode::InvalidRequest,
             RuntimeReceiptState::Denied,
         ),
         "mumu_manager.wait_timeout" => (
-            EMULATOR_CONTROL_WAIT_TIMEOUT,
+            HostCode::EmulatorControlWaitTimeout,
             RuntimeErrorCode::BackendOperationFailed,
             RuntimeReceiptState::Failed,
         ),
         _ => (
-            EMULATOR_CONTROL_FAILED,
+            HostCode::EmulatorControlFailed,
             RuntimeErrorCode::BackendOperationFailed,
             RuntimeReceiptState::Failed,
         ),
@@ -1343,7 +1362,7 @@ fn emulator_control_error(
             category,
             stage,
             "mumu_manager",
-            "control_instance",
+            ContractLocation::ControlInstance.as_str(),
             message,
             Sensitivity::Sensitive,
         ))
@@ -1354,13 +1373,16 @@ fn emulator_control_error(
 }
 
 /// The busy denial of the fence (`fence=<reason>` as native detail).
-fn busy_error(instance_id: InstanceId, reason: &'static str) -> RuntimeHostError {
+fn busy_error(
+    instance_id: InstanceId,
+    fence: MonitorRecoveryCoordinationReason,
+) -> RuntimeHostError {
     let mut error = RuntimeHostError::request(
-        "emulator_control_busy",
+        HostCode::EmulatorControlBusy,
         CONTROL_OPERATION,
         RuntimeErrorCode::RuntimeBusy,
     )
-    .with_native_detail(format!("fence={reason}"));
+    .with_native_detail(format!("fence={}", fence_reason_token(fence)));
     error.lifecycle.instance_id = Some(instance_id);
     error
 }
@@ -1373,11 +1395,12 @@ fn fact_failure(error: RuntimeHostError, terminal_event: TerminalEvent) -> Reque
     }
 }
 
-const fn fence_reason_code(reason: MonitorRecoveryCoordinationReason) -> &'static str {
+/// The fence reason's token (its snake_case name; a vocabulary token, not an outcome code).
+const fn fence_reason_token(reason: MonitorRecoveryCoordinationReason) -> &'static str {
     match reason {
         MonitorRecoveryCoordinationReason::SchedulerAvailable => "scheduler_available",
         MonitorRecoveryCoordinationReason::ActiveLease => "active_lease",
-        MonitorRecoveryCoordinationReason::LeaseExpired => "lease_expired",
+        MonitorRecoveryCoordinationReason::LeaseExpired => RuntimeErrorCode::LeaseExpired.as_str(),
         MonitorRecoveryCoordinationReason::DestructiveStepActive => "destructive_step_active",
         MonitorRecoveryCoordinationReason::PreemptionPending => "preemption_pending",
         MonitorRecoveryCoordinationReason::TakeoverCooldown => "takeover_cooldown",

@@ -4,6 +4,12 @@ use super::facts::FactPublicationPurpose;
 use super::lease::HostClaim;
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use crate::error::spelled;
+use actingcommand_contract::codes::{
+    ContractLocation, DeviceSelfCheckFailure, RuntimeErrorCode, SharedCode,
+};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     CaptureBackendName, CaptureExtent, CaptureGeometryObservation,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
@@ -17,8 +23,10 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 /// How often an instance pause re-reads its instance's in-flight contained runs (and, in stage
 /// (c), its lease and owed client resets).
 pub(super) const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
-const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: &str = "settle_previous_epoch_contained_runs";
+const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str =
+    SharedCode::ContainedTaskPostAdmissionOcrFailed.as_str();
+const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: HostLocation =
+    HostLocation::SettlePreviousEpochContainedRuns;
 /// Workflow #369 Q-2: the longest a direct task run (CLI, console, MCP `ac_run_pack`) waits in
 /// its instance's queue before it is refused `lease_queue_expired`.
 const DIRECT_TASK_RUN_CLAIM_WAIT_MS: u64 = 60_000;
@@ -38,11 +46,12 @@ fn direct_task_run_claim_cap_ms(receipt_deadline_monotonic_ms: u64, now_monotoni
 /// Reads one original run identity without creating identifiers or producer authority.
 fn contained_task_recovery_identity(
     events: &[PersistedEvent],
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> Result<Option<(TaskRunIdentity, Option<LeaseId>)>, RequestFailure> {
+    let operation: Location = operation.into();
     let invalid = || {
         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-            "contained_task_recovery_identity_invalid",
+            HostCode::ContainedTaskRecoveryIdentityInvalid,
             operation,
             RuntimeErrorCode::RuntimeFatal,
         ))
@@ -157,7 +166,7 @@ impl ContainedTaskCheckpointTestControl {
     pub(crate) fn observed(&self) -> RuntimeHostResult<Option<ContainedTaskCheckpointIdentity>> {
         Ok(*lock(
             &self.observed,
-            "read_contained_task_checkpoint_test_control",
+            crate::codes::test_spellings::TestLocation::ReadContainedTaskCheckpointTestControl,
         )?)
     }
 }
@@ -286,19 +295,20 @@ fn resource_reading_failure_detail(code: &str, detail: Option<&str>) -> Option<S
 /// after that terminal, with `detail` as native detail.
 fn refuse_resource_readings(
     draft: &mut ContainedTaskTerminalDraft,
-    code: &'static str,
+    code: impl Into<Code>,
     detail: String,
 ) -> RequestFailure {
+    let code: Code = code.into();
     draft.outcome = TaskOutcome::Failure;
     draft.final_page = None;
-    draft.failure_code = Some(code);
+    draft.failure_code = Some(code.as_str());
     draft.failure_severity = draft.projection_failure_severity;
     draft.scheduling_outcome = None;
     draft.selected_scheduling_outcome = None;
     RequestFailure::request(
         RuntimeHostError::request(
             code,
-            "append_contained_task_terminal",
+            HostLocation::AppendContainedTaskTerminal,
             RuntimeErrorCode::BackendOperationFailed,
         )
         .with_native_detail(detail),
@@ -307,10 +317,10 @@ fn refuse_resource_readings(
     )
 }
 
-fn resource_reading_poison(code: &'static str) -> RequestFailure {
+fn resource_reading_poison(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
         code,
-        "run_contained_task",
+        ContractLocation::RunContainedTask,
         RuntimeErrorCode::RuntimeFatal,
     ))
 }
@@ -396,8 +406,8 @@ impl ContainedRunControl {
     ) -> RuntimeHostResult<()> {
         self.ladder_source.set(source).map_err(|_| {
             RuntimeHostError::fatal(
-                "contained_task_ladder_source_state_invalid",
-                "note_contained_task_ladder_source",
+                HostCode::ContainedTaskLadderSourceStateInvalid,
+                HostLocation::NoteContainedTaskLadderSource,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })
@@ -418,15 +428,15 @@ impl ContainedRunControl {
 
     /// The run's committed `task.failed` terminal, taken once.
     pub(super) fn take_failed_terminal(&self) -> RuntimeHostResult<Option<FailedTaskTerminal>> {
-        Ok(lock(&self.failed_terminal, "take_failed_task_terminal")?.take())
+        Ok(lock(&self.failed_terminal, HostLocation::TakeFailedTaskTerminal)?.take())
     }
 
     /// Workflow #336 L2d: notes the prepared package's identity, once per run.
     fn note_package(&self, package: &PreparedContainedTask) -> RuntimeHostResult<()> {
         self.package.set(PackageIdentity::of(package)).map_err(|_| {
             RuntimeHostError::fatal(
-                "contained_task_package_state_invalid",
-                "note_contained_task_package",
+                HostCode::ContainedTaskPackageStateInvalid,
+                HostLocation::NoteContainedTaskPackage,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })
@@ -440,8 +450,8 @@ impl ContainedRunControl {
     fn set_deadline(&self, deadline_monotonic_ms: u64) -> RuntimeHostResult<()> {
         if deadline_monotonic_ms == 0 {
             return Err(RuntimeHostError::fatal(
-                "contained_task_deadline_state_invalid",
-                "configure_contained_task_deadline",
+                HostCode::ContainedTaskDeadlineStateInvalid,
+                HostLocation::ConfigureContainedTaskDeadline,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -457,8 +467,8 @@ impl ContainedRunControl {
                 .map(|_| ())
                 .map_err(|_| {
                     RuntimeHostError::fatal(
-                        "contained_task_deadline_state_invalid",
-                        "configure_contained_task_deadline",
+                        HostCode::ContainedTaskDeadlineStateInvalid,
+                        HostLocation::ConfigureContainedTaskDeadline,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })
@@ -518,10 +528,10 @@ impl ContainedRunControl {
     }
 }
 
-fn pause_drain_fatal(code: &'static str) -> RequestFailure {
+fn pause_drain_fatal(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
         code,
-        "drain_paused_instance",
+        HostLocation::DrainPausedInstance,
         RuntimeErrorCode::RuntimeFatal,
     ))
 }
@@ -537,7 +547,7 @@ pub(super) struct SchedulingPauseDeadlines {
 
 impl SchedulingPauseDeadlines {
     pub(super) fn after(drain_timeout_ms: u64) -> Result<Self, RequestFailure> {
-        let overflow = || pause_drain_fatal("scheduling_pause_drain_deadline_overflow");
+        let overflow = || pause_drain_fatal(HostCode::SchedulingPauseDrainDeadlineOverflow);
         let drain = Instant::now()
             .checked_add(Duration::from_millis(drain_timeout_ms))
             .ok_or_else(overflow)?;
@@ -660,15 +670,15 @@ impl CaptureEvidenceAccumulator {
         let frame_index = self.next_frame_index;
         self.next_frame_index = self.next_frame_index.checked_add(1).ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "capture_summary_count_overflow",
-                "record_contained_task_capture",
+                SharedCode::CaptureSummaryCountOverflow,
+                HostLocation::RecordContainedTaskCapture,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
         self.counts.captured = self.counts.captured.checked_add(1).ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "capture_summary_count_overflow",
-                "record_contained_task_capture",
+                SharedCode::CaptureSummaryCountOverflow,
+                HostLocation::RecordContainedTaskCapture,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -687,16 +697,16 @@ impl CaptureEvidenceAccumulator {
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "capture_summary_frame_conflict",
-                    "record_contained_task_capture",
+                    SharedCode::CaptureSummaryFrameConflict,
+                    HostLocation::RecordContainedTaskCapture,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
         }
         self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "capture_summary_count_overflow",
-                "record_contained_task_capture",
+                SharedCode::CaptureSummaryCountOverflow,
+                HostLocation::RecordContainedTaskCapture,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -717,8 +727,8 @@ impl CaptureEvidenceAccumulator {
         if self.pending_post_input {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "capture_summary_phase_conflict",
-                    "record_contained_task_effect",
+                    HostCode::CaptureSummaryPhaseConflict,
+                    HostLocation::RecordContainedTaskEffect,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -746,8 +756,8 @@ impl CaptureEvidenceAccumulator {
             .map(|frame| frame.artifact.clone())
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "capture_summary_frame_missing",
-                    "record_contained_task_pin",
+                    HostCode::CaptureSummaryFrameMissing,
+                    HostLocation::RecordContainedTaskPin,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -767,8 +777,8 @@ impl CaptureEvidenceAccumulator {
             }
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "capture_summary_pin_conflict",
-                    "record_contained_task_pin",
+                    SharedCode::CaptureSummaryPinConflict,
+                    HostLocation::RecordContainedTaskPin,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -816,7 +826,7 @@ impl CaptureEvidenceAccumulator {
                         .map_err(online_observation::observation_artifact_failure)?;
                     if original.as_ref() != Some(&material) {
                         return Err(online_observation::observation_integrity_failure(
-                            "capture_pin_material_changed",
+                            HostCode::CapturePinMaterialChanged,
                         ));
                     }
                 }
@@ -840,9 +850,9 @@ impl CaptureEvidenceAccumulator {
             })
             .collect();
         build_capture_pipeline_summary(self.counts, pinned, self.frames).map_err(|error| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            RequestFailure::poison_without_terminal(RuntimeHostError::relayed_fatal(
                 error.code(),
-                "finalize_contained_task_capture_summary",
+                HostLocation::FinalizeContainedTaskCaptureSummary.as_str(),
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })
@@ -1151,10 +1161,10 @@ struct RuntimeContainedTaskOcrFailureDiagnostic<'a> {
     detail_sha256: String,
 }
 
-fn task_geometry_error(code: &'static str) -> RuntimeHostError {
+fn task_geometry_error(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::request(
         code,
-        "observe_task_geometry",
+        HostLocation::ObserveTaskGeometry,
         RuntimeErrorCode::CaptureFailed,
     )
 }
@@ -1168,11 +1178,13 @@ fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
 
 fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> RuntimeHostError {
     task_geometry_error(match conclusion {
-        TaskGeometryConclusion::AspectMismatch { .. } => "contained_task_geometry_aspect_mismatch",
-        TaskGeometryConclusion::Unknown { .. } => "contained_task_geometry_unknown",
-        TaskGeometryConclusion::Unavailable => "contained_task_geometry_unavailable",
+        TaskGeometryConclusion::AspectMismatch { .. } => {
+            HostCode::ContainedTaskGeometryAspectMismatch
+        }
+        TaskGeometryConclusion::Unknown { .. } => HostCode::ContainedTaskGeometryUnknown,
+        TaskGeometryConclusion::Unavailable => HostCode::ContainedTaskGeometryUnavailable,
         TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable => {
-            "contained_task_geometry_producer_binding_mismatch"
+            HostCode::ContainedTaskGeometryProducerBindingMismatch
         }
     })
 }
@@ -1217,27 +1229,26 @@ impl RuntimeContainedTask<'_> {
     ) -> RuntimeHostResult<CaptureGeometryObservation> {
         let deadline = self
             .geometry_deadline
-            .ok_or_else(|| task_geometry_error("contained_task_geometry_budget_unavailable"))?;
+            .ok_or_else(|| task_geometry_error(HostCode::ContainedTaskGeometryBudgetUnavailable))?;
         let now = self.host.monotonic_ms()?;
         if Instant::now() >= deadline || self.control.cancellation_reason(now).is_some() {
             return Err(task_geometry_error(
-                "contained_task_geometry_budget_unavailable",
+                HostCode::ContainedTaskGeometryBudgetUnavailable,
             ));
         }
-        let session = self
-            .geometry_session
-            .as_ref()
-            .ok_or_else(|| task_geometry_error("contained_task_geometry_session_unavailable"))?;
+        let session = self.geometry_session.as_ref().ok_or_else(|| {
+            task_geometry_error(HostCode::ContainedTaskGeometrySessionUnavailable)
+        })?;
         let frame = self
             .geometry_frame
             .as_ref()
-            .ok_or_else(|| task_geometry_error("contained_task_geometry_frame_unavailable"))?;
+            .ok_or_else(|| task_geometry_error(HostCode::ContainedTaskGeometryFrameUnavailable))?;
         // This checks the original session; it cannot create or reopen a producer.
         self.host
             .execution()?
             .validate_capture_geometry_session(session, deadline)
             .map_err(|error| {
-                RuntimeHostError::execution("validate_task_geometry_session", &error)
+                RuntimeHostError::execution(HostLocation::ValidateTaskGeometrySession, &error)
             })?;
         if frame.backend == CaptureBackendName::FixtureSimulation
             || reuse_frame && frame.backend == CaptureBackendName::NemuIpc
@@ -1247,7 +1258,7 @@ impl RuntimeContainedTask<'_> {
         self.host
             .execution()?
             .observe_capture_geometry(session, deadline)
-            .map_err(|error| RuntimeHostError::execution("observe_task_geometry", &error))
+            .map_err(|error| RuntimeHostError::execution(HostLocation::ObserveTaskGeometry, &error))
     }
 
     fn record_task_geometry(
@@ -1278,7 +1289,7 @@ impl RuntimeContainedTask<'_> {
             Ok(observation) => TaskGeometryObservation::assess(
                 self.geometry_frame.as_ref().ok_or_else(|| {
                     RequestFailure::poison_without_terminal(task_geometry_error(
-                        "contained_task_geometry_frame_unavailable",
+                        HostCode::ContainedTaskGeometryFrameUnavailable,
                     ))
                 })?,
                 observation,
@@ -1353,7 +1364,7 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), RequestFailure> {
         let extent = CaptureExtent::new(frame.width, frame.height).ok_or_else(|| {
             RequestFailure::poison_without_terminal(task_geometry_error(
-                "contained_task_geometry_frame_extent_invalid",
+                HostCode::ContainedTaskGeometryFrameExtentInvalid,
             ))
         })?;
         self.geometry_frame = Some(TaskGeometryFrame {
@@ -1372,7 +1383,7 @@ impl RuntimeContainedTask<'_> {
                 != (self.execution_provenance == ExecutionBackendProvenance::FixtureSimulation)
         {
             return Err(task_geometry_request_failure(
-                task_geometry_error("contained_task_geometry_producer_binding_mismatch"),
+                task_geometry_error(HostCode::ContainedTaskGeometryProducerBindingMismatch),
                 None,
             ));
         }
@@ -1412,7 +1423,7 @@ impl RuntimeContainedTask<'_> {
     fn require_task_geometry_for_input(&self) -> Result<(), RequestFailure> {
         let failure = || {
             task_geometry_request_failure(
-                task_geometry_error("contained_task_geometry_input_prerequisite_missing"),
+                task_geometry_error(HostCode::ContainedTaskGeometryInputPrerequisiteMissing),
                 None,
             )
         };
@@ -1446,7 +1457,7 @@ impl RuntimeContainedTask<'_> {
             .validate_capture_geometry_session(session, self.geometry_deadline.ok_or_else(failure)?)
             .map_err(|error| {
                 task_geometry_request_failure(
-                    RuntimeHostError::execution("validate_task_geometry_input", &error),
+                    RuntimeHostError::execution(HostLocation::ValidateTaskGeometryInput, &error),
                     None,
                 )
             })
@@ -1462,15 +1473,17 @@ impl RuntimeContainedTask<'_> {
         let (trigger, primary) = match execution {
             Err(ContainedTaskRunError::Task(error)) => {
                 let trigger = match error.code() {
-                    "contained_task_recognition_failed" => {
+                    code if spelled(code, &[SharedCode::ContainedTaskRecognitionFailed.code()]) => {
                         TaskGeometryRecheckTrigger::RecognitionFailed
                     }
-                    "contained_task_page_unknown" => TaskGeometryRecheckTrigger::PageUnknown,
+                    code if spelled(code, &[SharedCode::ContainedTaskPageUnknown.code()]) => {
+                        TaskGeometryRecheckTrigger::PageUnknown
+                    }
                     _ => return,
                 };
-                let mut primary = RuntimeHostError::request(
+                let mut primary = RuntimeHostError::relayed_request(
                     error.code(),
-                    "run_contained_task",
+                    ContractLocation::RunContainedTask.as_str(),
                     RuntimeErrorCode::BackendOperationFailed,
                 );
                 if let Some(detail) = error.detail() {
@@ -1481,9 +1494,12 @@ impl RuntimeContainedTask<'_> {
             Err(ContainedTaskRunError::NonfatalOperation(failure))
                 if !failure.poison_runtime
                     && !failure.error.is_fatal()
-                    && matches!(
+                    && spelled(
                         failure.error.code(),
-                        "input_backend_operation_failed" | "input_backend_open_failed"
+                        &[
+                            SharedCode::InputBackendOperationFailed.code(),
+                            DeviceSelfCheckFailure::InputBackendOpenFailed.code(),
+                        ],
                     ) =>
             {
                 (
@@ -1616,7 +1632,7 @@ impl RuntimeContainedTask<'_> {
             .resolve(self.instance_alias)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "resolve_contained_task_configuration",
+                    HostLocation::ResolveContainedTaskConfiguration,
                     &error,
                 ))
             })?;
@@ -1652,7 +1668,7 @@ impl RuntimeContainedTask<'_> {
         // #336 L2b, and one return-home, L2c), Capture and Input.
         if self.configuration_records >= 7 {
             return Err(RequestFailure::poison_without_terminal(
-                artifact_store_error("effective_configuration_limit_exceeded"),
+                artifact_store_error(HostLocation::EffectiveConfigurationLimitExceeded),
             ));
         }
         let record = EffectiveConfigurationRecord {
@@ -1667,12 +1683,12 @@ impl RuntimeContainedTask<'_> {
         };
         let bytes = serde_json::to_vec(&record).map_err(|_| {
             RequestFailure::poison_without_terminal(artifact_store_error(
-                "encode_effective_configuration",
+                HostLocation::EncodeEffectiveConfiguration,
             ))
         })?;
         if bytes.len() as u64 > MAX_EFFECTIVE_CONFIGURATION_BYTES {
             return Err(RequestFailure::poison_without_terminal(
-                artifact_store_error("effective_configuration_too_large"),
+                artifact_store_error(SharedCode::EffectiveConfigurationTooLarge),
             ));
         }
         let mut event_links = self
@@ -1729,29 +1745,29 @@ impl RuntimeContainedTask<'_> {
         };
         let (code, projection) = match reason {
             ContainedTaskCancellationReason::DeadlineExceeded => (
-                "contained_task_deadline_exceeded",
+                RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str(),
                 RuntimeErrorCode::ContainedTaskDeadlineExceeded,
             ),
             ContainedTaskCancellationReason::ClientRequested => (
-                "contained_task_cancelled",
+                RuntimeErrorCode::ContainedTaskCancelled.as_str(),
                 RuntimeErrorCode::ContainedTaskCancelled,
             ),
             ContainedTaskCancellationReason::PausedByOperator => (
-                "contained_task_paused",
+                RuntimeErrorCode::ContainedTaskPaused.as_str(),
                 RuntimeErrorCode::ContainedTaskPaused,
             ),
             ContainedTaskCancellationReason::RecoveredAfterRestart => {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "contained_task_cancellation_state_invalid",
-                        "check_contained_task_deadline",
+                        HostCode::ContainedTaskCancellationStateInvalid,
+                        HostLocation::CheckContainedTaskDeadline,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
             }
         };
         Err(RequestFailure::request(
-            RuntimeHostError::request(code, "run_contained_task", projection),
+            RuntimeHostError::request(code, ContractLocation::RunContainedTask, projection),
             RuntimeReceiptState::Failed,
             None,
         ))
@@ -1791,7 +1807,7 @@ impl RuntimeContainedTask<'_> {
             self.ensure_active()?;
             self.host.ledger.check_writer_health().map_err(|error| {
                 RequestFailure::poison_without_terminal(
-                    RuntimeHostError::fatal(
+                    RuntimeHostError::relayed_fatal(
                         error.code(),
                         error.operation(),
                         RuntimeErrorCode::LedgerFailure,
@@ -1821,8 +1837,8 @@ impl RuntimeContainedTask<'_> {
             if self.control.deadline() == 0 || self.host.fatal.is_shutdown_requested() {
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(
-                        "capture_pressure_pause_stopped",
-                        "admit_contained_task_capture",
+                        HostCode::CapturePressurePauseStopped,
+                        HostLocation::AdmitContainedTaskCapture,
                         RuntimeErrorCode::CaptureFailed,
                     ),
                     RuntimeReceiptState::Denied,
@@ -1901,8 +1917,8 @@ impl RuntimeContainedTask<'_> {
                                 RuntimeHostError::artifact(error).with_related_failure(
                                     "capture_frame_context",
                                     &RuntimeHostError::fatal(
-                                        "observation_frame_context_missing",
-                                        "record_capture_recognition",
+                                        HostCode::ObservationFrameContextMissing,
+                                        ContractLocation::RecordCaptureRecognition,
                                         RuntimeErrorCode::RuntimeFatal,
                                     ),
                                 ),
@@ -2058,8 +2074,8 @@ impl RuntimeContainedTask<'_> {
             .checked_add(step_index)
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_step_index_overflow",
-                    "run_contained_task",
+                    HostCode::ContainedTaskStepIndexOverflow,
+                    ContractLocation::RunContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })
@@ -2219,23 +2235,23 @@ impl RuntimeContainedTask<'_> {
         };
         let frame_id = self.last_frame_id.ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_failure_frame_missing",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrFailureFrameMissing,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
         let event_links = self.links();
         let request_id = event_links.request_id().copied().ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_failure_request_missing",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrFailureRequestMissing,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
         let correlation_id = event_links.correlation_id().copied().ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_failure_correlation_missing",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrFailureCorrelationMissing,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -2255,8 +2271,8 @@ impl RuntimeContainedTask<'_> {
         };
         let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_failure_evidence_encode_failed",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrFailureEvidenceEncodeFailed,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -2268,7 +2284,9 @@ impl RuntimeContainedTask<'_> {
             == 1
         {
             return Err(RequestFailure::poison_without_terminal(
-                artifact_store_error("persist_contained_task_post_admission_ocr_failure"),
+                artifact_store_error(
+                    crate::codes::HostLocation::PersistContainedTaskPostAdmissionOcrFailure,
+                ),
             ));
         }
         self.persist_post_admission_ocr_diagnostic(frame_id, &bytes, false, CapacityUse::Drain)
@@ -2281,8 +2299,8 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), RequestFailure> {
         let frame_id = self.last_frame_id.ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_frame_missing",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrFrameMissing,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -2292,8 +2310,8 @@ impl RuntimeContainedTask<'_> {
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_post_admission_ocr_state_invalid",
-                    "run_contained_task",
+                    HostCode::ContainedTaskPostAdmissionOcrStateInvalid,
+                    ContractLocation::RunContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -2305,8 +2323,8 @@ impl RuntimeContainedTask<'_> {
             .filter(|frame| frame.artifact.frame_id() == Some(frame_id.transport()))
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_post_admission_ocr_frame_artifact_missing",
-                    "run_contained_task",
+                    HostCode::ContainedTaskPostAdmissionOcrFrameArtifactMissing,
+                    ContractLocation::RunContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -2321,8 +2339,8 @@ impl RuntimeContainedTask<'_> {
         };
         let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_evidence_encode_failed",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrEvidenceEncodeFailed,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -2337,8 +2355,8 @@ impl RuntimeContainedTask<'_> {
             .checked_add(1)
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_post_admission_ocr_count_overflow",
-                    "run_contained_task",
+                    HostCode::ContainedTaskPostAdmissionOcrCountOverflow,
+                    ContractLocation::RunContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -2354,8 +2372,8 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), RequestFailure> {
         let frame_id = self.last_frame_id.ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_frame_missing",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrFrameMissing,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -2367,8 +2385,8 @@ impl RuntimeContainedTask<'_> {
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_post_admission_ocr_comparison_invalid",
-                    "run_contained_task",
+                    HostCode::ContainedTaskPostAdmissionOcrComparisonInvalid,
+                    ContractLocation::RunContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -2382,8 +2400,8 @@ impl RuntimeContainedTask<'_> {
         };
         let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_post_admission_ocr_evidence_encode_failed",
-                "run_contained_task",
+                HostCode::ContainedTaskPostAdmissionOcrEvidenceEncodeFailed,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -2422,12 +2440,12 @@ impl RuntimeContainedTask<'_> {
                 .is_none()
         {
             return Err(contained_task_stability_failure(
-                "contained_task_stability_baseline_invalid",
+                HostCode::ContainedTaskStabilityBaselineInvalid,
             ));
         }
         contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
         let current_frame_id = self.last_frame_id.ok_or_else(|| {
-            contained_task_stability_failure("contained_task_stability_frame_identity_missing")
+            contained_task_stability_failure(HostCode::ContainedTaskStabilityFrameIdentityMissing)
         })?;
         self.stability = Some(RuntimeContainedTaskStability {
             declaration,
@@ -2456,12 +2474,12 @@ impl RuntimeContainedTask<'_> {
         let action_id =
             contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
         let state = self.stability.as_ref().ok_or_else(|| {
-            contained_task_stability_failure("contained_task_stability_baseline_missing")
+            contained_task_stability_failure(HostCode::ContainedTaskStabilityBaselineMissing)
         })?;
         let current_frame_id =
             contained_task_stability_current_frame(state.previous_frame_id, self.last_frame_id)?;
         let expected_step_index = state.last_step_index.checked_add(1).ok_or_else(|| {
-            contained_task_stability_failure("contained_task_stability_step_overflow")
+            contained_task_stability_failure(HostCode::ContainedTaskStabilityStepOverflow)
         })?;
         if state.terminal_recorded
             || state.pending_terminal.is_some()
@@ -2470,14 +2488,14 @@ impl RuntimeContainedTask<'_> {
             || prior_consecutive_unchanged != state.consecutive_unchanged
         {
             return Err(contained_task_stability_failure(
-                "contained_task_stability_comparison_invalid",
+                HostCode::ContainedTaskStabilityComparisonInvalid,
             ));
         }
         let expected_count = match result {
             StabilityComparisonResult::Changed => 0,
             StabilityComparisonResult::Unchanged => {
                 prior_consecutive_unchanged.checked_add(1).ok_or_else(|| {
-                    contained_task_stability_failure("contained_task_stability_count_overflow")
+                    contained_task_stability_failure(HostCode::ContainedTaskStabilityCountOverflow)
                 })?
             }
         };
@@ -2485,18 +2503,18 @@ impl RuntimeContainedTask<'_> {
             || new_consecutive_unchanged > declaration.consecutive_unchanged_threshold
         {
             return Err(contained_task_stability_failure(
-                "contained_task_stability_count_invalid",
+                HostCode::ContainedTaskStabilityCountInvalid,
             ));
         }
         let completed_steps = step_index
             .checked_sub(self.step_index_offset)
             .and_then(|relative| relative.checked_add(1))
             .ok_or_else(|| {
-                contained_task_stability_failure("contained_task_stability_step_overflow")
+                contained_task_stability_failure(HostCode::ContainedTaskStabilityStepOverflow)
             })?;
         if completed_steps > declaration.max_steps {
             return Err(contained_task_stability_failure(
-                "contained_task_stability_step_invalid",
+                HostCode::ContainedTaskStabilityStepInvalid,
             ));
         }
         let expected_terminal_reason =
@@ -2509,7 +2527,7 @@ impl RuntimeContainedTask<'_> {
             };
         if terminal_reason != expected_terminal_reason {
             return Err(contained_task_stability_failure(
-                "contained_task_stability_terminal_reason_invalid",
+                HostCode::ContainedTaskStabilityTerminalReasonInvalid,
             ));
         }
 
@@ -2533,7 +2551,7 @@ impl RuntimeContainedTask<'_> {
             terminal_reason,
         };
         let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
-            contained_task_stability_failure("contained_task_stability_evidence_encode_failed")
+            contained_task_stability_failure(HostCode::ContainedTaskStabilityEvidenceEncodeFailed)
         })?;
         let event_links = self
             .links()
@@ -2557,7 +2575,7 @@ impl RuntimeContainedTask<'_> {
         #[cfg(test)]
         if persistence_failure == 1 {
             return Err(RequestFailure::poison_without_terminal(
-                artifact_store_error("persist_contained_task_stability_comparison"),
+                artifact_store_error(crate::codes::test_spellings::TestLocation::PersistContainedTaskStabilityComparison),
             ));
         }
         let write_request = ArtifactWriteRequest::new(
@@ -2592,7 +2610,7 @@ impl RuntimeContainedTask<'_> {
         stored.map_err(online_observation::observation_artifact_failure)?;
 
         let state = self.stability.as_mut().ok_or_else(|| {
-            contained_task_stability_failure("contained_task_stability_state_missing")
+            contained_task_stability_failure(HostCode::ContainedTaskStabilityStateMissing)
         })?;
         state.previous_frame_id = current_frame_id;
         state.last_step_index = step_index;
@@ -2613,10 +2631,10 @@ impl RuntimeContainedTask<'_> {
         reason: StabilityTerminalReason,
     ) -> Result<(), RequestFailure> {
         let state = self.stability.as_mut().ok_or_else(|| {
-            contained_task_stability_failure("contained_task_stability_baseline_missing")
+            contained_task_stability_failure(HostCode::ContainedTaskStabilityBaselineMissing)
         })?;
         let pending = state.pending_terminal.as_ref().ok_or_else(|| {
-            contained_task_stability_failure("contained_task_stability_terminal_missing")
+            contained_task_stability_failure(HostCode::ContainedTaskStabilityTerminalMissing)
         })?;
         if state.terminal_recorded
             || pending.step_index != step_index
@@ -2624,7 +2642,7 @@ impl RuntimeContainedTask<'_> {
             || pending.reason != reason
         {
             return Err(contained_task_stability_failure(
-                "contained_task_stability_terminal_mismatch",
+                HostCode::ContainedTaskStabilityTerminalMismatch,
             ));
         }
         state.pending_terminal = None;
@@ -2645,8 +2663,8 @@ fn bounded_post_admission_ocr_failure_detail<'a>(
     };
     if detail.len() > MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES {
         return Err(RuntimeHostError::fatal(
-            "contained_task_post_admission_ocr_failure_detail_too_large",
-            "persist_contained_task_post_admission_ocr_failure",
+            HostCode::ContainedTaskPostAdmissionOcrFailureDetailTooLarge,
+            HostLocation::PersistContainedTaskPostAdmissionOcrFailure,
             RuntimeErrorCode::RuntimeFatal,
         ));
     }
@@ -2688,10 +2706,10 @@ fn post_admission_ocr_failure_detail_gate_is_exact_and_bounded() {
     assert!(error.is_fatal());
 }
 
-fn contained_task_stability_failure(code: &'static str) -> RequestFailure {
+fn contained_task_stability_failure(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
         code,
-        "record_contained_task_stability",
+        HostLocation::RecordContainedTaskStability,
         RuntimeErrorCode::RuntimeFatal,
     ))
 }
@@ -2701,11 +2719,11 @@ fn contained_task_stability_current_frame(
     current_frame_id: Option<IssuedFrameId>,
 ) -> Result<IssuedFrameId, RequestFailure> {
     let current_frame_id = current_frame_id.ok_or_else(|| {
-        contained_task_stability_failure("contained_task_stability_frame_identity_missing")
+        contained_task_stability_failure(HostCode::ContainedTaskStabilityFrameIdentityMissing)
     })?;
     if current_frame_id == previous_frame_id {
         return Err(contained_task_stability_failure(
-            "contained_task_stability_frame_identity_reused",
+            HostCode::ContainedTaskStabilityFrameIdentityReused,
         ));
     }
     Ok(current_frame_id)
@@ -2839,7 +2857,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             active?;
             self.geometry_deadline = Some(self.geometry_operation_deadline()?);
             let instance_guard = self.host.instance_guard(self.token.instance_id())?;
-            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
             let frame_id =
                 self.host.events.issuer().mint_frame_id().map_err(|_| {
                     RequestFailure::poison_without_terminal(runtime_identifier_error())
@@ -3098,7 +3116,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .finish_capture_failure_while_guarded(error, links.clone(), &admission)
                         .map_err(RequestFailure::poison_without_terminal)?;
                     let mut runtime_error =
-                        RuntimeHostError::execution("run_contained_task_capture", &error);
+                        RuntimeHostError::execution(HostLocation::RunContainedTaskCapture, &error);
                     if self
                         .host
                         .retain_unconfirmed_resources(&runtime_error, links.clone())?
@@ -3113,9 +3131,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     if self.last_frame_id.is_none()
                         && self.execution_provenance == ExecutionBackendProvenance::PhysicalDevice
                         && runtime_error.is_fatal()
-                        && matches!(
+                        && spelled(
                             error.code(),
-                            "capture_backend_open_failed" | "capture_backend_operation_failed"
+                            &[
+                                DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
+                                SharedCode::CaptureBackendOperationFailed.code(),
+                            ],
                         )
                     {
                         let host = self.host;
@@ -3131,7 +3152,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             {
                                 host.invalidate_adb_baseline(self.token.instance_id())?;
                                 runtime_error = RuntimeHostError::adb_unreachable_capture(
-                                    "run_contained_task_capture",
+                                    HostLocation::RunContainedTaskCapture,
                                     &error,
                                 );
                             }
@@ -3140,14 +3161,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             // idle session went stale. It is closed above; the task fails
                             // nonfatal and the next capture opens a new session.
                             Ok(())
-                                if error.code() == "capture_backend_operation_failed"
+                                if error.code()
+                                    == SharedCode::CaptureBackendOperationFailed.as_str()
                                     && error
                                         .failure_context()
                                         .backend_open_observations()
                                         .is_empty() =>
                             {
                                 runtime_error = RuntimeHostError::reused_session_capture(
-                                    "run_contained_task_capture",
+                                    HostLocation::RunContainedTaskCapture,
                                     &error,
                                 );
                             }
@@ -3157,9 +3179,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     let payload = CapturePayloadDraft::failed_with_causes(
                         EventAction::CaptureObserve,
                         DiagnosticCode::CaptureFailed,
-                        if matches!(
+                        if spelled(
                             runtime_error.code(),
-                            "capture_frame_invalid" | "frame_workspace_unavailable"
+                            &[
+                                SharedCode::CaptureFrameInvalid.code(),
+                                SharedCode::FrameWorkspaceUnavailable.code(),
+                            ],
                         ) {
                             EffectDisposition::Indeterminate
                         } else {
@@ -3221,8 +3246,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         if !self.used_action_seeds.insert(action_seed) {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_sampling_seed_reused",
-                    "derive_contained_task_action_seed",
+                    HostCode::ContainedTaskSamplingSeedReused,
+                    HostLocation::DeriveContainedTaskActionSeed,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -3241,7 +3266,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     ) -> Result<actingcommand_execution_kernel::SelectionState, Self::Error> {
         self.ensure_active()?;
         let configured = {
-            let inputs = lock(&self.host.policy_inputs, "read_selection_state")?;
+            let inputs = lock(&self.host.policy_inputs, HostLocation::ReadSelectionState)?;
             inputs.as_ref().and_then(|inputs| {
                 inputs
                     .instance_identities()
@@ -3282,7 +3307,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .map(Some)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "resolve_committed_input_frame",
+                    HostLocation::ResolveCommittedInputFrame,
                     &error,
                 ))
             })
@@ -3337,8 +3362,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } else {
                 Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "contained_task_input_result_invalid",
-                        "run_contained_task",
+                        HostCode::ContainedTaskInputResultInvalid,
+                        ContractLocation::RunContainedTask,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ))
@@ -3452,7 +3477,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     } else {
                         self.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                             disposition: TaskEntryTargetDisposition::FailClosed,
-                            failure_code: Some("contained_task_home_entry_not_matched".to_owned()),
+                            failure_code: Some(
+                                SharedCode::ContainedTaskHomeEntryNotMatched
+                                    .as_str()
+                                    .to_owned(),
+                            ),
                         })
                     };
                 }
@@ -3465,8 +3494,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     } else {
                         TaskEntryTargetDisposition::FailClosed
                     },
-                    failure_code: (!matched)
-                        .then(|| "contained_task_home_entry_not_matched".to_owned()),
+                    failure_code: (!matched).then(|| {
+                        SharedCode::ContainedTaskHomeEntryNotMatched
+                            .as_str()
+                            .to_owned()
+                    }),
                 })
             }
             ContainedTaskTrace::CaptureCompleted { width, height } => {
@@ -3479,8 +3511,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 let result = (|| {
                     let frame_id = self.last_frame_id.ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                            "contained_task_frame_identity_missing",
-                            "run_contained_task",
+                            HostCode::ContainedTaskFrameIdentityMissing,
+                            ContractLocation::RunContainedTask,
                             RuntimeErrorCode::RuntimeFatal,
                         ))
                     })?;
@@ -3534,7 +3566,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .map(|_| ())
                         .map_err(|error| {
                             RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                                "commit_capture_input_frame",
+                                HostLocation::CommitCaptureInputFrame,
                                 &error,
                             ))
                         })
@@ -3557,8 +3589,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     if self.current_recognition_id.is_some() {
                         return Err(RequestFailure::poison_without_terminal(
                             RuntimeHostError::fatal(
-                                "contained_task_recognition_state_invalid",
-                                "run_contained_task",
+                                HostCode::ContainedTaskRecognitionStateInvalid,
+                                ContractLocation::RunContainedTask,
                                 RuntimeErrorCode::RuntimeFatal,
                             ),
                         ));
@@ -3567,8 +3599,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .pin_last(PinnedFrameReason::RecognitionEvidence)?;
                     let frame_id = self.last_frame_id.ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                            "contained_task_frame_identity_missing",
-                            "run_contained_task",
+                            HostCode::ContainedTaskFrameIdentityMissing,
+                            ContractLocation::RunContainedTask,
                             RuntimeErrorCode::RuntimeFatal,
                         ))
                     })?;
@@ -3627,15 +3659,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 let result = (|| {
                     let frame_id = self.last_frame_id.ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                            "contained_task_frame_identity_missing",
-                            "run_contained_task",
+                            HostCode::ContainedTaskFrameIdentityMissing,
+                            ContractLocation::RunContainedTask,
                             RuntimeErrorCode::RuntimeFatal,
                         ))
                     })?;
                     let recognition_id = self.current_recognition_id.ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                            "contained_task_recognition_identity_missing",
-                            "run_contained_task",
+                            HostCode::ContainedTaskRecognitionIdentityMissing,
+                            ContractLocation::RunContainedTask,
                             RuntimeErrorCode::RuntimeFatal,
                         ))
                     })?;
@@ -3747,8 +3779,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
-                            "contained_task_step_identity_reused",
-                            "run_contained_task",
+                            HostCode::ContainedTaskStepIdentityReused,
+                            ContractLocation::RunContainedTask,
                             RuntimeErrorCode::RuntimeFatal,
                         ),
                     ));
@@ -3780,8 +3812,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 // `run_ending` record reaches this check unvalidated.
                 selection.validate_for_append().map_err(|error| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        error.code().as_str(),
-                        "record_contained_task_selection",
+                        error.code(),
+                        HostLocation::RecordContainedTaskSelection,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
@@ -3813,8 +3845,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } => {
                 action.validate().map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_effect_invalid",
-                        "run_contained_task",
+                        HostCode::ContainedTaskEffectInvalid,
+                        ContractLocation::RunContainedTask,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
@@ -3825,8 +3857,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         if frame.frame_id != *frame_id.transport() {
                             return Err(RequestFailure::poison_without_terminal(
                                 RuntimeHostError::fatal(
-                                    "contained_task_effect_frame_identity_mismatch",
-                                    "run_contained_task",
+                                    HostCode::ContainedTaskEffectFrameIdentityMismatch,
+                                    ContractLocation::RunContainedTask,
                                     RuntimeErrorCode::RuntimeFatal,
                                 ),
                             ));
@@ -3904,8 +3936,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
                 let (action_id, _) = self.step_actions.remove(&step_index).ok_or_else(|| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_step_identity_missing",
-                        "run_contained_task",
+                        HostCode::ContainedTaskStepIdentityMissing,
+                        ContractLocation::RunContainedTask,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
@@ -3980,19 +4012,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } => {
                 if self.finalizing.is_some() || self.taken_resource_readings.is_some() {
                     return Err(resource_reading_poison(
-                        "contained_task_resource_reading_duplicate",
+                        HostCode::ContainedTaskResourceReadingDuplicate,
                     ));
                 }
                 let (Some(frame_id), Some(frame_captured_at)) =
                     (self.last_frame_id, self.last_frame_captured_at)
                 else {
                     return Err(resource_reading_poison(
-                        "contained_task_resource_reading_frame_missing",
+                        HostCode::ContainedTaskResourceReadingFrameMissing,
                     ));
                 };
                 if frame_captured_at != captured_at {
                     return Err(resource_reading_poison(
-                        "contained_task_resource_reading_frame_mismatch",
+                        HostCode::ContainedTaskResourceReadingFrameMismatch,
                     ));
                 }
                 self.taken_resource_readings = Some((captured_at, frame_id, readings));
@@ -4025,8 +4057,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
-                            "contained_task_finalizing_state_invalid",
-                            "run_contained_task",
+                            HostCode::ContainedTaskFinalizingStateInvalid,
+                            ContractLocation::RunContainedTask,
                             RuntimeErrorCode::RuntimeFatal,
                         ),
                     ));
@@ -4055,8 +4087,8 @@ fn contained_task_step_action(
         .map(|(action_id, _)| *action_id)
         .ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_step_identity_mismatch",
-                "run_contained_task",
+                HostCode::ContainedTaskStepIdentityMismatch,
+                ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })
@@ -4109,7 +4141,7 @@ pub(super) fn prepare_contained_task(
     let path = Path::new(request.package_path());
     if !path.is_absolute() {
         return Err(contained_task_package_failure(
-            "contained_task_path_not_absolute",
+            HostCode::ContainedTaskPathNotAbsolute,
         ));
     }
     if request.expected_sha256().is_directory_source() {
@@ -4123,21 +4155,22 @@ pub(super) fn prepare_contained_task(
         .map_err(|error| contained_task_declaration_failure(request, error));
     }
     let path = fs::canonicalize(path)
-        .map_err(|_| contained_task_package_failure("contained_task_package_open_failed"))?;
-    let metadata = fs::metadata(&path)
-        .map_err(|_| contained_task_package_failure("contained_task_package_metadata_failed"))?;
+        .map_err(|_| contained_task_package_failure(HostCode::ContainedTaskPackageOpenFailed))?;
+    let metadata = fs::metadata(&path).map_err(|_| {
+        contained_task_package_failure(HostCode::ContainedTaskPackageMetadataFailed)
+    })?;
     if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
         return Err(contained_task_package_failure(
-            "contained_task_package_size_invalid",
+            HostCode::ContainedTaskPackageSizeInvalid,
         ));
     }
     let bytes = fs::read(&path)
-        .map_err(|_| contained_task_package_failure("contained_task_package_read_failed"))?;
+        .map_err(|_| contained_task_package_failure(HostCode::ContainedTaskPackageReadFailed))?;
     let expected =
         ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256().ok_or_else(
-            || contained_task_package_failure("contained_task_package_hash_invalid"),
+            || contained_task_package_failure(HostCode::ContainedTaskPackageHashInvalid),
         )?)
-        .map_err(|_| contained_task_package_failure("contained_task_package_hash_invalid"))?;
+        .map_err(|_| contained_task_package_failure(HostCode::ContainedTaskPackageHashInvalid))?;
     match vision_provider {
         Some(provider) => PreparedContainedTask::load_with_vision_provider(
             instance_alias,
@@ -4154,7 +4187,15 @@ fn contained_task_declaration_failure(
     request: &ContainedTaskRequest,
     error: actingcommand_execution_kernel::ContainedTaskError,
 ) -> RequestFailure {
-    let mut failure = contained_task_package_failure(error.code());
+    let mut failure = RequestFailure::request(
+        RuntimeHostError::relayed_request(
+            error.code(),
+            ContractLocation::RunContainedTask.as_str(),
+            RuntimeErrorCode::PackageInvalid,
+        ),
+        RuntimeReceiptState::Denied,
+        None,
+    );
     if let Some(detail) = resource_reading_failure_detail(error.code(), error.detail()) {
         let refused = *failure.error;
         failure.error = Box::new(refused.with_native_detail(detail));
@@ -4176,9 +4217,13 @@ fn contained_task_declaration_failure(
     failure
 }
 
-fn contained_task_package_failure(code: &'static str) -> RequestFailure {
+fn contained_task_package_failure(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::request(
-        RuntimeHostError::request(code, "run_contained_task", RuntimeErrorCode::PackageInvalid),
+        RuntimeHostError::request(
+            code,
+            ContractLocation::RunContainedTask,
+            RuntimeErrorCode::PackageInvalid,
+        ),
         RuntimeReceiptState::Denied,
         None,
     )
@@ -4187,8 +4232,8 @@ fn contained_task_package_failure(code: &'static str) -> RequestFailure {
 /// Workflow #369 S3a: a host package run's own request did not validate (an invariant).
 fn startup_package_request_invalid() -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-        "startup_package_request_invalid",
-        "run_startup_package",
+        HostCode::StartupPackageRequestInvalid,
+        HostLocation::RunStartupPackage,
         RuntimeErrorCode::RuntimeFatal,
     ))
 }
@@ -4201,14 +4246,14 @@ fn startup_package_admission_failure(mut failure: RequestFailure) -> RequestFail
     if failure.poison_runtime || failure.error.is_fatal() {
         return failure;
     }
-    let code = if failure.error.code() == "contained_task_package_open_failed" {
-        "startup_package_missing"
+    let code = if failure.error.code() == HostCode::ContainedTaskPackageOpenFailed.as_str() {
+        HostCode::StartupPackageMissing
     } else {
-        "startup_package_admission_failed"
+        HostCode::StartupPackageAdmissionFailed
     };
     let mut error = RuntimeHostError::request(
         code,
-        "run_startup_package",
+        HostLocation::RunStartupPackage,
         RuntimeErrorCode::PackageInvalid,
     )
     .with_related_failure("package_admission", &failure.error);
@@ -4228,20 +4273,20 @@ fn select_scheduling_disposition(
     let Some((game, declaration)) = contract else {
         if selected_outcome_key.is_some() {
             return Err(scheduling_outcome_failure(
-                "contained_task_outcome_declaration_missing",
+                HostCode::ContainedTaskOutcomeDeclarationMissing,
             ));
         }
         return Ok(None);
     };
     if outcome != TaskOutcome::Success {
         return Err(scheduling_outcome_failure(
-            "contained_task_outcome_requires_success",
+            HostCode::ContainedTaskOutcomeRequiresSuccess,
         ));
     }
     let executed_steps = executed_steps
-        .ok_or_else(|| scheduling_outcome_failure("contained_task_outcome_progress_missing"))?;
+        .ok_or_else(|| scheduling_outcome_failure(HostCode::ContainedTaskOutcomeProgressMissing))?;
     let final_page = final_page.ok_or_else(|| {
-        scheduling_outcome_failure("contained_task_outcome_terminal_page_missing")
+        scheduling_outcome_failure(HostCode::ContainedTaskOutcomeTerminalPageMissing)
     })?;
     let designated_effects = declaration
         .designated_operation()
@@ -4270,12 +4315,12 @@ fn select_scheduling_disposition(
         .any(|(step_index, _)| *step_index >= executed_steps)
     {
         return Err(scheduling_outcome_failure(
-            "contained_task_outcome_effect_outside_executed_steps",
+            HostCode::ContainedTaskOutcomeEffectOutsideExecutedSteps,
         ));
     }
     if designated_effects.len() > 1 {
         return Err(scheduling_outcome_failure(
-            "contained_task_outcome_designated_effect_duplicate",
+            HostCode::ContainedTaskOutcomeDesignatedEffectDuplicate,
         ));
     }
     if executed_steps == 0 {
@@ -4294,7 +4339,7 @@ fn select_scheduling_disposition(
         });
         if observed_page.is_none_or(|page| !page_anchor_matches(game, page, final_page)) {
             return Err(scheduling_outcome_failure(
-                "contained_task_outcome_final_observation_missing",
+                HostCode::ContainedTaskOutcomeFinalObservationMissing,
             ));
         }
     } else {
@@ -4333,12 +4378,12 @@ fn select_scheduling_disposition(
             .collect::<Vec<_>>();
         let [observed_page] = final_steps.as_slice() else {
             return Err(scheduling_outcome_failure(
-                "contained_task_outcome_final_step_not_unique",
+                HostCode::ContainedTaskOutcomeFinalStepNotUnique,
             ));
         };
         if !page_anchor_matches(game, observed_page, final_page) {
             return Err(scheduling_outcome_failure(
-                "contained_task_outcome_final_page_conflict",
+                HostCode::ContainedTaskOutcomeFinalPageConflict,
             ));
         }
     }
@@ -4379,7 +4424,7 @@ fn select_scheduling_disposition(
             .count();
         if lifecycle_count != 1 {
             return Err(scheduling_outcome_failure(
-                "contained_task_outcome_designated_step_not_unique",
+                HostCode::ContainedTaskOutcomeDesignatedStepNotUnique,
             ));
         }
     }
@@ -4412,32 +4457,32 @@ fn select_scheduling_disposition(
         .collect::<Vec<_>>();
     let [mapping] = matching.as_slice() else {
         return Err(scheduling_outcome_failure(if matching.is_empty() {
-            "contained_task_outcome_mapping_missing"
+            HostCode::ContainedTaskOutcomeMappingMissing
         } else {
-            "contained_task_outcome_mapping_conflict"
+            HostCode::ContainedTaskOutcomeMappingConflict
         }));
     };
     if selected_outcome_key.is_some_and(|selected| selected != mapping.outcome_key()) {
         return Err(scheduling_outcome_failure(
-            "contained_task_outcome_comparison_conflict",
+            HostCode::ContainedTaskOutcomeComparisonConflict,
         ));
     }
     SchedulingDisposition::new(mapping.outcome_key(), effect)
         .map(Some)
         .map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_outcome_disposition_invalid",
-                "append_contained_task_terminal",
+                HostCode::ContainedTaskOutcomeDispositionInvalid,
+                HostLocation::AppendContainedTaskTerminal,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })
 }
 
-fn scheduling_outcome_failure(code: &'static str) -> RequestFailure {
+fn scheduling_outcome_failure(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
             code,
-            "append_contained_task_terminal",
+            HostLocation::AppendContainedTaskTerminal,
             RuntimeErrorCode::BackendOperationFailed,
         ),
         RuntimeReceiptState::Failed,
@@ -4461,11 +4506,11 @@ pub(super) const fn task_outcome_event_type(outcome: TaskOutcome) -> EventType {
     }
 }
 
-fn contained_task_replay_denied(code: &'static str) -> RequestFailure {
+fn contained_task_replay_denied(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
             code,
-            "recover_contained_task",
+            HostLocation::RecoverContainedTask,
             RuntimeErrorCode::ProtocolInvalid,
         ),
         RuntimeReceiptState::Denied,
@@ -4476,8 +4521,8 @@ fn contained_task_replay_denied(code: &'static str) -> RequestFailure {
 fn contained_task_sampling_seed<T: serde::Serialize>(value: &T) -> RuntimeHostResult<u64> {
     let bytes = serde_json::to_vec(value).map_err(|_| {
         RuntimeHostError::fatal(
-            "contained_task_sampling_seed_encode_failed",
-            "derive_contained_task_sampling_seed",
+            HostCode::ContainedTaskSamplingSeedEncodeFailed,
+            HostLocation::DeriveContainedTaskSamplingSeed,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
@@ -4492,8 +4537,8 @@ pub(crate) fn require_contained_task_sampling_run_seed(
 ) -> RuntimeHostResult<u64> {
     run_seed.ok_or_else(|| {
         RuntimeHostError::fatal(
-            "contained_task_sampling_seed_missing",
-            "derive_contained_task_action_seed",
+            HostCode::ContainedTaskSamplingSeedMissing,
+            HostLocation::DeriveContainedTaskActionSeed,
             RuntimeErrorCode::RuntimeFatal,
         )
     })
@@ -4509,7 +4554,7 @@ impl HostShared {
         let hook = {
             let mut slot = lock(
                 &self.contained_task_checkpoint_test_hook,
-                "consume_contained_task_checkpoint_test_hook",
+                crate::codes::test_spellings::TestLocation::ConsumeContainedTaskCheckpointTestHook,
             )?;
             let should_consume = match slot.as_mut() {
                 Some(hook)
@@ -4532,7 +4577,7 @@ impl HostShared {
         };
         *lock(
             &hook.observed,
-            "record_contained_task_checkpoint_test_identity",
+            crate::codes::test_spellings::TestLocation::RecordContainedTaskCheckpointTestIdentity,
         )? = Some(identity);
         (hook.action)(identity);
         hook.consumed.fetch_add(1, Ordering::AcqRel);
@@ -4543,15 +4588,15 @@ impl HostShared {
         &self,
         task_request_id: RequestId,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let active = lock(&self.contained_runs, "read_active_contained_run")?
+        let active = lock(&self.contained_runs, HostLocation::ReadActiveContainedRun)?
             .get(&task_request_id)
             .cloned();
         if let Some(control) = &active {
             if !control.client_cancellable {
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(
-                        "scheduled_contained_task_not_client_cancellable",
-                        "cancel_contained_task",
+                        SharedCode::ScheduledContainedTaskNotClientCancellable,
+                        ContractLocation::CancelContainedTask,
                         RuntimeErrorCode::InvalidRequest,
                     ),
                     RuntimeReceiptState::Denied,
@@ -4568,7 +4613,7 @@ impl HostShared {
             })
             .map_err(|_| {
                 RequestFailure::poison_without_terminal(ledger_error(
-                    "query_contained_task_cancellation",
+                    HostLocation::QueryContainedTaskCancellation,
                 ))
             })?;
         if let Some(control) = &active
@@ -4582,8 +4627,8 @@ impl HostShared {
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_active_identity_mismatch",
-                    "cancel_contained_task",
+                    HostCode::ContainedTaskActiveIdentityMismatch,
+                    ContractLocation::CancelContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -4591,8 +4636,8 @@ impl HostShared {
         if events.is_empty() && active.is_none() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "contained_task_cancellation_identity_missing",
-                    "cancel_contained_task",
+                    HostCode::ContainedTaskCancellationIdentityMissing,
+                    ContractLocation::CancelContainedTask,
                     RuntimeErrorCode::InvalidRequest,
                 ),
                 RuntimeReceiptState::Denied,
@@ -4626,8 +4671,8 @@ impl HostShared {
         if terminals.len() > 1 {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_terminal_state_inconsistent",
-                    "cancel_contained_task",
+                    HostCode::ContainedTaskTerminalStateInconsistent,
+                    ContractLocation::CancelContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -4635,8 +4680,8 @@ impl HostShared {
         if let [(task_terminal, outcome, failure_code)] = terminals.as_slice() {
             let lease_id = task_terminal.links().lease_id().copied().ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_identity_missing",
-                    "cancel_contained_task",
+                    HostCode::ContainedTaskIdentityMissing,
+                    ContractLocation::CancelContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -4648,7 +4693,7 @@ impl HostShared {
                 })
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(ledger_error(
-                        "query_contained_task_lease_terminal",
+                        HostLocation::QueryContainedTaskLeaseTerminal,
                     ))
                 })?;
             let lease_terminals = lease_events
@@ -4663,8 +4708,8 @@ impl HostShared {
             if lease_terminals.len() > 1 {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "contained_task_lease_terminal_state_inconsistent",
-                        "cancel_contained_task",
+                        HostCode::ContainedTaskLeaseTerminalStateInconsistent,
+                        ContractLocation::CancelContainedTask,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
@@ -4745,8 +4790,8 @@ impl HostShared {
                         now.checked_add(task_request.response_deadline_ms())
                             .ok_or_else(|| {
                                 RuntimeHostError::fatal(
-                                    "contained_task_deadline_overflow",
-                                    "derive_contained_task_deadline",
+                                    HostCode::ContainedTaskDeadlineOverflow,
+                                    HostLocation::DeriveContainedTaskDeadline,
                                     RuntimeErrorCode::RuntimeFatal,
                                 )
                             })
@@ -4855,7 +4900,7 @@ impl HostShared {
             .checked_add(Duration::from_millis(
                 deadline_monotonic_ms.saturating_sub(now),
             ))
-            .ok_or_else(|| contained_task_package_failure("contained_task_deadline_overflow"))
+            .ok_or_else(|| contained_task_package_failure(HostCode::ContainedTaskDeadlineOverflow))
     }
 
     fn contained_task_deadline(
@@ -4870,8 +4915,8 @@ impl HostShared {
             .checked_add(request.response_deadline_ms())
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_deadline_overflow",
-                    "derive_contained_task_deadline",
+                    HostCode::ContainedTaskDeadlineOverflow,
+                    HostLocation::DeriveContainedTaskDeadline,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -4889,16 +4934,19 @@ impl HostShared {
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let reserve = lock(&self.scheduler, "read_contained_task_deadline_config")?
-            .config()
-            .maximum_client_heartbeat_interval_ms;
+        let reserve = lock(
+            &self.scheduler,
+            HostLocation::ReadContainedTaskDeadlineConfig,
+        )?
+        .config()
+        .maximum_client_heartbeat_interval_ms;
         let lease_boundary = token
             .expires_at_monotonic_ms()
             .checked_sub(reserve)
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_lease_deadline_invalid",
-                    "derive_contained_task_deadline",
+                    HostCode::ContainedTaskLeaseDeadlineInvalid,
+                    HostLocation::DeriveContainedTaskDeadline,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -4906,8 +4954,8 @@ impl HostShared {
         if deadline <= now {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "contained_task_deadline_unavailable",
-                    "derive_contained_task_deadline",
+                    HostCode::ContainedTaskDeadlineUnavailable,
+                    HostLocation::DeriveContainedTaskDeadline,
                     RuntimeErrorCode::ContainedTaskDeadlineExceeded,
                 ),
                 RuntimeReceiptState::Denied,
@@ -4921,16 +4969,19 @@ impl HostShared {
         &self,
         request: &ContainedTaskRequest,
     ) -> Result<u64, RequestFailure> {
-        let reserve = lock(&self.scheduler, "read_contained_task_lease_ttl_config")?
-            .config()
-            .maximum_client_heartbeat_interval_ms;
+        let reserve = lock(
+            &self.scheduler,
+            HostLocation::ReadContainedTaskLeaseTtlConfig,
+        )?
+        .config()
+        .maximum_client_heartbeat_interval_ms;
         request
             .response_deadline_ms()
             .checked_add(reserve)
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_lease_ttl_overflow",
-                    "derive_contained_task_lease_ttl",
+                    HostCode::ContainedTaskLeaseTtlOverflow,
+                    HostLocation::DeriveContainedTaskLeaseTtl,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })
@@ -4950,8 +5001,8 @@ impl HostShared {
         if resolved.instance_id() != pending.instance_id {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "startup_package_instance_mismatch",
-                    "run_startup_package",
+                    HostCode::StartupPackageInstanceMismatch,
+                    HostLocation::RunStartupPackage,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -5000,8 +5051,8 @@ impl HostShared {
                         now.checked_add(task_request.response_deadline_ms())
                             .ok_or_else(|| {
                                 RuntimeHostError::fatal(
-                                    "contained_task_deadline_overflow",
-                                    "derive_contained_task_deadline",
+                                    HostCode::ContainedTaskDeadlineOverflow,
+                                    HostLocation::DeriveContainedTaskDeadline,
                                     RuntimeErrorCode::RuntimeFatal,
                                 )
                             })
@@ -5042,7 +5093,7 @@ impl HostShared {
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(
                         code,
-                        "run_startup_package",
+                        HostLocation::RunStartupPackage,
                         RuntimeErrorCode::BackendOperationFailed,
                     ),
                     RuntimeReceiptState::Denied,
@@ -5061,12 +5112,12 @@ impl HostShared {
         {
             if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
                 return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::execution("run_startup_package", &error),
+                    RuntimeHostError::execution(HostLocation::RunStartupPackage, &error),
                 ));
             }
             let mut host_error = RuntimeHostError::request(
                 pending.run.adb_not_ready_code(),
-                "run_startup_package",
+                HostLocation::RunStartupPackage,
                 RuntimeErrorCode::BackendOperationFailed,
             )
             .with_native_detail(format!(
@@ -5084,8 +5135,8 @@ impl HostShared {
         if prepared.startup_incompatibility().is_some() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "contained_task_resource_reading_run_kind_unsupported",
-                    "run_startup_package",
+                    HostCode::ContainedTaskResourceReadingRunKindUnsupported,
+                    HostLocation::RunStartupPackage,
                     RuntimeErrorCode::PackageInvalid,
                 ),
                 RuntimeReceiptState::Denied,
@@ -5159,8 +5210,8 @@ impl HostShared {
         if token.instance_id() != instance_id || !holder_matches {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "host_package_lease_identity_mismatch",
-                    "run_prepared_package",
+                    HostCode::HostPackageLeaseIdentityMismatch,
+                    HostLocation::RunPreparedPackage,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -5206,7 +5257,7 @@ impl HostShared {
     ) -> Result<(RuntimeRequest, OperationSuccess), RequestFailure> {
         // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item).
         self.register_scheduled_resolution(context.decision_id())?;
-        lock(self.policy()?, "validate_policy_run_context")?
+        lock(self.policy()?, HostLocation::ValidatePolicyRunContext)?
             .validate_run_context(context)
             .map_err(|error| {
                 if error.is_fatal() {
@@ -5223,16 +5274,16 @@ impl HostShared {
         else {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "policy_run_request_invalid",
-                    "run_scheduled_contained_task",
+                    HostCode::PolicyRunRequestInvalid,
+                    HostLocation::RunScheduledContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
         };
         context.package_digest().validate().map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "policy_run_package_digest_invalid",
-                "run_scheduled_contained_task",
+                HostCode::PolicyRunPackageDigestInvalid,
+                HostLocation::RunScheduledContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -5245,8 +5296,8 @@ impl HostShared {
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "policy_run_identity_mismatch",
-                    "run_scheduled_contained_task",
+                    HostCode::PolicyRunIdentityMismatch,
+                    HostLocation::RunScheduledContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -5255,8 +5306,8 @@ impl HostShared {
         if resolved.instance_id() != token.instance_id() {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "policy_run_lease_instance_mismatch",
-                    "run_scheduled_contained_task",
+                    HostCode::PolicyRunLeaseInstanceMismatch,
+                    HostLocation::RunScheduledContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -5283,21 +5334,21 @@ impl HostShared {
         )
         .map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "policy_task_request_invalid",
-                "run_scheduled_contained_task",
+                HostCode::PolicyTaskRequestInvalid,
+                HostLocation::RunScheduledContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
         let validated = task_request_message.validate().map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "policy_task_request_invalid",
-                "run_scheduled_contained_task",
+                HostCode::PolicyTaskRequestInvalid,
+                HostLocation::RunScheduledContainedTask,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
         let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE).map_err(|error| {
             RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                "build_policy_connection",
+                HostLocation::BuildPolicyConnection,
                 &error,
             ))
         })?;
@@ -5340,8 +5391,8 @@ impl HostShared {
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "policy_run_execution_identity_mismatch",
-                    "run_scheduled_contained_task",
+                    HostCode::PolicyRunExecutionIdentityMismatch,
+                    HostLocation::RunScheduledContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -5368,8 +5419,8 @@ impl HostShared {
                         now.checked_add(task_request.response_deadline_ms())
                             .ok_or_else(|| {
                                 RuntimeHostError::fatal(
-                                    "contained_task_deadline_overflow",
-                                    "derive_contained_task_deadline",
+                                    HostCode::ContainedTaskDeadlineOverflow,
+                                    HostLocation::DeriveContainedTaskDeadline,
                                     RuntimeErrorCode::RuntimeFatal,
                                 )
                             })
@@ -5393,15 +5444,18 @@ impl HostShared {
                 prerequisite_deadline,
             )?,
         };
-        let expected_outcome_keys = lock(self.policy()?, "validate_policy_outcome_declaration")?
-            .referenced_outcome_keys(context)
-            .map_err(|error| {
-                if error.is_fatal() {
-                    RequestFailure::poison_without_terminal(error)
-                } else {
-                    RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                }
-            })?;
+        let expected_outcome_keys = lock(
+            self.policy()?,
+            HostLocation::ValidatePolicyOutcomeDeclaration,
+        )?
+        .referenced_outcome_keys(context)
+        .map_err(|error| {
+            if error.is_fatal() {
+                RequestFailure::poison_without_terminal(error)
+            } else {
+                RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+            }
+        })?;
         let declared_outcome_keys = prepared
             .scheduling_outcome()
             .into_iter()
@@ -5411,8 +5465,8 @@ impl HostShared {
         if !expected_outcome_keys.is_empty() && expected_outcome_keys != declared_outcome_keys {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "policy_run_outcome_declaration_mismatch",
-                    "run_scheduled_contained_task",
+                    HostCode::PolicyRunOutcomeDeclarationMismatch,
+                    HostLocation::RunScheduledContainedTask,
                     RuntimeErrorCode::InvalidRequest,
                 ),
                 RuntimeReceiptState::Denied,
@@ -5600,8 +5654,8 @@ impl HostShared {
                     execution = Err(ContainedTaskRunError::Boundary(
                         RequestFailure::poison_without_terminal(unrecorded.unwrap_or_else(|| {
                             RuntimeHostError::fatal(
-                                "contained_task_selection_record_unreturned",
-                                "run_contained_task",
+                                HostCode::ContainedTaskSelectionRecordUnreturned,
+                                ContractLocation::RunContainedTask,
                                 RuntimeErrorCode::RuntimeFatal,
                             )
                         })),
@@ -5628,7 +5682,8 @@ impl HostShared {
                     if failure.poison_runtime || failure.error.is_fatal());
         let capacity_refused = matches!(&execution,
             Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
-                if failure.error.code() == "capacity_admission_refused" && !failure.error.is_fatal());
+                if failure.error.code() == SharedCode::CapacityAdmissionRefused.as_str()
+                    && !failure.error.is_fatal());
         // The refusal already carries its Ledger fact reference. Abort the unpublished
         // diagnostic if its new bytes were refused; task terminal/settlement still run.
         let diagnostic_result = if fatal || capacity_refused {
@@ -5649,9 +5704,9 @@ impl HostShared {
                     };
                     primary.with_related_failure(
                         "prior_task",
-                        &RuntimeHostError::request(
+                        &RuntimeHostError::relayed_request(
                             error.code(),
-                            "run_contained_task",
+                            ContractLocation::RunContainedTask.as_str(),
                             RuntimeErrorCode::BackendOperationFailed,
                         ),
                     )
@@ -5718,8 +5773,8 @@ impl HostShared {
                         )
                         .ok_or_else(|| {
                             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                                "contained_task_cancellation_state_missing",
-                                "finalize_contained_task_cancellation",
+                                HostCode::ContainedTaskCancellationStateMissing,
+                                HostLocation::FinalizeContainedTaskCancellation,
                                 RuntimeErrorCode::RuntimeFatal,
                             ))
                         })?;
@@ -5861,14 +5916,14 @@ impl HostShared {
                 ));
             }
             Err(ContainedTaskRunError::Task(error)) => {
-                if matches!(
+                if (matches!(
                     error.code(),
                     "contained_task_guard_refused"
-                        | "contained_task_guard_evaluation_failed"
                         | "contained_task_guard_target_missing"
                         | "contained_task_guard_target_invalid"
-                ) && let Err(pin_failure) =
-                    capture_evidence.pin_last(PinnedFrameReason::GuardRejection)
+                ) || error.code() == SharedCode::ContainedTaskGuardEvaluationFailed.as_str())
+                    && let Err(pin_failure) =
+                        capture_evidence.pin_last(PinnedFrameReason::GuardRejection)
                 {
                     return Err(self.cleanup_composite_failure_with_run_links(
                         request,
@@ -5911,10 +5966,12 @@ impl HostShared {
                         resource_readings: None,
                     },
                 )?;
-                let mut task_error = RuntimeHostError::request(
+                let mut task_error = RuntimeHostError::relayed_request(
                     error.code(),
-                    "run_contained_task",
-                    if error.code() == "application_effect_requires_assigned_application" {
+                    ContractLocation::RunContainedTask.as_str(),
+                    if error.code()
+                        == SharedCode::ApplicationEffectRequiresAssignedApplication.as_str()
+                    {
                         RuntimeErrorCode::InvalidRequest
                     } else {
                         RuntimeErrorCode::BackendOperationFailed
@@ -5941,7 +5998,9 @@ impl HostShared {
                 }
                 let mut failure = RequestFailure::request(
                     task_error,
-                    if error.code() == "application_effect_requires_assigned_application" {
+                    if error.code()
+                        == SharedCode::ApplicationEffectRequiresAssignedApplication.as_str()
+                    {
                         RuntimeReceiptState::Denied
                     } else {
                         RuntimeReceiptState::Failed
@@ -6005,8 +6064,8 @@ impl HostShared {
                 connection_id,
                 run_links,
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_finalizing_state_invalid",
-                    "run_contained_task",
+                    HostCode::ContainedTaskFinalizingStateInvalid,
+                    ContractLocation::RunContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 )),
             ));
@@ -6132,7 +6191,7 @@ impl HostShared {
                 None => {
                     return fail_contained_task_entry(
                         runtime,
-                        "contained_task_home_recovery_binding_missing",
+                        HostCode::ContainedTaskHomeRecoveryBindingMissing.as_str(),
                     );
                 }
             },
@@ -6215,7 +6274,7 @@ impl HostShared {
         } else if !recovery.is_entry_recovery_compatible() {
             return fail_contained_task_entry(
                 runtime,
-                "contained_task_home_recovery_package_incompatible",
+                SharedCode::ContainedTaskHomeRecoveryPackageIncompatible.as_str(),
             );
         }
         let recovery_sha256 = recovery.package_sha256().to_owned();
@@ -6259,13 +6318,16 @@ impl HostShared {
         let recovery_outcome = match recovery_execution {
             Ok(outcome) => outcome,
             Err(ContainedTaskRunError::Task(error)) => {
-                if matches!(
+                if spelled(
                     error.code(),
-                    "contained_task_recognition_failed" | "contained_task_page_unknown"
+                    &[
+                        SharedCode::ContainedTaskRecognitionFailed.code(),
+                        SharedCode::ContainedTaskPageUnknown.code(),
+                    ],
                 ) {
-                    let mut primary = RuntimeHostError::request(
+                    let mut primary = RuntimeHostError::relayed_request(
                         error.code(),
-                        "run_contained_task",
+                        ContractLocation::RunContainedTask.as_str(),
                         RuntimeErrorCode::BackendOperationFailed,
                     );
                     if let Some(detail) = error.detail() {
@@ -6291,9 +6353,12 @@ impl HostShared {
                 if nonfatal_operation
                     && !failure.poison_runtime
                     && !failure.error.is_fatal()
-                    && matches!(
+                    && spelled(
                         failure.error.code(),
-                        "input_backend_operation_failed" | "input_backend_open_failed"
+                        &[
+                            SharedCode::InputBackendOperationFailed.code(),
+                            DeviceSelfCheckFailure::InputBackendOpenFailed.code(),
+                        ],
                     )
                 {
                     runtime
@@ -6324,7 +6389,7 @@ impl HostShared {
         let Some(final_page) = recovery_outcome.final_page.clone() else {
             return fail_contained_task_entry(
                 runtime,
-                "contained_task_home_recovery_final_page_missing",
+                HostCode::ContainedTaskHomeRecoveryFinalPageMissing.as_str(),
             );
         };
         runtime
@@ -6340,7 +6405,7 @@ impl HostShared {
         if !configured_linear && !prepared.terminal_matches_required_home(&final_page) {
             return fail_contained_task_entry(
                 runtime,
-                "contained_task_home_recovery_terminal_non_home",
+                HostCode::ContainedTaskHomeRecoveryTerminalNonHome.as_str(),
             );
         }
 
@@ -6355,7 +6420,7 @@ impl HostShared {
         if !post_recovery_home {
             return fail_contained_task_entry(
                 runtime,
-                "contained_task_home_recovery_persistently_non_home",
+                HostCode::ContainedTaskHomeRecoveryPersistentlyNonHome.as_str(),
             );
         }
         if recovery_outcome
@@ -6363,7 +6428,10 @@ impl HostShared {
             .checked_add(prepared.maximum_executed_steps())
             .is_none_or(|maximum| maximum > 1_000)
         {
-            return fail_contained_task_entry(runtime, "contained_task_home_recovery_step_limit");
+            return fail_contained_task_entry(
+                runtime,
+                HostCode::ContainedTaskHomeRecoveryStepLimit.as_str(),
+            );
         }
         runtime.step_index_offset = recovery_outcome.executed_steps;
         runtime
@@ -6377,7 +6445,7 @@ impl HostShared {
             .executed_steps
             .checked_add(recovery_outcome.executed_steps)
             .ok_or_else(|| {
-                ContainedTaskRunError::task("contained_task_home_recovery_step_limit")
+                ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
             })?;
         Ok(outcome)
     }
@@ -6389,7 +6457,7 @@ impl HostShared {
         instance_id: InstanceId,
         task_request: &ContainedTaskRequest,
     ) -> Result<Option<OperationSuccess>, RequestFailure> {
-        let active = lock(&self.contained_runs, "read_active_contained_runs")?
+        let active = lock(&self.contained_runs, HostLocation::ReadActiveContainedRuns)?
             .contains_key(&request.request_id());
         let events = self
             .ledger
@@ -6398,12 +6466,14 @@ impl HostShared {
                 ..EventQuery::default()
             })
             .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error("recover_contained_task"))
+                RequestFailure::poison_without_terminal(ledger_error(
+                    HostLocation::RecoverContainedTask,
+                ))
             })?;
         if events.is_empty() {
             return if active {
                 Err(contained_task_replay_denied(
-                    "contained_task_already_running",
+                    HostCode::ContainedTaskAlreadyRunning,
                 ))
             } else {
                 Ok(None)
@@ -6417,7 +6487,7 @@ impl HostShared {
                     .is_some_and(|actual| actual != &instance_id)
         }) {
             return Err(contained_task_replay_denied(
-                "contained_task_request_identity_reused",
+                HostCode::ContainedTaskRequestIdentityReused,
             ));
         }
         let semantic = events
@@ -6428,10 +6498,10 @@ impl HostShared {
             })
             .collect::<Vec<_>>();
         let Some((identity, lease_id)) =
-            contained_task_recovery_identity(&events, "recover_contained_task")?
+            contained_task_recovery_identity(&events, HostLocation::RecoverContainedTask)?
         else {
             return Err(contained_task_replay_denied(
-                "contained_task_previous_attempt_incomplete",
+                HostCode::ContainedTaskPreviousAttemptIncomplete,
             ));
         };
         let packages = semantic
@@ -6451,7 +6521,7 @@ impl HostShared {
                 .is_some_and(|(_, package, _)| *package != task_request.expected_sha256())
         {
             return Err(contained_task_replay_denied(
-                "contained_task_request_package_reused",
+                HostCode::ContainedTaskRequestPackageReused,
             ));
         }
         let recovery_packages = semantic
@@ -6483,7 +6553,7 @@ impl HostShared {
             })
         {
             return Err(contained_task_replay_denied(
-                "contained_task_request_recovery_reused",
+                HostCode::ContainedTaskRequestRecoveryReused,
             ));
         }
         let deadline_monotonic_ms = packages.first().and_then(|(_, _, deadline)| *deadline);
@@ -6511,8 +6581,8 @@ impl HostShared {
         if terminals.len() > 1 {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_terminal_state_inconsistent",
-                    "recover_contained_task",
+                    HostCode::ContainedTaskTerminalStateInconsistent,
+                    HostLocation::RecoverContainedTask,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -6520,12 +6590,12 @@ impl HostShared {
         if terminals.is_empty() {
             if active {
                 return Err(contained_task_replay_denied(
-                    "contained_task_already_running",
+                    HostCode::ContainedTaskAlreadyRunning,
                 ));
             }
             if packages.is_empty() {
                 return Err(contained_task_replay_denied(
-                    "contained_task_previous_attempt_incomplete",
+                    HostCode::ContainedTaskPreviousAttemptIncomplete,
                 ));
             }
             let terminal_event = self.append_recovered_contained_task_terminal(
@@ -6540,7 +6610,11 @@ impl HostShared {
                 TaskOutcome::Cancelled,
                 None,
                 None,
-                Some("contained_task_recovered_after_restart".to_owned()),
+                Some(
+                    HostCode::ContainedTaskRecoveredAfterRestart
+                        .as_str()
+                        .to_owned(),
+                ),
             ));
         }
         let lease_disposition = if let Some(lease_id) = lease_id {
@@ -6552,7 +6626,7 @@ impl HostShared {
                 })
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(ledger_error(
-                        "query_recovered_contained_task_lease_terminal",
+                        HostLocation::QueryRecoveredContainedTaskLeaseTerminal,
                     ))
                 })?;
             let granted = lease_events.iter().any(|event| {
@@ -6572,8 +6646,8 @@ impl HostShared {
             if lease_terminals.len() > 1 {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "contained_task_lease_terminal_state_inconsistent",
-                        "recover_contained_task",
+                        HostCode::ContainedTaskLeaseTerminalStateInconsistent,
+                        HostLocation::RecoverContainedTask,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
@@ -6585,7 +6659,7 @@ impl HostShared {
                 [_] => Some(ContainedTaskLeaseTerminal::Released),
                 [] if active => {
                     return Err(contained_task_replay_denied(
-                        "contained_task_already_running",
+                        HostCode::ContainedTaskAlreadyRunning,
                     ));
                 }
                 [] if granted => {
@@ -6622,8 +6696,8 @@ impl HostShared {
                     final_page: final_page.clone(),
                     executed_steps: executed_steps.ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                            "contained_task_terminal_state_inconsistent",
-                            "recover_contained_task",
+                            HostCode::ContainedTaskTerminalStateInconsistent,
+                            HostLocation::RecoverContainedTask,
                             RuntimeErrorCode::RuntimeFatal,
                         ))
                     })?,
@@ -6645,8 +6719,8 @@ impl HostShared {
             })),
             TaskOutcome::Failure => Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "contained_task_recovered_terminal_failure",
-                    "recover_contained_task",
+                    HostCode::ContainedTaskRecoveredTerminalFailure,
+                    HostLocation::RecoverContainedTask,
                     RuntimeErrorCode::BackendOperationFailed,
                 ),
                 RuntimeReceiptState::Failed,
@@ -6670,8 +6744,11 @@ impl HostShared {
             run_id,
             None,
         );
-        let gate = lock(&self.fact_write_gate, "recover_contained_task_terminal")
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let gate = lock(
+            &self.fact_write_gate,
+            HostLocation::RecoverContainedTaskTerminal,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         let mut appended = Vec::with_capacity(2);
         appended.push(
             self.append_event_under_fact_gate(
@@ -6701,7 +6778,11 @@ impl HostShared {
                         outcome: TaskOutcome::Cancelled,
                         final_page: None,
                         executed_steps: None,
-                        failure_code: Some("contained_task_recovered_after_restart".to_owned()),
+                        failure_code: Some(
+                            HostCode::ContainedTaskRecoveredAfterRestart
+                                .as_str()
+                                .to_owned(),
+                        ),
                         scheduling_disposition: None,
                         task_timing: None,
                     },
@@ -6728,31 +6809,37 @@ impl HostShared {
         task_id: TaskId,
         run_id: RunId,
     ) -> Result<PersistedEvent, RequestFailure> {
-        if lock(&self.scheduler, "verify_recovered_contained_task_lease")?
-            .active_tokens()
-            .iter()
-            .any(|token| token.instance_id() == instance_id && token.lease_id() == lease_id)
+        if lock(
+            &self.scheduler,
+            HostLocation::VerifyRecoveredContainedTaskLease,
+        )?
+        .active_tokens()
+        .iter()
+        .any(|token| token.instance_id() == instance_id && token.lease_id() == lease_id)
         {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "contained_task_recovery_lease_busy",
-                    "recover_contained_task",
+                    HostCode::ContainedTaskRecoveryLeaseBusy,
+                    HostLocation::RecoverContainedTask,
                     RuntimeErrorCode::ContainedTaskBusy,
                 ),
                 RuntimeReceiptState::Denied,
                 None,
             ));
         }
-        let resolved = lock(&self.registered_instances, "read_instance_registry")?
-            .get(&instance_id)
-            .cloned()
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "contained_task_recovery_instance_missing",
-                    "recover_contained_task",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadInstanceRegistry,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                HostCode::ContainedTaskRecoveryInstanceMissing,
+                HostLocation::RecoverContainedTask,
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
         let links = request.contained_task_recovery_event_links(
             instance_id,
             Some(lease_id),
@@ -6828,7 +6915,7 @@ impl HostShared {
             let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
                 .ok_or_else(|| {
                     RuntimeHostError::fatal(
-                        "contained_task_identity_missing",
+                        HostCode::ContainedTaskIdentityMissing,
                         PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                         RuntimeErrorCode::RuntimeFatal,
                     )
@@ -6848,7 +6935,7 @@ impl HostShared {
     ) -> Result<(), RequestFailure> {
         let identity_missing = || {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_identity_missing",
+                HostCode::ContainedTaskIdentityMissing,
                 PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                 RuntimeErrorCode::RuntimeFatal,
             ))
@@ -6911,7 +6998,7 @@ impl HostShared {
         if packages > 1 {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_request_package_reused",
+                    HostCode::ContainedTaskRequestPackageReused,
                     PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
@@ -6930,15 +7017,18 @@ impl HostShared {
         if terminals > 1 {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_terminal_state_inconsistent",
+                    HostCode::ContainedTaskTerminalStateInconsistent,
                     PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
         }
         if terminals == 1
-            || !lock(&self.registered_instances, "read_instance_registry")?
-                .contains_key(&instance_id)
+            || !lock(
+                &self.registered_instances,
+                HostLocation::ReadInstanceRegistry,
+            )?
+            .contains_key(&instance_id)
         {
             return Ok(());
         }
@@ -6946,7 +7036,7 @@ impl HostShared {
         // request, correlation and causation reach the recovery links.
         let identity_invalid = || {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "contained_task_recovery_identity_invalid",
+                HostCode::ContainedTaskRecoveryIdentityInvalid,
                 PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                 RuntimeErrorCode::RuntimeFatal,
             ))
@@ -7012,7 +7102,7 @@ impl HostShared {
             0 | 1 => Ok(()),
             _ => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_lease_terminal_state_inconsistent",
+                    HostCode::ContainedTaskLeaseTerminalStateInconsistent,
                     PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
@@ -7026,10 +7116,10 @@ impl HostShared {
         instance_id: InstanceId,
         client_cancellable: bool,
     ) -> Result<ActiveContainedRun<'_>, RequestFailure> {
-        let mut active = lock(&self.contained_runs, "begin_contained_run")?;
+        let mut active = lock(&self.contained_runs, HostLocation::BeginContainedRun)?;
         if active.contains_key(&request_id) {
             return Err(contained_task_replay_denied(
-                "contained_task_already_running",
+                HostCode::ContainedTaskAlreadyRunning,
             ));
         }
         let control = Arc::new(ContainedRunControl::new(
@@ -7073,15 +7163,15 @@ impl HostShared {
             if self.fatal.is_shutdown_requested() {
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(
-                        "scheduling_pause_drain_interrupted",
-                        "drain_paused_instance",
+                        HostCode::SchedulingPauseDrainInterrupted,
+                        HostLocation::DrainPausedInstance,
                         RuntimeErrorCode::RuntimeUnavailable,
                     ),
                     RuntimeReceiptState::Failed,
                     None,
                 ));
             }
-            let active = lock(&self.contained_runs, "read_paused_instance_runs")?
+            let active = lock(&self.contained_runs, HostLocation::ReadPausedInstanceRuns)?
                 .iter()
                 .filter(|(_, control)| control.instance_id == instance_id)
                 .map(|(request_id, control)| (*request_id, Arc::clone(control)))
@@ -7102,9 +7192,9 @@ impl HostShared {
                 } else {
                     &mut summary.finished
                 };
-                *count = count
-                    .checked_add(1)
-                    .ok_or_else(|| pause_drain_fatal("scheduling_pause_drain_count_overflow"))?;
+                *count = count.checked_add(1).ok_or_else(|| {
+                    pause_drain_fatal(HostCode::SchedulingPauseDrainCountOverflow)
+                })?;
             }
             for (request_id, control) in active {
                 tracked.entry(request_id).or_insert((control, false));
@@ -7122,8 +7212,8 @@ impl HostShared {
                 if now >= deadlines.grace {
                     return Err(RequestFailure::request(
                         RuntimeHostError::request(
-                            "scheduling_pause_drain_incomplete",
-                            "drain_paused_instance",
+                            HostCode::SchedulingPauseDrainIncomplete,
+                            HostLocation::DrainPausedInstance,
                             RuntimeErrorCode::ContainedTaskBusy,
                         ),
                         RuntimeReceiptState::Failed,
@@ -7142,11 +7232,14 @@ impl HostShared {
         request_id: RequestId,
         terminal: FailedTaskTerminal,
     ) -> RuntimeHostResult<()> {
-        let control = lock(&self.contained_runs, "note_failed_task_terminal")?
+        let control = lock(&self.contained_runs, HostLocation::NoteFailedTaskTerminal)?
             .get(&request_id)
             .cloned();
         if let Some(control) = control {
-            *lock(&control.failed_terminal, "note_failed_task_terminal")? = Some(terminal);
+            *lock(
+                &control.failed_terminal,
+                HostLocation::NoteFailedTaskTerminal,
+            )? = Some(terminal);
         }
         Ok(())
     }
@@ -7171,11 +7264,11 @@ impl HostShared {
                 .with_run_id(draft.run_id);
             // The task's lease is still current when its terminal is written. Workflow #191 H: the
             // device session stays with the instance; the lease end closes one that must close.
-            let _task_connection = lock(&self.scheduler, "read_task_lease_connection")?
+            let _task_connection = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?
                 .connection_for_token(token)
                 .map_err(|error| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                        "read_task_lease_connection",
+                        HostLocation::ReadTaskLeaseConnection,
                         &error,
                     ))
                 })?;
@@ -7199,8 +7292,11 @@ impl HostShared {
                     )?,
                 _ => None,
             };
-            let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
-                .map_err(RequestFailure::poison_without_terminal)?;
+            let gate = lock(
+                &self.fact_write_gate,
+                HostLocation::AppendContainedTaskTerminal,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
             let (summary_committed, requested_summary, projection) =
                 match self.check_contained_task_terminal(request, token, &draft, &links)? {
                     ContainedTaskTerminalCheck::AlreadyCommitted(rejected) => {
@@ -7274,8 +7370,8 @@ impl HostShared {
                 _ => {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
-                            "contained_task_terminal_severity_invalid",
-                            "append_contained_task_terminal",
+                            HostCode::ContainedTaskTerminalSeverityInvalid,
+                            HostLocation::AppendContainedTaskTerminal,
                             RuntimeErrorCode::RuntimeFatal,
                         ),
                     ));
@@ -7290,8 +7386,8 @@ impl HostShared {
             {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "scheduling_terminal_append_injected_failure",
-                        "append_contained_task_terminal",
+                        crate::codes::test_spellings::TestCode::SchedulingTerminalAppendInjectedFailure,
+                        crate::codes::HostLocation::AppendContainedTaskTerminal,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
@@ -7377,7 +7473,7 @@ impl HostShared {
             })
             .map_err(|_| {
                 RequestFailure::poison_without_terminal(ledger_error(
-                    "check_contained_task_terminal",
+                    HostLocation::CheckContainedTaskTerminal,
                 ))
             })?;
         let terminals = chain_events
@@ -7402,7 +7498,7 @@ impl HostShared {
                         TaskSemanticFact::TerminalRejected {
                             committed_outcome: *committed_outcome,
                             attempted_outcome: draft.outcome,
-                            reason: "terminal_already_committed".to_string(),
+                            reason: HostCode::TerminalAlreadyCommitted.as_str().to_string(),
                         },
                         AuditInput::new(),
                     ),
@@ -7417,8 +7513,8 @@ impl HostShared {
         if terminals.len() > 1 {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "contained_task_terminal_state_inconsistent",
-                    "append_contained_task_terminal",
+                    HostCode::ContainedTaskTerminalStateInconsistent,
+                    HostLocation::AppendContainedTaskTerminal,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -7430,8 +7526,8 @@ impl HostShared {
         if existing_summary_events.len() > 1 {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "capture_summary_state_inconsistent",
-                    "append_contained_task_terminal",
+                    HostCode::CaptureSummaryStateInconsistent,
+                    HostLocation::AppendContainedTaskTerminal,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -7445,8 +7541,8 @@ impl HostShared {
                 {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
-                            "capture_summary_state_conflict",
-                            "append_contained_task_terminal",
+                            HostCode::CaptureSummaryStateConflict,
+                            HostLocation::AppendContainedTaskTerminal,
                             RuntimeErrorCode::RuntimeFatal,
                         ),
                     ));
@@ -7456,8 +7552,8 @@ impl HostShared {
                 else {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
-                            "capture_summary_state_inconsistent",
-                            "append_contained_task_terminal",
+                            HostCode::CaptureSummaryStateInconsistent,
+                            HostLocation::AppendContainedTaskTerminal,
                             RuntimeErrorCode::RuntimeFatal,
                         ),
                     ));
@@ -7471,9 +7567,9 @@ impl HostShared {
             .map(capture_summary_record)
             .transpose()
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                RequestFailure::poison_without_terminal(RuntimeHostError::relayed_fatal(
                     error.code(),
-                    "append_contained_task_terminal",
+                    HostLocation::AppendContainedTaskTerminal.as_str(),
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -7482,8 +7578,8 @@ impl HostShared {
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "capture_summary_state_conflict",
-                    "append_contained_task_terminal",
+                    HostCode::CaptureSummaryStateConflict,
+                    HostLocation::AppendContainedTaskTerminal,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -7514,8 +7610,8 @@ impl HostShared {
         }
         RequestFailure::request(
             RuntimeHostError::request(
-                "contained_task_terminal_already_committed",
-                "append_contained_task_terminal",
+                HostCode::ContainedTaskTerminalAlreadyCommitted,
+                HostLocation::AppendContainedTaskTerminal,
                 RuntimeErrorCode::InvalidRequest,
             ),
             RuntimeReceiptState::Denied,
@@ -7552,7 +7648,7 @@ impl HostShared {
         let scope = actingcommand_policy::ScopeSelector::Instance {
             instance_id: readings.instance_alias.clone(),
         };
-        let catalog = lock(self.policy()?, "check_resource_reading_pools")
+        let catalog = lock(self.policy()?, HostLocation::CheckResourceReadingPools)
             .map_err(RequestFailure::poison_without_terminal)?
             .active_loaded();
         let live_pool = catalog.as_ref().and_then(|catalog| {
@@ -7580,12 +7676,15 @@ impl HostShared {
         if let Some(detail) = live_pool {
             return Ok(Some(refuse_resource_readings(
                 draft,
-                "contained_task_resource_reading_live_pool_unsupported",
+                HostCode::ContainedTaskResourceReadingLivePoolUnsupported,
                 detail,
             )));
         }
-        let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let gate = lock(
+            &self.fact_write_gate,
+            HostLocation::AppendContainedTaskTerminal,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         match self.check_contained_task_terminal(request, token, draft, links)? {
             ContainedTaskTerminalCheck::AlreadyCommitted(rejected) => {
                 drop(gate);
@@ -7609,14 +7708,15 @@ impl HostShared {
         let observed_at_unix_ms = readings
             .captured_at
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| "system_clock_invalid")
+            .map_err(|_| SharedCode::SystemClockInvalid.as_str())
             .and_then(|elapsed| {
-                u64::try_from(elapsed.as_millis()).map_err(|_| "system_clock_overflow")
+                u64::try_from(elapsed.as_millis())
+                    .map_err(|_| HostCode::SystemClockOverflow.as_str())
             })
             .map_err(|code| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     code,
-                    "publish_resource_readings",
+                    HostLocation::PublishResourceReadings,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -7633,7 +7733,7 @@ impl HostShared {
             ) else {
                 return Ok(Some(refuse_resource_readings(
                     draft,
-                    "contained_task_resource_reading_rejected",
+                    HostCode::ContainedTaskResourceReadingRejected,
                     format!("{}:fact_observation_invalid", reading.declaration.id),
                 )));
             };
@@ -7654,7 +7754,7 @@ impl HostShared {
                 Err(error) => {
                     return Ok(Some(refuse_resource_readings(
                         draft,
-                        "contained_task_resource_reading_rejected",
+                        HostCode::ContainedTaskResourceReadingRejected,
                         format!("{reading_id}:{}", error.code()),
                     )));
                 }
