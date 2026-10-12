@@ -450,6 +450,19 @@ pub enum StabilityTerminalReason {
     MaxStepsReached,
 }
 
+impl StabilityTerminalReason {
+    /// The registered code whose spelling the reason serializes as (Workflow #378: shared with
+    /// ledger-forensics, which reads the reason back).
+    pub const fn code(self) -> Code {
+        match self {
+            Self::ConsecutiveUnchangedThresholdReached => {
+                SharedCode::ConsecutiveUnchangedThresholdReached.code()
+            }
+            Self::MaxStepsReached => SharedCode::MaxStepsReached.code(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PostAdmissionOcrNormalization {

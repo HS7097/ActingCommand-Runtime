@@ -1173,7 +1173,7 @@ impl AdbShellInputBackend {
                 DeviceErrorCategory::Protocol,
                 "adb.input.rotation.resolve",
                 DeviceLocation::DeviceRotation,
-                "rotation_resolve",
+                DeviceLocation::RotationResolve.as_str(),
                 DeviceErrorDiagnosticMessage::AdbShellInputRotationUnavailable,
             )
         })?;

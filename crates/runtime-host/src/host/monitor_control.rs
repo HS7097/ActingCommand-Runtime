@@ -679,7 +679,9 @@ impl HostShared {
         if matches!(stage, MonitorFailureStage::Artifact) {
             self.record_required_failure(&error, &failed, links.clone())?;
         }
-        if error.code() == "monitor_observation_invalid"
+        if error.code()
+            == actingcommand_execution_kernel::ExecutionKernelCode::MonitorObservationInvalid
+                .as_str()
             || (error.is_fatal()
                 && spelled(
                     error.code(),

@@ -1185,6 +1185,19 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "consecutive_unchanged_threshold_reached": {
+      "category": "info",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because the screen stayed unchanged for the declared number of consecutive steps.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_guard_evaluation_failed": {
       "category": "error",
       "owner": "contract",
@@ -10286,6 +10299,19 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): material read verification mismatch.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "max_steps_reached": {
+      "category": "info",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because it reached its declared maximum number of steps.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

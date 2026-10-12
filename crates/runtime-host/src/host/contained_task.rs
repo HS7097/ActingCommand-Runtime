@@ -16,7 +16,9 @@ use actingcommand_contract::{
     TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation, TaskGeometryPhase,
     TaskGeometryRecheckTrigger, TaskRunIdentity,
 };
-use actingcommand_execution_kernel::{CaptureGeometrySessionRef, ResourceReadingValue};
+use actingcommand_execution_kernel::{
+    CaptureGeometrySessionRef, ExecutionKernelCode, ResourceReadingValue,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
@@ -280,9 +282,12 @@ fn resource_reading_identifier_text(
 /// Workflow #335 S5b: the `<id>:<reason>` of a reading the kernel could not take, or of a
 /// declaration it refused, is the receipt's native detail.
 fn resource_reading_failure_detail(code: &str, detail: Option<&str>) -> Option<String> {
-    if matches!(
+    if spelled(
         code,
-        "contained_task_resource_reading_unresolved" | "contained_task_resource_reading_invalid"
+        &[
+            ExecutionKernelCode::ContainedTaskResourceReadingUnresolved.code(),
+            ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
+        ],
     ) {
         detail.map(str::to_owned)
     } else {
@@ -5918,15 +5923,16 @@ impl HostShared {
                 ));
             }
             Err(ContainedTaskRunError::Task(error)) => {
-                if (matches!(
+                if spelled(
                     error.code().as_str(),
-                    "contained_task_guard_refused"
-                        | "contained_task_guard_target_missing"
-                        | "contained_task_guard_target_invalid"
-                ) || error.code().as_str()
-                    == SharedCode::ContainedTaskGuardEvaluationFailed.as_str())
-                    && let Err(pin_failure) =
-                        capture_evidence.pin_last(PinnedFrameReason::GuardRejection)
+                    &[
+                        ExecutionKernelCode::ContainedTaskGuardRefused.code(),
+                        ExecutionKernelCode::ContainedTaskGuardTargetMissing.code(),
+                        ExecutionKernelCode::ContainedTaskGuardTargetInvalid.code(),
+                        SharedCode::ContainedTaskGuardEvaluationFailed.code(),
+                    ],
+                ) && let Err(pin_failure) =
+                    capture_evidence.pin_last(PinnedFrameReason::GuardRejection)
                 {
                     return Err(self.cleanup_composite_failure_with_run_links(
                         request,
@@ -5984,12 +5990,14 @@ impl HostShared {
                 // return-home package carries its detail as a linear failure does. Workflow
                 // #371-2: so does a page-graph step whose confirmation failed.
                 let detailed = prepared.execution_mode() == "linear_steps"
-                    || matches!(
+                    || error.code().as_str() == prerequisite::INCOMPATIBLE
+                    || spelled(
                         error.code().as_str(),
-                        prerequisite::INCOMPATIBLE
-                            | "contained_task_step_unconfirmed"
-                            | "contained_task_error_page_reached"
-                            | "page_confirmation_failed"
+                        &[
+                            ExecutionKernelCode::ContainedTaskStepUnconfirmed.code(),
+                            ExecutionKernelCode::ContainedTaskErrorPageReached.code(),
+                            ExecutionKernelCode::PageConfirmationFailed.code(),
+                        ],
                     );
                 if let Some(detail) =
                     resource_reading_failure_detail(error.code().as_str(), error.detail())

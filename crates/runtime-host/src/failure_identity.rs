@@ -56,9 +56,10 @@ const DETAIL_KEYS: &[&str] = &[
 ];
 /// Failures of the main package's own steps whose screen does not match the package (R21).
 const MAIN_ACCUMULATING: &[&str] = &[
-    "page_confirmation_failed",
-    "contained_task_linear_intermediate_unobserved",
-    "contained_task_guard_refused",
+    actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str(),
+    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearIntermediateUnobserved
+        .as_str(),
+    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskGuardRefused.as_str(),
 ];
 /// Preparation refusals of the prerequisite chain: reproducible configuration problems (R21).
 const PREPARE_ACCUMULATING_PREFIX: &str = "contained_task_prerequisite_";

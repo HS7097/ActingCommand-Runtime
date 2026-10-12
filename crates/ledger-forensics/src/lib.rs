@@ -1556,10 +1556,11 @@ fn project_stability(
         || !comparison.comparison_parameters.is_empty()
         || !matches!(comparison.result.as_str(), "changed" | "unchanged")
         || comparison.terminal_reason.as_deref().is_some_and(|value| {
-            !matches!(
-                value,
-                "consecutive_unchanged_threshold_reached" | "max_steps_reached"
-            )
+            ![
+                SharedCode::ConsecutiveUnchangedThresholdReached.as_str(),
+                SharedCode::MaxStepsReached.as_str(),
+            ]
+            .contains(&value)
         })
     {
         return Err(invalid(ForensicsCode::StabilityFieldsInvalid.code()));

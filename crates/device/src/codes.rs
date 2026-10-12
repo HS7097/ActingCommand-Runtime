@@ -56,5 +56,6 @@ actingcommand_contract::outcome_locations! {
         CaptureIdentity => "capture_identity",
         TargetResolve => "target_resolve",
         SegmentedSwipe => "segmented_swipe",
+        RotationResolve => "rotation_resolve",
     }
 }

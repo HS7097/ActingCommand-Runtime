@@ -4035,6 +4035,9 @@
     }
   },
   "domains": {
+    "consecutive_unchanged_": [
+      "contract"
+    ],
     "foreign_": [
       "contract"
     ],
@@ -4049,6 +4052,9 @@
       "ledger-forensics",
       "runtime-client",
       "runtime-host"
+    ],
+    "max_steps_": [
+      "contract"
     ],
     "proposal_report_": [
       "runtime-host"
@@ -6145,7 +6151,8 @@
       "device"
     ],
     "rotation_": [
-      "contract"
+      "contract",
+      "device"
     ],
     "run_": [
       "actingctl",
@@ -6638,6 +6645,9 @@
       "policy",
       "runtime-host"
     ],
+    "unload_": [
+      "runtime-host"
+    ],
     "unlock_": [
       "actingd",
       "ledger",
@@ -6665,7 +6675,8 @@
       "runtime-host"
     ],
     "upgrade_": [
-      "ledger"
+      "ledger",
+      "runtime-host"
     ],
     "upstream_": [
       "actinglab"

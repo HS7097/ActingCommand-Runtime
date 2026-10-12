@@ -362,9 +362,14 @@ impl HostShared {
             Ok::<_, RuntimeHostError>(id)
         };
         if let Some(error) = host_error {
-            let phase_close = matches!(
+            let phase_close = crate::error::spelled(
                 error.code(),
-                "input_backend_close_failed" | "capture_backend_close_failed"
+                &[
+                    actingcommand_execution_kernel::ExecutionKernelCode::InputBackendCloseFailed
+                        .code(),
+                    actingcommand_execution_kernel::ExecutionKernelCode::CaptureBackendCloseFailed
+                        .code(),
+                ],
             ) && error.diagnostics().resource_dispositions().is_none()
                 && !error.diagnostics().is_resource_close_recording()
                 && error.diagnostics().lifecycle_causes().iter().any(|cause| {

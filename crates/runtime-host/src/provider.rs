@@ -1279,9 +1279,10 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         witness: &FencedWrite,
         plan: &PreparedSegmentedSwipePlan,
     ) -> DeviceResult<()> {
-        self.run("segmented_swipe", |backend| {
-            backend.segmented_swipe_prepared(witness, plan)
-        })
+        self.run(
+            actingcommand_device::DeviceLocation::SegmentedSwipe.as_str(),
+            |backend| backend.segmented_swipe_prepared(witness, plan),
+        )
     }
 
     fn segmented_swipe_prepared_in_frame(
@@ -1290,9 +1291,10 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         plan: &PreparedSegmentedSwipePlan,
         context: &actingcommand_device::InputExecutionContext,
     ) -> DeviceResult<()> {
-        self.run("segmented_swipe", |backend| {
-            backend.segmented_swipe_prepared_in_frame(witness, plan, context)
-        })
+        self.run(
+            actingcommand_device::DeviceLocation::SegmentedSwipe.as_str(),
+            |backend| backend.segmented_swipe_prepared_in_frame(witness, plan, context),
+        )
     }
 
     fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {

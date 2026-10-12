@@ -3,7 +3,7 @@
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
-use actingcommand_artifact_store::{ArtifactReader, open_projected_stream};
+use actingcommand_artifact_store::{ArtifactReader, StoreCode, open_projected_stream};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     ArtifactEvictionDisposition, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
@@ -11,7 +11,9 @@ use actingcommand_contract::{
     RuntimeMaterialReadFailure, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
     RuntimeMaterialReadResult, RuntimeMaterialReadSource, RuntimeMaterialReadState,
 };
-use actingcommand_ledger::{GlobalLedgerError, LedgerArtifactSelection, ResolvedLedgerArtifact};
+use actingcommand_ledger::{
+    GlobalLedgerError, LedgerArtifactSelection, LedgerCode, ResolvedLedgerArtifact,
+};
 
 #[derive(Clone, Copy)]
 pub(super) struct MaterialReadContext {
@@ -263,13 +265,13 @@ impl HostShared {
                         return Err(RequestFailure::poison_without_terminal(host));
                     }
                     match error.code() {
-                        "ledger_read_budget_exceeded" => (
+                        code if code == LedgerCode::LedgerReadBudgetExceeded.as_str() => (
                             RuntimeMaterialReadState::NotProvided,
                             Some(RuntimeMaterialReadLimit::BudgetExceeded),
                             host,
                             None,
                         ),
-                        "ledger_source_incomplete" => {
+                        code if code == LedgerCode::LedgerSourceIncomplete.as_str() => {
                             (RuntimeMaterialReadState::SourceIncomplete, None, host, None)
                         }
                         _ => (RuntimeMaterialReadState::RequestDenied, None, host, None),
@@ -291,9 +293,9 @@ impl HostShared {
                     None,
                 ),
                 MaterialReadError::Artifact(error) => {
-                    let state = if error.code() == "artifact_read_budget_exceeded" {
+                    let state = if error.code() == StoreCode::ArtifactReadBudgetExceeded.as_str() {
                         RuntimeMaterialReadState::NotProvided
-                    } else if error.code() == "artifact_hash_mismatch"
+                    } else if error.code() == StoreCode::ArtifactHashMismatch.as_str()
                         || error.code() == SharedCode::ArtifactVerifyFailed.as_str()
                     {
                         RuntimeMaterialReadState::IntegrityFailed

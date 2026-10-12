@@ -162,7 +162,9 @@ impl HostShared {
             };
             // A declared prefix beyond the authenticated source head is an invalid prefix.
             match error.code() {
-                "ledger_prefix_beyond_head" => {
+                code if code
+                    == actingcommand_ledger::LedgerCode::LedgerPrefixBeyondHead.as_str() =>
+                {
                     source_error(HostCode::SavedSourceIncomplete, detail)
                 }
                 relayed => relayed_source_error(relayed, detail),

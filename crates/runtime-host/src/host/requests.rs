@@ -550,12 +550,14 @@ impl HostShared {
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (BindChannel U-2, LoadPack and UnloadPack U-3, UpgradeState and
             // UpgradeStateStatus U-4). Until then each is refused and records nothing.
-            RuntimeOperation::BindChannel { .. } => Err(not_implemented("bind_channel")),
-            RuntimeOperation::LoadPack { .. } => Err(not_implemented("load_pack")),
-            RuntimeOperation::UnloadPack { .. } => Err(not_implemented("unload_pack")),
-            RuntimeOperation::UpgradeState { .. } => Err(not_implemented("upgrade_state")),
+            RuntimeOperation::BindChannel { .. } => Err(not_implemented(HostLocation::BindChannel)),
+            RuntimeOperation::LoadPack { .. } => Err(not_implemented(HostLocation::LoadPack)),
+            RuntimeOperation::UnloadPack { .. } => Err(not_implemented(HostLocation::UnloadPack)),
+            RuntimeOperation::UpgradeState { .. } => {
+                Err(not_implemented(HostLocation::UpgradeState))
+            }
             RuntimeOperation::UpgradeStateStatus { .. } => {
-                Err(not_implemented("upgrade_state_status"))
+                Err(not_implemented(HostLocation::UpgradeStateStatus))
             }
         }
     }
@@ -563,10 +565,10 @@ impl HostShared {
 
 /// A request kind whose behaviour a later slice adds: Denied with the shared code
 /// `not_implemented` (Workflow #389 U-1).
-fn not_implemented(operation: &'static str) -> RequestFailure {
+fn not_implemented(operation: HostLocation) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
-            actingcommand_contract::codes::SharedCode::NotImplemented.as_str(),
+            actingcommand_contract::codes::SharedCode::NotImplemented,
             operation,
             RuntimeErrorCode::InvalidRequest,
         ),

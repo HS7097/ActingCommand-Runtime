@@ -1063,7 +1063,9 @@ impl HostShared {
                 .project_scheduling_outcomes(identity.clone(), ledger_position)
                 .map_err(|error| {
                     if error.code() == SharedCode::OutcomeProjectionNotReady.as_str()
-                        || error.code() == "outcome_projection_position_invalid"
+                        || error.code()
+                            == actingcommand_ledger::LedgerCode::OutcomeProjectionPositionInvalid
+                                .as_str()
                     {
                         RuntimeHostError::request(
                             SharedCode::OutcomeProjectionNotReady,

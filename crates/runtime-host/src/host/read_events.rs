@@ -270,7 +270,10 @@ impl HostShared {
                         events.push(projected);
                     }
                 }
-                Err(error) if error.code() == "subscription_timeout" => {
+                Err(error)
+                    if error.code()
+                        == actingcommand_ledger::LedgerCode::SubscriptionTimeout.as_str() =>
+                {
                     break events.is_empty();
                 }
                 Err(_) => {

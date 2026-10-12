@@ -13200,6 +13200,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: begin preparation attempt."
     },
+    "bind_channel": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: bind channel."
+    },
     "bind_fact_scope": {
       "owner": "runtime-host",
       "layer": "host",
@@ -14695,6 +14703,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: load catalog generation."
+    },
+    "load_pack": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: load pack."
     },
     "load_policy_catalog_rollback": {
       "owner": "runtime-host",
@@ -18248,6 +18264,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: try lock instance admission."
     },
+    "unload_pack": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: unload pack."
+    },
     "unlock_owner_file": {
       "owner": "runtime-host",
       "layer": "host",
@@ -18295,6 +18319,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: update runtime debug run outcome."
+    },
+    "upgrade_state": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: upgrade state."
+    },
+    "upgrade_state_status": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: upgrade state status."
     },
     "validate_catalog_failure": {
       "owner": "runtime-host",

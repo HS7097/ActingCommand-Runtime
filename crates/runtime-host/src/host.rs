@@ -1179,7 +1179,7 @@ impl RuntimeHost {
         let recovery = limits
             .deadline()
             .map_err(|error| {
-                RuntimeHostError::relayed_fatal(
+                RuntimeHostError::fatal(
                     error.code(),
                     error.operation(),
                     RuntimeErrorCode::LedgerFailure,
@@ -1256,7 +1256,7 @@ impl RuntimeHost {
         let prior_epoch_recovery = limits
             .deadline()
             .map_err(|error| {
-                RuntimeHostError::relayed_fatal(
+                RuntimeHostError::fatal(
                     error.code(),
                     error.operation(),
                     RuntimeErrorCode::LedgerFailure,

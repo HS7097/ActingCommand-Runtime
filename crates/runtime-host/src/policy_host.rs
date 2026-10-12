@@ -708,7 +708,7 @@ fn eligibility_verdict(decision: &TaskDecision, in_flight: bool) -> EligibilityV
         SchedulingDecisionState::Deferred => decision
             .reasons
             .iter()
-            .any(|reason| reason.code == "score_deferred"),
+            .any(|reason| reason.code == actingcommand_policy::PolicyCode::ScoreDeferred.as_str()),
         SchedulingDecisionState::Blocked => false,
     };
     if waiting && !in_flight {
@@ -1610,11 +1610,9 @@ impl PolicyHost {
                 HostLocation::ValidatePolicyDispatch,
             ));
         }
-        if reason_chain
-            .reasons
-            .iter()
-            .any(|reason| reason.code == "failure_retry_immediate")
-        {
+        if reason_chain.reasons.iter().any(|reason| {
+            reason.code == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+        }) {
             self.control
                 .validate_immediate_retry(&active.compiled, intent, context.now_unix_ms)?;
         }
@@ -1736,10 +1734,9 @@ impl PolicyHost {
             &active.compiled,
             intent,
             admission,
-            reason_chain
-                .reasons
-                .iter()
-                .any(|reason| reason.code == "failure_retry_immediate"),
+            reason_chain.reasons.iter().any(|reason| {
+                reason.code == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+            }),
         )?;
         // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b).
         self.eligibility
@@ -2612,11 +2609,10 @@ impl PolicyHost {
                         &catalog.compiled,
                         &intent,
                         &admission,
-                        dispatch
-                            .data
-                            .reasons
-                            .iter()
-                            .any(|reason| reason.code == "failure_retry_immediate"),
+                        dispatch.data.reasons.iter().any(|reason| {
+                            reason.code
+                                == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+                        }),
                     )?;
                     dispatch.admission = Some(admission);
                 }

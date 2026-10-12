@@ -865,10 +865,14 @@ mod tests {
             )
         };
         let own_revision = |guard: &mut OwnerGuard| {
-            read_last_record(guard.file_mut("read_own_start").expect("same handle"))
-                .expect("persisted start")
-                .expect("owner record")
-                .revision
+            read_last_record(
+                guard
+                    .file_mut(crate::codes::test_spellings::TestLocation::ReadOwnStart)
+                    .expect("same handle"),
+            )
+            .expect("persisted start")
+            .expect("owner record")
+            .revision
         };
 
         // Without the marker: a journal ending in a formal close reads as before.

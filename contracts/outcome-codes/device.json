@@ -373,6 +373,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Input operation: a segmented swipe; the capability check refuses it when the selected input backend does not support it."
+    },
+    "rotation_resolve": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of the adb shell input backend's connect that the device error's diagnostic context names when the display rotation cannot be resolved."
     }
   }
 }
