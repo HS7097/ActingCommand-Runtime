@@ -19572,14 +19572,6 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: snapshot policy outcome state."
     },
-    "snapshot_policy_scheduling_outcomes": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: snapshot policy scheduling outcomes."
-    },
     "snapshot_strategic_outcome_state": {
       "owner": "runtime-host",
       "layer": "host",

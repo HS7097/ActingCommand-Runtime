@@ -1813,7 +1813,6 @@ actingcommand_contract::outcome_locations! {
         SettlePreviousEpochContainedRuns => "settle_previous_epoch_contained_runs",
         SnapshotPolicyInputIdentityOutcomeState => "snapshot_policy_input_identity_outcome_state",
         SnapshotPolicyOutcomeState => "snapshot_policy_outcome_state",
-        SnapshotPolicySchedulingOutcomes => "snapshot_policy_scheduling_outcomes",
         SnapshotStrategicOutcomeState => "snapshot_strategic_outcome_state",
         SpawnInstanceWorkers => "spawn_instance_workers",
         StageCatalogGeneration => "stage_catalog_generation",
