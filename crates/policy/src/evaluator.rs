@@ -2512,12 +2512,14 @@ fn score_candidates(
                     ))
                 })?;
             // The facts a score read: a `fact` source carries its own bound, an instance-fact
-            // field its record's expiry; a fixed field has none.
+            // field its record's expiry; a fixed field has none. A `keyed_fact` read never comes
+            // back here (the collect option refuses a record-list document), so it is a fact
+            // source only to keep the match total.
             let known_until_unix_ms = result
                 .known_inputs
                 .iter()
                 .filter_map(|known| match &known.input {
-                    ValueRef::Fact { .. } => known.known_until_unix_ms,
+                    ValueRef::Fact { .. } | ValueRef::KeyedFact { .. } => known.known_until_unix_ms,
                     ValueRef::Field { field } => projection.field_expiries.get(field).copied(),
                 })
                 .min();
@@ -2559,7 +2561,11 @@ fn unknown_input_reasons(
         .iter()
         .map(|unknown| {
             let (key, unknown_reason) = match &unknown.input {
-                ValueRef::Fact { fact_key } => (fact_key.as_str(), unknown.reason),
+                // The collect option refuses a record-list document, so a `keyed_fact` input is
+                // never listed; its list's fact key keeps the match total.
+                ValueRef::Fact { fact_key } | ValueRef::KeyedFact { fact_key, .. } => {
+                    (fact_key.as_str(), unknown.reason)
+                }
                 // A field that names an instance fact whose record has expired is read as
                 // expired, not as missing (decision D1).
                 ValueRef::Field { field }
