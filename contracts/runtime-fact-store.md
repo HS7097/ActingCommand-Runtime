@@ -128,6 +128,44 @@ Runtime-scoped record (the configuration inventory) is durable (see
 [Durability classes](ledger-store.md#durability-classes-workflow-191-i)).
 Anything not appended is gone with the process (iron rule 13).
 
+> **Superseded by Workflow #383** (this section, "Startup replay", "Takeover invalidation" and
+> "Periodic snapshot"): see "Accept-first rule (Workflow #383 target)" below. AO-4 replaces the
+> append-first rule and the core's snapshot; AO-6 replaces the startup replay; each deletes the
+> old text when it merges.
+
+## Accept-first rule (Workflow #383 target)
+
+The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1–§3.2, §8, §14.3).
+
+1. **Accept first.** `record` and `invalidate` apply the change to the store under
+   `fact_write_gate` with today's acceptance rules (identical → `Unchanged` and nothing captured;
+   older or equal observation → `runtime_fact_stale`; full store → `runtime_fact_capacity_exceeded`;
+   absent key → `runtime_fact_missing`). An accepted change raises the workbench `revision` by one.
+2. **Copy.** The gate G3 captures `runtime.fact_recorded` / `runtime.fact_invalidated` with the
+   workbench (lineage, revision); nothing waits for the ledger. `runtime_fact_store_desync`
+   ("the ledger holds a change the store refuses") cannot happen any more and is not emitted.
+3. **Lineage.** The workbench opens a new lineage at every process start; its base record is the
+   lifecycle phase `tagged_state_loaded`.
+4. **Persistence across a restart** is the tag: only keys that match
+   `ledger_observer.tag.workbench_patterns` are loaded at start, from the ledger index
+   ([ledger-observer.md §11](ledger-observer.md#11-tags-and-the-index-table-ao-2-maintains-ao-5-rules-and-seeding-ao-6-loads)):
+   the four settlement keys `task.*.last_duration_ms`, `.last_outcome`, `.failure_streak`,
+   `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`,
+   `host.perf_baseline.*`, `host.perf_calibration.*` and `host.config_overrides`. Keys under
+   `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
+   `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
+   loaded: this start observes or replays them again, so the takeover invalidation of
+   `device.`/`backend.`/`application.` and `task.page` has nothing left to drop. Any other key is
+   not loaded and reports `ledger_tag_key_unclassified` once per prefix.
+5. **Snapshot.** The core stops sealing `runtime.fact_snapshot` (AO-4); the ledger seals it itself
+   when a revision changed (probe T2, AO-8), so the offline "latest snapshot plus later records"
+   read keeps working.
+6. **Workbench changes use only** `runtime.fact_recorded` / `runtime.fact_invalidated`; the key
+   tells what changed (no per-feature record type).
+
+**Capacity of `config.parameters`.** The one-revision v0.12.0 configuration adds about 170 keys;
+the row budget (256 per `record_list`) is booked in [the v0.12.0 register](v012-register.md#51-capacity-of-configparameters).
+
 ## Startup replay
 
 `recover_runtime_fact_store` runs during `start_with_provider`, after

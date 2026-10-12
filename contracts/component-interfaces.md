@@ -151,6 +151,27 @@ Each change since v0.11.2 was checked against these interfaces:
   It is derived from the Tools manifest and never declared, so neither the
   declaration nor the known table changes for it.
 
+### Revisions from Workflow #389 (unified interface)
+
+Workflow #389 (`runtime-interface.md`) changes three interfaces. This section
+records its part of each; the declaration in
+`distribution/windows/component-interfaces.json` moves only with the slice named
+in the last column (#378 A8 declares the v0.12.0 revisions once and folds these
+rows into the vocabulary table).
+
+| Interface | Rev | #389's part | Declared from | Anchor |
+|---|---|---|---|---|
+| `actingd-config` | 5 | revision 5, the one revision v0.12.0 raises, also carries the optional booleans `lab_module_authoring` and `lab_module_debugging` (absent means `false`; a file names them only when `true`). acsetup's Lab transaction is their only writer: `acsetup --commit-config` refuses a proposal that changes either. A Runtime before v0.12.0 refuses a file that names either key, because the file denies unknown fields; a file that names neither keeps its revision | v0.12.0; U-2 reads them | `apps/actingd/src/config.rs`, the two Lab option fields (U-2) |
+| `runtime-client` | 2 | the handshake request `BindChannel{channel, via?}`, sent once on every new connection after `Health`; the request kinds `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` and their results (shapes U-1). A client that speaks 2 and meets a Runtime that drops the connection on `BindChannel` reconnects once, goes on unbound and reports `client_channel_unsupported`. Revision 2's other changes are listed by the slices that make them | v0.12.0 (A8) | `crates/actingcommand-contract/src/runtime.rs`, `RuntimeOperation` |
+| `install-control` | 2 | the upgrade state: `actingctl upgrade-state enter` (the Runtime drains, records its pause and accepts its own close while the requesting connection is open, and marks the close in its owner journal), `cancel`, `leave` (releases a Runtime started with `--install-held`), `status`. Revisions 0 and 1 keep working, so the Runtime declares [0, 2] | the Runtime release that carries U-4 (v0.12.x); v0.12.0 keeps [0, 1] | `crates/actingcommand-contract/src/installation.rs`, the `UpgradeState` request (U-1) |
+
+The install-control check per operation is unchanged: acsetup uses the highest
+common revision, and 2 means the upgrade state. acsetup closes the old Runtime
+with the installed slot's actingctl, so the first upgrade to a Runtime that
+speaks 2 still closes the old one with revision 1. Against a Runtime that speaks
+2, acsetup ([0, 2], UI U-5) uses only the upgrade state; to stop a Runtime
+outside an installation, `actingctl request-shutdown` stays.
+
 ## Bump rule
 
 - A revision rises when a peer that speaks the previous revision can no longer

@@ -5,9 +5,9 @@ use std::sync::{Mutex, Once};
 
 crate::outcome_codes! {
     enum TestCode {
-        Failed => "test_operation_failed": error,
-        Unusable => "test_store_unusable": fatal,
-        Done => "test_operation_done": success,
+        Failed => "test_operation_failed": error / none,
+        Unusable => "test_store_unusable": fatal / none,
+        Done => "test_operation_done": success / none,
     }
 }
 

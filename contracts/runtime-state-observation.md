@@ -85,4 +85,8 @@ before selecting the requested 1–10 runs, and orders them by their first fact,
 newest first. A later fact in the time window does not make an older run recent.
 The listing and each projection share one snapshot and the existing 20-second
 budget; reaching that budget returns `incomplete`. MCP `ac_get_run`, `ac_diagnose`
-and the latest-run lookup consume this projection directly.
+and the latest-run lookup consume this projection directly. Beside the runs, `ac_diagnose`
+carries at most 10 of the instance's `clock_slots` rows of `actingd suspended` recorded in its
+window, refused and deferred rows before owed ones, newest first in each, with
+`clock_slots_total` when fewer are kept; to fit its output budget it cuts them before any
+other list (Workflow #372 K3, `policy-suspension.md`).

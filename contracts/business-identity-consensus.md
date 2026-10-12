@@ -148,7 +148,7 @@ No sample delay occurs after an input Intent. The final tap still uses the norma
 path. A consumer without the sampling checkpoint explicitly refuses sampled task execution.
 
 The kernel captures one bounded frame transaction for page detection, required-home checks
-and input guards; it checks geometry and active permission between captures and records each
+and input guards; it checks geometry and cancellation between captures and records each
 backend call before continuing. Target raw outcomes carry typed sample frame hashes, effective
 parameters, actual durations and optional verdicts (`null` on a failed call). Target aggregate
 rows retain `k`, per-sample evidence and the verdict. Sample records and their OCR children do

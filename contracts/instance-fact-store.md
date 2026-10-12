@@ -30,8 +30,49 @@ cleanup and pipeline observation run outside this hold; the lock order remains
 `policy_outcome_gate` → `policy` → `fact_write_gate` → facts. Lock, append or synchronization
 failure propagates as a fatal host failure.
 
+> **Superseded by Workflow #383** (the two paragraphs above): the store stops being a projection
+> rebuilt from the ledger. See "Accept first, revisions and tagged load" below; AO-3 (single
+> entry, revisions, gate order) and AO-6 (start load) delete those paragraphs when they merge.
+
 This document freezes the store's role as the source of the policy input
 instance set (Workflow #313, item 4).
+
+## Accept first, revisions and tagged load (Workflow #383 target)
+
+The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.2–§3.5, §8). Slice
+AO-3 implements the entry, the revisions and the gate order; AO-6 the start load.
+
+- **One entry.** `InstanceFactStore::apply(change)` takes every change: publication, invalidation,
+  seed, derived invalidation, add or subtract. The store applies an accepted change first; the gate
+  G2 then copies it into the capture queue. The acceptance rules stay exactly as above (identical
+  records are idempotent, same-millisecond or older observations are refused, a full store refuses
+  without eviction). A refused change keeps the revision, returns to the caller as a request error
+  and produces no `fact.*` record.
+- **Revision and lineage.** The store has a monotonic `revision` (+1 per accepted change) and a
+  `lineage` that is new at every process start, whether the store starts empty or loads tagged
+  records. The ledger therefore never holds the same (lineage, revision) twice; the base record
+  `tagged_state_loaded` says from which previous (lineage, revision) the new lineage continues.
+- **Fact snapshot id** = hash(context, instance store (lineage, revision), workbench (lineage,
+  revision), records), no longer the ledger position. Admission compares it as before
+  (`policy_facts_stale`).
+- **Order guarantees** (the three of today, held by in-memory order): an input's result and its
+  invalidations are applied under `fact_write_gate` before any later intent's fact check (shared
+  game and server facts included); the store commit and the gate's copy are one ordered step, so
+  ledger order equals business order; the workbench shares the gate. Nothing waits for the ledger
+  inside the gate or the `policy` lock.
+- **`observe_trigger` invariant.** Every recorded event passes `observe_trigger` at capture, in
+  capture order, through the host's single `capture` function, so `invalidate_on` keeps working for
+  any event type except those [refused as triggers](ledger-observer.md#3-the-fan-out-point-and-the-observe_trigger-invariant-ao-3).
+- **Add or subtract.** A record of an add or subtract change carries the value after the change
+  (it may also carry the delta). Amounts come only from live recognition (D2 Q-D2).
+- **Start load.** Every key of this store is tagged. At start the store is loaded from the index
+  table's `state` rows and the records they point to (ledger-observer.md §11.5), not by replaying
+  the ledger; `latest_observed`, tombstones and the input boundary are derived from the same
+  records. Tombstones stay in the store (at most 256). History at a ledger position
+  (`at_position`) remains for forensics only.
+- The projection below reads the store at the evaluation's revision pair instead of a
+  `ledger_position` (AO-4; the `input_ledger_position` member of the dispatch intent follows
+  [the v0.12.0 plan](v012-register.md)).
 
 ## Policy instance facts
 
@@ -368,3 +409,113 @@ The per-instance read (`actingctl facts` without `--program`) is not built.
 The seeds are visible as `fact.published` events of origin module `fact-store`
 and source `runtime` in the ledger, and through `RuntimeHost::instance_fact_snapshot`
 for one instance context.
+
+## Capacity ledger (Workflow #383 AO-0)
+
+The store holds at most 256 active facts for the whole host (`MAX_ACTIVE_FACTS`,
+`crates/runtime-host/src/fact_store.rs`), shared by every instance; a new key on a full store is
+refused (`fact_store_capacity_exceeded`), never evicted. Tombstones have their own bound of 256 and
+do not count. Every slice that adds keys to this store books them here first (LEDG §3.1, AO-0 row).
+
+Per instance *i* with game *g* and server *s*; a server- or game-scoped key shared by several
+instances is booked once.
+
+| Family | Keys | Scope | Rows per instance | Slice | Today's deployment (3 instances, each with its own game and server) |
+|---|---|---|---|---|---|
+| policy instance seeds | `session.instance.available`, `.capabilities`, `.preferred_tasks` | instance | 3 | existing (#313) | 9 |
+| resource target policy | `session.resource_targets` | instance | 1 | existing (#308 RT-S1a) | ≤ 3 |
+| priority offsets | `session.task.<task_id>.priority_offset` | instance, server or game | one per task with an offset set | existing (#308 4a-2) | *O* (usually 0–3) |
+| readings (D2 reality keys) | `resource.*`, `inventory.*` | instance | *R*: the distinct reading keys of the packages bound to the instance | existing (#335 S5b); refreshed by D2 | 44 (6 + 15 + 23: the distinct `fact_key` readings of the three resource repositories at `d41137c0`, `6dd529a1`, `dfb3729`) |
+| pack schedule | `session.pack.schedule` | instance, server, game | ≤ 3 (one per scope used) | SR-11 | ≤ 9 |
+| feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
+| instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
+| instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
+| selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
+
+- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 0 + 6 + 9 = **80 + *O***, well under 256.
+- **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 10 + 15
+  = **104 + *O* + *R₄* + *R₅* + *F***; the reading keys of new packages are the variable that
+  matters.
+- **Outside the Runtime**: today's deployment generator publishes one-shot request facts
+  (`session.w2.manual_request`, predicates over up to 200 such keys, D2M research B §3.3); each
+  published request holds one active fact until it expires. The task request of MCP-17 (a
+  `run_once` row in `session.instructions`) replaces them; until it does, the deployment must keep
+  the number of live requests small.
+- A slice that would push the computed total over 256 for the deployed instance count stops and
+  reports instead of merging; the store keeps refusing, not evicting.
+
+## Pack schedule facts
+
+Workflow #386 slice SR-11 (scheduling model v1.4.2 §6.1). A person or an agent states, as a
+state and not as a one-off command, during which periods a task package may be scheduled on an
+instance. The state is stored in this store as one record of the `session.` family per scope.
+
+**Status.** Written ahead of its code (documentation slice SR-0); slice SR-11 implements it.
+Until then a `session.pack.schedule` record is an ordinary `session.` record that nothing reads.
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `session.pack.schedule` | `record_list`, one row `{ "package_id": <string>, "from_unix_ms": <timestamp_ms>, "until_unix_ms": <timestamp_ms>, "schedulable": <boolean> }` per period | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
+
+**Rows.** A row says "from `from_unix_ms` until `until_unix_ms` (half-open), the task package
+`package_id` is schedulable or not". `package_id` is the task package's id as the procedure
+manifest names it; the granularity is the task package, so every catalog task of one package
+opens and closes together, never one task and never a whole standard package. A row whose
+`until_unix_ms` is not after its `from_unix_ms`, rows of one `package_id` that overlap, or a
+value of another shape are refused as the non-fatal request error
+`session_pack_schedule_invalid` (`fact_key`, `field` pointing at the member). One scope holds at
+most the `record_list` bound of 256 rows, for all its packages together.
+
+**Writing.** One observation writes a scope's whole list, atomically. The publisher chooses the
+lifetime: no `expires_at_unix_ms` never expires. Publishing an empty list withdraws every row of
+the scope; publishing the list without a package's rows withdraws only those. The writers are
+`actingctl pack-schedule set` and `pack-schedule get`, the MCP general tools
+`ac_pack_schedule_set` and `ac_pack_schedule_get` (no tier), and the UI console (slice UI-2);
+they write the same rows. Under Workflow #389 the key is in the general key family
+(`fact_key_family`, `contracts/runtime-interface.md`), so all three counters may write it, and
+an observation that mixes it with keys of another family is refused as `fact_origin_mixed`.
+Before #389's slice U-6 removes the origin exception, SR-11 accepts it like a priority offset:
+from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. There is no offline writer: a write goes
+through a running actingd, like `actingctl task-offset`.
+
+**Which row applies.** For instance `I`, task package `P` and time `t`:
+
+1. the instruction layer: the `session.pack.schedule` record that applies to `I`, the most
+   specific scope first (instance over server over game, per key: an instance record replaces
+   the server and game records as a whole); a row of `P` that covers `t` decides;
+2. otherwise the standard package layer: the default rows the instance's standard package
+   declares in a data file at its root, compiled when the catalog is activated. The Runtime
+   only reads them and never stores them here; the file's name and format belong to the
+   standard-package data-file model of Workflow #373 (NAV-M). A default row should not close a
+   recognition maintenance package;
+3. otherwise `P` is schedulable.
+
+Schedulable does not mean that it runs: the task's own trigger, budgets, cooldown and blackouts
+still decide, and a task that runs only on request still runs only on request.
+
+**Evaluation.** When `P` is not schedulable for `I` at the evaluation instant, every candidate of
+`P` on `I` is deferred with `pack_schedule_closed` (info; `package_id`, and
+`next_eligible_unix_ms` the end of the covering row). Its place in the order of deferrals is
+after an active blackout and after `pack_registry_not_loaded` of Workflow #389
+(`scheduling-blackout.md`, "Order of the deferrals"). A row of a package that #389 has unloaded
+stays stored and takes effect again when the package is loaded. A changed record wakes the
+evaluation (`FactsChanged`); a row boundary wakes it through the deferral's wake time.
+
+**Unknown packages.** A row naming a package that no task of the active catalog uses is not an
+error: a cycle evaluated by `evaluate_policy_cycle` reports it once as
+`pack_schedule_unknown_package` (info; `package_id`) and the row has no effect.
+
+**Identity.** As for priority offsets, `combined_policy_snapshot_id` hashes the records the
+projection consumed, so a record written after an evaluation and before its admission refuses
+the intent as `policy_facts_stale` and a just-closed package is never dispatched. Without any
+such record the hashed input is exactly the previous one, so identities do not change.
+
+**Capacity and ledger.** The key takes one active fact identity per scope that uses it (the
+instance, its server, its game), counted in the store's shared capacity of 256 active facts
+(Workflow #383 AO-0 keeps the capacity ledger); when the store is full the write fails as today
+and nothing is evicted. A write is an ordinary `fact.published` event of the publishing request;
+like every key of this store it is a tagged record that the start loads from the ledger
+(Workflow #383).
+
+**Codes.** `pack_schedule_closed` and `pack_schedule_unknown_package` (policy),
+`session_pack_schedule_invalid` (runtime-host); none of them triggers the recovery ladder.

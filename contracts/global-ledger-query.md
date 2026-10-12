@@ -135,6 +135,27 @@ existing 1024-event query ceiling per run; a larger run yields Unknown with an
 explicit context limit. Missing relations, conflicting outcomes and incomplete
 sources also yield Unknown.
 
+### New record types in the views (Workflow #383, ledger revision 3)
+
+The ledger observer adds record types ([Ledger observer](ledger-observer.md),
+[v0.12.0 register](v012-register.md) §1). They join the type lists through the view schema upgrade
+of ledger revision 3 (SH-1); the closed definitions stay the only classification source:
+
+| Record type | Family | Views |
+|---|---|---|
+| `ledger.gap_recorded` (gap records) | `ledger` | Health; Errors by severity (warning or error) |
+| `ledger.health_observed` (probe findings) | `ledger` | Health; Errors by severity |
+| `ledger.dump_imported` | `ledger` | Health |
+| `policy.control_state_recorded` (decision-memory value records) | `policy` | Changes |
+| `policy.activity_state_recorded` (activity-state value records) | `policy` | Changes |
+| `agent.wake_obligation_recorded` (wake-obligation value records) | `agent` | Changes |
+| `policy.fact_refresh_transition` (fact-refresh transitions) | `policy` | Changes |
+| `perf.pacing_changed`, `perf.dispatch_share_changed`, `perf.run_hold` | `performance` | Health (by family) |
+
+An intent without its result reads as "in progress or unknown" in a run's derived state; a run
+whose events fall inside a gap record's time range is reported with that gap (AO-9). actingledger
+gains read-only queries for gap records, dump imports and probe findings (AO-9).
+
 Supported positive relations are input failure/completion with the same action,
 recognition failure/later PageMatched with the same recognition/action links,
 and native entry-recovery failure/completion with the same run and package.
