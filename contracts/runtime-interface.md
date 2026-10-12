@@ -11,8 +11,8 @@ Source: the frozen model v2.2.3 (Workflow `rd-1009/perm/model-unified-interface.
 with its §14.2 correction (writing resource targets and instance facts is general) and
 its §14.3 correction (Workflow #336, option 丙, M-PKG v1.1 §5.1: task packages have no
 content digest). Where the model's body and §14.2 differ, this document follows §14.2.
-One point awaits Alice: an unload stops the manual runs of the same `package_id`
-(M-PKG D10).
+Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the same
+`package_id`.
 
 | Slice | Release | What it brings |
 |---|---|---|
@@ -30,11 +30,13 @@ One point awaits Alice: an unload stops the manual runs of the same `package_id`
 - **Counter**: one of the three entries of the general interface: `cli` (actingctl,
   and acsetup and scripts through it), `mcp` (`actingctl mcp-serve`), `ui` (acui).
 - **Lab channel**: the channel `lab`, bound by actinglab and by whatever forwards to it.
-- **Channel**: the identity a connection binds once: `cli`, `mcp`, `ui` or `lab`.
-- **via**: on the Lab channel only, the counter that forwarded the work to actinglab:
-  `mcp` or `ui`.
+- **Channel** (`RuntimeChannel`): the identity a connection binds once: `cli`, `mcp`,
+  `ui` or `lab`.
+- **via** (`ChannelVia`): on the Lab channel only, the counter that forwarded the work
+  to actinglab: `mcp` or `ui`.
 - **Option one, authoring** (`lab_module_authoring`) and **option two, debugging**
-  (`lab_module_debugging`): the two Lab options (section Lab options).
+  (`lab_module_debugging`): the two Lab options (`LabOption`: `authoring`,
+  `debugging`; section Lab options).
 - **Block**: where a request kind belongs: handshake, general, option one, option two,
   retired or compat.
 - **Class**: read, instruction or operation. It explains a kind; only the block
@@ -293,7 +295,7 @@ U-6 deletes the source gates.
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
 | `BindChannel{channel, via?}` | handshake | — | the runtime client's handshake, once on every new TCP connection | no |
-| `UpgradeState{enter, cancel, leave}` | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
+| `UpgradeState{target, action}` (`enter`, `cancel`, `leave`) | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
 | `UpgradeStateStatus{transition_id}` | general | read | cli | no |
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
@@ -621,6 +623,11 @@ Lab. Shapes are install-control revision 2 (`component-interfaces.md`), from U-4
 
 ### Shapes
 
+Every upgrade-state request is `UpgradeState{target, action}`: `target` is the Runtime
+it is meant for (`RuntimeShutdownTarget`, as in `InstallTransition`;
+`install_owner_mismatch` when it is not this owner), and `action`
+(`UpgradeStateAction`) is `enter`, `cancel` or `leave` with the fields below.
+
 | Request | Fields | Sender | The Runtime | Reply |
 |---|---|---|---|---|
 | `UpgradeState{enter}` | `transition_id` (from the installer); `timeout_ms` (drain limit, default 60 000) | the installer, to the running Runtime | closes admission and drains (as BeginDrain today); when idle, records its pause and reaches Drained; while the requesting connection is still open, accepts its own close (as CommitShutdown today), writes the upgrade-state marker on its owner-journal close record, closes and exits. The request thread watches its own connection while it waits; if the connection closes before the close is accepted, the Runtime handles it as `cancel`: admission reopens, the transition is recorded as Aborted with `failure_code` = `upgrade_state_requester_disconnected`, and the Runtime keeps running | `upgrade_state_entered` (with the ticket) once drained and closed; otherwise a refusal code |
@@ -637,11 +644,12 @@ Lab. Shapes are install-control revision 2 (`component-interfaces.md`), from U-4
 
 ### The marker, the maintenance owner and the watchdog
 
-- An upgrade-state close carries a marker on its owner-journal close record (for
-  example `closed_by: upgrade_state`). The field is optional; the owner-record schema
-  number does not change. U-1 makes every v0.12.0 reader (actingd's start,
-  `ledger-maintenance`, actingledger) accept it and names it in `owner-journal.md`;
-  U-4 writes it. `owner.lock` is not the ledger.
+- An upgrade-state close carries a marker on its owner-journal close record: the
+  field `closed_by` with the value `upgrade_state`. The field is optional; the
+  owner-record schema number does not change. U-1 makes every v0.12.0 reader
+  (actingd's start, `ledger-maintenance`, and `actingctl request-shutdown --wait`,
+  which reads loosely) accept it and names it in `owner-journal.md`; U-4 writes it.
+  `owner.lock` is not the ledger.
 - A maintenance owner (both lock sites of `ledger-maintenance`) whose preceding record
   is a marked close copies the marker onto its own close. The marker is used up when a
   non-maintenance Runtime owner starts: that owner's close does not carry it. So the
@@ -743,7 +751,9 @@ item 5). Neither touches files on disk.
   its own. The catalog is not in it.
 - Key: a package's identity is its `package_id`, which is the procedure manifest's
   `procedure_ref` and the `package_id` of SR-11's rows. Startup and prerequisite
-  packages are located by their configuration item; the exact key shape is #383 AO-0's.
+  packages are located by their configuration item. A request names an entry by
+  `PackRegistryKey` (U-1): `procedure{package_id}`, `startup_package{instance_alias}`
+  or `prerequisite_package{package_id}`; the workbench key shape is #383 AO-0's.
 - Every use reads the effective table: policy evaluation and admission, startup
   packages, the ladder's `return_home` and `application_restart`, prerequisite chain
   resolution, D2's reader dispatch.
@@ -760,10 +770,10 @@ No shape carries a package digest (M-PKG).
 
 | Request | Fields | Checks | Success |
 |---|---|---|---|
-| `LoadPack` (restore a start-table entry) | `package_id` | the start table has it; the package at its location passes structural admission | `pack_registry_loaded` |
-| `LoadPack` (a new package or a replacing binding) | one `policy.procedure_manifest` entry: `package_id` (= `procedure_ref`), `operation_id`, `yield_points`, optional `scheduled_execution` (`mode` + `package_path`; absent = a client run) | as at start: the binding's shape; `scheduled_execution`'s instance and backend mode; structural admission; when a catalog task names it, `operation_id` and `yield_points` match; a package no task names may load and is unused, visibly in the receipt and the workbench record | `pack_registry_loaded` |
-| `LoadPack` (startup or prerequisite package) | the configuration item + the package location | as above | `pack_registry_loaded` |
-| `UnloadPack` | `package_id` (or the startup or prerequisite configuration item); `wait_ms` (0–25 000, as `run stop` waits) | in the effective table; never refused because the package is in use | `pack_registry_unloaded`; the result lists the stopped runs (request ids) and the withdrawn dispatches; its shape is U-1's |
+| `LoadPack{entry: restore}` (restore a start-table entry) | `key` (`PackRegistryKey`) | the start table has it; the package at its location passes structural admission | `pack_registry_loaded` |
+| `LoadPack{entry: procedure}` (a new package or a replacing binding) | one `policy.procedure_manifest` entry: `package_id` (= `procedure_ref`), `operation_id`, `yield_points`, optional `scheduled_execution` (`mode` + `package_path`; absent = a client run) | as at start: the binding's shape; `scheduled_execution`'s instance and backend mode; structural admission; when a catalog task names it, `operation_id` and `yield_points` match; a package no task names may load and is unused, visibly in the receipt and the workbench record | `pack_registry_loaded` |
+| `LoadPack{entry: startup_package}`, `LoadPack{entry: prerequisite_package}` | the configuration item (`instance_alias` or `package_id`) + the package location (`package_path`) | as above | `pack_registry_loaded` |
+| `UnloadPack{key, wait_ms}` | `key` (`PackRegistryKey`: a procedure's `package_id`, or the startup or prerequisite configuration item); `wait_ms` (0–25 000, as `run stop` waits) | in the effective table; never refused because the package is in use | `pack_registry_unloaded`; the result `PackUnloaded{key, stopped_runs[{request_id, settled}], withdrawn_dispatches}` lists the stopped runs and counts the withdrawn dispatches |
 
 - A package that cannot be read or declares something invalid keeps the structural
   admission codes; there is no new code for it.
@@ -783,8 +793,8 @@ The user's or agent's input is always the highest priority (Alice 10-10 12:3x it
 2. **Stops the runs that use it**, through the path of a run stop: policy dispatches and
    runs the Runtime scheduled, startup packages, the ladder's `return_home` and
    `application_restart`, the prerequisite layer that is running the package, and the
-   manual runs (`run start`, `lab run`) of the same `package_id` (M-PKG D10, pending
-   Alice).
+   manual runs (`run start`, `lab run`) of the same `package_id` (M-PKG D10, decided
+   by Alice 2026-10-12).
    - The Runtime sets the cancellation itself. For a scheduled run it bypasses the
      "scheduled runs are not client-cancellable" check
      (`scheduled_contained_task_not_client_cancellable`), as the instance pause's drain
@@ -813,7 +823,7 @@ The user's or agent's input is always the highest priority (Alice 10-10 12:3x it
   marks the runs still stopping (as `run stop --wait-s`).
 - A manual run is matched by the `package_id` of its admitted package: the same id
   stops, another id does not; there is one copy per package, so "another version" no
-  longer exists (M-PKG D10, pending Alice). A manual run started after the unload
+  longer exists (M-PKG D10, decided by Alice 2026-10-12). A manual run started after the unload
   runs: a manual run never needed a load. A prerequisite chain that needs an unloaded prerequisite package is refused as
   today with `contained_task_prerequisite_*`.
 - A ladder rung whose run is stopped by an unload is recorded as skipped
@@ -899,9 +909,11 @@ them.
 | `mcp_tier_retired` | warning | actingctl (`mcp_tier_`) | mcp-serve got the retired `--tier`; it starts as usual | `operation` | U-3 |
 | `lab_command_option_disabled` | error | actinglab (`lab_command_`) | an actinglab offline package tool without option one | `operation`, `lab_option` | U-3 |
 
-- `pack_registry_loaded` carries `package_id` only (M-PKG).
-- The keys `channel` and `lab_option` and their vocabularies are #383 AO-0's
-  registration (section Hand-off to #383 AO-0).
+- `pack_registry_loaded` carries `package_id` only (M-PKG). Its result is
+  `PackLoaded{key, named_by_catalog?}` (U-1).
+- U-0 registers the keys `channel` and `lab_option` and their vocabularies of the
+  same names, whose sources are U-1's `RuntimeChannel` and `LabOption` (coordinator
+  decision 2, 10-12).
 - Each prefix belongs to one crate: `lab_tool_` is actingctl's (its existing
   `lab_tool_unavailable` is in it), `lab_command_` actinglab's, `lab_module_`
   runtime-host's.
@@ -972,9 +984,10 @@ AO-0 registers every v0.12.0 persisted shape at once. From this model:
 6. Not AO-0's: the upgrade-state marker on the owner-journal close record (U-1 reader,
    U-4 writer; `owner.lock` is not the ledger). The number stays so that references
    match the model.
-7. The vocabularies `channel` and `lab_option` (`authoring`, `debugging`; its source is
-   the contract's new `LabOption` enum, U-1) and the keys of the same names, which the
-   codes above carry.
+7. Not AO-0's either (coordinator decision 2, 10-12): U-0 registers the vocabularies
+   `channel` (`cli`, `mcp`, `ui`, `lab`; source `RuntimeChannel`, U-1) and
+   `lab_option` (`authoring`, `debugging`; source `LabOption`, U-1) and the keys of
+   the same names, which the codes above carry.
 
 The persisted invariants this model keeps: the approval records' provenance
 `(Governance, User, Ui)`, the structure of `Status`, and `ContainedTaskCancellationReason`

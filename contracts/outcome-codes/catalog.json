@@ -1452,6 +1452,14 @@
         "count": "required"
       },
       "description": "Counts per revisioned source, one record each."
+    },
+    "channel": {
+      "type": "vocab:channel",
+      "description": "The channel a Runtime connection is bound to."
+    },
+    "lab_option": {
+      "type": "vocab:lab_option",
+      "description": "A Lab option of the installer."
     }
   },
   "vocabularies": {
@@ -4116,6 +4124,44 @@
         },
         "ended": {
           "description": "The condition ended."
+        }
+      }
+    },
+    "channel": {
+      "description": "The channel a Runtime connection is bound to: one of the general interface's three counters, or the Lab channel (Workflow #389).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/runtime/interface.rs",
+        "enum": "RuntimeChannel"
+      },
+      "tokens": {
+        "cli": {
+          "description": "actingctl, and the installer and scripts that run it."
+        },
+        "mcp": {
+          "description": "actingctl mcp-serve."
+        },
+        "ui": {
+          "description": "The console."
+        },
+        "lab": {
+          "description": "The Lab module, actinglab."
+        }
+      }
+    },
+    "lab_option": {
+      "description": "One of the two Lab options of the installer page (Workflow #389).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/runtime/interface.rs",
+        "enum": "LabOption"
+      },
+      "tokens": {
+        "authoring": {
+          "description": "Option one: authoring."
+        },
+        "debugging": {
+          "description": "Option two: debugging."
         }
       }
     }

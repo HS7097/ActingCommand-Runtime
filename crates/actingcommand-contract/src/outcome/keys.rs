@@ -347,4 +347,9 @@ outcome_keys! {
     buffer_bytes: integer,
     source_counts: records(ledger_source, count),
     // Workflow #383 AO-0. End.
+    // Workflow #389 U-0 (unified interface; coordinator decision 2): the keys of the interface's
+    // codes. Begin.
+    channel: vocab(channel),
+    lab_option: vocab(lab_option),
+    // Workflow #389 U-0. End.
 }
