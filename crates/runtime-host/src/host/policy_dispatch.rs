@@ -1228,7 +1228,7 @@ impl HostShared {
         project_forward(catalog.compiled(), &facts, &resources, time, seed, config).map_err(
             |error| {
                 RuntimeHostError::request(
-                    error.code(),
+                    error.code().as_str(),
                     "project_policy_forward",
                     RuntimeErrorCode::InvalidRequest,
                 )

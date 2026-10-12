@@ -72,7 +72,7 @@ pub fn inspect_scheduling_timeline_files(
 ) -> LabResult<SchedulingTimelineResponse> {
     let catalog = load_catalog(paths)?;
     let timeline = inspect_timeline(&catalog, time, context, event_ids)
-        .map_err(|error| scheduling_error(error.code(), error.to_string()))?;
+        .map_err(|error| scheduling_error(error.code().as_str(), error.to_string()))?;
     let bytes = serde_json::to_vec(&SchedulingTimelineResponse {
         mode: SchedulingInspectionMode::OfflineInspection,
         compilation: compile_report(&catalog)?,
