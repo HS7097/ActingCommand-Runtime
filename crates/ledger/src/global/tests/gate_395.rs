@@ -26,6 +26,7 @@ use actingcommand_ledger_forensics::{
     ForensicFactsPhase, ForensicMaterialPhase, ForensicMaterialRequest, ForensicRuntimeFactsResult,
     read_material_to_per_phase, runtime_facts_at_per_phase,
 };
+use actingcommand_runtime_database::MaintenanceLimits;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -154,6 +155,25 @@ fn read_facts(
     (asked, result)
 }
 
+/// A deadline `ENOUGH` from now. A gate file reads no clock itself (test plan v2.2 §2.1 guard
+/// 3); as in the crate's gate fixture, the deadline is the one `MaintenanceLimits` computes.
+fn deadline_enough_ahead() -> Instant {
+    MaintenanceLimits {
+        timeout_seconds: ENOUGH.as_secs(),
+        ..MaintenanceLimits::default()
+    }
+    .deadline()
+    .expect("a deadline ENOUGH ahead")
+}
+
+/// A deadline that has run out: the moment a deadline `ENOUGH` ahead was taken. The ledger's
+/// check (`now >= deadline`) finds it reached at once, like a phase budget of zero.
+fn deadline_run_out() -> Instant {
+    deadline_enough_ahead()
+        .checked_sub(ENOUGH)
+        .expect("the moment the deadline was taken")
+}
+
 /// `actingledger material`: the first lookup, the second lookup under the reader's use guard and
 /// the verified read each take their own deadline when they start. A phase whose deadline runs
 /// out leaves the report `not_provided` with `budget_exceeded`, no bytes, and that phase as the
@@ -254,7 +274,7 @@ fn gate_each_runtime_facts_phase_has_its_own_deadline_and_a_run_out_names_its_ph
 fn gate_a_metadata_snapshot_reads_under_the_deadline_of_the_current_phase() {
     let root = SealedRoot::create();
     let mut snapshot = GlobalLedger::open_metadata(
-        GlobalLedgerEvidenceConfig::new(root.path()).with_deadline(Instant::now() + ENOUGH),
+        GlobalLedgerEvidenceConfig::new(root.path()).with_deadline(deadline_enough_ahead()),
     )
     .expect("metadata snapshot");
     let request = RuntimeEventQueryPageRequest::default()
@@ -262,13 +282,13 @@ fn gate_a_metadata_snapshot_reads_under_the_deadline_of_the_current_phase() {
         .expect("page request");
     let query = EventQuery::default();
 
-    snapshot.set_read_deadline(Instant::now());
+    snapshot.set_read_deadline(deadline_run_out());
     let refused = snapshot
         .project_view_page(&query, ProjectionProfile::Cli, &request)
         .expect_err("a phase whose deadline ran out reads no page");
     assert_eq!(refused.code(), "ledger_read_budget_exceeded");
 
-    snapshot.set_read_deadline(Instant::now() + ENOUGH);
+    snapshot.set_read_deadline(deadline_enough_ahead());
     let page = snapshot
         .project_view_page(&query, ProjectionProfile::Cli, &request)
         .expect("the next phase reads under its own deadline");
