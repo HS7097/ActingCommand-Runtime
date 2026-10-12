@@ -59,8 +59,8 @@ pub struct RuntimeHostError {
 #[derive(Clone, Copy)]
 enum HostErrorCode {
     Registered(Code),
-    /// A code of the store, state or execution crates (or of another error that relays one),
-    /// carried as its spelling until A2c and A2d type those crates' codes.
+    /// A code of the store, state, execution or policy crates (or of another error that relays
+    /// one), carried as its spelling until A2c and A2d type those crates' codes.
     Relayed {
         relayed_code: &'static str,
     },
@@ -80,8 +80,8 @@ impl HostErrorCode {
 #[derive(Clone, Copy)]
 enum HostErrorOperation {
     Registered(Location),
-    /// An operation of the store, state or execution crates, carried as its spelling until A2c
-    /// and A2d type those crates' locations.
+    /// An operation of the store, state, execution or policy crates, carried as its spelling
+    /// until A2c and A2d type those crates' locations.
     Relayed {
         relayed_operation: &'static str,
     },
@@ -435,7 +435,7 @@ impl RuntimeHostError {
     }
 
     /// A fatal error that relays the code and operation of another owner's error as spellings
-    /// (the store, state and execution crates; A2c and A2d type them and remove this bridge).
+    /// (the store, state, execution and policy crates; A2c and A2d type them and remove it).
     pub(crate) fn relayed_fatal(
         relayed_code: &'static str,
         relayed_operation: &'static str,
@@ -449,7 +449,7 @@ impl RuntimeHostError {
     }
 
     /// A request error that relays the code and operation of another owner's error as spellings
-    /// (the store, state and execution crates; A2c and A2d type them and remove this bridge).
+    /// (the store, state, execution and policy crates; A2c and A2d type them and remove it).
     pub(crate) fn relayed_request(
         relayed_code: &'static str,
         relayed_operation: &'static str,

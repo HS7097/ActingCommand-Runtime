@@ -477,11 +477,18 @@ impl SchedulingPauseTable {
     }
 
     /// The deferral code a policy dispatch to `instance_alias` meets, if a gate is closed.
+    /// The pause that defers a dispatch on `instance_alias`, as the spelling the policy
+    /// evaluator's scheduling-pause callback takes (the policy crate types it in A2d).
     pub(super) fn deferral(&self, instance_alias: &str) -> Option<&'static str> {
+        self.deferral_code(instance_alias).map(HostCode::as_str)
+    }
+
+    /// The pause that defers a dispatch on `instance_alias`.
+    pub(super) fn deferral_code(&self, instance_alias: &str) -> Option<HostCode> {
         if self.global.is_some() {
-            Some("dispatch_paused_global")
+            Some(HostCode::DispatchPausedGlobal)
         } else if self.instances.contains_key(instance_alias) {
-            Some("dispatch_paused_instance")
+            Some(HostCode::DispatchPausedInstance)
         } else {
             None
         }
@@ -1357,7 +1364,7 @@ impl HostShared {
                 &self.scheduling_pause,
                 HostLocation::GatePolicySchedulingPause,
             )?
-            .deferral(&intent.instance_id);
+            .deferral_code(&intent.instance_id);
             // Workflow #369 W-1: a holder or an eligible waiting claim, read under the scheduler
             // lock, rejects the dispatch at Info after its intent.
             let held = match pause_deferral {

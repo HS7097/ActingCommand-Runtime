@@ -976,7 +976,7 @@ impl HostShared {
 fn split_runtime_fact_snapshot(
     sealed: RuntimeFactSnapshot,
 ) -> RuntimeHostResult<Vec<RuntimeFactSnapshot>> {
-    let fatal = |code| {
+    let fatal = |code: Code| {
         RuntimeHostError::fatal(
             code,
             HostLocation::AppendRuntimeFactSnapshot,
@@ -991,14 +991,14 @@ fn split_runtime_fact_snapshot(
     };
     // The widest part numbers, so the real envelope is never larger than the one measured.
     let envelope_bytes = serde_json::to_vec(&envelope)
-        .map_err(|_| fatal(SharedCode::InvalidRuntimeFactSnapshot.as_str()))?
+        .map_err(|_| fatal(SharedCode::InvalidRuntimeFactSnapshot.code()))?
         .len();
     let mut groups = Vec::new();
     let mut current = Vec::new();
     let mut current_bytes = envelope_bytes;
     for record in sealed.records {
         let record_bytes = serde_json::to_vec(&record)
-            .map_err(|_| fatal(SharedCode::InvalidRuntimeFactSnapshot.as_str()))?
+            .map_err(|_| fatal(SharedCode::InvalidRuntimeFactSnapshot.code()))?
             .len();
         // Every record after the first in a part adds one separating comma.
         if !current.is_empty() && current_bytes + 1 + record_bytes > MAX_RUNTIME_FACT_SNAPSHOT_BYTES
@@ -1013,7 +1013,7 @@ fn split_runtime_fact_snapshot(
         groups.push(current);
     }
     let parts = u16::try_from(groups.len())
-        .map_err(|_| fatal(SharedCode::RuntimeFactSnapshotPayloadTooLarge.as_str()))?;
+        .map_err(|_| fatal(SharedCode::RuntimeFactSnapshotPayloadTooLarge.code()))?;
     envelope.parts = parts;
     Ok(groups
         .into_iter()

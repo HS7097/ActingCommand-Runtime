@@ -1688,7 +1688,9 @@ impl RuntimeContainedTask<'_> {
         })?;
         if bytes.len() as u64 > MAX_EFFECTIVE_CONFIGURATION_BYTES {
             return Err(RequestFailure::poison_without_terminal(
-                artifact_store_error(SharedCode::EffectiveConfigurationTooLarge),
+                artifact_store_error_at_code_spelling(
+                    SharedCode::EffectiveConfigurationTooLarge.as_str(),
+                ),
             ));
         }
         let mut event_links = self
@@ -1745,15 +1747,15 @@ impl RuntimeContainedTask<'_> {
         };
         let (code, projection) = match reason {
             ContainedTaskCancellationReason::DeadlineExceeded => (
-                RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str(),
+                RuntimeErrorCode::ContainedTaskDeadlineExceeded.code(),
                 RuntimeErrorCode::ContainedTaskDeadlineExceeded,
             ),
             ContainedTaskCancellationReason::ClientRequested => (
-                RuntimeErrorCode::ContainedTaskCancelled.as_str(),
+                RuntimeErrorCode::ContainedTaskCancelled.code(),
                 RuntimeErrorCode::ContainedTaskCancelled,
             ),
             ContainedTaskCancellationReason::PausedByOperator => (
-                RuntimeErrorCode::ContainedTaskPaused.as_str(),
+                RuntimeErrorCode::ContainedTaskPaused.code(),
                 RuntimeErrorCode::ContainedTaskPaused,
             ),
             ContainedTaskCancellationReason::RecoveredAfterRestart => {
@@ -7708,10 +7710,9 @@ impl HostShared {
         let observed_at_unix_ms = readings
             .captured_at
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| SharedCode::SystemClockInvalid.as_str())
+            .map_err(|_| SharedCode::SystemClockInvalid.code())
             .and_then(|elapsed| {
-                u64::try_from(elapsed.as_millis())
-                    .map_err(|_| HostCode::SystemClockOverflow.as_str())
+                u64::try_from(elapsed.as_millis()).map_err(|_| HostCode::SystemClockOverflow.code())
             })
             .map_err(|code| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(

@@ -12590,6 +12590,45 @@
       "description": "Emulator control refused because the provider does not support the requested control.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "drain_timeout": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An install transition's drain did not finish before its deadline; the transition aborts and the old owner reopens.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "dispatch_paused_global": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator's global scheduling pause defers the dispatch.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "dispatch_paused_instance": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator's scheduling pause of the instance defers the dispatch.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

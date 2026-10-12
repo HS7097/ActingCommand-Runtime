@@ -329,9 +329,9 @@ fn resource_targets_error(error: ResourceTargetsError) -> RuntimeHostError {
             RuntimeErrorCode::InvalidRequest,
         )
         .with_native_detail(error.to_string()),
-        ResourceTargetsError::Internal(code) => RuntimeHostError::fatal(
+        ResourceTargetsError::Internal(code) => RuntimeHostError::relayed_fatal(
             code,
-            RESOURCE_TARGETS_OPERATION,
+            RESOURCE_TARGETS_OPERATION.as_str(),
             RuntimeErrorCode::RuntimeFatal,
         ),
     }

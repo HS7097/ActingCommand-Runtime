@@ -1105,43 +1105,43 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/runtime-host/src/error.rs",
         "HostErrorCode::Relayed.relayed_code",
         &[Check::G2],
-        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store and execution-kernel errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
+        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store, execution-kernel and policy errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
     ),
     bridge(
         "crates/runtime-host/src/error.rs",
         "HostErrorOperation::Relayed.relayed_operation",
         &[Check::G2],
-        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store and execution-kernel errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
+        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store, execution-kernel and policy errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
     ),
     bridge(
         "crates/runtime-host/src/error.rs",
         "RuntimeHostError::code",
         &[Check::G2],
-        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store and execution-kernel errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
+        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store, execution-kernel and policy errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
     ),
     bridge(
         "crates/runtime-host/src/error.rs",
         "RuntimeHostError::operation",
         &[Check::G2],
-        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store and execution-kernel errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
+        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store, execution-kernel and policy errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
     ),
     bridge(
         "crates/runtime-host/src/error.rs",
         "RuntimeHostError::relayed_fatal",
         &[Check::G2],
-        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store and execution-kernel errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
+        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store, execution-kernel and policy errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
     ),
     bridge(
         "crates/runtime-host/src/error.rs",
         "RuntimeHostError::relayed_request",
         &[Check::G2],
-        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store and execution-kernel errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
+        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store, execution-kernel and policy errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
     ),
     bridge(
         "crates/runtime-host/src/error.rs",
         "RuntimeHostError::relayed_with_projection",
         &[Check::G2],
-        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store and execution-kernel errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
+        "A2c, A2d: the runtime host error relays the codes and operations of the ledger, state, artifact-store, execution-kernel and policy errors as spellings (RuntimeHostError::relayed_*); once A2c and A2d type those codes the relay goes and this channel takes Code and Location",
     ),
     bridge(
         "crates/runtime-host/src/error.rs",
@@ -1502,6 +1502,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "suspension_report",
         &[Check::G3],
         "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
+    ),
+    bridge(
+        "crates/runtime-host/src/host.rs",
+        "artifact_store_error_at_code_spelling",
+        &[Check::G2],
+        "A2-P: an operation spelled like a shared code (effective_configuration_too_large: one spelling for a code and a location); A2-P renames one side",
     ),
     // Possible double registration (coordinator note on A2c, PR #698): seven literals these
     // functions compare stay spellings until the A2b/A2c merge follow-up.

@@ -150,10 +150,8 @@ impl UnrecordedControl {
     /// records as it stands.
     fn into_wrapped(self: Box<Self>) -> Result<WrappedFailure, Box<Self>> {
         let code = match self.error.code() {
-            relayed if relayed == EMULATOR_CONTROL_WAIT_TIMEOUT => {
-                HostCode::EmulatorControlWaitTimeout
-            }
-            relayed if relayed == EMULATOR_CONTROL_FAILED => HostCode::EmulatorControlFailed,
+            EMULATOR_CONTROL_WAIT_TIMEOUT => HostCode::EmulatorControlWaitTimeout,
+            EMULATOR_CONTROL_FAILED => HostCode::EmulatorControlFailed,
             _ => return Err(self),
         };
         let failure = *self;

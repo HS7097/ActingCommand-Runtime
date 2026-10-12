@@ -672,17 +672,17 @@ impl HostShared {
             let (stage, code, reopen) = match status.phase {
                 Phase::Draining | Phase::Drained => (
                     RuntimeLifecycleFailureStage::InstallDrain,
-                    "drain_timeout",
+                    HostCode::DrainTimeout,
                     true,
                 ),
                 Phase::Held => (
                     RuntimeLifecycleFailureStage::InstallHeld,
-                    HostCode::HeldTimeout.as_str(),
+                    HostCode::HeldTimeout,
                     false,
                 ),
                 _ => (
                     RuntimeLifecycleFailureStage::InstallRelease,
-                    HostCode::ReleaseTimeout.as_str(),
+                    HostCode::ReleaseTimeout,
                     false,
                 ),
             };

@@ -735,7 +735,7 @@ mod tests {
             .expect("update same retained owner");
         let record = read_last_record(
             first_guard
-                .file_mut("read_retained_owner")
+                .file_mut(crate::codes::test_spellings::TestLocation::ReadRetainedOwner)
                 .expect("same handle"),
         )
         .expect("persisted retained owner")
@@ -826,9 +826,13 @@ mod tests {
                 last_disposition: OwnerResourceDisposition::Unconfirmed,
             })
         );
-        let record = read_last_record(released.file_mut("read_released_owner").expect("handle"))
-            .expect("persisted released owner")
-            .expect("owner record");
+        let record = read_last_record(
+            released
+                .file_mut(crate::codes::test_spellings::TestLocation::ReadReleasedOwner)
+                .expect("handle"),
+        )
+        .expect("persisted released owner")
+        .expect("owner record");
         assert_eq!(record.revision, 2);
         assert_eq!(record.owner_epoch, owner_epoch);
         assert!(record.active);
