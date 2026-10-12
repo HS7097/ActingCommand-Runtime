@@ -158,6 +158,7 @@ use zip::{ZipWriter, write::FileOptions};
 mod cli_information;
 mod cli_parse;
 mod cli_result;
+mod codes;
 mod commands;
 mod contained_resources;
 mod scheduling_cli;

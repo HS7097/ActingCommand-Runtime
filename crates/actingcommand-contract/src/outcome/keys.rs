@@ -332,4 +332,37 @@ outcome_keys! {
     android_started: boolean,
     adb_port_present: boolean,
     device_process_present: vocab(device_process_presence),
+    // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.
+    duplicate_count: integer,
+    dump_sealed: boolean,
+    dump_sha256: hash,
+    dump_version: integer,
+    gap_start_unix_ms: unix_ms,
+    gap_end_unix_ms: unix_ms,
+    ledger_source: vocab(ledger_source),
+    source_lineage: id,
+    source_revision: integer,
+    expected_revision: integer,
+    segment_edge: vocab(segment_edge),
+    buffer_bytes: integer,
+    source_counts: records(ledger_source, count),
+    // Workflow #383 AO-0. End.
+    // Workflow #389 U-0 (unified interface; coordinator decision 2): the keys of the interface's
+    // codes. Begin.
+    channel: vocab(channel),
+    lab_option: vocab(lab_option),
+    // Workflow #389 U-0. End.
+    // ---- Workflow #386 SR-0 (scheduling rules): begin ----
+    required_ms: duration_ms,
+    remaining_ms: duration_ms,
+    limit_ms: duration_ms,
+    pack_operation_id: id,
+    step_id: id,
+    page_id: id,
+    blackout_id: id,
+    blackout_start_unix_ms: unix_ms,
+    pacing_stage: vocab(pacing_stage),
+    // ---- Workflow #386 SR-0 (scheduling rules): end ----
+    // Workflow #387 D1a: a code's ladder class, as a value.
+    ladder_class: vocab(ladder_class),
 }

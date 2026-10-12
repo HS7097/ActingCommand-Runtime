@@ -3,6 +3,7 @@
   "codes": {
     "backup_busy_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "backup_destination_exists": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "backup_key_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "backup_manifest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "backup_manifest_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -68,6 +73,7 @@
     },
     "backup_manifest_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -81,6 +87,7 @@
     },
     "backup_manifest_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -94,6 +101,7 @@
     },
     "backup_manifest_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -107,6 +115,7 @@
     },
     "backup_material_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "backup_material_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "backup_material_reserved": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "backup_page_count_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -159,6 +171,7 @@
     },
     "backup_page_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -172,6 +185,7 @@
     },
     "backup_parent_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -185,6 +199,7 @@
     },
     "backup_result_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -198,6 +213,7 @@
     },
     "backup_source_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -211,6 +227,7 @@
     },
     "database_maintenance_io_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -224,6 +241,7 @@
     },
     "database_maintenance_sql_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -237,6 +255,7 @@
     },
     "maintenance_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -250,6 +269,7 @@
     },
     "maintenance_deadline_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -263,6 +283,7 @@
     },
     "maintenance_limits_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -276,6 +297,7 @@
     },
     "maintenance_material_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -289,6 +311,7 @@
     },
     "maintenance_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -302,6 +325,7 @@
     },
     "maintenance_path_unsafe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -315,6 +339,7 @@
     },
     "maintenance_paths_overlap": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -328,6 +353,7 @@
     },
     "maintenance_size_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -341,6 +367,7 @@
     },
     "maintenance_target_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -354,6 +381,7 @@
     },
     "restore_target_not_empty": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -367,6 +395,7 @@
     },
     "restored_material_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -380,6 +409,7 @@
     },
     "sqlite_backup_busy": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -393,6 +423,7 @@
     },
     "sqlite_backup_locked": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -406,6 +437,7 @@
     },
     "state_connection_busy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -419,6 +451,7 @@
     },
     "state_connection_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -432,6 +465,7 @@
     },
     "state_database_config_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -445,6 +479,7 @@
     },
     "state_database_corrupt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -458,6 +493,7 @@
     },
     "state_database_inspect_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -471,6 +507,7 @@
     },
     "state_database_journal_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -484,6 +521,7 @@
     },
     "state_database_open_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -497,6 +535,7 @@
     },
     "state_database_sync_config_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -510,6 +549,7 @@
     },
     "state_database_sync_relaxed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -523,6 +563,7 @@
     },
     "state_database_unsafe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -536,6 +577,7 @@
     },
     "state_integrity_check_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -549,6 +591,7 @@
     },
     "state_integrity_key_clock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -562,6 +605,7 @@
     },
     "state_integrity_key_create_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -575,6 +619,7 @@
     },
     "state_integrity_key_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -588,6 +633,7 @@
     },
     "state_integrity_key_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -601,6 +647,7 @@
     },
     "state_integrity_key_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -614,6 +661,7 @@
     },
     "state_integrity_key_write_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -627,6 +675,7 @@
     },
     "state_schema_initialize_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -640,6 +689,7 @@
     },
     "state_schema_metadata_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
@@ -653,6 +703,7 @@
     },
     "state_schema_version_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-database",
       "layer": "store",
       "uncertain": false,
