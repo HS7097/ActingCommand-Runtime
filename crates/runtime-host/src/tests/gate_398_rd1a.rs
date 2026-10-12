@@ -198,17 +198,21 @@ fn rd1a_t4_effective_configuration_names_the_handset_by_its_label() {
     }
 }
 
-/// T5, the gate (§3.5 closing line): start, a routine run that fails and hands its key to the
-/// ladder, the ladder's rungs, a self-check that meets a device error whose text names the
-/// serial as adb's would, and shutdown. No file the run left under the state root (ledger,
-/// artifacts, everything) and no error or receipt text holds any spelling of the serial; the
-/// records name the instance by its label.
+/// T5, the gate (§3.5 closing line): start with its self-check, a routine run that fails and
+/// hands its key to the ladder, the ladder's rungs, a self-check that meets a device error whose
+/// text names the serial as adb's would, and shutdown. No file the run left under the state root
+/// (ledger, artifacts, everything) and no error or receipt text holds any spelling of the serial;
+/// the records name the instance by its label.
 #[test]
 fn rd1a_t5_a_whole_fake_host_run_leaves_no_device_serial_behind() {
     let root = TempDir::new().expect("tempdir");
     let (host_config, request) = ladder_setup(root.path());
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
+    // The registry binds the handset's adb endpoint, so the instance is device self-checked:
+    // the start's preparation self-check decides its availability (§12 T5: start, then
+    // self-check). The handset answers, so its opens report a passed native open.
+    state.observed_open.store(true, Ordering::Release);
     let instance_id = instance_id();
     let host = start_host(host_config, instance_id, handset_target(), &state);
     let mut developer_log = Vec::new();
