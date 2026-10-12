@@ -3,6 +3,7 @@
   "codes": {
     "fact_refresh_unbound": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -21,6 +22,7 @@
     },
     "selection_evaluation_aborted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -35,6 +37,7 @@
     },
     "selection_input_unknown": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -52,6 +55,7 @@
     },
     "selection_unknown_clause_ignored": {
       "category": "warning",
+      "ladder_class": "declaration_error",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -68,6 +72,7 @@
     },
     "policy_evaluation_input_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -81,6 +86,7 @@
     },
     "policy_evaluation_fact_type_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -94,6 +100,7 @@
     },
     "policy_evaluation_numeric_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -107,6 +114,7 @@
     },
     "score_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -120,6 +128,7 @@
     },
     "selection_policy_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -133,6 +142,7 @@
     },
     "scope_without_instance": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -146,6 +156,7 @@
     },
     "failure_retry_immediate": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -159,6 +170,7 @@
     },
     "trigger_false": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -172,6 +184,7 @@
     },
     "trigger_unknown": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -185,6 +198,7 @@
     },
     "feedback_stop_true": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -198,6 +212,7 @@
     },
     "feedback_stop_unknown": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -211,6 +226,7 @@
     },
     "task_cooldown_active": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -224,6 +240,7 @@
     },
     "instance_already_selected": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -237,6 +254,7 @@
     },
     "heavy_scene_budget_deferred": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -250,6 +268,7 @@
     },
     "host_budget_deferred": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -263,6 +282,7 @@
     },
     "placement_selected": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -276,6 +296,7 @@
     },
     "rank_breakdown": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -289,6 +310,7 @@
     },
     "decision_record": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -302,6 +324,7 @@
     },
     "instance_unavailable": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -315,6 +338,7 @@
     },
     "capability_missing": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -328,6 +352,7 @@
     },
     "instance_override_disabled": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -341,6 +366,7 @@
     },
     "activity_profile_missing": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -354,6 +380,7 @@
     },
     "heavy_scene_budget_exhausted": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -367,6 +394,7 @@
     },
     "host_capacity_insufficient": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -380,6 +408,7 @@
     },
     "score_deferred": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -393,6 +422,7 @@
     },
     "score_promoted": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -406,6 +436,7 @@
     },
     "score_aging_cap": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -419,6 +450,7 @@
     },
     "timeline_unavailable": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -432,6 +464,7 @@
     },
     "timeline_active": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -445,6 +478,7 @@
     },
     "resource_targets": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -458,6 +492,7 @@
     },
     "resource_weights": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -471,6 +506,7 @@
     },
     "resource_target_policy_ignored": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -484,6 +520,7 @@
     },
     "resource_target_policy_unreadable": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -497,6 +534,7 @@
     },
     "resource_target_policy_expired": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -510,6 +548,7 @@
     },
     "resource_target_tasks_unevaluable": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -523,6 +562,7 @@
     },
     "resource_targets_parser_code_unexpected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -536,6 +576,7 @@
     },
     "resource_targets_canonical_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -549,6 +590,7 @@
     },
     "resource_targets_view_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -562,6 +604,7 @@
     },
     "malformed_rows": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -575,6 +618,7 @@
     },
     "forward_projection_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -588,6 +632,7 @@
     },
     "forward_projection_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -601,6 +646,7 @@
     },
     "step_budget_exhausted": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -614,6 +660,7 @@
     },
     "effect_evidence_insufficient": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -627,6 +674,7 @@
     },
     "strategy_report_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -640,6 +688,7 @@
     },
     "strategy_catalog_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -653,6 +702,7 @@
     },
     "strategy_template_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -666,6 +716,7 @@
     },
     "strategy_numeric_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -679,6 +730,7 @@
     },
     "execution_continues": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -692,6 +744,7 @@
     },
     "no_conditional_template_matched": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -705,6 +758,7 @@
     },
     "pinned_observation_missing": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -718,6 +772,7 @@
     },
     "catalog_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -731,6 +786,7 @@
     },
     "unknown_field": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -744,6 +800,7 @@
     },
     "descriptor_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -757,6 +814,7 @@
     },
     "predicate_unreachable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -770,6 +828,7 @@
     },
     "predicate_uncomputable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -783,6 +842,7 @@
     },
     "loop_budget_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -796,6 +856,7 @@
     },
     "effect_incompatible": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -809,6 +870,7 @@
     },
     "approval_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -822,6 +884,7 @@
     },
     "priority_selection_without_document": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -835,6 +898,7 @@
     },
     "priority_selection_percentile_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -845,6 +909,73 @@
       "description": "Catalog compile diagnostic: the priority selection's defer and promote percentiles are not declared together, are out of range, or are out of order.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "feature_locked": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "next_eligible_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A candidate is deferred because the active, unexpired session.feature. record fact_key of its instance is false and the task needs that feature; next_eligible_unix_ms is the record's expiry when it has one. A missing or expired record never defers (there is no substitute value).",
+      "common_causes": "A run met the feature's locked page earlier; a person or an agent marked the feature locked.",
+      "handling": "Nothing to repair. Publish true for the key once the feature is unlocked; otherwise the task is tried again when the record expires."
+    },
+    "decision_reason_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A decision that is not selected ended without a reason, which is a programming error in the evaluator. The candidate is still deferred and the evaluation round goes on, so the gap is visible rather than reported as none.",
+      "common_causes": "An evaluator path that defers or blocks a candidate without pushing its reason.",
+      "handling": "Report it with the evaluation's inputs; the evaluator path needs its reason."
+    },
+    "pack_schedule_closed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "next_eligible_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Every candidate of the task package package_id is deferred because the pack schedule that applies to the instance (an instruction row of session.pack.schedule, else a default row of the standard package) says the package is not schedulable now; next_eligible_unix_ms is the end of the covering row.",
+      "common_causes": "A person or an agent closed the package for a period; the standard package closes it by default.",
+      "handling": "Nothing to repair. Write a row that makes the package schedulable, or wait for the row to end."
+    },
+    "pack_schedule_unknown_package": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A session.pack.schedule row names a package that no task of the active catalog uses. Reported once per evaluation cycle; the row is kept and has no effect until a catalog uses the package. Not an error.",
+      "common_causes": "A row written for a package of another standard package or catalog generation.",
+      "handling": "Nothing to repair; remove the row if it is no longer wanted."
     }
   }
 }
