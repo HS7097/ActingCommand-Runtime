@@ -8,7 +8,7 @@
 actingcommand_contract::outcome_codes! {
     /// Why a page of an evaluation batch was not evaluated.
     pub enum PageDetectorCode {
-        BatchValidationFailed => "batch_validation_failed": warning,
-        BatchTerminated => "batch_terminated": warning,
+        BatchValidationFailed => "batch_validation_failed": warning / none,
+        BatchTerminated => "batch_terminated": warning / none,
     }
 }

@@ -23,6 +23,12 @@ pub const UI_PREFIXES: [&str; 2] = ["setup_", "console_"];
 pub const CATEGORIZED_VOCABULARY: &str = "event_type";
 /// The first release whose entries must follow the naming rule.
 pub const NAMING_SINCE: (u64, u64, u64) = (0, 12, 0);
+/// The vocabulary of every code's `ladder_class` (Workflow #387 model v1.2 §3.2).
+pub const LADDER_CLASS_VOCABULARY: &str = "ladder_class";
+/// The ladder class whose codes the recovery ladder counts as warnings on an instance; such a
+/// code is of category warning or error.
+const STABILITY_WARNING: &str = "stability_warning";
+const STABILITY_WARNING_CATEGORIES: &[&str] = &["warning", "error"];
 
 const CATEGORIES: &[&str] = &["success", "info", "warning", "error", "fatal"];
 const LAYERS: &[&str] = &[
@@ -71,6 +77,7 @@ const TOKEN_FIELDS: &[&str] = &["description", "category"];
 const FRAGMENT_FIELDS: &[&str] = &["owner", "codes", "locations"];
 const CODE_FIELDS: &[&str] = &[
     "category",
+    "ladder_class",
     "owner",
     "layer",
     "uncertain",
@@ -143,6 +150,11 @@ pub fn load(root: &Path, members: &[String]) -> Result<Catalog, Vec<String>> {
     let fragments = object(&header, "fragments", HEADER_FILE, &mut errors);
 
     check_vocabularies(&vocabularies, &mut errors);
+    if !vocabularies.contains_key(LADDER_CLASS_VOCABULARY) {
+        errors.push(format!(
+            "{HEADER_FILE}: the vocabulary {LADDER_CLASS_VOCABULARY} is missing"
+        ));
+    }
     check_keys(&keys, &vocabularies, &mut errors);
     let owners = check_fragment_map(&fragments, members, &mut errors);
     check_domains(&domains, &owners, &mut errors);
@@ -182,7 +194,7 @@ pub fn load(root: &Path, members: &[String]) -> Result<Catalog, Vec<String>> {
                     continue;
                 };
                 let canonical = if is_code {
-                    check_code(entry, owner, &keys, &place, &mut errors)
+                    check_code(entry, owner, &keys, &vocabularies, &place, &mut errors)
                 } else {
                     check_location(entry, owner, &place, &mut errors)
                 };
@@ -382,6 +394,11 @@ pub fn check_snapshot(
             if text(old, "category") != text(current, "category") {
                 violations.push(format!(
                     "G9 {relative}: settled {name} changed its category"
+                ));
+            }
+            if section == "codes" && text(old, "ladder_class") != text(current, "ladder_class") {
+                violations.push(format!(
+                    "G9 {relative}: settled {name} changed its ladder_class"
                 ));
             }
             check_snapshot_values(relative, name, old, current, catalog, &mut violations);
@@ -604,6 +621,7 @@ fn check_code(
     entry: &Map<String, Value>,
     owner: &str,
     keys: &Map<String, Value>,
+    vocabularies: &Map<String, Value>,
     place: &str,
     errors: &mut Vec<String>,
 ) -> Map<String, Value> {
@@ -611,6 +629,7 @@ fn check_code(
     if !text(entry, "category").is_some_and(|category| CATEGORIES.contains(&category)) {
         errors.push(format!("{place}: category is not a category"));
     }
+    errors.extend(check_ladder_class(entry, vocabularies, place));
     if !entry.get("uncertain").is_some_and(Value::is_boolean) {
         errors.push(format!("{place}: uncertain must be true or false"));
     }
@@ -633,6 +652,38 @@ fn check_code(
     require_text(entry, "handling", place, errors);
     check_common(entry, owner, place, errors);
     canonical(entry, CODE_FIELDS)
+}
+
+/// A code entry's `ladder_class` (Workflow #387 model v1.2 §3.2): every code names one, a token
+/// of the vocabulary `ladder_class`; a `stability_warning` code is of category warning or error.
+pub fn check_ladder_class(
+    entry: &Map<String, Value>,
+    vocabularies: &Map<String, Value>,
+    place: &str,
+) -> Vec<String> {
+    let tokens = vocabularies
+        .get(LADDER_CLASS_VOCABULARY)
+        .and_then(|vocabulary| vocabulary.get("tokens"))
+        .and_then(Value::as_object);
+    match text(entry, "ladder_class") {
+        None => vec![format!(
+            "{place}: ladder_class is missing; every code names one token of the vocabulary \
+             {LADDER_CLASS_VOCABULARY}"
+        )],
+        Some(class) if !tokens.is_some_and(|tokens| tokens.contains_key(class)) => vec![format!(
+            "{place}: ladder_class {class} is not a token of the vocabulary \
+             {LADDER_CLASS_VOCABULARY}"
+        )],
+        Some(STABILITY_WARNING)
+            if !text(entry, "category")
+                .is_some_and(|category| STABILITY_WARNING_CATEGORIES.contains(&category)) =>
+        {
+            vec![format!(
+                "{place}: a {STABILITY_WARNING} code is of category warning or error"
+            )]
+        }
+        Some(_) => Vec::new(),
+    }
 }
 
 fn check_location(

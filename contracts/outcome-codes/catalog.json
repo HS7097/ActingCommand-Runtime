@@ -1397,6 +1397,110 @@
       "type": "vocab:device_process_presence",
       "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
     },
+    "duplicate_count": {
+      "type": "integer",
+      "description": "Records skipped because their event id was already in the ledger."
+    },
+    "dump_sealed": {
+      "type": "boolean",
+      "description": "Whether a ledger dump ended with its trailer line."
+    },
+    "dump_sha256": {
+      "type": "hash",
+      "description": "The SHA-256 over all record lines of a ledger dump."
+    },
+    "dump_version": {
+      "type": "integer",
+      "description": "The format version a ledger dump's header declares."
+    },
+    "gap_start_unix_ms": {
+      "type": "unix_ms",
+      "description": "The start of the time range a ledger gap record covers, in Unix milliseconds."
+    },
+    "gap_end_unix_ms": {
+      "type": "unix_ms",
+      "description": "The end of the time range a ledger gap record covers, in Unix milliseconds."
+    },
+    "ledger_source": {
+      "type": "vocab:ledger_source",
+      "description": "A revisioned source whose changes the ledger records."
+    },
+    "source_lineage": {
+      "type": "id",
+      "description": "The lineage of a revisioned source: a fresh identity per process start."
+    },
+    "source_revision": {
+      "type": "integer",
+      "description": "A revisioned source's revision: +1 per accepted change within one lineage."
+    },
+    "expected_revision": {
+      "type": "integer",
+      "description": "The revision expected next, or recorded on the ledger's side."
+    },
+    "segment_edge": {
+      "type": "vocab:segment_edge",
+      "description": "Whether a reported stretch of a condition started or ended."
+    },
+    "buffer_bytes": {
+      "type": "integer",
+      "description": "Bytes held in, or spilled from, the ledger's capture queue."
+    },
+    "source_counts": {
+      "type": "records",
+      "fields": {
+        "ledger_source": "required",
+        "count": "required"
+      },
+      "description": "Counts per revisioned source, one record each."
+    },
+    "channel": {
+      "type": "vocab:channel",
+      "description": "The channel a Runtime connection is bound to."
+    },
+    "lab_option": {
+      "type": "vocab:lab_option",
+      "description": "A Lab option of the installer."
+    },
+    "required_ms": {
+      "type": "duration_ms",
+      "description": "Time a step, an observation or an operation needs, in milliseconds."
+    },
+    "remaining_ms": {
+      "type": "duration_ms",
+      "description": "Time left before a deadline, in milliseconds."
+    },
+    "limit_ms": {
+      "type": "duration_ms",
+      "description": "The largest time a declaration may need, in milliseconds."
+    },
+    "pack_operation_id": {
+      "type": "id",
+      "description": "The id of an operation of a task package."
+    },
+    "step_id": {
+      "type": "id",
+      "description": "The id of a step that a task package declaration names."
+    },
+    "page_id": {
+      "type": "id",
+      "description": "The id of a page that a task package declares."
+    },
+    "blackout_id": {
+      "type": "id",
+      "description": "The id of a blackout: a catalog maintenance event or a host blackout entry."
+    },
+    "blackout_start_unix_ms": {
+      "type": "unix_ms",
+      "description": "When a blackout starts, in Unix milliseconds."
+    },
+    "pacing_stage": {
+      "type": "vocab:pacing_stage",
+      "description": "The performance pacing stage of an instance."
+    },
+    "ladder_class": {
+      "type": "vocab:ladder_class",
+      "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
+    },
     "device_state_probe": {
       "type": "vocab:device_state_probe",
       "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
@@ -4037,6 +4141,121 @@
         }
       }
     },
+    "ledger_source": {
+      "description": "A revisioned source whose changes the ledger records (Workflow #383).",
+      "review": "pending",
+      "tokens": {
+        "instance_facts": {
+          "description": "The instance fact store."
+        },
+        "runtime_facts": {
+          "description": "The scheduler workbench's runtime fact store."
+        },
+        "decision_memory": {
+          "description": "The scheduler's decision memory."
+        },
+        "fact_refresh_transitions": {
+          "description": "The fact-refresh transition recorder."
+        }
+      }
+    },
+    "segment_edge": {
+      "description": "The edge of a reported stretch of a condition.",
+      "review": "pending",
+      "tokens": {
+        "started": {
+          "description": "The condition started."
+        },
+        "ended": {
+          "description": "The condition ended."
+        }
+      }
+    },
+    "channel": {
+      "description": "The channel a Runtime connection is bound to: one of the general interface's three counters, or the Lab channel (Workflow #389).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/runtime/interface.rs",
+        "enum": "RuntimeChannel"
+      },
+      "tokens": {
+        "cli": {
+          "description": "actingctl, and the installer and scripts that run it."
+        },
+        "mcp": {
+          "description": "actingctl mcp-serve."
+        },
+        "ui": {
+          "description": "The console."
+        },
+        "lab": {
+          "description": "The Lab module, actinglab."
+        }
+      }
+    },
+    "lab_option": {
+      "description": "One of the two Lab options of the installer page (Workflow #389).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/runtime/interface.rs",
+        "enum": "LabOption"
+      },
+      "tokens": {
+        "authoring": {
+          "description": "Option one: authoring."
+        },
+        "debugging": {
+          "description": "Option two: debugging."
+        }
+      }
+    },
+    "pacing_stage": {
+      "description": "A performance pacing stage of an instance (Workflow #385): s0 is normal pacing, each later stage a worse responsiveness band.",
+      "review": "pending",
+      "tokens": {
+        "s0": {
+          "description": "Normal: no slowdown, no pause."
+        },
+        "s1": {
+          "description": "First signs: longer intervals and one more retry, never a pause."
+        },
+        "s2": {
+          "description": "Tight: longer intervals and more retries, never a pause."
+        },
+        "s3": {
+          "description": "Short: dispatch shares fall and the instances with the smallest share pause first."
+        },
+        "s4": {
+          "description": "Severe: every dispatch pauses and running policy runs are held."
+        }
+      }
+    },
+    "ladder_class": {
+      "description": "How the recovery ladder's trigger matching reads a code (Workflow #387). Every code entry names exactly one class: the first of these tokens, in this order, whose rule the code meets.",
+      "tokens": {
+        "planned_stop": {
+          "description": "1. Planned stop: a person, a rule or the pack's design stopped the run on purpose (a cancel, a pause, a performance yield or hold, a blackout window, a locked feature)."
+        },
+        "budget_or_permission": {
+          "description": "2. Budget or permission: the work lacked time, samples, attempts, quota or permission (a sampling deadline, an insufficient sample budget, a run timeout, an exhausted policy budget)."
+        },
+        "declaration_error": {
+          "description": "3. Declaration error: a pack, a binding or a configuration the work uses is itself wrong or incompatible; decided without looking at the screen, the same on every run."
+        },
+        "pack_logic_mismatch": {
+          "description": "4. Pack logic mismatch: the screen or the flow differs from what the pack declares; known only by looking at the screen (an unknown page, a failed or conflicting recognition, an unconfirmed step, an error page, an unmatched entry)."
+        },
+        "environment_fault": {
+          "description": "5. Environment fault: a device, a backend, ADB, the emulator or the vision provider could not open or failed, and the work ended because of it."
+        },
+        "stability_warning": {
+          "description": "6. Stability warning: a device, connection, capture or input anomaly on one instance that the Runtime retried or survived; its category is warning or error. Repeated, it shows the environment getting worse."
+        },
+        "none": {
+          "description": "7. Not applicable: a success or an info, a Runtime-internal invariant, a refused request or contract value, a client error or a configuration error."
+        }
+      }
+    },
     "device_state_probe": {
       "description": "A device-state read of a handset (model-398 section 7.1).",
       "source": {
@@ -5008,7 +5227,8 @@
       "runtime-host"
     ],
     "feature_": [
-      "contract"
+      "contract",
+      "policy"
     ],
     "feedback_": [
       "policy"
@@ -6804,6 +7024,70 @@
     ],
     "writer_": [
       "ledger"
+    ],
+    "channel_": [
+      "runtime-host"
+    ],
+    "lab_module_": [
+      "runtime-host"
+    ],
+    "upgrade_state_": [
+      "runtime-host"
+    ],
+    "pack_registry_": [
+      "runtime-host"
+    ],
+    "client_channel_": [
+      "runtime-client"
+    ],
+    "lab_tool_": [
+      "actingctl"
+    ],
+    "mcp_tier_": [
+      "actingctl"
+    ],
+    "lab_command_": [
+      "actinglab"
+    ],
+    "recognition_sample_": [
+      "execution-kernel"
+    ],
+    "candidate_sample_": [
+      "execution-kernel",
+      "recognition-pack"
+    ],
+    "contained_task_feature_": [
+      "execution-kernel"
+    ],
+    "cost_commit_": [
+      "execution-kernel"
+    ],
+    "policy_rerun_": [
+      "runtime-host"
+    ],
+    "policy_cost_commit_": [
+      "runtime-host"
+    ],
+    "pack_admission_": [
+      "runtime-host"
+    ],
+    "blackout_": [
+      "runtime-host"
+    ],
+    "session_feature_": [
+      "runtime-host"
+    ],
+    "session_pack_schedule_": [
+      "runtime-host"
+    ],
+    "due_task_": [
+      "runtime-host"
+    ],
+    "decision_reason_": [
+      "policy"
+    ],
+    "pack_schedule_": [
+      "policy"
     ]
   },
   "fragments": {

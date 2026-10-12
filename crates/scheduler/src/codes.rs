@@ -9,19 +9,19 @@
 actingcommand_contract::outcome_codes! {
     /// The scheduler's own refusals (`SchedulerError::code`).
     pub enum SchedulerCode {
-        InvalidSchedulerConfig => "invalid_scheduler_config": error,
-        InvalidConnectionId => "invalid_connection_id": error,
-        IdentifierIssuanceFailed => "identifier_issuance_failed": error,
-        LeaseExpiryOverflow => "lease_expiry_overflow": error,
-        LeaseNotExpired => "lease_not_expired": error,
-        LeaseQueueFull => "lease_queue_full": error,
-        LeaseQueueMissing => "lease_queue_missing": error,
-        LeaseQueueRequestMismatch => "lease_queue_request_mismatch": error,
-        LeaseQueueTimeoutInvalid => "lease_queue_timeout_invalid": error,
-        LeaseQueueSequenceOverflow => "lease_queue_sequence_overflow": error,
-        LeaseStepSequenceOverflow => "lease_step_sequence_overflow": error,
-        LeaseTransferNotSafe => "lease_transfer_not_safe": error,
-        DestructiveStateMismatch => "destructive_state_mismatch": error,
-        ResourceCloseOnly => "resource_close_only": error,
+        InvalidSchedulerConfig => "invalid_scheduler_config": error / none,
+        InvalidConnectionId => "invalid_connection_id": error / none,
+        IdentifierIssuanceFailed => "identifier_issuance_failed": error / none,
+        LeaseExpiryOverflow => "lease_expiry_overflow": error / none,
+        LeaseNotExpired => "lease_not_expired": error / none,
+        LeaseQueueFull => "lease_queue_full": error / none,
+        LeaseQueueMissing => "lease_queue_missing": error / none,
+        LeaseQueueRequestMismatch => "lease_queue_request_mismatch": error / none,
+        LeaseQueueTimeoutInvalid => "lease_queue_timeout_invalid": error / none,
+        LeaseQueueSequenceOverflow => "lease_queue_sequence_overflow": error / none,
+        LeaseStepSequenceOverflow => "lease_step_sequence_overflow": error / none,
+        LeaseTransferNotSafe => "lease_transfer_not_safe": error / none,
+        DestructiveStateMismatch => "destructive_state_mismatch": error / none,
+        ResourceCloseOnly => "resource_close_only": error / none,
     }
 }
