@@ -19,6 +19,20 @@ checkpoint's base (below). Revisions never restart. A complete line that fails
 these rules is fatal `owner_record_invalid`; only an incomplete final line left by
 a crash mid-append is truncated.
 
+An inactive v2 record may also carry `closed_by` (Workflow #389, unified
+interface section 3.6), the marker of a close that is not a formal stop. Its only
+value is `upgrade_state`: the upgrade state accepted its own shutdown, and the
+watchdog may start the selected generation again. The field is optional and the
+schema version does not change: a record without it reads exactly as before, and a
+`closed_by` on an active or a v1 record is `owner_record_invalid`. The checkpoint's
+`last_record` is an owner record and carries it verbatim. Since v0.12.0 every
+reader of the journal accepts it (actingd start, `ledger-maintenance`,
+`actingledger`); the watchdog reads records leniently and needs no change. The
+writers come with #389 slice U-4: the upgrade state's close record, and a
+maintenance owner (`ledger-maintenance`) whose previous close carries the marker
+copies it onto its own close, until a Runtime owner that is not a maintenance owner
+starts.
+
 Writers, all through the handle that holds the lock:
 
 | Writer | Record |
@@ -27,7 +41,7 @@ Writers, all through the handle that holds the lock:
 | active-instance change | same epoch, new instance set; an unchanged value writes nothing |
 | resource disposition | same epoch, `in_use` or `confirmed_closed`; unchanged writes nothing |
 | retention | same epoch, `unconfirmed`; the lock stays held until process exit |
-| close | same epoch, inactive, `closed_at_unix_ms`, `none`; then unlock |
+| close | same epoch, inactive, `closed_at_unix_ms`, `none`; then unlock (no `closed_by` until #389 U-4) |
 | `actingd unlock-owner` | the last epoch again, `confirmed_closed` (`contracts/actingd-unlock-owner.md`) |
 
 ## Derived state
@@ -146,6 +160,11 @@ fails explicitly as `owner_journal_too_large`.
 A build older than Workflow #191 O reads a checkpoint as `owner_record_invalid`
 and does not start. To go back to such a build, restore the owner journal backed
 up before its first fold and delete `owner.lock.compact` if present.
+
+A build older than v0.12.0 reads a record with `closed_by` as
+`owner_record_invalid`. The reader ships in v0.12.0, before any writer, so a
+rollback from a later v0.12 release to v0.12.0 still reads the journal its upgrade
+state closed.
 
 ## Error codes
 

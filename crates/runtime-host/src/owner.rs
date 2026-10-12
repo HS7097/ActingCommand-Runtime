@@ -197,6 +197,7 @@ impl OwnerGuard {
             active_instances: takeover_instances.clone(),
             closed_at_unix_ms: None,
             resource_disposition: Some(OwnerResourceDisposition::None),
+            closed_by: None,
         };
         let encoded = encode_record(&record)?;
         write_record(&mut file, &encoded)?;
@@ -662,6 +663,7 @@ fn write_record(file: &mut File, encoded: &[u8]) -> RuntimeHostResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_ledger::owner_journal::OwnerCloseMarker;
 
     // Defect regression D10: PR298 review 5120590779, Workflow #257 C1B9 v16.
     #[test]
@@ -771,6 +773,7 @@ mod tests {
                     active_instances: Vec::new(),
                     closed_at_unix_ms: None,
                     resource_disposition: Some(OwnerResourceDisposition::Unconfirmed),
+                    closed_by: None,
                 },
             )
             .expect("write stale unconfirmed owner");
@@ -822,5 +825,110 @@ mod tests {
             Some(OwnerResourceDisposition::None)
         );
         released.close(5).expect("close released owner");
+    }
+
+    /// Workflow #389 TU-44 (unified interface model v2.2.3, section 8.2; section 3.6): this build
+    /// reads an owner journal whose close carries the upgrade-state marker as usual, with the
+    /// marker on an ordinary record and on a checkpoint's `last_record`, and the owner record
+    /// schema still v2; a journal without the marker reads as before. actingd start and
+    /// `ledger-maintenance` read the journal through `OwnerGuard::acquire`.
+    #[test]
+    fn tu44_an_owner_journal_with_the_upgrade_state_close_marker_reads_as_usual() {
+        const OWNER_SCHEMA_V2: &str = "actingcommand.runtime-owner.v2";
+        let root = tempfile::tempdir().expect("owner root");
+        let path = root.path().join(OWNER_FILE_NAME);
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let startup_shape = |startup: &OwnerStartup| {
+            (
+                startup.takeover,
+                startup.takeover_instances.clone(),
+                startup.released_by_exit,
+            )
+        };
+        let own_revision = |guard: &mut OwnerGuard| {
+            read_last_record(guard.file_mut("read_own_start").expect("same handle"))
+                .expect("persisted start")
+                .expect("owner record")
+                .revision
+        };
+
+        // Without the marker: a journal ending in a formal close reads as before.
+        let mut first = OwnerGuard::acquire(root.path(), &issuer, 10)
+            .expect("first owner")
+            .guard;
+        first.close(11).expect("first close");
+        drop(first);
+        let mut second = OwnerGuard::acquire(root.path(), &issuer, 12).expect("unmarked journal");
+        let previous = second.journal.last().expect("first close record");
+        assert_eq!(
+            (
+                previous.revision,
+                previous.active,
+                previous.closed_at_unix_ms,
+                previous.resource_disposition,
+                previous.closed_by,
+            ),
+            (
+                2,
+                false,
+                Some(11),
+                Some(OwnerResourceDisposition::None),
+                None
+            )
+        );
+        assert_eq!(startup_shape(&second), (false, Vec::new(), None));
+        assert_eq!(own_revision(&mut second.guard), 3);
+        second.guard.close(13).expect("second close");
+        let unmarked_close = second.guard.record.clone();
+        drop(second);
+
+        // The upgrade state's close (written from #389 U-4 on): the same record with the marker.
+        let journal = std::fs::read_to_string(&path).expect("owner journal");
+        let body = journal.strip_suffix("}\n").expect("complete close record");
+        std::fs::write(&path, format!("{body},\"closed_by\":\"upgrade_state\"}}\n"))
+            .expect("marked close");
+
+        // The marker on an ordinary record.
+        let mut third = OwnerGuard::acquire(root.path(), &issuer, 14).expect("marked journal");
+        let marked = third.journal.last().expect("marked close record");
+        assert_eq!(marked.schema_version, OWNER_SCHEMA_V2);
+        assert_eq!(marked.closed_by, Some(OwnerCloseMarker::UpgradeState));
+        assert_eq!(
+            serde_json::to_value(OwnerRecord {
+                closed_by: None,
+                ..marked.clone()
+            })
+            .expect("encode marked close"),
+            serde_json::to_value(unmarked_close).expect("encode unmarked close")
+        );
+        assert_eq!(startup_shape(&third), (false, Vec::new(), None));
+        assert_eq!(own_revision(&mut third.guard), 5);
+
+        // The marker on a checkpoint's `last_record`: this owner folds every record but its own
+        // start, as an in-epoch append past the compaction threshold does.
+        third
+            .guard
+            .compact()
+            .expect("fold through the marked close");
+        third.guard.close(15).expect("third close");
+        drop(third);
+        let journal = std::fs::read_to_string(&path).expect("folded journal");
+        let checkpoint: serde_json::Value =
+            serde_json::from_str(journal.lines().next().expect("checkpoint line"))
+                .expect("checkpoint");
+        assert_eq!(
+            checkpoint["schema_version"],
+            "actingcommand.runtime-owner-checkpoint.v1"
+        );
+        assert_eq!(checkpoint["last_record"]["schema_version"], OWNER_SCHEMA_V2);
+        assert_eq!(checkpoint["last_record"]["revision"], 4);
+        assert_eq!(checkpoint["last_record"]["closed_by"], "upgrade_state");
+        let mut fourth =
+            OwnerGuard::acquire(root.path(), &issuer, 16).expect("folded marked journal");
+        let previous = fourth.journal.last().expect("third close record");
+        assert_eq!((previous.revision, previous.active), (6, false));
+        assert_eq!(startup_shape(&fourth), (false, Vec::new(), None));
+        assert_eq!(own_revision(&mut fourth.guard), 7);
+        fourth.guard.close(17).expect("fourth close");
     }
 }
