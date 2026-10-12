@@ -479,7 +479,7 @@ impl PolicyRecomputeWake {
         let terminal = receipt
             .terminal()
             .ok_or_else(|| ActingdError::process(ActingdCode::PolicyRecomputeTerminalMissing))?;
-        let identity = projection.outcome().identity();
+        let identity = projection.scheduling_result().identity();
         if projection.ledger_position() < terminal.sequence
             || identity.terminal_event_id() != terminal.event_id
             || identity.terminal_sequence() != terminal.sequence
@@ -503,7 +503,7 @@ impl PolicyRecomputeWake {
     }
 
     fn key(&self) -> PolicyRecomputeKey {
-        let identity = self.projection.outcome().identity();
+        let identity = self.projection.scheduling_result().identity();
         PolicyRecomputeKey {
             run_id: identity.run_id(),
             terminal_event_id: identity.terminal_event_id(),
@@ -1952,11 +1952,27 @@ mod tests {
             GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root.path()), |_| None)
                 .expect("read-only before final close");
         let events = ledger.query(&EventQuery::default());
+        // Ledger revision 3: each failure's code is its record's outcome; a spelling the
+        // catalog does not list is relayed as `outcome_relay_unregistered` with `raw_code`.
         let failures = events
             .iter()
             .filter_map(|event| match event.payload() {
                 EventPayload::Runtime(RuntimePayload::Failed(payload)) => {
-                    Some(payload.lifecycle_failure().expect("typed lifecycle"))
+                    assert!(payload.lifecycle_failure().is_some(), "typed lifecycle");
+                    let outcome = payload.outcome();
+                    Some(
+                        if *outcome.code()
+                            == actingcommand_contract::codes::ContractCode::OutcomeRelayUnregistered
+                                .code()
+                        {
+                            outcome
+                                .value("raw_code")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                        } else {
+                            outcome.code().as_str()
+                        },
+                    )
                 }
                 _ => None,
             })
@@ -1969,10 +1985,7 @@ mod tests {
             "policy_driver_reference_leaked",
         ] {
             assert_eq!(
-                failures
-                    .iter()
-                    .filter(|failure| failure.code() == code)
-                    .count(),
+                failures.iter().filter(|failure| **failure == code).count(),
                 1
             );
         }
@@ -2311,11 +2324,17 @@ mod tests {
             )
         };
         assert_eq!(
-            wake.projection.outcome().identity().catalog_task_id(),
+            wake.projection
+                .scheduling_result()
+                .identity()
+                .catalog_task_id(),
             "fixture.observe"
         );
         assert_eq!(
-            wake.projection.outcome().disposition().outcome_key(),
+            wake.projection
+                .scheduling_result()
+                .disposition()
+                .outcome_key(),
             "resident-completed"
         );
         let control = PolicyDriverControl::default();
@@ -2453,13 +2472,19 @@ mod tests {
             projection: SchedulingOutcomeProjection::new(
                 wake.projection.ledger_position(),
                 actingcommand_contract::AuthoritativeSchedulingOutcome::new(
-                    wake.projection.outcome().identity().clone(),
+                    wake.projection.scheduling_result().identity().clone(),
                     actingcommand_contract::SchedulingDisposition::new(
                         "resident-conflict",
-                        wake.projection.outcome().disposition().effect().clone(),
+                        wake.projection
+                            .scheduling_result()
+                            .disposition()
+                            .effect()
+                            .clone(),
                     )
                     .expect("conflicting disposition"),
-                    wake.projection.outcome().terminal_timestamp_unix_ms(),
+                    wake.projection
+                        .scheduling_result()
+                        .terminal_timestamp_unix_ms(),
                 )
                 .expect("conflicting outcome"),
             )

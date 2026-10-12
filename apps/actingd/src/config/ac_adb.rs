@@ -157,11 +157,6 @@ impl InstanceAdb {
     pub(super) fn selected(&self) -> Option<&InstalledAdb> {
         self.installed.as_ref().filter(|_| self.selected)
     }
-
-    /// The install root's adb, used by the instance or not (conflict messages).
-    pub(super) fn installed(&self) -> Option<&InstalledAdb> {
-        self.installed.as_ref()
-    }
 }
 
 /// What `assemble` hands to `require`: the install root's adb, if any, and the aliases of the

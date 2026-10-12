@@ -3597,7 +3597,7 @@ fn receipt_ocr_run(
             if !matches!(
                 payload.fact(),
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     ..
                 }
             ) {
@@ -4394,7 +4394,7 @@ fn official_ocr_marker_expected(
             ));
         };
         if let TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             scheduling_disposition: Some(disposition),
             ..
         } = payload.fact()
@@ -4405,12 +4405,12 @@ fn official_ocr_marker_expected(
             );
         }
         if let TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Failure,
-            failure_code: Some(code),
+            task_result: TaskOutcome::Failure,
+            outcome: Some(outcome),
             ..
         } = payload.fact()
         {
-            expected |= code == SharedCode::ContainedTaskOcrFieldsUnresolved.as_str();
+            expected |= *outcome.code() == SharedCode::ContainedTaskOcrFieldsUnresolved.code();
         }
     }
     Ok(expected)
@@ -5451,7 +5451,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             ClientLocation::SummarizeRun.location(),
         ));
     }
-    if is_policy_settlement_interrupted(execution.outcome()) {
+    if is_policy_settlement_interrupted(execution.policy_result()) {
         if release_event.sequence <= lease_event.sequence
             || events.iter().any(|event| {
                 matches!(
@@ -5501,7 +5501,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             },
             "outcome": {
                 "kind": SharedCode::PolicySettlementInterrupted.as_str(),
-                "policy": execution.outcome(),
+                "policy": execution.policy_result(),
                 "result": "original_cause_unavailable",
                 "original_cause": "unavailable"
             },
@@ -5520,7 +5520,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "completed_sequence": completed_event.sequence
         }));
     }
-    let (task_event_type, status, result) = match execution.outcome() {
+    let (task_event_type, status, result) = match execution.policy_result() {
         PolicyExecutionOutcome::Succeeded { .. } => {
             (EventType::TaskCompleted, "simulated_completed", None)
         }
@@ -5558,7 +5558,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             ClientLocation::SummarizeRun.location(),
         ));
     }
-    validate_task_terminal(task_event, execution.outcome())?;
+    validate_task_terminal(task_event, execution.policy_result())?;
     let task_timing = full_payload(task_event)?.task_timing();
     validate_admitted_package(events, &lab_request_id, intent.package_digest())?;
     let simulated_effect_count = validate_fixture_simulation(events)?;
@@ -5600,7 +5600,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         },
         "outcome": {
             "kind": "fixture_simulation",
-            "policy": execution.outcome(),
+            "policy": execution.policy_result(),
             "result": result
         },
         "execution_provenance": {
@@ -5639,8 +5639,8 @@ fn validate_task_terminal(
         ));
     };
     let TaskSemanticFact::TerminalCommitted {
+        task_result,
         outcome,
-        failure_code,
         ..
     } = payload.fact()
     else {
@@ -5651,11 +5651,12 @@ fn validate_task_terminal(
     };
     let matches = match execution {
         PolicyExecutionOutcome::Succeeded { .. } => {
-            *outcome == actingcommand_contract::TaskOutcome::Success && failure_code.is_none()
+            *task_result == actingcommand_contract::TaskOutcome::Success && outcome.is_none()
         }
         PolicyExecutionOutcome::Failed { failure } => {
-            *outcome == actingcommand_contract::TaskOutcome::Failure
-                && failure_code.as_deref() == Some(failure.error_code.as_str())
+            *task_result == actingcommand_contract::TaskOutcome::Failure
+                && outcome.as_ref().map(|outcome| outcome.code().as_str())
+                    == Some(failure.error_code.as_str())
         }
     };
     if !matches {
@@ -6379,7 +6380,6 @@ mod run_summary_settlement_tests {
             reason_chain_id: "reason:settlement".to_owned(),
             reasons: vec![PolicyReasonRecord {
                 code: "scheduled".to_owned(),
-                detail: "deterministic settlement fixture".to_owned(),
             }],
             catalog_hash: format!("sha256:{}", "c".repeat(64)),
             catalog_version: 1,

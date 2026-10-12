@@ -1796,6 +1796,116 @@
       "description": "actingd refused its configuration file: a policy.monitor value is outside its range.",
       "common_causes": "TBD",
       "handling": "Correct policy.monitor as contracts/actingd-check-config.md describes it."
+    },
+    "provider_native_failed": {
+      "category": "error",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "device_category": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Provider startup failed in the device layer and the device error names no registered code; device_category names the device failure's category when the device error has one, and a foreign_other_error link carries the device's text.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_configured": {
+      "category": "info",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the configuration file configures: its flag is on or its section is present.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_configured_off": {
+      "category": "info",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the configuration file turns off with its flag; an env_overrides subsystem carries each ignored ACTINGCOMMAND_* variable as a note link of env_override_ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_flag_absent": {
+      "category": "info",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem whose flag the configuration file does not name, so its default applies; an env_overrides subsystem carries each ignored ACTINGCOMMAND_* variable as a note link of env_override_ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_section_absent": {
+      "category": "info",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem off because the configuration file has no section for it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_always_on": {
+      "category": "info",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the Runtime always runs; count is the number of allowed client identities when the governance subsystem restricts them.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_discovery_bound": {
+      "category": "info",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a discovery subsystem on: count instances are bound by instance_index or instance_name.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_discovery_unbound": {
+      "category": "info",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a discovery subsystem off: no instance is bound by instance_index or instance_name.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

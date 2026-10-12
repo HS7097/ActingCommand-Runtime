@@ -2,7 +2,7 @@
 
 use super::*;
 use actingcommand_contract::{
-    ApplicationLifecycleAction, IdentifierIssuer, InputAction, InstanceId, Sensitivity,
+    ApplicationLifecycleAction, IdentifierIssuer, InputAction, InstanceId,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -963,11 +963,9 @@ fn segmented_swipe_capability_failure_preserves_device_detail() {
     assert_eq!(detail.stage(), "input.segmented_swipe.capability");
     assert_eq!(detail.backend(), "input_backend");
     assert_eq!(detail.operation(), "segmented_swipe");
-    assert_eq!(
-        detail.message(),
-        "selected input backend does not support segmented swipe"
-    );
-    assert_eq!(detail.declared_sensitivity(), Sensitivity::Internal);
+    // Ledger revision 3: the fixed summary is Runtime text and is not persisted, so this
+    // failure carries no native text.
+    assert!(error.native_detail().is_none());
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.input_calls, 0);
     assert_eq!(snapshot.input_closes, 1);
@@ -1161,9 +1159,11 @@ fn execution_error_preserves_secondary_cleanup_detail() {
             .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.operation")
             .with_diagnostic_context("adb_shell_input", "reset", DeviceErrorSensitivity::Internal),
     );
-    assert!(
-        primary.native_detail().is_none(),
-        "the diagnostic already carries the complete cause"
+    // Ledger revision 3: the diagnostic detail carries no text; the device's own text is the
+    // native detail.
+    assert_eq!(
+        primary.native_detail().map(|native| native.text()),
+        Some("primary bounded context")
     );
     let native_text = "雪".repeat(1_024);
     let bounded = ExecutionKernelError::device(
@@ -1181,12 +1181,12 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     assert_eq!(native.text(), "雪".repeat(341));
     assert!(native.truncated());
     assert!(native.text().len() <= 1_024);
+    let summary = bounded
+        .diagnostic_detail()
+        .expect("where the failure arose");
     assert_eq!(
-        bounded
-            .diagnostic_detail()
-            .expect("summary")
-            .declared_sensitivity(),
-        Sensitivity::Secret
+        (summary.backend(), summary.operation()),
+        ("maatouch", "swipe")
     );
     assert!(!format!("{bounded:?} {bounded}").contains('雪'));
     let merged_native = ExecutionKernelError::merge(bounded.clone(), primary.clone());
@@ -1203,15 +1203,18 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     assert_eq!(merged.device_severity(), Some(DeviceErrorSeverity::Fatal));
     assert_eq!(merged.diagnostic_detail(), primary.diagnostic_detail());
     let cause = merged.cleanup_cause().expect("real cleanup cause");
-    assert_eq!(cause.code(), cleanup.code().as_str());
+    assert_eq!(cause.code(), cleanup.code());
     assert_eq!(cause.severity(), CleanupCauseSeverity::Fatal);
     assert_eq!(cause.detail(), cleanup.diagnostic_detail());
     let detail = cause.detail().expect("cleanup producer detail");
     assert_eq!(detail.stage(), "maatouch.stdin.flush");
     assert_eq!(detail.backend(), "maatouch");
     assert_eq!(detail.operation(), "close");
-    assert_eq!(detail.declared_sensitivity(), Sensitivity::Secret);
-    assert_eq!(detail.message(), "exit_status=1 stderr=cleanup_failed");
+    // Ledger revision 3: the cleanup's device text is its native detail, not a detail message.
+    assert_eq!(
+        cleanup.native_detail().map(|native| native.text()),
+        Some("exit_status=1 stderr=cleanup_failed")
+    );
     let repeated = ExecutionKernelError::merge(merged.clone(), merged.clone());
     assert_eq!(repeated, merged);
     let retired = ExecutionKernelError::merge(
@@ -1263,7 +1266,7 @@ fn execution_error_preserves_secondary_cleanup_detail() {
             }
         );
         let cause = error.cleanup_cause().expect("session cleanup cause");
-        assert_eq!(cause.code(), "input_backend_close_failed");
+        assert_eq!(cause.code().as_str(), "input_backend_close_failed");
         assert_eq!(cause.severity(), CleanupCauseSeverity::Fatal);
         assert!(
             cause.detail().is_none(),

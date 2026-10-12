@@ -272,22 +272,24 @@ fn gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stal
         ],
         "the vendor's restart is never dispatched"
     );
-    let detail = events
+    // Ledger revision 3: the restart's failure record carries its failure as its outcome, and
+    // the restart's tokens as the outcome's values.
+    let restart = events
         .iter()
         .find_map(|event| match event.payload() {
-            EventPayload::Runtime(RuntimePayload::Failed(record)) => record
-                .lifecycle_failure()
-                .filter(|failure| failure.code() == "emulator_restart_start_failed")
-                .and_then(|failure| failure.primary_detail())
-                .map(|detail| detail.message().to_owned()),
+            EventPayload::Runtime(RuntimePayload::Failed(record))
+                if record.lifecycle_failure().is_some()
+                    && record.outcome().code().as_str() == "emulator_restart_start_failed" =>
+            {
+                Some(record.outcome().clone())
+            }
             _ => None,
         })
         .expect("the restart's failure record");
-    assert!(
-        detail
-            .split_whitespace()
-            .any(|token| token == "restart_phase=start"),
-        "{detail}"
+    assert_eq!(
+        restart.value("restart_phase").and_then(Value::as_str),
+        Some("start"),
+        "{restart}"
     );
     assert!(status.status.success(), "{}", describe(&status));
     let status: Value = serde_json::from_slice(&status.stdout).expect("status JSON");

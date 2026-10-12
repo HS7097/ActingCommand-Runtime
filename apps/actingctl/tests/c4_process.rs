@@ -584,10 +584,10 @@ fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
         facts.iter().any(|fact| matches!(
             fact,
             TaskSemanticFact::TerminalCommitted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 final_page: Some(page),
                 executed_steps: Some(1),
-                failure_code: None,
+                outcome: None,
                 ..
             } if page == "neutral/terminal"
         )),

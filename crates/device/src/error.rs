@@ -420,6 +420,16 @@ impl DeviceErrorDiagnosticMessage {
     }
 }
 
+/// The `device_category` vocabulary (Workflow #378 A3): an outcome names a device failure's
+/// category with this token, as `as_str` spells it.
+impl actingcommand_contract::outcome::VocabularyToken for DeviceErrorCategory {
+    const VOCABULARY: &'static str = "device_category";
+
+    fn token(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 impl DeviceErrorCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
