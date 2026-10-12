@@ -152,7 +152,7 @@ impl ControlMode<'_> {
         }
     }
 
-    const fn restart_phase(&self) -> bool {
+    fn restart_phase(&self) -> bool {
         matches!(self, Self::RestartPhase(_))
     }
 

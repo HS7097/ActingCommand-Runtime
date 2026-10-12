@@ -1227,9 +1227,9 @@ fn transferred_to(event: &PersistedEvent) -> RequestId {
 fn startup_claim_request(events: &[PersistedEvent]) -> RequestId {
     let scheduled = phases(events)
         .into_iter()
-        .filter(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::StartupPackageScheduled { .. }))
+        .rev()
+        .find(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::StartupPackageScheduled { .. }))
         .map(|(event, _)| event)
-        .last()
         .expect("startup_package_scheduled");
     let causation = *scheduled
         .links()
@@ -1237,11 +1237,11 @@ fn startup_claim_request(events: &[PersistedEvent]) -> RequestId {
         .expect("scheduling causation");
     *events
         .iter()
-        .filter(|event| {
+        .rev()
+        .find(|event| {
             event.event_type() == EventType::LeaseRequested
                 && event.links().causation_id() == Some(&causation)
         })
-        .last()
         .and_then(|event| event.links().request_id())
         .expect("the startup claim's request")
 }
