@@ -1089,6 +1089,7 @@ impl SceneEvaluation<'_> {
                     nn: None,
                     color_digest: None,
                     composite: None,
+                    failure: None,
                     message: template_message(template_ok, color_ok),
                     sampling: None,
                     sample_evaluations: Vec::new(),

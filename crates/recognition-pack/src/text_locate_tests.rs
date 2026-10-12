@@ -783,6 +783,15 @@ fn locate_declarations_are_refused_at_their_pointer() {
                    "click": {"x": 40, "y": 60, "width": 120, "height": 120},
                    "targets": {"business_id": "text/entry"}}]
     }]);
+    let mut feature = base();
+    feature["candidate_layouts"] = json!([{
+        "id": "choices", "page_id": "neutral/list", "kind": "fixed_slots",
+        "features": [{"name": "business_id", "value": "passed",
+                      "target": "text/entry", "offset": {"x": 0, "y": 0}}],
+        "slots": [{"rect": {"x": 40, "y": 60, "width": 120, "height": 120},
+                   "click": {"x": 40, "y": 60, "width": 120, "height": 120},
+                   "targets": {}}]
+    }]);
     let mut region_merge = base();
     region_merge["targets"][0]["locate"] =
         json!({"normalize": "identity_v1", "blocks": "region", "line_merge": "none"});
@@ -826,6 +835,12 @@ fn locate_declarations_are_refused_at_their_pointer() {
             "candidate slot target",
             slot,
             "/candidate_layouts/0/slots/0/targets/business_id",
+            Reason::InvalidValue,
+        ),
+        (
+            "candidate feature target",
+            feature,
+            "/candidate_layouts/0/features/0/target",
             Reason::InvalidValue,
         ),
         (
