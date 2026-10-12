@@ -11,9 +11,9 @@
 use super::*;
 use crate::host::ContainedTaskCheckpointPoint as LapsePoint;
 use actingcommand_contract::{
-    InstallTransitionAction, InstallTransitionPhase, LeasePayload, RecoveryLadderOutcome,
-    RecoveryRung, RecoveryRungOutcome, RequestId, RuntimeLifecyclePhase, RuntimePayload,
-    SchedulerPayload, SchedulingPauseScope, StartupPackageDisposition,
+    DiagnosticCode, InstallTransitionAction, InstallTransitionPhase, LeasePayload,
+    RecoveryLadderOutcome, RecoveryRung, RecoveryRungOutcome, RequestId, RuntimeLifecyclePhase,
+    RuntimePayload, SchedulerPayload, SchedulingPauseScope, StartupPackageDisposition,
 };
 use actingcommand_scheduler::ClaimKind;
 
@@ -1593,6 +1593,177 @@ fn a_start_whose_preparation_fails_hands_its_key_to_the_ladder() {
     );
     let control_release = only_one(&control, EventType::LeaseReleased);
     assert!(control_release.sequence() > transferred.sequence());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host during the climb");
+}
+
+/// Coordinator ruling on review #716 (item 1): an emulator control whose hold hands no startup
+/// claim over cancels the instance's queued startup claim, since a startup run against a stopped
+/// emulator is meaningless. Under a pause, a start leaves its startup claim queued; a stop then
+/// cancels it (`scheduler.denied lease.queue_cancelled`), so the resume runs no startup package.
+#[test]
+fn a_stop_under_a_pause_cancels_the_queued_startup_claim_so_the_resume_runs_none() {
+    use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), true);
+    assert_eq!(
+        pause_instance(&host, STARTUP_ALIAS, 91).state(),
+        RuntimeReceiptState::Completed
+    );
+    let (_, started) = control_emulator(&host, Start, 92);
+    assert_eq!(
+        started.state(),
+        RuntimeReceiptState::Completed,
+        "{started:?}"
+    );
+    assert_eq!(
+        controlled_startup(&started),
+        StartupPackageDisposition::Scheduled
+    );
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the startup claim waits gated"
+    );
+    let startup_claim = startup_claim_request(&all_events(&host));
+
+    let (_, stopped) = control_emulator(&host, Stop, 93);
+    assert_eq!(
+        stopped.state(),
+        RuntimeReceiptState::Completed,
+        "{stopped:?}"
+    );
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![]),
+        "the stop cancelled the startup claim"
+    );
+    let (_, resumed) = resume_instance(&host, 94);
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![])
+    );
+    let events = all_events(&host);
+    let claim = of_request(&events, startup_claim);
+    let cancelled = only_one(&claim, EventType::SchedulerDenied);
+    assert!(matches!(
+        cancelled.payload(),
+        EventPayload::Scheduler(SchedulerPayload::Denied(payload))
+            if payload.diagnostic_code() == DiagnosticCode::LeaseQueueCancelled
+    ));
+    assert!(
+        claim.iter().all(|event| !matches!(
+            event.event_type(),
+            EventType::LeaseGranted | EventType::LeaseTransferred
+        )),
+        "the startup claim never gets the key"
+    );
+    assert_eq!(
+        count(&events, EventType::TaskRequested),
+        0,
+        "no startup run"
+    );
+    assert!(completed_runs(&events).is_empty());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Workflow #369 H-1, P1 (coordinator ruling on review #716, item 2): a resume whose reconnect
+/// preparation fails in a way the preparation rule calls recoverable hands its key straight to
+/// the ladder that failure admits, ahead of the startup claim a start under the pause left
+/// queued: the reconnect's lease goes to the ladder in one transfer, with no grant of its own.
+#[test]
+fn a_resume_whose_reconnect_fails_hands_its_key_to_the_ladder_ahead_of_a_queued_startup_claim() {
+    use actingcommand_contract::EmulatorInstanceAction::Start;
+    use actingcommand_device::{
+        DeviceError, DeviceErrorCategory, DeviceErrorSensitivity, DeviceResourceQuiescence,
+    };
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), true);
+    assert_eq!(
+        pause_instance(&host, STARTUP_ALIAS, 95).state(),
+        RuntimeReceiptState::Completed
+    );
+    let (_, started) = control_emulator(&host, Start, 96);
+    assert_eq!(
+        started.state(),
+        RuntimeReceiptState::Completed,
+        "{started:?}"
+    );
+    assert_eq!(
+        controlled_startup(&started),
+        StartupPackageDisposition::Scheduled
+    );
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the startup claim waits gated"
+    );
+    let startup_claim = startup_claim_request(&all_events(&host));
+    *state.input_open_error.lock().expect("input open error") = Some(
+        DeviceError::transient("fixture input handshake failed")
+            .with_diagnostic(DeviceErrorCategory::Handshake, "device_registry.input.open")
+            .with_diagnostic_context("adb_shell_input", "open", DeviceErrorSensitivity::Internal)
+            .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
+    );
+
+    let (resume, resumed) = resume_instance(&host, 97);
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "a failed reconnect does not fail the resume: {resumed:?}"
+    );
+    wait_until("the ladder's start", || {
+        phases(&all_events(&host))
+            .iter()
+            .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))
+    });
+    let events = all_events(&host);
+    let ladder_request = phases(&events)
+        .into_iter()
+        .find_map(|(event, phase)| match phase {
+            RuntimeLifecyclePhase::RecoveryLadderStarted { .. } => {
+                Some(*event.links().request_id().expect("the ladder's request"))
+            }
+            _ => None,
+        })
+        .expect("recovery_ladder_started");
+    let reconnect = events
+        .iter()
+        .filter(|event| event.links().correlation_id() == Some(&resume.correlation_id()))
+        .collect::<Vec<_>>();
+    let reconnect_lease = *only_one(&reconnect, EventType::LeaseGranted)
+        .links()
+        .lease_id()
+        .expect("the reconnect claim's lease");
+    let transferred = transfer_from(&events, reconnect_lease);
+    assert_eq!(
+        transferred_to(transferred),
+        ladder_request,
+        "the reconnect's key goes to the ladder"
+    );
+    assert_ne!(transferred_to(transferred), startup_claim);
+    let ladder = of_request(&events, ladder_request);
+    assert!(only_one(&ladder, EventType::LeaseRequested).sequence() < transferred.sequence());
+    assert!(only_one(&ladder, EventType::SchedulerQueued).sequence() < transferred.sequence());
+    assert!(
+        !ladder
+            .iter()
+            .any(|event| event.event_type() == EventType::LeaseGranted),
+        "the ladder is granted by the transfer"
+    );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host during the climb");
 }

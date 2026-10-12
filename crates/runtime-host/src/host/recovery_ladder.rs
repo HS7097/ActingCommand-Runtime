@@ -14,13 +14,15 @@
 //! (`cleanup_scheduled_failure_with_run_links`, to which only the policy-run path passes a
 //! `LadderTrigger`). An admitted ladder turns that end into a transfer of the key to the
 //! ladder's claim, so nothing can take the instance between the failure and the climb. A
-//! preparation's ladder is queued as a claim after the preparation released its lease. Either
-//! way the ladder climbs on its instance's worker (`host_claims`) and holds the key from its
-//! first rung to its end (H-3): rung runs run on its token, each after the ladder queued its
-//! own continuation, to which the run's release hands the key back; the ladder renews before
-//! every step whose bound exceeds what is left; at every step it checks that it still holds
-//! the key and that no pause, capacity refusal, drain or shutdown ends the climb; and it
-//! releases once.
+//! daemon-start preparation's ladder is queued as a claim after the preparation released its
+//! dedicated lease; after a preparation on a held key (an emulator start or restart, a resume's
+//! reconnect, a self-check), the key's release hands the key straight to the ladder's claim
+//! (`release_to_preparation_ladder`). Either way the ladder climbs on its instance's worker
+//! (`host_claims`) and holds the key from its first rung to its end (H-3): rung runs run on its
+//! token, each after the ladder queued its own continuation, to which the run's release hands
+//! the key back; the ladder renews before every step whose bound exceeds what is left; at every
+//! step it checks that it still holds the key and that no pause, capacity refusal, drain or
+//! shutdown ends the climb; and it releases once.
 //!
 //! The rungs, in this fixed order, are existing work under the instance's key:
 //! `return_home` runs the failed run's bound recovery package as a standalone contained task
@@ -248,6 +250,8 @@ fn ladder_invariant(code: impl Into<Code>) -> RuntimeHostError {
 impl HostShared {
     /// The summary is appended only after original acquisition disposal and the existing
     /// session close/release path returned. Its event identity is the preparation attempt.
+    /// Returns it with the ladder a failed preparation admitted, which is not queued yet: the
+    /// caller queues it, or hands it the key it holds (`release_to_preparation_ladder`).
     pub(super) fn record_preparation_finished(
         &self,
         instance_id: InstanceId,
@@ -256,7 +260,7 @@ impl HostShared {
         observations: &[actingcommand_device::BackendOpenObservation],
         check: &SchedulingResumeSelfCheck,
         recoverable: bool,
-    ) -> RuntimeHostResult<TerminalEvent> {
+    ) -> RuntimeHostResult<(TerminalEvent, Option<PendingRecoveryLadder>)> {
         let channel = |entry, passed| {
             if passed {
                 return BackendObservationStatus::Passed;
@@ -318,10 +322,10 @@ impl HostShared {
             || stage == RecoveryTriggerStage::RecoveryPreparation
             || self.fatal.is_shutdown_requested()
         {
-            return Ok(event);
+            return Ok((event, None));
         }
         let Some(failure_code) = &check.failure_code else {
-            return Ok(event);
+            return Ok((event, None));
         };
         let settings = self
             .stuck_recovery()?
@@ -337,7 +341,7 @@ impl HostShared {
         .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderInstanceMissing))?;
         if !settings.enabled || resolved.provenance() != ExecutionBackendProvenance::PhysicalDevice
         {
-            return Ok(event);
+            return Ok((event, None));
         }
         let issuer = self.events.issuer();
         let request_id = issuer
@@ -360,9 +364,12 @@ impl HostShared {
             causation_id,
             holder_id,
         )?;
-        // Workflow #369 H-1: a preparation's ladder waits as a claim; the preparation released
-        // its lease before this record, so the pump grants it on the free instance.
-        self.queue_recovery_ladder(PendingRecoveryLadder {
+        // Workflow #369 H-1, P1: the admitted ladder goes back to the preparation. After a
+        // daemon-start preparation, whose dedicated lease was released before this record, it
+        // is queued and the pump grants it on the free instance; after a preparation on a held
+        // key (an emulator start or restart, a resume's reconnect, a self-check), the key's
+        // holder hands that key straight to it at its release (`release_to_preparation_ladder`).
+        let pending = PendingRecoveryLadder {
             instance_id,
             instance_alias: resolved.instance_alias,
             trigger: RecoveryLadderTrigger {
@@ -383,8 +390,11 @@ impl HostShared {
             cooldown_ms: u64::from(settings.cooldown_secs) * 1_000,
             claim,
             holder_id,
-        })?;
-        Ok(event)
+        };
+        Ok((
+            event,
+            self.admit_recovery_ladder(&pending)?.then_some(pending),
+        ))
     }
 
     /// Workflow #369 H-1: the ladder claim's own synthetic request.
@@ -589,12 +599,66 @@ impl HostShared {
         Ok(false)
     }
 
-    /// Admits a preparation's ladder and queues its claim.
-    fn queue_recovery_ladder(&self, pending: PendingRecoveryLadder) -> RuntimeHostResult<()> {
-        if !self.admit_recovery_ladder(&pending)? {
-            return Ok(());
+    /// Workflow #369 H-1, P1 (review #716 follow-up): the explicit release `request_id` of the
+    /// held key (`token` on `connection_id`) on which a preparation ran that admitted `ladder`.
+    /// The release hands the key straight to the ladder's claim (`release_lease_to_claim`: the
+    /// claim's own `lease.requested` + `scheduler.queued`, then `lease.transferred`, no grant
+    /// of its own), so no claim queued earlier can take the instance first. With no hand-off (a
+    /// pause closed the gate since the admission, or a destructive step is open), the ladder
+    /// waits as a claim and the key is released; a refused hand-off is recorded as a refused
+    /// queueing is, and the key is released.
+    pub(super) fn release_to_preparation_ladder(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        request_id: RequestId,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        ladder: PendingRecoveryLadder,
+    ) -> Result<(), RequestFailure> {
+        let claim_connection =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    HostLocation::BuildLadderConnection,
+                    &error,
+                ))
+            })?;
+        let claim = ladder.claim.clone();
+        let instance_alias = ladder.instance_alias.clone();
+        let handed = self.release_lease_to_claim(
+            request,
+            request_id,
+            token,
+            connection_id,
+            HostClaim {
+                request: &claim,
+                instance_alias: &instance_alias,
+                holder_id: ladder.holder_id,
+                connection_id: claim_connection,
+                kind: ClaimKind::Ladder,
+                priority: LeasePriority::High,
+                lease_ttl_ms: LADDER_CLAIM_TTL_MS,
+            },
+            HostClaimWork::RecoveryLadder(Box::new(ladder.clone())),
+        );
+        match handed {
+            Ok(true) => return Ok(()),
+            Ok(false) => self
+                .enqueue_ladder_claim(ladder)
+                .map_err(RequestFailure::poison_without_terminal)?,
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                return Err(failure);
+            }
+            Err(failure) => self
+                .append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    ladder.links,
+                    None,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?,
         }
-        self.enqueue_ladder_claim(pending)
+        self.release_lease(request, request_id, token, connection_id, None)
+            .map(|_| ())
     }
 
     /// Workflow #369 H-1: queues an admitted ladder's claim (routine, high, no deadline); the

@@ -52,10 +52,12 @@ claim is a gated routine claim: an emulator `start` / `restart` under a pause of
 the global pause (a restored pause included) still drives the emulator, but its startup claim
 waits queued and the control's key is released, so no startup run happens until the resume;
 the resume's reconnect claim is granted first, and its release hands the key to the startup
-claim. A gated claim does not refuse the pause's hand-back (step (c)). A stuck-recovery
-ladder is admitted only while its instance is not paused; a pause that arrives while a ladder
-holds the instance ends the ladder at its next step (`recovery_admission_denied`), and its one
-release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
+claim. A `stop`, or a `start` / `restart` whose preparation fails, made meanwhile cancels the
+queued startup claim, so the resume runs none; a reconnect whose preparation fails and admits a
+ladder hands the key to that ladder first. A gated claim does not refuse the pause's hand-back
+(step (c)). A stuck-recovery ladder is admitted only while its instance is not paused; a pause
+that arrives while a ladder holds the instance ends the ladder at its next step
+(`recovery_admission_denied`), and its one release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
 
 ## Global pause
 

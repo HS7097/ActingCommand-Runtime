@@ -61,11 +61,12 @@ scheduler's default lease TTL, the request's own connection):
 - **The end.** The hold ends with the request's explicit release (`lease.transition_intent`,
   `lease.released` under its links), after the action's records: after a `start` / `restart`
   whose preparation passed it hands the key to the startup package's claim ("Startup package
-  hook"); after a failed preparation that admits a ladder, the release transfers the key to
-  that ladder ("Stuck-recovery ladder"); otherwise it hands the key to the next eligible claim,
-  or frees the instance. A failed action ends the key as a failed lease end does (`lease.released`
-  under the lease's own links, the key handed on), except after an unconfirmed close, which
-  keeps it.
+  hook"). A hold that hands no startup claim over (a stop, a failed preparation) first cancels
+  the instance's queued startup claim; then, after a failed preparation that admits a ladder,
+  the release hands the key straight to that ladder ("Stuck-recovery ladder"); otherwise it
+  hands the key to the next eligible claim, or frees the instance. A failed action ends the
+  key as a failed lease end does (`lease.released` under the lease's own links, the key handed
+  on), except after an unconfirmed close, which keeps it.
 
 ## Close before the action
 
@@ -389,7 +390,10 @@ that belongs to emulator control:
   (`contracts/scheduling-pause.md`). A claim of a kind that takes the admission checks passes
   them first; a refusal is recorded as the package's failure and the receipt still says
   `scheduled`. A new startup claim cancels one still queued for the same instance
-  (`scheduler.denied lease_queue_cancelled`, warning).
+  (`scheduler.denied lease_queue_cancelled`, warning), and so does a control whose hold hands
+  no startup claim over (a `stop`, or a `start` / `restart` whose preparation failed): a
+  startup run against a stopped or unprepared emulator is meaningless, so a start under a
+  pause followed by a stop leaves no startup run at the resume.
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
   request and correlation ids, the claim's holder and synthesized connection, origin
@@ -442,9 +446,13 @@ enter this owner after the original temporary resources and installed session ba
 confirmed disposition. Its ladder is queued as a claim (routine, high, no deadline): after a
 daemon-start preparation, whose dedicated lease has been released, the free instance grants it
 at once; after a preparation on a claim's key (an emulator `start` / `restart` since Workflow
-#369 S6b, a resume's reconnect, a self-check), the ladder claim waits for that key and the
-claim's release transfers the key to it (H-1, P1). The trigger carries
-`stage: startup_preparation | connection_preparation`, the actual preparation event reference
+#369 S6b, a resume's reconnect, a self-check), the claim's release hands that key straight to
+the ladder's claim (its own `lease.requested` + `scheduler.queued`, then `lease.transferred`,
+no `lease.granted` of its own), so no claim queued earlier, such as a startup claim held back
+by a pause, takes the instance first (H-1, P1). With no hand-off (a pause closed the gate
+since the admission, a destructive step is open) the ladder waits as a claim and the key is
+released. The trigger carries `stage: startup_preparation | connection_preparation`, the
+actual preparation event reference
 `preparation { sequence, event_id }`, and the original `failure_code`; it has no task/run IDs.
 A connection preparation is the one after emulator `start` / `restart` (including the
 `actingctl emulator start` of a logon script), an instance resume or `SelfCheckInstance`; its

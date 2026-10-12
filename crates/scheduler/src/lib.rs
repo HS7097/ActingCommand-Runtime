@@ -1800,8 +1800,9 @@ impl SeedScheduler {
 
     /// Workflow #369 H-4, Q-3 (1) (S6b): [`Self::prepare_hand_off`] at the explicit release
     /// `release_request_id` of `token`: an operator's emulator control hands its key to the
-    /// startup package's claim as it releases it. Behind a closed gate there is no hand-off
-    /// (`NoCandidate`), and the release is an ordinary one.
+    /// startup package's claim as it releases it, and the holder of a key on which a
+    /// preparation failed hands it to the ladder that failure admitted (H-1, P1). Behind a
+    /// closed gate there is no hand-off (`NoCandidate`), and the release is an ordinary one.
     pub fn prepare_release_hand_off(
         &mut self,
         token: &LeaseToken,

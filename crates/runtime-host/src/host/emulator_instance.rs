@@ -55,12 +55,16 @@
 //! `restart` whose preparation passed, an instance with a startup package hands the key to the
 //! package's claim on that release, through the gate (`hand_off_startup_package`), so no
 //! dispatch can see the instance free between the start and the startup run; behind a closed
-//! gate the claim waits queued. A failed preparation's ladder waits for the key
-//! (`record_preparation_finished`), and the release hands the key to it (H-1, P1).
+//! gate the claim waits queued. A hold that hands no startup claim over (a stop, a failed
+//! preparation) first cancels the instance's queued startup claims (coordinator ruling on
+//! review #716). A failed preparation's admitted ladder (`record_preparation_finished`) gets
+//! the key straight from the release (H-1, P1; `release_to_preparation_ladder`).
 
 use super::host_claims::HostKey;
 use super::lease::HostClaim;
-use super::recovery_ladder::{EMULATOR_START_BOUND_MS, EMULATOR_STOP_BOUND_MS, HOLD_MARGIN_MS};
+use super::recovery_ladder::{
+    EMULATOR_START_BOUND_MS, EMULATOR_STOP_BOUND_MS, HOLD_MARGIN_MS, PendingRecoveryLadder,
+};
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::startup_package::PendingStartupPackage;
 use super::*;
@@ -87,7 +91,8 @@ const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// A performed control action: its result terminal and, after `start` / `restart` of an
 /// instance with a startup package, that package with its scheduling intent recorded, which the
-/// control's release hands its key to (Workflow #369 H-4, S6b).
+/// control's release hands its key to (Workflow #369 H-4, S6b); after a failed preparation, the
+/// ladder it admitted, which the release hands the key to instead (H-1, P1).
 pub(super) struct EmulatorControlDriven {
     pub(super) outcome: EmulatorControlOutcome,
     adb_wait_ms: u64,
@@ -96,14 +101,17 @@ pub(super) struct EmulatorControlDriven {
     stop_ms: u64,
     pub(super) terminal: TerminalEvent,
     pub(super) startup_package: Option<PendingStartupPackage>,
+    ladder: Option<PendingRecoveryLadder>,
 }
 
 /// A failed operator control (Workflow #369 S6b): the request's failure and, for a restart
 /// whose Stop failed while its Start succeeded (Workflow #381 B D2 (c)), the startup package the
-/// Start's success path scheduled, which the key still goes to after the failure record.
+/// Start's success path scheduled, or the ladder its failed preparation admitted, which the key
+/// still goes to after the failure record.
 struct FailedControl {
     failure: RequestFailure,
     startup_package: Option<Box<PendingStartupPackage>>,
+    ladder: Option<Box<PendingRecoveryLadder>>,
 }
 
 impl From<RequestFailure> for FailedControl {
@@ -111,6 +119,7 @@ impl From<RequestFailure> for FailedControl {
         Self {
             failure,
             startup_package: None,
+            ladder: None,
         }
     }
 }
@@ -356,17 +365,17 @@ impl HostShared {
         // Slice #316-B3: after `start` / `restart` the configured startup package is only
         // scheduled (intent event + the key handed to its claim, or the claim queued; Workflow
         // #369 H-4, S6b); it runs on the instance's worker.
-        let startup_package =
-            match self.end_emulator_control_hold(request, &key, driven.startup_package.take()) {
-                Ok(startup_package) => startup_package,
-                Err(failure) => {
-                    return Err(self.cleanup_composite_failure(
-                        key.token,
-                        key.connection_id,
-                        failure,
-                    ));
-                }
-            };
+        let startup_package = match self.end_emulator_control_hold(
+            request,
+            &key,
+            driven.startup_package.take(),
+            driven.ladder.take(),
+        ) {
+            Ok(startup_package) => startup_package,
+            Err(failure) => {
+                return Err(self.cleanup_composite_failure(key.token, key.connection_id, failure));
+            }
+        };
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(driven.terminal),
@@ -426,29 +435,44 @@ impl HostShared {
 
     /// Workflow #369 H-4, M6, P1: ends an operator control's hold with its explicit release
     /// (the control's request id). With a startup package scheduled, the key goes to the
-    /// package's claim through the gate (`hand_off_startup_package`). Otherwise the key is
-    /// released, and the release hands it on: to the ladder a failed preparation queued for it
-    /// (H-1, P1), or to the next eligible claim.
+    /// package's claim through the gate (`hand_off_startup_package`). Otherwise (a stop, a failed
+    /// preparation) the instance's queued startup claims are cancelled first (coordinator ruling
+    /// on review #716: a startup run against a stopped or unprepared emulator is meaningless),
+    /// then the release hands the key straight to the ladder a failed preparation admitted (H-1,
+    /// P1; `release_to_preparation_ladder`), or to the next eligible claim.
     fn end_emulator_control_hold(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         key: &HostKey,
         startup_package: Option<PendingStartupPackage>,
+        ladder: Option<PendingRecoveryLadder>,
     ) -> Result<StartupPackageDisposition, RequestFailure> {
         let request_id = key.request.request_id();
-        match startup_package {
-            Some(pending) => self.hand_off_startup_package(request, request_id, key, pending),
-            None => self
-                .release_lease(request, request_id, &key.token, key.connection_id, None)
-                .map(|_| StartupPackageDisposition::None),
+        if let Some(pending) = startup_package {
+            return self.hand_off_startup_package(request, request_id, key, pending);
         }
+        self.cancel_queued_startup_claims(key.token.instance_id())?;
+        match ladder {
+            Some(ladder) => self.release_to_preparation_ladder(
+                request,
+                request_id,
+                &key.token,
+                key.connection_id,
+                ladder,
+            )?,
+            None => {
+                self.release_lease(request, request_id, &key.token, key.connection_id, None)?;
+            }
+        }
+        Ok(StartupPackageDisposition::None)
     }
 
     /// The end of a failed operator control's hold: a failure the Runtime does not survive, or
-    /// one without a startup package, ends the key as a failed lease end does
+    /// one with neither a startup package nor a ladder, ends the key as a failed lease end does
     /// (`cleanup_composite_failure`: an unconfirmed close keeps it, any other end hands it on).
     /// A restart whose Start succeeded after a failed Stop (Workflow #381 B D2 (c)) hands its
-    /// key to the startup package after the failure record, as on success.
+    /// key to the startup package, or to the ladder its failed preparation admitted, after the
+    /// failure record, as on success.
     fn end_failed_emulator_control(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -458,16 +482,20 @@ impl HostShared {
         let FailedControl {
             failure,
             startup_package,
+            ladder,
         } = failed;
-        match startup_package {
-            Some(pending) if !failure.poison_runtime => {
-                match self.end_emulator_control_hold(request, &key, Some(*pending)) {
-                    Ok(_) => failure,
-                    Err(end) if end.poison_runtime => failure.replace_with_poison(*end.error),
-                    Err(_) => self.cleanup_composite_failure(key.token, key.connection_id, failure),
-                }
-            }
-            _ => self.cleanup_composite_failure(key.token, key.connection_id, failure),
+        if failure.poison_runtime || (startup_package.is_none() && ladder.is_none()) {
+            return self.cleanup_composite_failure(key.token, key.connection_id, failure);
+        }
+        match self.end_emulator_control_hold(
+            request,
+            &key,
+            startup_package.map(|pending| *pending),
+            ladder.map(|ladder| *ladder),
+        ) {
+            Ok(_) => failure,
+            Err(end) if end.poison_runtime => failure.replace_with_poison(*end.error),
+            Err(_) => self.cleanup_composite_failure(key.token, key.connection_id, failure),
         }
     }
 
@@ -597,8 +625,10 @@ impl HostShared {
             },
             (Err(stop_failure), Ok(mut started)) => {
                 // D2 (c): the Start ran its success path; the restart's one record follows it,
-                // and the control's release hands the key to the startup package after it.
+                // and the control's release hands the key to the startup package, or to the
+                // ladder a failed preparation admitted, after it.
                 let pending = started.startup_package.take();
+                let ladder = started.ladder.take();
                 let failure = self.report_stop_failed(
                     &links,
                     instance_id,
@@ -606,14 +636,15 @@ impl HostShared {
                     stop_ms,
                     StartAfterStop::Confirmed(&started, start_ms),
                 );
-                let startup_package = if failure.poison_runtime {
-                    None
+                let (startup_package, ladder) = if failure.poison_runtime {
+                    (None, None)
                 } else {
-                    pending.map(Box::new)
+                    (pending.map(Box::new), ladder.map(Box::new))
                 };
                 Err(FailedControl {
                     failure,
                     startup_package,
+                    ladder,
                 })
             }
             (Err(stop_failure), Err(start_failure)) => {
@@ -948,9 +979,10 @@ impl HostShared {
         // Workflow #317 sc3 (b), #316 goal 5: a started physical instance is connected and
         // self-checked at once; it stays unavailable until that self-check passes. A failed
         // preparation is recorded and does not fail the completed control action; Workflow #369
-        // H-1, P1: its ladder waits for the operator's key, which the control's release hands
-        // to it. Workflow #369-1: the ladder's emulator restart waits for readiness itself
-        // (`recovery_ladder`), so nothing is prepared or scheduled here on that path.
+        // H-1, P1: the ladder it admitted goes back with the result, and the control's release
+        // hands the operator's key straight to it. Workflow #369-1: the ladder's emulator restart
+        // waits for readiness itself (`recovery_ladder`), so nothing is prepared or scheduled
+        // here on that path.
         let Some(key) = mode.operator_key() else {
             return Ok(EmulatorControlDriven {
                 outcome,
@@ -958,10 +990,11 @@ impl HostShared {
                 stop_ms: 0,
                 terminal: terminal_event,
                 startup_package: None,
+                ladder: None,
             });
         };
-        let preparation_failed = if prepares {
-            let check = self
+        let (preparation_failed, ladder) = if prepares {
+            let (check, ladder) = self
                 .prepare_instance_connection(
                     &rebound.instance_alias,
                     instance_id,
@@ -971,9 +1004,12 @@ impl HostShared {
                     key.connection_id,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
-            !check.capture.ok || !check.touch.ok || check.failure_code.is_some()
+            (
+                !check.capture.ok || !check.touch.ok || check.failure_code.is_some(),
+                ladder,
+            )
         } else {
-            false
+            (false, None)
         };
         let startup_package = if action == EmulatorInstanceAction::Stop || preparation_failed {
             None
@@ -986,6 +1022,7 @@ impl HostShared {
             stop_ms: 0,
             terminal: terminal_event,
             startup_package,
+            ladder,
         })
     }
 

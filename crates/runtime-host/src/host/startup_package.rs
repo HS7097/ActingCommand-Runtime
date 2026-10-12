@@ -18,10 +18,11 @@
 //! start and the startup run; while a scheduling pause holds the instance or the global gate
 //! (a restored pause included), the claim waits queued as a gated routine entry, the key is
 //! released, and the resume's reconnect runs before the startup run (M-3). A new startup claim
-//! cancels one still queued for the same instance. Once granted, the package runs on the
-//! instance's worker (`host_claims`) under the claim's key, as an ordinary contained task with
-//! a self-minted request and correlation id, the claim's holder and synthesized connection, the
-//! same causation id, hash admission and the complete `task.*` event chain
+//! cancels one still queued for the same instance, and so does an emulator control whose hold
+//! hands no startup claim over (a stop, a failed preparation). Once granted, the package runs
+//! on the instance's worker (`host_claims`) under the claim's key, as an ordinary contained
+//! task with a self-minted request and correlation id, the claim's holder and synthesized
+//! connection, the same causation id, hash admission and the complete `task.*` event chain
 //! (`HostShared::run_package_on_key`). A package that cannot be admitted fails typed before its
 //! run: `startup_package_missing` (the locator does not open) or
 //! `startup_package_admission_failed` (every other admission refusal, the underlying code
@@ -237,8 +238,13 @@ impl HostShared {
     }
 
     /// H-6: one startup claim per instance: a still-queued one is cancelled
-    /// (`scheduler.denied lease.queue_cancelled`, its request links only, Warning).
-    fn cancel_queued_startup_claims(&self, instance_id: InstanceId) -> Result<(), RequestFailure> {
+    /// (`scheduler.denied lease.queue_cancelled`, its request links only, Warning). An emulator
+    /// control whose hold hands no startup claim over (a stop, a failed preparation) cancels it
+    /// too (coordinator ruling on review #716).
+    pub(super) fn cancel_queued_startup_claims(
+        &self,
+        instance_id: InstanceId,
+    ) -> Result<(), RequestFailure> {
         let connection_id = startup_claim_connection()?;
         let queued = lock(&self.scheduler, HostLocation::ReadQueuedStartupClaims)?
             .queued_of_kind(instance_id, ClaimKind::StartupPackage);
