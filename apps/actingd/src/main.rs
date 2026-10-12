@@ -243,9 +243,12 @@ fn initialize_policy(
             }
         })?;
     let generation = plan.generation();
+    // Workflow #378 A4: the driver reads its refusals' data values (whether the host halted),
+    // so it asks for the full outcome that a (User, Ui) request would otherwise not get.
     let governance = RuntimeClient::connect(
         RuntimeClientConfig::new(&policy.state_root, EventActor::User, EventSource::Ui)
-            .with_io_timeout(Duration::from_secs(5)),
+            .with_io_timeout(Duration::from_secs(5))
+            .with_detail(Detail::Full),
     )
     .map_err(ActingdError::client)?;
     // Workflow #318 cfg4: the driver transcribes the person's configured approvals, so it

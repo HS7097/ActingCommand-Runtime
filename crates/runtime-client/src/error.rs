@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::codes::{ClientCode, ClientLocation};
-use actingcommand_contract::outcome::{Code, Location, VocabularyToken};
+use actingcommand_contract::outcome::{
+    CauseRelation, Code, IoKind, IoOp, Location, Outcome, RawSource, VocabularyToken,
+};
 use actingcommand_contract::{
     CorrelationId, OwnerEpoch, RequestId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
     RuntimeReceipt, RuntimeRequest,
@@ -153,7 +155,27 @@ impl RuntimeReceiptHeaderIo {
     pub const fn expected_runtime_pid(&self) -> Option<u32> {
         self.expected_runtime_pid
     }
+
+    /// The failed read as a `foreign_os_error` link (Workflow #378 A4): the I/O kind and the OS
+    /// error number with the system's text, as far as the client kept it.
+    fn outcome(&self) -> Outcome {
+        let mut outcome = Outcome::new(actingcommand_contract::codes::ContractCode::ForeignOsError)
+            .raw_source(RawSource::Os)
+            .io_kind(IoKind::from_error_kind(self.kind))
+            .io_op(IoOp::Read);
+        if let Some(os_error) = self.raw_os_error {
+            outcome = outcome.os_error(os_error);
+        }
+        outcome = outcome.raw_text(&self.message);
+        if self.message_truncated {
+            outcome = outcome.raw_text_truncated(true);
+        }
+        outcome
+    }
 }
+
+/// The outcome key of the location a request failed at.
+const OPERATION_KEY: &str = "operation";
 
 /// Redacted local transport or typed Runtime rejection error.
 #[derive(Clone, PartialEq, Eq)]
@@ -161,6 +183,8 @@ pub struct RuntimeClientError {
     code: Code,
     operation: Location,
     projection: Option<Box<RuntimeErrorProjection>>,
+    /// Workflow #378 A4: the outcome of the denied or failed receipt behind `projection`.
+    receipt_outcome: Option<Box<Outcome>>,
     related: Option<Box<RuntimeClientError>>,
     committed_receipt: Option<Box<RuntimeReceipt>>,
     received_receipt: Option<Box<RuntimeReceipt>>,
@@ -236,10 +260,41 @@ impl RuntimeClientError {
             .is_some_and(RuntimeClientError::is_uncertain)
     }
 
-    /// The Runtime's closed failure code and operation, when its receipt carried both.
+    /// The Runtime's closed failure code and operation, when its receipt carried both: the
+    /// receipt outcome's top code and its `operation` value (Workflow #378 A4).
     pub fn host_failure(&self) -> Option<(&str, &str)> {
-        let projection = self.projection.as_ref()?;
-        Some((projection.host_code()?, projection.host_operation()?))
+        let outcome = self.receipt_outcome.as_deref()?;
+        let operation = outcome.value(OPERATION_KEY)?.as_str()?;
+        Some((outcome.code().as_str(), operation))
+    }
+
+    /// The outcome of the denied or failed receipt this error carries, as the Runtime wrote it.
+    pub fn receipt_outcome(&self) -> Option<&Outcome> {
+        self.receipt_outcome.as_deref()
+    }
+
+    /// This failure as one outcome (Workflow #378 A4, model section 7.2): a denied or failed
+    /// receipt's outcome on top as the Runtime wrote it, else the client's own code with its
+    /// `operation`. The client's relations become links: a related failure is `related`, or
+    /// `after_commit` once the request's terminal receipt was committed; the failed receipt-header
+    /// read is a `foreign_os_error` `caused_by` link.
+    pub fn outcome(&self) -> Outcome {
+        let mut outcome = match self.receipt_outcome.as_deref() {
+            Some(receipt) => receipt.clone(),
+            None => Outcome::new(self.code).operation(self.operation),
+        };
+        if let Some(header) = self.receipt_header_io.as_deref() {
+            outcome = outcome.caused_by(header.outcome());
+        }
+        if let Some(related) = self.related.as_deref() {
+            let relation = if self.committed_receipt.is_some() {
+                CauseRelation::AfterCommit
+            } else {
+                CauseRelation::Related
+            };
+            outcome = outcome.link(relation, related.outcome());
+        }
+        outcome
     }
 
     pub fn committed_receipt(&self) -> Option<&RuntimeReceipt> {
@@ -296,6 +351,7 @@ impl RuntimeClientError {
             code: code.into(),
             operation: operation.into(),
             projection: None,
+            receipt_outcome: None,
             related: None,
             committed_receipt: None,
             received_receipt: None,
@@ -303,14 +359,17 @@ impl RuntimeClientError {
         }
     }
 
+    /// A denied or failed receipt: its projection and the outcome it carried (Workflow #378 A4).
     pub(crate) fn rejected(
         operation: impl Into<Location>,
         projection: RuntimeErrorProjection,
+        receipt_outcome: Outcome,
     ) -> Self {
         Self {
             code: ClientCode::RuntimeRequestRejected.code(),
             operation: operation.into(),
             projection: Some(Box::new(projection)),
+            receipt_outcome: Some(Box::new(receipt_outcome)),
             related: None,
             committed_receipt: None,
             received_receipt: None,
@@ -328,6 +387,7 @@ impl RuntimeClientError {
             code: code.into(),
             operation: operation.into(),
             projection: None,
+            receipt_outcome: None,
             related: Some(Box::new(related)),
             committed_receipt: Some(Box::new(receipt)),
             received_receipt: None,

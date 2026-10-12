@@ -454,7 +454,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                         task_id: task,
                         task_request_id: request.request_id(),
                         response_deadline_monotonic_ms: Some(60_000),
-                        outcome: TaskOutcome::Success,
+                        task_result: TaskOutcome::Success,
                         final_page: Some("fixture/panel".into()),
                         executed_steps: 0,
                     },
@@ -482,7 +482,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
             let receipt = error.committed_receipt().expect("original failed terminal");
             assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
             assert_eq!(receipt.terminal().unwrap().sequence, 5);
-            assert_eq!(receipt.error_projection(), error.projection());
+            assert_eq!(receipt.error_projection().as_ref(), error.projection());
         } else if matches!(
             case,
             "hash"
@@ -556,10 +556,10 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 );
                 assert!(!output.receipt().error_projection().unwrap().fatal);
                 assert!(output.receipt().terminal().is_some());
-                assert!(
-                    value["receipt"]
-                        .get("error")
-                        .is_some_and(|error| !error.is_null())
+                // Receipt v2 (Workflow #378 A4): the failure travels as the receipt's outcome.
+                assert_eq!(
+                    value["receipt"]["outcome"]["code"],
+                    RuntimeErrorCode::BackendOperationFailed.as_str()
                 );
             }
             if field_failed {
@@ -1860,7 +1860,7 @@ fn contained_task_success_receipt(
             task_id,
             task_request_id: request.request_id(),
             response_deadline_monotonic_ms: Some(60_000),
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             final_page: Some("fixture/final".to_owned()),
             executed_steps: 1,
         },
@@ -1953,7 +1953,7 @@ fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
                 task_id: *ids.mint_task_id().expect("task id").transport(),
                 task_request_id: request.request_id(),
                 response_deadline_monotonic_ms: Some(60_000),
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 final_page: None,
                 executed_steps: 1,
             },
@@ -2003,7 +2003,7 @@ fn successful_contained_task_returns_complete_ordered_projection_across_event_pa
                 task_id: *ids.mint_task_id().expect("task id").transport(),
                 task_request_id: task_request.request_id(),
                 response_deadline_monotonic_ms: Some(60_000),
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 final_page: Some("fixture/final".to_owned()),
                 executed_steps: 1,
             },
@@ -2068,7 +2068,7 @@ fn successful_contained_task_returns_complete_ordered_projection_across_event_pa
     assert!(matches!(
         output.receipt().result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             ..
         })
     ));
@@ -2108,7 +2108,7 @@ fn successful_multi_page_task_projects_complete_official_ocr_and_provider_facts(
                 task_id,
                 task_request_id: task_request.request_id(),
                 response_deadline_monotonic_ms: Some(60_000),
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 final_page: Some("fixture/final".to_owned()),
                 executed_steps: 1,
             },
@@ -2429,7 +2429,7 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
                 task_request_id: request.request_id(),
                 status: actingcommand_contract::ContainedTaskCancellationStatus::Terminal {
                     deadline_monotonic_ms: Some(100),
-                    outcome: TaskOutcome::Cancelled,
+                    task_result: TaskOutcome::Cancelled,
                     reason: Some(
                         actingcommand_contract::ContainedTaskCancellationReason::DeadlineExceeded,
                     ),
@@ -3933,9 +3933,11 @@ fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
         RuntimeErrorCode::BackendOpenFailed,
         RuntimeErrorCode::BackendOperationFailed,
     ] {
+        let projection = RuntimeErrorProjection::new(code, false);
         let error = RuntimeClientError::rejected(
             ClientLocation::RuntimeHealth,
-            RuntimeErrorProjection::new(code, false),
+            projection.clone(),
+            projection.receipt_outcome(None, None),
         );
         assert!(error.is_fallback_eligible());
     }
@@ -3959,9 +3961,11 @@ fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
         RuntimeErrorCode::RecognitionFailed,
         RuntimeErrorCode::LedgerFailure,
     ] {
+        let projection = RuntimeErrorProjection::new(code, false);
         let error = RuntimeClientError::rejected(
             ClientLocation::RuntimeHealth,
-            RuntimeErrorProjection::new(code, false),
+            projection.clone(),
+            projection.receipt_outcome(None, None),
         );
         assert!(!error.is_fallback_eligible());
         assert!(error.to_string().contains(code.as_str()));

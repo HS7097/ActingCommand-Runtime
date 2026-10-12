@@ -922,7 +922,7 @@ fn contained_task_cancellation_status_rejects_ambiguous_terminal_identity() {
     assert!(
         ContainedTaskCancellationStatus::Terminal {
             deadline_monotonic_ms: Some(1),
-            outcome: TaskOutcome::Cancelled,
+            task_result: TaskOutcome::Cancelled,
             reason: Some(ContainedTaskCancellationReason::ClientRequested),
             task_terminal: same_terminal,
             lease_terminal: same_terminal,
@@ -938,7 +938,7 @@ fn contained_task_cancellation_status_rejects_ambiguous_terminal_identity() {
     assert!(
         ContainedTaskCancellationStatus::Terminal {
             deadline_monotonic_ms: Some(1),
-            outcome: TaskOutcome::Cancelled,
+            task_result: TaskOutcome::Cancelled,
             reason: None,
             task_terminal: same_terminal,
             lease_terminal,
@@ -2159,9 +2159,10 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
     )
     .expect("agent fact publication request");
     let encoded = serde_json::to_value(&request).expect("fact publication request JSON");
+    // Workflow #378 A4: requests are v4 (runtime-client revision 2); every older version fails.
     assert_eq!(
         encoded["schema_version"],
-        "actingcommand.runtime.request.v3"
+        "actingcommand.runtime.request.v4"
     );
     assert_eq!(encoded["operation"]["operation"], "publish_fact");
     assert_eq!(encoded["operation"]["record"]["key"], "env.ui_theme");
@@ -2169,6 +2170,7 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
     for version in [
         "actingcommand.runtime.request.v1",
         "actingcommand.runtime.request.v2",
+        "actingcommand.runtime.request.v3",
     ] {
         let mut older = encoded.clone();
         older["schema_version"] = serde_json::json!(version);

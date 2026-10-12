@@ -103,6 +103,72 @@ crate::outcome_codes! {
 }
 
 crate::outcome_codes! {
+    /// Workflow #378 A4 (model section 7.2): what a receipt carries when its request did not
+    /// fail. A receipt in state admitted, observed, queued or cancelled carries its state's info
+    /// code; a completed receipt carries the success code of its request kind, one per kind
+    /// ([`crate::RuntimeOperationKind::success_code`]). A denied or failed receipt carries its
+    /// refusal or failure instead.
+    pub enum ReceiptCode {
+        RequestAdmitted => "request_admitted": info,
+        RequestObserved => "request_observed": info,
+        RequestQueued => "request_queued": info,
+        RequestCancelled => "request_cancelled": info,
+        HealthCompleted => "request_health_completed": success,
+        InstallTransitionCompleted => "request_install_transition_completed": success,
+        StatusCompleted => "request_status_completed": success,
+        ProjectInterfaceCompleted => "request_project_interface_completed": success,
+        ProjectPolicyInputIdentityCompleted => "request_project_policy_input_identity_completed": success,
+        MonitorStatusCompleted => "request_monitor_status_completed": success,
+        RuntimeFactSnapshotCompleted => "request_runtime_fact_snapshot_completed": success,
+        ConfigureMonitorCompleted => "request_configure_monitor_completed": success,
+        ClearMonitorCompleted => "request_clear_monitor_completed": success,
+        CancelContainedTaskCompleted => "request_cancel_contained_task_completed": success,
+        RenewLeaseCompleted => "request_renew_lease_completed": success,
+        ReleaseLeaseCompleted => "request_release_lease_completed": success,
+        ObserveReadonlyCompleted => "request_observe_readonly_completed": success,
+        RecognizeArtifactCompleted => "request_recognize_artifact_completed": success,
+        RunContainedLabOperationCompleted => "request_run_contained_lab_operation_completed": success,
+        CaptureSequenceCompleted => "request_capture_sequence_completed": success,
+        SafeResetCompleted => "request_safe_reset_completed": success,
+        ApplicationLifecycleCompleted => "request_application_lifecycle_completed": success,
+        ControlEmulatorInstanceCompleted => "request_control_emulator_instance_completed": success,
+        DiscoverInstancesCompleted => "request_discover_instances_completed": success,
+        PauseSchedulingCompleted => "request_pause_scheduling_completed": success,
+        ResumeSchedulingCompleted => "request_resume_scheduling_completed": success,
+        SelfCheckInstanceCompleted => "request_self_check_instance_completed": success,
+        RunContainedTaskCompleted => "request_run_contained_task_completed": success,
+        InputCompleted => "request_input_completed": success,
+        PublishFactCompleted => "request_publish_fact_completed": success,
+        PublishFactsCompleted => "request_publish_facts_completed": success,
+        QueryEventsCompleted => "request_query_events_completed": success,
+        ReadMaterialCompleted => "request_read_material_completed": success,
+        SubscribeEventsCompleted => "request_subscribe_events_completed": success,
+        RegisterDiagnosticSignatureCompleted => "request_register_diagnostic_signature_completed": success,
+        MatchDiagnosticSignaturesCompleted => "request_match_diagnostic_signatures_completed": success,
+        RetireDiagnosticSignatureCompleted => "request_retire_diagnostic_signature_completed": success,
+        DebugPackageCompleted => "request_debug_package_completed": success,
+        ExportEvidenceCompleted => "request_export_evidence_completed": success,
+        RecordAuthoringEventCompleted => "request_record_authoring_event_completed": success,
+        RecordDebugEventCompleted => "request_record_debug_event_completed": success,
+        ReleaseLabPinCompleted => "request_release_lab_pin_completed": success,
+        RecordClientActionCompleted => "request_record_client_action_completed": success,
+        DeclareGovernanceIdentityCompleted => "request_declare_governance_identity_completed": success,
+        RecordApprovalDecisionCompleted => "request_record_approval_decision_completed": success,
+        StartAgentSessionCompleted => "request_start_agent_session_completed": success,
+        ResumeAgentSessionCompleted => "request_resume_agent_session_completed": success,
+        AgentSessionStatusCompleted => "request_agent_session_status_completed": success,
+        RecordAgentResponseCompleted => "request_record_agent_response_completed": success,
+        PrepareStrategicReportCompleted => "request_prepare_strategic_report_completed": success,
+        ProjectPolicyForwardCompleted => "request_project_policy_forward_completed": success,
+        AssessPredictiveMaintenanceCompleted => "request_assess_predictive_maintenance_completed": success,
+        CompileProposalCompleted => "request_compile_proposal_completed": success,
+        PromoteProposalCompleted => "request_promote_proposal_completed": success,
+        ApplyResourceTargetsCompleted => "request_apply_resource_targets_completed": success,
+        ResourceTargetViewCompleted => "request_resource_target_view_completed": success,
+    }
+}
+
+crate::outcome_codes! {
     /// Why the Runtime refused a governance identity card (Workflow #318 cfg4): the
     /// `governance.identity_declared` verdict and the Denied receipt's host code carry it.
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -424,7 +490,6 @@ crate::outcome_codes! {
         FactOriginMixed => "fact_origin_mixed": error,
         InvalidAgentDispatcherOrigin => "invalid_agent_dispatcher_origin": error,
         InvalidContainedTaskCancellationStatus => "invalid_contained_task_cancellation_status": error,
-        InvalidHostFailure => "invalid_host_failure": error,
         MaterialReadResultMissing => "material_read_result_missing": error,
         MaterialReadFailureAlreadyRecorded => "material_read_failure_already_recorded": error,
         MaterialReadRequestMismatch => "material_read_request_mismatch": error,

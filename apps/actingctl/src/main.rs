@@ -16,7 +16,7 @@ mod shutdown_wait;
 mod watchdog;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Category, Code};
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
     ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
@@ -66,10 +66,16 @@ fn main() -> ExitCode {
     match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {
+                // Receipt v2 (Workflow #378 A4): a refused or failed request's receipt carries
+                // an error or fatal outcome.
                 if output
                     .get("receipt")
-                    .and_then(|receipt| receipt.get("error"))
-                    .is_some_and(|error| !error.is_null())
+                    .and_then(|receipt| receipt.get("outcome"))
+                    .and_then(|outcome| outcome.get("category"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|category| {
+                        category == Category::Error.as_str() || category == Category::Fatal.as_str()
+                    })
                 {
                     ExitCode::FAILURE
                 } else {

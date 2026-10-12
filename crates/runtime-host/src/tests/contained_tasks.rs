@@ -131,7 +131,7 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     assert!(matches!(
         receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             final_page: Some(page),
             executed_steps: 1,
             ..
@@ -574,7 +574,7 @@ fn a_package_run_on_a_held_token_takes_no_lease_and_releases_once_under_its_run(
     let token = claim.granted.clone().expect("held claim token");
     let Ok(RuntimeResult::ContainedTaskCompleted {
         run_id,
-        outcome: TaskOutcome::Success,
+        task_result: TaskOutcome::Success,
         ..
     }) = result
     else {

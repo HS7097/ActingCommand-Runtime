@@ -1534,7 +1534,9 @@ impl HostShared {
             Ok(OperationSuccess {
                 result:
                     RuntimeResult::ContainedTaskCompleted {
-                        run_id, outcome, ..
+                        run_id,
+                        task_result: outcome,
+                        ..
                     },
                 ..
             }) => {

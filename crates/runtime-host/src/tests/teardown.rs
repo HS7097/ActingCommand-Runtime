@@ -483,7 +483,10 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             .process_request_for_test(&shutdown, ConnectionId::new(177).expect("connection"))
             .expect("fatal wins shutdown");
         assert_eq!(shutdown.state(), RuntimeReceiptState::Failed);
-        assert_eq!(shutdown.error_projection(), Some(fatal.projection()));
+        assert_eq!(
+            shutdown.error_projection().as_ref(),
+            Some(fatal.projection())
+        );
         assert!(shutdown.terminal().is_none());
         assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
         let events = host

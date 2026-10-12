@@ -8,7 +8,7 @@
 use super::*;
 use actingcommand_contract::{
     FactScalar, InstallHeldStartup, InstallTransitionAction, InstallTransitionPhase,
-    InstallTransitionTicket, RuntimeErrorProjection, RuntimeInfo, RuntimePayload,
+    InstallTransitionTicket, RuntimeInfo, RuntimePayload,
 };
 use std::sync::Mutex;
 
@@ -168,11 +168,12 @@ impl HeldStart {
     }
 }
 
+/// A refused or failed receipt's specific code: the top of its outcome (receipt v2, Workflow
+/// #378 A4).
 fn host_failure_code(receipt: &RuntimeReceipt) -> Option<String> {
     receipt
         .error_projection()
-        .and_then(RuntimeErrorProjection::host_code)
-        .map(str::to_owned)
+        .map(|_| receipt.outcome().code().as_str().to_owned())
 }
 
 /// R2: while the new owner is `preparing` and before its deadline, a Query on a connection that

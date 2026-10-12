@@ -40,6 +40,8 @@ mod provider;
 mod provider_startup;
 mod recovery_read;
 mod recovery_timing;
+// Workflow #378 A4: the typed code behind a relayed spelling, for receipt outcomes.
+mod relayed_spelling;
 mod strategy;
 mod suspension_report;
 mod time;

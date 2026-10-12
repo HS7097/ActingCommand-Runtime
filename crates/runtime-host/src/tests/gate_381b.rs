@@ -14,7 +14,7 @@ use super::instance_workers::{
 use super::*;
 use crate::codes::HostCode;
 use actingcommand_contract::{
-    EmulatorInstanceAction, EventAction, RecoveryRung, RecoveryRungOutcome, RuntimeErrorProjection,
+    EmulatorInstanceAction, EventAction, RecoveryRung, RecoveryRungOutcome,
     RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
     RuntimePayload,
 };
@@ -88,10 +88,12 @@ fn control(host: &RuntimeHost, action: EmulatorInstanceAction) -> RuntimeReceipt
     )
 }
 
+/// A refused or failed receipt's specific code: the top of its outcome (receipt v2, Workflow
+/// #378 A4).
 fn host_code(receipt: &RuntimeReceipt) -> Option<&str> {
     receipt
         .error_projection()
-        .and_then(RuntimeErrorProjection::host_code)
+        .map(|_| receipt.outcome().code().as_str())
 }
 
 /// The port the Runtime reports the instance bound to (`actingctl emulator status`); `None`

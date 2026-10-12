@@ -120,7 +120,7 @@ fn assert_queue_expired(receipt: &RuntimeReceipt) {
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
     let error = receipt.error_projection().expect("refusal projection");
     assert_eq!(error.code, RuntimeErrorCode::QueueExpired);
-    assert_eq!(error.host_code(), Some("lease_queue_expired"));
+    assert_eq!(receipt.outcome().code().as_str(), "lease_queue_expired");
 }
 
 /// The one record of the expiry: `scheduler.denied` `lease.queue_expired` at Warning, under the
@@ -182,7 +182,7 @@ fn gate_a_direct_run_behind_a_hold_runs_after_the_release() {
     assert!(matches!(
         receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             ..
         })
     ));

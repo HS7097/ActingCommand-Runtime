@@ -4732,7 +4732,7 @@ impl HostShared {
                         task_request_id,
                         status: ContainedTaskCancellationStatus::Terminal {
                             deadline_monotonic_ms,
-                            outcome: *outcome,
+                            task_result: *outcome,
                             reason,
                             task_terminal: terminal(task_terminal),
                             lease_terminal: terminal(lease_terminal),
@@ -6140,7 +6140,7 @@ impl HostShared {
                     task_id: *task_id.transport(),
                     task_request_id: original.request_id(),
                     response_deadline_monotonic_ms: Some(control.deadline()),
-                    outcome: outcome.outcome,
+                    task_result: outcome.outcome,
                     final_page: outcome.final_page,
                     executed_steps: outcome.executed_steps,
                 },
@@ -6704,7 +6704,7 @@ impl HostShared {
                     task_id,
                     task_request_id: request.request_id(),
                     response_deadline_monotonic_ms: deadline_monotonic_ms,
-                    outcome: *outcome,
+                    task_result: *outcome,
                     final_page: final_page.clone(),
                     executed_steps: executed_steps.ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(

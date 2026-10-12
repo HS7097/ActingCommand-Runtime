@@ -98,9 +98,11 @@ fn gate_every_runtime_error_code_has_its_r6_disposition() {
         RuntimeErrorCode::ContainedTaskCancelled,
         RuntimeErrorCode::ContainedTaskPaused,
     ] {
+        let projection = RuntimeErrorProjection::new(code, false);
         let error = RuntimeClientError::rejected(
             actingcommand_contract::codes::ContractLocation::RunContainedTask.location(),
-            RuntimeErrorProjection::new(code, false),
+            projection.clone(),
+            projection.receipt_outcome(None, None),
         );
         assert_eq!(error.disposition(), r6_class(code), "{code:?}");
     }

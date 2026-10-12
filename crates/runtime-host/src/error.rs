@@ -2,7 +2,7 @@
 
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     CleanupCauseDraft, DiagnosticDetailDraft, InstanceId, ResourceQuiescence, RuntimeErrorCode,
     RuntimeErrorProjection,
@@ -345,6 +345,29 @@ impl RuntimeHostError {
 
     pub fn projection(&self) -> &RuntimeErrorProjection {
         &self.projection
+    }
+
+    /// This error as the outcome of a denied or failed receipt (Workflow #378 A4, model section
+    /// 7.2): its code on top, its operation as the `operation` value, and its projection's
+    /// Runtime error code, halt, holder and retry as values
+    /// ([`RuntimeErrorProjection::receipt_outcome`]). A code or an operation this error relays as
+    /// a spelling is looked up in the registries it can come from
+    /// ([`crate::relayed_spelling`]); one that no registry knows (an operation spelled like a
+    /// code, which A2-P renames) leaves the Runtime error code on top, or the operation out.
+    pub(crate) fn receipt_outcome(&self) -> Outcome {
+        let code = match self.code {
+            HostErrorCode::Registered(code) => Some(code),
+            HostErrorCode::Relayed { relayed_code } => {
+                crate::relayed_spelling::registered_code(relayed_code)
+            }
+        };
+        let operation = match self.operation {
+            HostErrorOperation::Registered(operation) => Some(operation),
+            HostErrorOperation::Relayed { relayed_operation } => {
+                crate::relayed_spelling::registered_location(relayed_operation)
+            }
+        };
+        self.projection.receipt_outcome(code, operation)
     }
 
     pub fn resource_declaration(

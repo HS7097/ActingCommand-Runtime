@@ -255,6 +255,5 @@ lease.released                                  under the run's links; ends the 
 Fact invalidation reason: `adb_unreachable`. A first capture lost to the ADB baseline keeps
 the kernel's `capture_backend_open_failed` / `capture_backend_operation_failed`
 (`capture_failed`, nonfatal); no code is added.
-A failed or denied receipt carries its host code and operation in the optional, additive
-`host_code`/`host_operation` error-projection fields (closed static codes, never native text;
-a client built before them cannot decode such a receipt, `deny_unknown_fields`).
+A failed or denied receipt carries its host code on top of its `outcome`, with its operation as
+the `operation` value (receipt v2, Workflow #378 A4; `contracts/client-interactions.md`).

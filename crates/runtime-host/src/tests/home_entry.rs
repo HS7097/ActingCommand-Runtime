@@ -302,7 +302,7 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
         } else {
             assert!(
                 matches!(receipt.result(), Some(RuntimeResult::ContainedTaskCompleted {
-                outcome:TaskOutcome::Success, executed_steps:1, final_page:Some(page), ..
+                task_result:TaskOutcome::Success, executed_steps:1, final_page:Some(page), ..
             }) if page == "fixture01/other")
             );
         }
@@ -378,7 +378,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     assert!(matches!(
         receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             executed_steps: 1,
             ..
         })

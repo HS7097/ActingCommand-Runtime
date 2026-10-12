@@ -107,7 +107,7 @@ accepted card is recorded at severity `info`, then the connection joins the
 governance set and the receipt is Completed with result
 `governance_identity_accepted` and the event as its terminal. A refused card is
 recorded at severity `warning` first; the receipt is then Denied +
-`InvalidRequest` with the refusal as `host_code` and the event as its terminal.
+`InvalidRequest` with the refusal as its outcome's top code and the event as its terminal.
 A failed append poisons the Runtime exactly as a failed approval append does
 (Failed receipt, no authority granted). Governance authority lives only as long
 as the connection: disconnecting removes it and a new connection declares again.
@@ -231,13 +231,27 @@ received receipt. A latched error retains its original receipt and original IDs.
 Contained-task completed/cancelled results must also identify the current request
 in their `task_request_id` before reaching flow projection or receipt retention.
 
-A Denied/Failed receipt's error projection may also carry the optional, additive
-`host_code` and `host_operation` fields, the host's closed static failure code and
-operation (`[a-z0-9_.-]`, at most 128 bytes, never native text), filled when a
-dispatched request fails and absent on earlier refusals and the fatal-state replay;
-`RuntimeClientError::host_failure()` returns them, its display appends
-`host code <code> during <operation>`, and a client built before these fields
-cannot decode a receipt that carries them (`deny_unknown_fields`).
+Receipt v2 (`actingcommand.runtime.receipt.v2`, Workflow #378 A4, `runtime-client` revision 2)
+carries `outcome`, an `actingcommand.outcome.v1` envelope, on every receipt instead of the v1
+`error` projection. An admitted, observed, queued or cancelled receipt carries the info code of
+its state (`request_admitted`, `request_observed`, `request_queued`, `request_cancelled`); a
+completed receipt carries the success code of its request kind
+(`RuntimeOperationKind::success_code`, one per kind, for example `request_status_completed`).
+A Denied/Failed receipt carries its refusal or failure: the host's closed failure code on top
+(the contract's validation code when the request failed validation), with the values
+`runtime_code` (the `RuntimeErrorCode`), `operation` (where the host failed, a registered
+location), `host_halted` (the v1 `fatal`), `holder_id` and `lease_id` (the v1
+`current_holder_id`/`current_lease_id`) and `retry_after_ms`; a refusal without a more specific
+code has the `RuntimeErrorCode` itself on top. `RuntimeReceipt::error_projection()` reads the
+projection back from the outcome. Request v4 (`actingcommand.runtime.request.v4`) adds the
+optional `detail` (`codes` or `full`); without it a request whose `source` is `ui` gets codes only
+(the outcome's codes, locations and vocabulary tokens; `host_halted`, the holder and
+`retry_after_ms` are withheld) and every other source the full outcome. The host filters once,
+where the receipt leaves; `RuntimeClientConfig::with_detail` asks for one detail on every
+request of a session. `RuntimeClientError::host_failure()` returns the receipt outcome's top code
+and its `operation`, and `RuntimeClientError::outcome()` puts the receipt's outcome on top, else
+the client's own code with its `operation`, with the client's relations as links (`related`,
+`after_commit`, and the failed receipt-header read as a `foreign_os_error` `caused_by` link).
 
 A refused `ApplyResourceTargets` receipt (Denied + `InvalidRequest`, host code
 `resource_targets_rejected`, no terminal) also carries the additive field
