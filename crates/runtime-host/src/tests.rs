@@ -112,6 +112,7 @@ mod gate_372k2;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+mod gate_epoch_close;
 mod gate_p0;
 mod home_entry;
 mod input;
