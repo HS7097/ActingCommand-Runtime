@@ -128,8 +128,8 @@ pub enum ClaimKind {
     ResumeReconnect,
     /// A self-check preparation.
     SelfCheck,
-    /// The dedicated preparation lease of a connection preparation (daemon start; until the
-    /// later #369 slices move them, also resume, self-check and emulator start).
+    /// The dedicated preparation lease of a daemon-start connection preparation (resume,
+    /// self-check and emulator start prepare on their own claim's key since #369 S5 and S6b).
     DaemonStartPreparation,
     /// A Lab operation: an immediate try, never queued.
     LabOperation,
@@ -190,10 +190,10 @@ impl ClaimKind {
         }
     }
 
-    /// Q-3 (4): a routine entry is skipped while a pause holds. Until #369 S6b the startup
-    /// claim is not gated (H-6; `scheduling-pause.md` "not gated").
+    /// Q-3 (4): a routine entry is skipped while a pause holds. Since #369 S6b that includes the
+    /// startup claim (H-4, M6; `scheduling-pause.md`).
     pub const fn gated_by_pause(self) -> bool {
-        matches!(self.class(), ClaimClass::Routine) && !matches!(self, Self::StartupPackage)
+        matches!(self.class(), ClaimClass::Routine)
     }
 
     pub const fn holder_owned(self) -> bool {
@@ -1787,6 +1787,52 @@ impl SeedScheduler {
         if reason == LeaseTransferReason::ExplicitRelease {
             return Err(SchedulerError::QueueRequestMismatch);
         }
+        self.prepare_claim_hand_off(
+            token,
+            connection_id,
+            reason,
+            None,
+            claim,
+            gate,
+            now_monotonic_ms,
+        )
+    }
+
+    /// Workflow #369 H-4, Q-3 (1) (S6b): [`Self::prepare_hand_off`] at the explicit release
+    /// `release_request_id` of `token`: an operator's emulator control hands its key to the
+    /// startup package's claim as it releases it. Behind a closed gate there is no hand-off
+    /// (`NoCandidate`), and the release is an ordinary one.
+    pub fn prepare_release_hand_off(
+        &mut self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        release_request_id: RequestId,
+        claim: ClaimRequest,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<TransferPreparation> {
+        self.prepare_claim_hand_off(
+            token,
+            connection_id,
+            LeaseTransferReason::ExplicitRelease,
+            Some(release_request_id),
+            claim,
+            gate,
+            now_monotonic_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_claim_hand_off(
+        &mut self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        reason: LeaseTransferReason,
+        release_request_id: Option<RequestId>,
+        claim: ClaimRequest,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<TransferPreparation> {
         self.validate_claim_ttl(claim.lease_ttl_ms)?;
         if claim.instance_id != token.instance_id() {
             return Err(SchedulerError::InstanceMismatch);
@@ -1821,7 +1867,14 @@ impl SeedScheduler {
             lease_ttl_ms: claim.lease_ttl_ms,
             may_preempt: false,
         };
-        self.prepared_transfer(lease, queued, reason, None, true, now_monotonic_ms)
+        self.prepared_transfer(
+            lease,
+            queued,
+            reason,
+            release_request_id,
+            true,
+            now_monotonic_ms,
+        )
     }
 
     fn transferable_lease(

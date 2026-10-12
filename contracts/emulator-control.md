@@ -10,7 +10,8 @@ running instance (`ApplicationLifecycle`) is unchanged.
 ## Operation and origin gate
 
 - `action` is `start`, `stop` or `restart` (`EmulatorInstanceAction`, snake_case). No lease or
-  holder id is part of the request.
+  holder id is part of the request: the host takes the instance's key for it (see "The
+  operator's claim and the fence").
 - `RuntimeRequest::validate` admits the operation only when `(actor, source)` is
   `(User, Ui)` or `(Cli, Cli)`; every other origin is `invalid_emulator_control_origin`.
   `Adapter` / `Agent` are excluded on purpose: the scheduler and agents can never issue it, and
@@ -20,33 +21,64 @@ running instance (`ApplicationLifecycle`) is unchanged.
 - The instance must be a registered physical instance (`fixture_execution_scope_forbidden`
   otherwise).
 
-## Fence classification and the busy denial
+## The operator's claim and the fence
 
-The host takes the per-instance admission guard and classifies the instance exactly like
-monitor recovery (`monitor_recovery_admission`): an active lease, an expired lease, an active
-destructive step, a pending preemption, the takeover cooldown or queued lease requests each deny
-the request with `RuntimeErrorCode::RuntimeBusy`, host code `emulator_control_busy`, receipt state
-`denied`; the `runtime.failed` record carries the reason (`fence=<active_lease |
-lease_expired | destructive_step_active | preemption_pending | takeover_cooldown |
-queued_lease_requests>`) as native detail. Only `scheduler_available` proceeds. The admission
-guard stays held for the whole request, so no lease is granted on that instance while the
-emulator changes state. A concurrent READ-ONLY observation such as `capture_sequence` /
-`observe` holds no lease and is therefore NOT fenced: it fails typed with `capture.failed` once
-the session is closed; only lease holders, queued lease requests, destructive steps, preemption
-and the takeover cooldown deny the control.
+<!-- Workflow #369 S6b (H-4): emulator control as a holder of the instance's key. -->
+Since Workflow #369 S6b (model-369-queue H-4) an emulator control is an operator claim on the
+instance's key in its one queue (`ClaimKind::EmulatorControl`, holder minted by the host, the
+scheduler's default lease TTL, the request's own connection):
+
+- **Its turn.** After its `command.received`, the request waits at most 5 s for the key (W-3).
+  A free instance with no eligible waiting claim grants it at once (`lease.requested`,
+  `scheduler.admitted`, `lease.granted` under the request's links); otherwise it waits as an
+  operator entry (`lease.requested` + `scheduler.queued`), which a scheduling pause does not
+  hold back. Not granted within the 5 s, its entry is removed and the request is refused
+  `lease_queue_expired` (`RuntimeErrorCode::QueueExpired`, receipt state `denied`; detail
+  `timeout_ms=5000`, `holder_kind=<the holder's kind>` when the instance has a holder,
+  `queue_position=<n>`): one `scheduler.denied` `lease.queue_expired` at Warning under the
+  request's links is the receipt's terminal, and nothing is driven. A restart is one claim.
+- **A stopped instance.** The claim takes neither the bound-endpoint check nor the
+  performance-control lease gate, and is granted with drain capacity (Q-2a), so a pending
+  (stopped) instance can be started; no `instance_not_running` is recorded for it.
+- **One hold.** The claim holds the key through the Stop, the Start, the ADB baseline and the
+  connection preparation. It is renewed before the provider step, to the step's bound plus 5 s
+  (a Stop 210 s, a Start 220 s with the ADB baseline; each phase of a restart separately), and
+  again before the preparation, to 30 s plus 5 s, before the action's `command.validated`
+  (Q-5; review L-3). A renewal is recorded as every renewal is (`scheduler.admitted`,
+  `lease.transition_intent`, `lease.renewed`, Info, under the request's links). A refused
+  renewal (`lease_expired`, `lease_missing`) ends the hold with the action's failure pair
+  (`command.rejected` + `runtime.failed`) carrying that code.
+- **The fence.** Under the per-instance admission guard, held across the device steps so no
+  keyless observe meets the changing emulator, the request is fenced on its own key: the
+  instance's lease must be that key (lease id and holder id), unexpired, with no destructive
+  step open; otherwise the request is denied `emulator_control_busy` (`RuntimeBusy`, receipt
+  state `denied`; the `runtime.failed` record carries `fence=<active_lease | lease_expired |
+  destructive_step_active | preemption_pending | takeover_cooldown | queued_lease_requests>` as
+  native detail, from `monitor_recovery_admission`). Other holders, waiting claims and the
+  takeover cooldown are met in the queue, not by the fence. A concurrent READ-ONLY observation
+  such as `capture_sequence` / `observe` holds no key: it fails typed with `capture.failed` once
+  the session is closed.
+- **The end.** The hold ends with the request's explicit release (`lease.transition_intent`,
+  `lease.released` under its links), after the action's records: after a `start` / `restart`
+  whose preparation passed it hands the key to the startup package's claim ("Startup package
+  hook"); after a failed preparation that admits a ladder, the release transfers the key to
+  that ladder ("Stuck-recovery ladder"); otherwise it hands the key to the next eligible claim,
+  or frees the instance. A failed action ends the key as a failed lease end does (`lease.released`
+  under the lease's own links, the key handed on), except after an unconfirmed close, which
+  keeps it.
 
 ## Close before the action
 
 For every action (`start` included since slice #316-B2, because a session must not outlive the
 endpoint it was opened on) the instance's retained device session is closed first through
-`close_retained_instance_while_guarded` (the daemon keeps running; other instances are
-untouched; closing when no session is open is a no-op). A refusal because a lease is held is the
-same busy denial; a close failure is recorded through the existing session-close lifecycle path
-and fails the request. After `start` / `restart` of a device self-checked instance the connection
-preparation phase (`runtime-fact-store.md`) reopens the session and keeps it open (Workflow #191 H:
-the session belongs to the instance and only an external command disconnects it; an instance
-outside the multi-Nemu gate closes it again, as before). After `stop` nothing reopens it; it
-opens on its next use.
+`close_retained_instance_while_guarded` under the control's key (the daemon keeps running; other
+instances are untouched; closing when no session is open is a no-op); a close failure is recorded
+through the existing session-close lifecycle path and fails the request. After `start` /
+`restart` of a device self-checked instance the connection preparation phase
+(`runtime-fact-store.md`) reopens the session on the control's key, with no dedicated preparation
+lease, and keeps it open (Workflow #191 H: the session belongs to the instance and only an
+external command disconnects it; an instance outside the multi-Nemu gate closes it again, as
+before). After `stop` nothing reopens it; it opens on its next use.
 
 ## Tool dispatch, timeouts and wait criteria
 
@@ -170,8 +202,8 @@ guard so nothing can bypass the host checks: `open_input`, `open_capture` and
 `control_application` on a pending entry fail with a device error at stage
 `adb.endpoint_pending` (category `protocol`).
 
-Emulator control itself works on a pending instance: the fence and the close-before step do not
-require a bound endpoint. After a successful Start (a `start`, or a restart's Start phase), still
+Emulator control itself works on a pending instance: its claim, the fence and the close-before
+step do not require a bound endpoint (Workflow #369 Q-2a). After a successful Start (a `start`, or a restart's Start phase), still
 under the per-instance admission guard, the registry binds the entry to the host it was
 registered with and the port the control outcome reported (`EmulatorControlOutcome.adb_port`), the host refreshes its
 `registered_instances` record (endpoint and audit endpoint together, under the registry lock
@@ -185,8 +217,9 @@ it was and the request may be repeated.
 Lease queue/acquire uses only the stable instance identity to locate its admission lock.
 After acquiring that lock it resolves the current Host/registry binding again; the endpoint
 check and scheduler preparation, queue context and commit use that same current binding.
-Stop/start cannot admit or reject a waiting lease request using its earlier endpoint snapshot.
-The existing active-lease/queued-request fence and device-registry endpoint gate remain.
+Stop/start cannot admit or reject a waiting lease request using its earlier endpoint snapshot:
+while the control holds the instance's key no other lease is granted on it (Workflow #369 H-4),
+and the device-registry endpoint gate remains.
 
 ADB baseline (slice #316-B3): the vendor reports `running` a few seconds before adbd answers,
 so a bound Start succeeds only once the ADB baseline answers. Still under the
@@ -280,7 +313,8 @@ Every request is recorded intent -> result, all linked to the instance:
    `caused_by` link. A Start that succeeded after a Stop whose wait expired still prepares the
    connection and schedules the startup package before that record.
 
-Host codes: `emulator_control_busy` (`runtime_busy`, denied), `emulator_control_unavailable`
+Host codes: `lease_queue_expired` (`queue_expired`, denied; the claim's wait, see "The operator's
+claim and the fence"), `emulator_control_busy` (`runtime_busy`, denied), `emulator_control_unavailable`
 and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_control_wait_timeout`,
 `emulator_control_failed`, `emulator_control_endpoint_unresolved`,
 `emulator_control_adb_not_ready`, and for a restart `emulator_restart_stop_failed` and
@@ -318,9 +352,9 @@ fact store (`runtime-fact-store.md`).
 
 `adb_port` is omitted when the last observation carried none (a stopped instance). The receipt
 state is `completed` with the `command.validated` event as terminal. `startup_package` is
-`scheduled` when a successful `start` / `restart` queued the claim of the instance's
-configured startup package (see "Startup package hook"), `none` otherwise (nothing configured,
-or `stop`).
+`scheduled` when a successful `start` / `restart` handed its key to, or queued, the claim of the
+instance's configured startup package (see "Startup package hook"), `none` otherwise (nothing
+configured, a failed preparation, or `stop`).
 
 ## Startup package hook (slice #316-B3)
 
@@ -336,18 +370,26 @@ that belongs to emulator control:
   startup schedule nothing. A configured package is always invoked; an instance without one
   never has anything pulled.
 - The control request only *schedules* it, after `command.validated`, the second
-  `runtime.instance_bound` and the `device.connected` fact: one `runtime.lifecycle_observed`
-  (phase `startup_package_scheduled { instance_id }`, the package locator in the audit machine
-  path, links of the control request plus a freshly minted causation id) is appended, the
-  package's claim is queued, and the receipt returns as before with
-  `startup_package: scheduled`. The control's receipt wait is never spent on the package.
-- Workflow #369 H-6: the claim (high priority, no deadline, never preempting; its own
-  `lease.requested` + `scheduler.queued` under the causation id) is queued while the control
-  still holds the instance's admission guard, and granted (`scheduler.admitted` +
-  `lease.granted`) when the control lets the guard go, so no dispatch can see the instance free
-  between the start and the startup run. Until #369 S6b the claim is not gated by a scheduling
-  pause (`contracts/scheduling-pause.md`). A new startup claim cancels one still queued for the
-  same instance (`scheduler.denied lease_queue_cancelled`, warning).
+  `runtime.instance_bound`, the `device.connected` fact and a passing connection preparation:
+  one `runtime.lifecycle_observed` (phase `startup_package_scheduled { instance_id }`, the
+  package locator in the audit machine path, links of the control request plus a freshly
+  minted causation id) is appended, the control's key goes to the package's claim, and the
+  receipt returns as before with `startup_package: scheduled`. The control's receipt wait is
+  never spent on the package.
+- Workflow #369 H-4, M6 (S6b): the claim is a routine claim (high priority, no deadline, never
+  preempting). The control hands it the instance's key as it releases the key, through the
+  gate: with the gate open the claim's own `lease.requested` + `scheduler.queued` (under the
+  causation id) are followed by the control's `lease.transition_intent`, the claim's
+  `lease.transition_intent`, `lease.transferred` and the control's `lease.released`; the
+  claim takes no `lease.granted` of its own and bypasses the queue, so no dispatch can see the
+  instance free between the start and the startup run. While a scheduling pause holds the
+  instance or the global gate (a restored pause included), the claim waits queued as a gated
+  routine entry and the control's key is released: no startup run happens until the resume,
+  whose reconnect claim runs first and whose release hands the key to the startup claim
+  (`contracts/scheduling-pause.md`). A claim of a kind that takes the admission checks passes
+  them first; a refusal is recorded as the package's failure and the receipt still says
+  `scheduled`. A new startup claim cancels one still queued for the same instance
+  (`scheduler.denied lease_queue_cancelled`, warning).
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
   request and correlation ids, the claim's holder and synthesized connection, origin
@@ -397,8 +439,11 @@ never re-run.
 
 Ordinary physical-instance backend failures during startup or connection preparation also
 enter this owner after the original temporary resources and installed session backends have
-confirmed disposition, and the preparation lease has been released; its ladder is queued as
-a claim (routine, high, no deadline) that the free instance grants at once. The trigger carries
+confirmed disposition. Its ladder is queued as a claim (routine, high, no deadline): after a
+daemon-start preparation, whose dedicated lease has been released, the free instance grants it
+at once; after a preparation on a claim's key (an emulator `start` / `restart` since Workflow
+#369 S6b, a resume's reconnect, a self-check), the ladder claim waits for that key and the
+claim's release transfers the key to it (H-1, P1). The trigger carries
 `stage: startup_preparation | connection_preparation`, the actual preparation event reference
 `preparation { sequence, event_id }`, and the original `failure_code`; it has no task/run IDs.
 A connection preparation is the one after emulator `start` / `restart` (including the

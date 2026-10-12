@@ -626,8 +626,9 @@ impl HostShared {
     // client lease: under the instance admission guard it takes a dedicated preparation lease (the
     // close-lease precedent: a resource-close-only lease of a fixed Runtime connection, granted
     // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`; Workflow #369 W-3: a
-    // resume's reconnect and a self-check run on their operator claim's key instead, and a
-    // stuck-recovery ladder on its own key), closes a session a
+    // resume's reconnect and a self-check run on their operator claim's key instead, H-4 (S6b):
+    // an emulator start or restart on its control's key, and a stuck-recovery ladder on its own
+    // key), closes a session a
     // lease-free path retained (a read-only observe keeps its capture open, sc2; Workflow #191
     // h3) through the fenced close path, opens the instance's input and capture backends through
     // `ExecutionKernel::open_instance_backends` (a Nemu pair once) so the opens cover every
@@ -843,16 +844,20 @@ impl HostShared {
     }
 
     /// The preparation phase of one physical instance; the caller holds its admission guard.
-    /// The opens are recorded under `links` (which name the instance). `kind` names the
-    /// preparation lease's holder (Workflow #369 Q-2; review L2: emulator control). Returns the
-    /// self-check projected from the opens it made, with the code of the failing step, if any.
+    /// The opens are recorded under `links` (which name the instance). Workflow #369 H-4 (S6b):
+    /// it runs on the key of the operator's emulator control (`token` on `connection_id`), takes
+    /// no dedicated lease and releases nothing; a failed preparation's ladder waits for that key
+    /// (`record_preparation_finished`), and the control's release hands it on (H-1, P1). Returns
+    /// the self-check projected from the opens it made, with the code of the failing step, if
+    /// any.
     pub(super) fn prepare_instance_connection(
         &self,
         instance_alias: &str,
         instance_id: InstanceId,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
-        kind: ClaimKind,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
     ) -> RuntimeHostResult<SchedulingResumeSelfCheck> {
         self.prepare_instance_connection_with_cooldown(
             instance_alias,
@@ -860,7 +865,10 @@ impl HostShared {
             links,
             admission,
             actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
-            PreparationLease::Dedicated(kind),
+            PreparationLease::Held {
+                token,
+                connection_id,
+            },
         )
         .map(|(selfcheck, _, _, _)| selfcheck)
     }

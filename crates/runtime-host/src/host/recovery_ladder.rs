@@ -73,20 +73,21 @@ const RECOVERY_READINESS_BACKOFF: [Duration; 3] = [
 /// (Workflow #369 H-3, review2 L7) the scheduling pause.
 const RECOVERY_READINESS_POLL: Duration = Duration::from_millis(500);
 /// Workflow #369 Q-5 (B1): a hold renews to a step's bound plus this margin.
-const HOLD_MARGIN_MS: u64 = 5_000;
+pub(super) const HOLD_MARGIN_MS: u64 = 5_000;
 /// Workflow #369 H-1, H-3: the TTL a ladder claim, and each continuation, is granted with; the
 /// ladder renews before every longer step.
 pub(super) const LADDER_CLAIM_TTL_MS: u64 = 120_000;
 /// Rung 2's bound before its startup run: the entry's ADB probe (30 s) and the application
 /// stop (60 s, an ADB application command).
 const APPLICATION_RESTART_ENTRY_BOUND_MS: u64 = 90_000;
-/// Rung 3's Stop (review L-3; Workflow #381 B, coordinator answer D3): the control bound
-/// 60 s + the readiness wait 120 s + the last `info` poll 10 s + the last process listing 10 s
-/// (F2) + the bounded state read after a failure 10 s (review M3) = 210 s.
-const EMULATOR_STOP_BOUND_MS: u64 = 210_000;
-/// Rung 3's Start: 60 + 120 + 10 s and the ADB baseline 30 s = 220 s on success; a failure ends
-/// at 60 + 120 + 10 s and the state read 10 s = 200 s.
-const EMULATOR_START_BOUND_MS: u64 = 220_000;
+/// Rung 3's Stop, and an operator's (H-4, S6b) (review L-3; Workflow #381 B, coordinator
+/// answer D3): the control bound 60 s + the readiness wait 120 s + the last `info` poll 10 s +
+/// the last process listing 10 s (F2) + the bounded state read after a failure 10 s (review M3)
+/// = 210 s.
+pub(super) const EMULATOR_STOP_BOUND_MS: u64 = 210_000;
+/// Rung 3's Start, and an operator's (H-4, S6b): 60 + 120 + 10 s and the ADB baseline 30 s =
+/// 220 s on success; a failure ends at 60 + 120 + 10 s and the state read 10 s = 200 s.
+pub(super) const EMULATOR_START_BOUND_MS: u64 = 220_000;
 
 /// One admitted ladder: its trigger, the facts' links and its claim.
 #[derive(Clone)]
@@ -1242,7 +1243,7 @@ impl HostShared {
                 action,
                 pending.request_id,
                 &admission,
-                Some(&key.token),
+                &key.token,
             ) {
                 Ok(driven) => driven,
                 Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
