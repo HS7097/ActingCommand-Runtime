@@ -258,6 +258,9 @@ crate::outcome_codes! {
         NemuAppIndexRequiresPairedInput => "nemu_app_index_requires_paired_input": error,
         NemuInputFrameRequired => "nemu_input_frame_required": error,
         NotImplemented => "not_implemented": error,
+        // OCR-CONF (R-11): the kernel fails a fields task with it, the client reads it as a
+        // fields-failure terminal.
+        OcrFieldLowConfidence => "ocr_field_low_confidence": error,
         OcrFieldsDeclarationInvalid => "ocr_fields_declaration_invalid": error,
         OcrFieldsDeclarationMissing => "ocr_fields_declaration_missing": error,
         OcrFieldsDictionaryLimitExceeded => "ocr_fields_dictionary_limit_exceeded": error,

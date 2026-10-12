@@ -806,6 +806,9 @@ pub enum OcrFieldReason {
     ProviderFailed,
     RegionUnresolved,
     NotCollected,
+    /// Workflow R-11 (OCR-CONF): the text resolved, but the observation's confidence is missing
+    /// or below the `minimum_confidence` its OCR target declares, so no value is accepted.
+    LowConfidence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
