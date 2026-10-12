@@ -197,8 +197,10 @@ tests = [
     "actingcommand-runtime-host::lib::tests::mapped_validation::mapped_terminal_page_conflicts_and_error_pages_fail_without_success",
     "actingcommand-runtime-host::lib::tests::mapped_validation::duplicate_designated_effects_fail_before_terminal_and_downstream_dispatch",
     "actingcommand-runtime-host::lib::tests::mapped_validation::mapped_terminal_requires_a_final_page_and_same_run_final_observation",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::a_catalog_first_referencing_an_earlier_run_outcome_reads_it_as_unknown_until_the_next_run",
+    "actingcommand-runtime-host::lib::tests::mapped_outcomes::an_outcome_referenced_again_after_an_unreferenced_run_does_not_bring_back_the_older_result",
 ]
-incident = []
+incident = ["#399"]
 
 # No silent skip: a due clock slot that is not dispatched leaves one record
 [[gate]]
