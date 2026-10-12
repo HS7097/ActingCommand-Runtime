@@ -109,6 +109,8 @@ mod facts;
 mod forward_projection;
 mod gate_369s5;
 mod gate_372k2;
+// Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
+mod gate_373_nav3b;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
