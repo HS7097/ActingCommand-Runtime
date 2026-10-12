@@ -106,9 +106,6 @@ impl DeviceDiagnosticBudgetRecord {
                 for sample in [first, last] {
                     let detail = sample.detail.as_ref().ok_or_else(invalid_budget)?;
                     detail.validate()?;
-                    if detail.declared_sensitivity() > self.declared_sensitivity {
-                        return Err(invalid_budget());
-                    }
                 }
             }
             _ => return Err(invalid_budget()),

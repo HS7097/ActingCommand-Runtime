@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 mod retention;
-use crate::codes::{RuntimeContractCode, SanitizationCode, SharedCode};
+use crate::codes::{ContractCode, RuntimeContractCode, SanitizationCode, SharedCode};
+use crate::outcome::{CauseRelation, Code, IoKind, Location, Outcome, RawSource};
 pub use retention::*;
 mod ledger_migration;
 mod signature;
@@ -592,14 +593,18 @@ impl InputIntentPayload {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+/// Where a failure arose, as its producer names it: the category, the stage, the backend and
+/// the operation. Ledger revision 3 (Workflow #378 A3) persists no failure text: the failure
+/// itself is the record's `outcome`, foreign text rides on its `foreign_*` links, and text the
+/// Runtime made goes only to the developer log. These names stay typed context beside the
+/// outcome until they are registered (the dotted stage tokens in A2-P, the device stages and
+/// backends in B5).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticDetailDraft {
     category: String,
     stage: String,
     backend: String,
     operation: String,
-    message: String,
-    declared_sensitivity: Sensitivity,
 }
 
 impl DiagnosticDetailDraft {
@@ -608,16 +613,12 @@ impl DiagnosticDetailDraft {
         stage: impl Into<String>,
         backend: impl Into<String>,
         operation: impl Into<String>,
-        message: impl Into<String>,
-        declared_sensitivity: Sensitivity,
     ) -> Self {
         Self {
             category: category.into(),
             stage: stage.into(),
             backend: backend.into(),
             operation: operation.into(),
-            message: message.into(),
-            declared_sensitivity,
         }
     }
 
@@ -637,57 +638,24 @@ impl DiagnosticDetailDraft {
         &self.operation
     }
 
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    pub const fn declared_sensitivity(&self) -> Sensitivity {
-        self.declared_sensitivity
-    }
-
     fn sanitize(self) -> Result<DiagnosticDetailRecord, SanitizationError> {
-        validate_diagnostic_detail(
-            &self.category,
-            &self.stage,
-            &self.backend,
-            &self.operation,
-            &self.message,
-            self.declared_sensitivity,
-        )?;
+        validate_diagnostic_detail(&self.category, &self.stage, &self.backend, &self.operation)?;
         Ok(DiagnosticDetailRecord {
             category: self.category,
             stage: self.stage,
             backend: self.backend,
             operation: self.operation,
-            message: self.message,
-            declared_sensitivity: self.declared_sensitivity,
         })
     }
 }
 
-impl fmt::Debug for DiagnosticDetailDraft {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DiagnosticDetailDraft")
-            .field("category", &self.category)
-            .field("stage", &self.stage)
-            .field("backend", &self.backend)
-            .field("operation", &self.operation)
-            .field("message", &"<redacted>")
-            .field("declared_sensitivity", &self.declared_sensitivity)
-            .finish()
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticDetailRecord {
     category: String,
     stage: String,
     backend: String,
     operation: String,
-    message: String,
-    declared_sensitivity: Sensitivity,
 }
 
 impl DiagnosticDetailRecord {
@@ -707,37 +675,8 @@ impl DiagnosticDetailRecord {
         &self.operation
     }
 
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    pub const fn declared_sensitivity(&self) -> Sensitivity {
-        self.declared_sensitivity
-    }
-
     fn validate(&self) -> Result<(), SanitizationError> {
-        validate_diagnostic_detail(
-            &self.category,
-            &self.stage,
-            &self.backend,
-            &self.operation,
-            &self.message,
-            self.declared_sensitivity,
-        )
-    }
-}
-
-impl fmt::Debug for DiagnosticDetailRecord {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DiagnosticDetailRecord")
-            .field("category", &self.category)
-            .field("stage", &self.stage)
-            .field("backend", &self.backend)
-            .field("operation", &self.operation)
-            .field("message", &"<redacted>")
-            .field("declared_sensitivity", &self.declared_sensitivity)
-            .finish()
+        validate_diagnostic_detail(&self.category, &self.stage, &self.backend, &self.operation)
     }
 }
 
@@ -746,41 +685,11 @@ fn validate_diagnostic_detail(
     stage: &str,
     backend: &str,
     operation: &str,
-    message: &str,
-    declared_sensitivity: Sensitivity,
 ) -> Result<(), SanitizationError> {
     validate_diagnostic_detail_token(category, "category")?;
     validate_diagnostic_detail_stage(stage)?;
     validate_diagnostic_detail_token(backend, "backend")?;
-    validate_diagnostic_detail_token(operation, "operation")?;
-    if message.is_empty()
-        || message.len() > MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES
-        || message.chars().any(char::is_control)
-    {
-        return Err(SanitizationError::new(
-            SanitizationCode::InvalidDiagnosticDetailMessage,
-            "message",
-        ));
-    }
-    if diagnostic_message_has_unsafe_shape(message) {
-        return Err(SanitizationError::new(
-            SanitizationCode::UnsafeDiagnosticDetailMessage,
-            "message",
-        ));
-    }
-    let lower = message.to_ascii_lowercase();
-    let carries_native_output = ["stdout=", "stderr=", "exit_status="]
-        .iter()
-        .any(|marker| lower.contains(marker));
-    if declared_sensitivity == Sensitivity::Public
-        || (carries_native_output && declared_sensitivity < Sensitivity::Sensitive)
-    {
-        return Err(SanitizationError::new(
-            SanitizationCode::InvalidDiagnosticDetailSensitivity,
-            "declared_sensitivity",
-        ));
-    }
-    Ok(())
+    validate_diagnostic_detail_token(operation, "operation")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -790,16 +699,18 @@ pub enum CleanupCauseSeverity {
     Fatal,
 }
 
+/// A failed cleanup that accompanied a failure. Ledger revision 3 records it as the failure
+/// outcome's `cleanup` link, and its diagnostic detail as the record's `cleanup_detail`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanupCauseDraft {
-    code: String,
+    code: Code,
     severity: CleanupCauseSeverity,
     detail: Option<DiagnosticDetailDraft>,
 }
 
 impl CleanupCauseDraft {
     pub fn new(
-        code: impl Into<String>,
+        code: impl Into<Code>,
         severity: CleanupCauseSeverity,
         detail: Option<DiagnosticDetailDraft>,
     ) -> Self {
@@ -810,8 +721,8 @@ impl CleanupCauseDraft {
         }
     }
 
-    pub fn code(&self) -> &str {
-        &self.code
+    pub const fn code(&self) -> Code {
+        self.code
     }
 
     pub const fn severity(&self) -> CleanupCauseSeverity {
@@ -822,47 +733,18 @@ impl CleanupCauseDraft {
         self.detail.as_ref()
     }
 
-    fn sanitize(self) -> Result<CleanupCauseRecord, SanitizationError> {
-        validate_diagnostic_detail_token(&self.code, "cleanup_code")?;
-        Ok(CleanupCauseRecord {
-            code: self.code,
-            severity: self.severity,
-            detail: self
-                .detail
-                .map(DiagnosticDetailDraft::sanitize)
-                .transpose()?,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CleanupCauseRecord {
-    code: String,
-    severity: CleanupCauseSeverity,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    detail: Option<DiagnosticDetailRecord>,
-}
-
-impl CleanupCauseRecord {
-    pub fn code(&self) -> &str {
-        &self.code
+    /// The cleanup's own outcome, attached as the failure's `cleanup` link.
+    pub fn outcome(&self) -> Outcome {
+        Outcome::new(self.code)
     }
 
-    pub const fn severity(&self) -> CleanupCauseSeverity {
-        self.severity
-    }
-
-    pub const fn detail(&self) -> Option<&DiagnosticDetailRecord> {
-        self.detail.as_ref()
-    }
-
-    fn validate(&self) -> Result<(), SanitizationError> {
-        validate_diagnostic_detail_token(&self.code, "cleanup_code")?;
-        if let Some(detail) = &self.detail {
-            detail.validate()?;
-        }
-        Ok(())
+    fn sanitize(self) -> Result<(Outcome, Option<DiagnosticDetailRecord>), SanitizationError> {
+        let outcome = self.outcome();
+        let detail = self
+            .detail
+            .map(DiagnosticDetailDraft::sanitize)
+            .transpose()?;
+        Ok((outcome, detail))
     }
 }
 
@@ -996,6 +878,10 @@ pub enum OwnerResourceDisposition {
     Unconfirmed,
 }
 
+/// Text a third party produced (a backend's output, an OS or store error message), bounded to
+/// 1 KiB. Ledger revision 3 carries it as `raw_text` on a `foreign_*` link of the failure's
+/// outcome ([`LifecycleNativeDetail::outcome`]), with its declared sensitivity; only the typed
+/// ADB recovery evidence still holds it as a member (B5 moves device evidence to links).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LifecycleNativeDetail {
@@ -1041,6 +927,33 @@ impl LifecycleNativeDetail {
         self.truncated
     }
 
+    /// The `foreign_other_error` link that carries this text verbatim as `raw_text`
+    /// (`raw_source` `other`; B5 names the device sources).
+    pub fn outcome(&self) -> Outcome {
+        foreign_text_outcome(
+            ContractCode::ForeignOtherError,
+            RawSource::Other,
+            &self.text,
+            self.truncated,
+            self.declared_sensitivity,
+        )
+    }
+
+    /// The `foreign_os_error` link of an OS error number with this text as its `raw_text`.
+    pub fn os_outcome(&self, os_error: i32) -> Outcome {
+        foreign_text_outcome(
+            ContractCode::ForeignOsError,
+            RawSource::Os,
+            &self.text,
+            self.truncated,
+            self.declared_sensitivity,
+        )
+        .os_error(os_error)
+        .io_kind(IoKind::from_error_kind(
+            std::io::Error::from_raw_os_error(os_error).kind(),
+        ))
+    }
+
     pub(crate) fn validate(&self) -> Result<(), SanitizationError> {
         let lower = self.text.to_ascii_lowercase();
         if self.text.is_empty()
@@ -1072,12 +985,45 @@ impl LifecycleNativeDetail {
     }
 }
 
+/// A `foreign_*` link carrying third-party text verbatim.
+fn foreign_text_outcome(
+    code: ContractCode,
+    raw_source: RawSource,
+    text: &str,
+    truncated: bool,
+    sensitivity: Sensitivity,
+) -> Outcome {
+    let outcome = Outcome::new(code)
+        .raw_source(raw_source)
+        .raw_text(text)
+        .raw_text_sensitivity(sensitivity);
+    if truncated {
+        outcome.raw_text_truncated(true)
+    } else {
+        outcome
+    }
+}
+
+/// The `foreign_os_error` link of an OS error number alone: its text is the OS's own message.
+pub fn os_error_outcome(os_error: i32) -> Outcome {
+    let error = std::io::Error::from_raw_os_error(os_error);
+    Outcome::new(ContractCode::ForeignOsError)
+        .raw_source(RawSource::Os)
+        .raw_text(error.to_string())
+        .os_error(os_error)
+        .io_kind(IoKind::from_error_kind(error.kind()))
+}
+
+/// One cause of a runtime lifecycle failure: which backend phase failed, and the resources it
+/// left. Ledger revision 3 records the cause's code and native text as the failure outcome's
+/// `caused_by` link ([`LifecycleCauseDraft::link`]) and its typed context as the record's
+/// `cause`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifecycleCauseDraft {
     vendor_stdio: Option<Box<VendorStdioFacts>>,
     phase: LifecycleFailurePhase,
     source: String,
-    code: String,
+    code: Code,
     severity: CleanupCauseSeverity,
     detail: Option<DiagnosticDetailDraft>,
     native_detail: Option<LifecycleNativeDetail>,
@@ -1101,7 +1047,7 @@ impl LifecycleCauseDraft {
     pub fn new(
         phase: LifecycleFailurePhase,
         source: impl Into<String>,
-        code: impl Into<String>,
+        code: impl Into<Code>,
         severity: CleanupCauseSeverity,
     ) -> Self {
         Self {
@@ -1157,6 +1103,9 @@ impl LifecycleCauseDraft {
         self.dropped_count = Some(dropped_count);
         self
     }
+    pub const fn code(&self) -> Code {
+        self.code
+    }
     pub const fn severity(&self) -> CleanupCauseSeverity {
         self.severity
     }
@@ -1166,19 +1115,39 @@ impl LifecycleCauseDraft {
     pub const fn resource(&self) -> Option<RuntimeResourceKind> {
         self.resource
     }
-    fn sanitize(self) -> Result<LifecycleCauseRecord, SanitizationError> {
+    pub const fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
+        self.native_detail.as_ref()
+    }
+
+    /// The cause's own outcome: its code, with its native text (and the last native text it
+    /// observed) as `foreign_other_error` links.
+    pub fn link(&self) -> Outcome {
+        let mut outcome = Outcome::new(self.code);
+        if let Some(native) = &self.native_detail {
+            outcome = outcome.caused_by(native.outcome());
+        }
+        if let Some(native) = &self.last_native_detail {
+            outcome = outcome.link(CauseRelation::Related, native.outcome());
+        }
+        outcome
+    }
+
+    fn sanitize(self) -> Result<(Outcome, LifecycleCauseRecord), SanitizationError> {
+        for native in [&self.native_detail, &self.last_native_detail]
+            .into_iter()
+            .flatten()
+        {
+            native.validate()?;
+        }
+        let link = self.link();
         let record = LifecycleCauseRecord {
             vendor_stdio: self.vendor_stdio,
             phase: self.phase,
             source: self.source,
-            code: self.code,
-            severity: self.severity,
             detail: self
                 .detail
                 .map(DiagnosticDetailDraft::sanitize)
                 .transpose()?,
-            native_detail: self.native_detail,
-            last_native_detail: self.last_native_detail,
             resource: self.resource,
             resource_phase: self.resource_phase,
             candidate_index: self.candidate_index,
@@ -1189,10 +1158,12 @@ impl LifecycleCauseDraft {
             dropped_count: self.dropped_count,
         };
         record.validate()?;
-        Ok(record)
+        Ok((link, record))
     }
 }
 
+/// The typed context of a lifecycle failure's cause; its code and text are the failure
+/// outcome's `caused_by` link.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LifecycleCauseRecord {
@@ -1200,14 +1171,8 @@ pub struct LifecycleCauseRecord {
     vendor_stdio: Option<Box<VendorStdioFacts>>,
     phase: LifecycleFailurePhase,
     source: String,
-    code: String,
-    severity: CleanupCauseSeverity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<DiagnosticDetailRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    native_detail: Option<LifecycleNativeDetail>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    last_native_detail: Option<LifecycleNativeDetail>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource: Option<RuntimeResourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1230,27 +1195,14 @@ impl LifecycleCauseRecord {
     pub fn vendor_stdio(&self) -> Option<&VendorStdioFacts> {
         self.vendor_stdio.as_deref()
     }
-
-    pub const fn last_native_detail(&self) -> Option<&LifecycleNativeDetail> {
-        self.last_native_detail.as_ref()
-    }
     pub const fn phase(&self) -> LifecycleFailurePhase {
         self.phase
     }
     pub fn source(&self) -> &str {
         &self.source
     }
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-    pub const fn severity(&self) -> CleanupCauseSeverity {
-        self.severity
-    }
     pub const fn detail(&self) -> Option<&DiagnosticDetailRecord> {
         self.detail.as_ref()
-    }
-    pub const fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
-        self.native_detail.as_ref()
     }
     pub const fn resource(&self) -> Option<RuntimeResourceKind> {
         self.resource
@@ -1278,7 +1230,6 @@ impl LifecycleCauseRecord {
     }
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_diagnostic_detail_token(&self.source, "lifecycle_source")?;
-        validate_diagnostic_detail_token(&self.code, "lifecycle_code")?;
         if let Some(facts) = &self.vendor_stdio {
             facts.validate()?;
             if self.phase != LifecycleFailurePhase::ResourceClose || self.resource.is_none() {
@@ -1289,12 +1240,6 @@ impl LifecycleCauseRecord {
             }
         }
         if let Some(detail) = &self.detail {
-            detail.validate()?;
-        }
-        if let Some(detail) = &self.native_detail {
-            detail.validate()?;
-        }
-        if let Some(detail) = &self.last_native_detail {
             detail.validate()?;
         }
         if self.resource.is_some() != self.resource_phase.is_some()
@@ -1312,9 +1257,15 @@ impl LifecycleCauseRecord {
     }
 }
 
+/// A runtime lifecycle failure (`runtime.failed`). Its producer builds the failure's outcome
+/// (code, `operation`, `stage`); the draft attaches the cleanup, the cause, the OS error and
+/// the native text as links, and the record keeps the typed context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeLifecycleFailureDraft {
     record: RuntimeLifecycleFailureRecord,
+    outcome: Outcome,
+    native_detail: Option<LifecycleNativeDetail>,
+    raw_os_error: Option<i32>,
     primary_detail: Option<DiagnosticDetailDraft>,
     cleanup_cause: Option<CleanupCauseDraft>,
     cause: Option<LifecycleCauseDraft>,
@@ -1326,52 +1277,38 @@ impl RuntimeLifecycleFailureDraft {
         self
     }
 
-    pub fn new(
-        owner_epoch: OwnerEpoch,
-        stage: impl Into<String>,
-        source: impl Into<String>,
-        code: impl Into<String>,
-    ) -> Self {
+    /// `source` names the component that reported the failure (`runtime_host`,
+    /// `runtime_client` or `actingd`); `outcome` is the failure itself.
+    pub fn new(owner_epoch: OwnerEpoch, source: impl Into<String>, outcome: Outcome) -> Self {
         Self {
             record: RuntimeLifecycleFailureRecord {
                 resource_dispositions: None,
                 adb_recovery: None,
                 owner_epoch,
-                stage: stage.into(),
                 source: source.into(),
-                code: code.into(),
-                operation: None,
-                fatal: None,
                 runtime_code: None,
                 entered_event_id: None,
                 instance_id: None,
                 primary_detail: None,
-                cleanup_cause: None,
+                cleanup_detail: None,
                 cause: None,
-                native_detail: None,
                 capacity: None,
-                raw_os_error: None,
                 task_timing: None,
             },
+            outcome,
+            native_detail: None,
+            raw_os_error: None,
             primary_detail: None,
             cleanup_cause: None,
             cause: None,
         }
     }
-    pub fn with_operation(mut self, operation: Option<&str>) -> Self {
-        self.record.operation = operation.map(str::to_owned);
-        self
-    }
     pub fn with_resource_dispositions(mut self, groups: Option<Vec<ResourceDisposition>>) -> Self {
         self.record.resource_dispositions = groups;
         self
     }
-    pub fn with_projection(
-        mut self,
-        fatal: Option<bool>,
-        code: Option<crate::RuntimeErrorCode>,
-    ) -> Self {
-        self.record.fatal = fatal;
+    /// The Runtime error code a receipt for this failure projects.
+    pub fn with_runtime_code(mut self, code: Option<crate::RuntimeErrorCode>) -> Self {
         self.record.runtime_code = code;
         self
     }
@@ -1388,7 +1325,7 @@ impl RuntimeLifecycleFailureDraft {
         self
     }
     pub fn with_native_detail(mut self, detail: Option<LifecycleNativeDetail>) -> Self {
-        self.record.native_detail = detail;
+        self.native_detail = detail;
         self
     }
     pub fn with_capacity(mut self, capacity: Option<crate::CapacityDecision>) -> Self {
@@ -1400,7 +1337,7 @@ impl RuntimeLifecycleFailureDraft {
         self
     }
     pub fn with_raw_os_error(mut self, code: Option<i32>) -> Self {
-        self.record.raw_os_error = code;
+        self.raw_os_error = code;
         self
     }
     pub fn with_cleanup_cause(mut self, cause: Option<CleanupCauseDraft>) -> Self {
@@ -1411,21 +1348,44 @@ impl RuntimeLifecycleFailureDraft {
         self.cause = cause;
         self
     }
-    fn sanitize(mut self) -> Result<RuntimeLifecycleFailureRecord, SanitizationError> {
+    /// The failure's outcome as it is so far (without the links the draft adds).
+    pub fn outcome(&self) -> &Outcome {
+        &self.outcome
+    }
+    fn sanitize(mut self) -> Result<(RuntimeLifecycleFailureRecord, Outcome), SanitizationError> {
+        let mut outcome = self.outcome;
+        if let Some(cause) = self.cause {
+            let (link, record) = cause.sanitize()?;
+            outcome = outcome.caused_by(link);
+            self.record.cause = Some(record);
+        }
+        if let Some(os_error) = self.raw_os_error {
+            outcome = outcome.caused_by(match &self.native_detail {
+                Some(native) => native.os_outcome(os_error),
+                None => os_error_outcome(os_error),
+            });
+        } else if let Some(native) = &self.native_detail {
+            outcome = outcome.caused_by(native.outcome());
+        }
+        if let Some(native) = &self.native_detail {
+            native.validate()?;
+        }
+        if let Some(cleanup) = self.cleanup_cause {
+            let (link, detail) = cleanup.sanitize()?;
+            outcome = outcome.link(CauseRelation::Cleanup, link);
+            self.record.cleanup_detail = detail;
+        }
         self.record.primary_detail = self
             .primary_detail
             .map(DiagnosticDetailDraft::sanitize)
             .transpose()?;
-        self.record.cleanup_cause = self
-            .cleanup_cause
-            .map(CleanupCauseDraft::sanitize)
-            .transpose()?;
-        self.record.cause = self.cause.map(LifecycleCauseDraft::sanitize).transpose()?;
         self.record.validate()?;
-        Ok(self.record)
+        Ok((self.record, outcome))
     }
 }
 
+/// The typed context of a `runtime.failed` record; the failure itself is the payload's
+/// `outcome` (ledger revision 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecycleFailureRecord {
@@ -1436,17 +1396,9 @@ pub struct RuntimeLifecycleFailureRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capacity: Option<crate::CapacityDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    raw_os_error: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
-    stage: String,
     source: String,
-    code: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    operation: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    fatal: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_code: Option<crate::RuntimeErrorCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1456,9 +1408,7 @@ pub struct RuntimeLifecycleFailureRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     primary_detail: Option<DiagnosticDetailRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    native_detail: Option<LifecycleNativeDetail>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cleanup_cause: Option<CleanupCauseRecord>,
+    cleanup_detail: Option<DiagnosticDetailRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cause: Option<LifecycleCauseRecord>,
 }
@@ -1473,29 +1423,14 @@ impl RuntimeLifecycleFailureRecord {
     pub const fn capacity(&self) -> Option<&crate::CapacityDecision> {
         self.capacity.as_ref()
     }
-    pub const fn raw_os_error(&self) -> Option<i32> {
-        self.raw_os_error
-    }
     pub fn adb_recovery(&self) -> Option<&AdbTargetRecovery> {
         self.adb_recovery.as_deref()
     }
     pub const fn owner_epoch(&self) -> OwnerEpoch {
         self.owner_epoch
     }
-    pub fn stage(&self) -> &str {
-        &self.stage
-    }
     pub fn source(&self) -> &str {
         &self.source
-    }
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-    pub fn operation(&self) -> Option<&str> {
-        self.operation.as_deref()
-    }
-    pub const fn fatal(&self) -> Option<bool> {
-        self.fatal
     }
     pub const fn runtime_code(&self) -> Option<crate::RuntimeErrorCode> {
         self.runtime_code
@@ -1509,17 +1444,13 @@ impl RuntimeLifecycleFailureRecord {
     pub const fn primary_detail(&self) -> Option<&DiagnosticDetailRecord> {
         self.primary_detail.as_ref()
     }
-    pub const fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
-        self.native_detail.as_ref()
-    }
-    pub const fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
-        self.cleanup_cause.as_ref()
+    pub const fn cleanup_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.cleanup_detail.as_ref()
     }
     pub const fn cause(&self) -> Option<&LifecycleCauseRecord> {
         self.cause.as_ref()
     }
     fn validate(&self) -> Result<(), SanitizationError> {
-        validate_diagnostic_detail_stage(&self.stage)?;
         if let Some(groups) = &self.resource_dispositions {
             validate_resource_dispositions(groups)?;
         }
@@ -1533,18 +1464,11 @@ impl RuntimeLifecycleFailureRecord {
             recovery.validate()?;
         }
         validate_diagnostic_detail_token(&self.source, "lifecycle_source")?;
-        validate_diagnostic_detail_token(&self.code, "lifecycle_code")?;
-        if let Some(operation) = &self.operation {
-            validate_diagnostic_detail_token(operation, "lifecycle_operation")?;
-        }
-        if let Some(detail) = &self.primary_detail {
+        for detail in [&self.primary_detail, &self.cleanup_detail]
+            .into_iter()
+            .flatten()
+        {
             detail.validate()?;
-        }
-        if let Some(detail) = &self.native_detail {
-            detail.validate()?;
-        }
-        if let Some(cause) = &self.cleanup_cause {
-            cause.validate()?;
         }
         if let Some(cause) = &self.cause {
             cause.validate()?;
@@ -1571,28 +1495,6 @@ impl RuntimeLifecycleFailureRecord {
         {
             sensitivity = Sensitivity::Sensitive;
         }
-        if let Some(native) = &self.native_detail {
-            sensitivity = sensitivity.max(native.declared_sensitivity);
-        }
-        for detail in [
-            self.primary_detail.as_ref(),
-            self.cleanup_cause
-                .as_ref()
-                .and_then(CleanupCauseRecord::detail),
-            self.cause.as_ref().and_then(LifecycleCauseRecord::detail),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            sensitivity = sensitivity.max(detail.declared_sensitivity());
-        }
-        if let Some(native) = self
-            .cause
-            .as_ref()
-            .and_then(LifecycleCauseRecord::native_detail)
-        {
-            sensitivity = sensitivity.max(native.declared_sensitivity);
-        }
         sensitivity
     }
     fn public_summary(&self) -> Self {
@@ -1601,15 +1503,10 @@ impl RuntimeLifecycleFailureRecord {
             capacity.target_volume = None;
         }
         result.primary_detail = None;
+        result.cleanup_detail = None;
         result.adb_recovery = None;
-        result.native_detail = None;
-        if let Some(cause) = &mut result.cleanup_cause {
-            cause.detail = None;
-        }
         if let Some(cause) = &mut result.cause {
             cause.detail = None;
-            cause.native_detail = None;
-            cause.last_native_detail = None;
             cause.native_instance = None;
             cause.vendor_stdio = None;
         }
@@ -1617,10 +1514,12 @@ impl RuntimeLifecycleFailureRecord {
     }
 }
 
+/// A stage token: one to four dotted segments of lowercase letters, digits, `_` and `-` (the
+/// dotted producer stages, and registered locations).
 fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError> {
     let segments = value.split('.').collect::<Vec<_>>();
     if value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
-        || !(2..=4).contains(&segments.len())
+        || !(1..=4).contains(&segments.len())
         || segments.iter().any(|segment| {
             segment.is_empty()
                 || !segment.bytes().all(|byte| {
@@ -1639,51 +1538,12 @@ fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError
     }
 }
 
-fn diagnostic_message_has_unsafe_shape(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    if [
-        "authorization:",
-        "bearer ",
-        "password=",
-        "password:",
-        "secret=",
-        "secret:",
-        "token=",
-        "token:",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-        || value.contains("\\\\")
-        || value.contains("//")
-        || value.as_bytes().windows(3).any(|window| {
-            window[0].is_ascii_alphabetic()
-                && window[1] == b':'
-                && matches!(window[2], b'\\' | b'/')
-        })
-    {
-        return true;
-    }
-    value
-        .split(|character: char| {
-            character.is_whitespace() || matches!(character, ',' | ';' | '(' | ')' | '"' | '\'')
-        })
-        .map(|candidate| candidate.trim_matches(|character| matches!(character, '.' | ':')))
-        .any(|candidate| {
-            (candidate.starts_with('/') && candidate.len() > 1)
-                || candidate.parse::<std::net::SocketAddr>().is_ok()
-                || candidate.rsplit_once(':').is_some_and(|(host, port)| {
-                    !host.is_empty()
-                        && port.parse::<u16>().is_ok()
-                        && (host == "localhost" || host.parse::<std::net::IpAddr>().is_ok())
-                })
-        })
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticPayload {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
+    outcome: Outcome,
     audit: SanitizedAudit,
 }
 
@@ -1700,16 +1560,19 @@ pub struct OutcomePayload {
     audit: SanitizedAudit,
 }
 
+/// A failed or refused operation (`*.failed`, `*.rejected`). `diagnostic_code` classifies it
+/// for ledger queries; `outcome` is the failure itself (ledger revision 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticOutcomePayload {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    outcome: Outcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<DiagnosticDetailRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    cleanup_cause: Option<Box<CleanupCauseRecord>>,
+    cleanup_detail: Option<DiagnosticDetailRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1730,26 +1593,83 @@ pub enum ArtifactFailureStage {
     VerifiedRecord,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// One failed step of an artifact store operation: a registered code and location with the
+/// store's native text. Ledger revision 3 records it as an outcome ([`Self::outcome`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactFailureCause {
-    pub code: String,
-    pub operation: String,
+    pub code: Code,
+    pub operation: Location,
     pub native_detail: LifecycleNativeDetail,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_os_error: Option<i32>,
+}
+
+impl ArtifactFailureCause {
+    /// The step's code with its `operation`, and its native text as a `foreign_os_error`
+    /// (with the OS error number) or `foreign_other_error` link.
+    pub fn outcome(&self) -> Outcome {
+        Outcome::new(self.code)
+            .operation(self.operation)
+            .caused_by(match self.raw_os_error {
+                Some(os_error) => self.native_detail.os_outcome(os_error),
+                None => self.native_detail.outcome(),
+            })
+    }
 }
 
 pub const MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES: usize = 4;
 
-/// An attempted identity is diagnostic data, never a readable artifact attachment.
+/// An artifact store failure as its producer reports it: the primary step, at most four
+/// secondary steps, and the attempted identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactFailureDraft {
+    pub artifact_id: crate::ArtifactId,
+    pub stage: ArtifactFailureStage,
+    pub primary: ArtifactFailureCause,
+    pub secondary: Vec<ArtifactFailureCause>,
+    pub omitted_secondary_count: u64,
+    pub capacity: Option<crate::CapacityDecision>,
+}
+
+impl ArtifactFailureDraft {
+    /// The failure's outcome: the primary step on top and each secondary step as a
+    /// `secondary` link.
+    pub fn outcome(&self) -> Outcome {
+        self.secondary
+            .iter()
+            .fold(self.primary.outcome(), |outcome, cause| {
+                outcome.link(CauseRelation::Secondary, cause.outcome())
+            })
+    }
+
+    fn sanitize(self) -> Result<(ArtifactFailureRecord, Outcome), SanitizationError> {
+        if self.secondary.len() > MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidArtifactFailureCauses,
+                "secondary",
+            ));
+        }
+        for cause in std::iter::once(&self.primary).chain(&self.secondary) {
+            cause.native_detail.validate()?;
+        }
+        let outcome = self.outcome();
+        let record = ArtifactFailureRecord {
+            artifact_id: self.artifact_id,
+            stage: self.stage,
+            omitted_secondary_count: self.omitted_secondary_count,
+            capacity: self.capacity,
+        };
+        record.validate()?;
+        Ok((record, outcome))
+    }
+}
+
+/// An attempted identity is diagnostic data, never a readable artifact attachment. The steps
+/// that failed are the payload's `outcome` (ledger revision 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactFailureRecord {
     pub artifact_id: crate::ArtifactId,
     pub stage: ArtifactFailureStage,
-    pub primary: ArtifactFailureCause,
-    pub secondary: Vec<ArtifactFailureCause>,
     pub omitted_secondary_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity: Option<crate::CapacityDecision>,
@@ -1759,17 +1679,6 @@ impl ArtifactFailureRecord {
     fn validate(&self) -> Result<(), SanitizationError> {
         if let Some(capacity) = &self.capacity {
             capacity.validate()?;
-        }
-        if self.secondary.len() > MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES {
-            return Err(SanitizationError::new(
-                SanitizationCode::InvalidArtifactFailureCauses,
-                "secondary",
-            ));
-        }
-        for cause in std::iter::once(&self.primary).chain(&self.secondary) {
-            validate_diagnostic_detail_token(&cause.code, "artifact_failure_code")?;
-            validate_diagnostic_detail_token(&cause.operation, "artifact_failure_operation")?;
-            cause.native_detail.validate()?;
         }
         Ok(())
     }
@@ -1833,13 +1742,14 @@ pub enum RuntimeLifecyclePhase {
         rungs: Vec<RecoveryRungPlan>,
     },
     /// One rung ended; `run_id` names the rung's own contained task run when it ran one.
+    /// A failed or skipped rung's `outcome` is why (ledger revision 3; was `reason`).
     RecoveryRungFinished {
         rung: RecoveryRung,
-        outcome: RecoveryRungOutcome,
+        rung_result: RecoveryRungOutcome,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<RunId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
+        outcome: Option<Outcome>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environment: Option<crate::TerminalEvent>,
     },
@@ -1849,8 +1759,9 @@ pub enum RuntimeLifecyclePhase {
         stage: RecoveryTriggerStage,
         capture: crate::BackendObservationStatus,
         input: crate::BackendObservationStatus,
+        /// The preparation's failure (ledger revision 3; was `failure_code`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        failure_code: Option<String>,
+        outcome: Option<Outcome>,
     },
     /// Confirmed provider Stop, new Start and successful fresh input/capture preparation.
     RecoveryEnvironmentReady {
@@ -1865,7 +1776,7 @@ pub enum RuntimeLifecyclePhase {
     },
     /// The ladder ended; `rungs_tried` counts the rungs that were executed (not skipped).
     RecoveryLadderFinished {
-        outcome: RecoveryLadderOutcome,
+        ladder_result: RecoveryLadderOutcome,
         rungs_tried: u8,
     },
     /// A trigger inside the cool-down window, or while a ladder runs, started nothing.
@@ -1902,6 +1813,18 @@ pub struct RuntimeLifecyclePayload {
 }
 
 impl RuntimeLifecyclePayload {
+    /// The outcome the phase carries (ledger revision 3): why a recovery rung failed or was
+    /// skipped, or why an instance preparation failed.
+    pub fn outcome(&self) -> Option<&Outcome> {
+        match &self.phase {
+            RuntimeLifecyclePhase::RecoveryRungFinished { outcome, .. }
+            | RuntimeLifecyclePhase::InstancePreparationFinished { outcome, .. } => {
+                outcome.as_ref()
+            }
+            _ => None,
+        }
+    }
+
     pub fn backend_open(&self) -> Option<&crate::BackendOpenReport> {
         self.backend_open.as_deref()
     }
@@ -2113,8 +2036,8 @@ pub struct PerformanceMonitorStatePayload {
     action: EventAction,
     observed_at_unix_ms: u64,
     health: PerformanceMonitorHealth,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    failure_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<Outcome>,
     consecutive_failures: u16,
     terminal: bool,
     unavailable_metrics: Vec<crate::PerformanceMetric>,
@@ -2580,6 +2503,8 @@ pub struct ArtifactExportPayload {
 pub struct ArtifactExportFailurePayload {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
+    /// The failed export's outcome (ledger revision 3).
+    outcome: Outcome,
     effect_disposition: EffectDisposition,
     task_outcome: TaskOutcome,
     evidence_completeness: EvidenceCompleteness,
@@ -2595,16 +2520,18 @@ pub struct ResourceAuthoringPayload {
     target_label: String,
     target_fingerprint: String,
     changed_paths: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    failure_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<Outcome>,
     audit: SanitizedAudit,
 }
 
+/// One reason of a dispatch's ranking chain. Ledger revision 3 persists no reason text (the
+/// policy's English detail goes only to the developer log); the code stays text until A2-P
+/// splits the policy's dynamic reason codes (`score_unknown:<rule>`) into fixed codes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyReasonRecord {
     pub code: String,
-    pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2806,7 +2733,7 @@ pub struct PolicyExecutionPayload {
     task_id: String,
     instance_id: String,
     observed_at_unix_ms: u64,
-    outcome: PolicyExecutionOutcome,
+    policy_result: PolicyExecutionOutcome,
     audit: SanitizedAudit,
 }
 
@@ -2827,8 +2754,9 @@ impl PolicyExecutionPayload {
         self.observed_at_unix_ms
     }
 
-    pub const fn outcome(&self) -> &PolicyExecutionOutcome {
-        &self.outcome
+    /// How the policy recorded the run (ledger revision 3; was `outcome`).
+    pub const fn policy_result(&self) -> &PolicyExecutionOutcome {
+        &self.policy_result
     }
 }
 
@@ -2954,13 +2882,13 @@ pub struct PolicyBudgetDenial {
     pub limit: u64,
 }
 
-/// Bounded Runtime failure facts, separate from the immutable ranking reason chain.
+/// Bounded Runtime failure facts, separate from the immutable ranking reason chain: the
+/// refusal is `outcome` (its code with `operation`; ledger revision 3), the budget it ran out
+/// of and when the task is next eligible stay typed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyDispatchRejection {
-    pub code: String,
-    pub operation: String,
-    pub fatal: bool,
+    pub outcome: Outcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<PolicyBudgetDenial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2969,8 +2897,7 @@ pub struct PolicyDispatchRejection {
 
 impl PolicyDispatchRejection {
     fn validate(&self) -> Result<(), SanitizationError> {
-        validate_policy_token(&self.code, "rejection_code")?;
-        validate_policy_token(&self.operation, "rejection_operation")
+        Ok(())
     }
 }
 
@@ -3055,6 +2982,9 @@ pub struct CatalogTransitionPayload {
     action: EventAction,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostic_code: Option<DiagnosticCode>,
+    /// A failed transition's outcome (ledger revision 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<Outcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     effect_disposition: Option<EffectDisposition>,
     catalog_id: String,
@@ -3124,6 +3054,9 @@ pub struct ReleaseTransitionPayload {
     action: EventAction,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostic_code: Option<DiagnosticCode>,
+    /// A failed transition's outcome (ledger revision 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<Outcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     effect_disposition: Option<EffectDisposition>,
     transition: ReleaseTransitionData,
@@ -3234,7 +3167,8 @@ pub struct TaskGeometryFrame {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskGeometryFailure {
-    pub code: String,
+    /// The failure (ledger revision 3; was `code`).
+    pub outcome: Outcome,
     pub event_id: Option<crate::EventId>,
 }
 
@@ -3364,9 +3298,6 @@ impl TaskGeometryObservation {
                 SanitizationCode::InvalidTaskGeometryPhase,
                 "geometry",
             ));
-        }
-        for failure in self.original_failure.iter().chain(self.unavailable.iter()) {
-            validate_task_semantic_label(&failure.code, "geometry_failure_code")?;
         }
         if let Some(frame) = &self.frame {
             validate_geometry_source(&frame.producer)?;
@@ -3503,14 +3434,16 @@ pub enum TaskSemanticFact {
         final_page: String,
         executed_steps: u32,
     },
+    /// The entry recovery package failed; `outcome` is its failure (ledger revision 3).
     EntryRecoveryFailed {
         package_sha256: crate::PackageRef,
-        failure_code: String,
+        outcome: Outcome,
     },
+    /// A fail-closed disposition carries the entry's failure as `outcome`.
     EntryTargetDisposition {
         disposition: TaskEntryTargetDisposition,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        failure_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<Outcome>,
     },
     StepStarted {
         step_index: u32,
@@ -3544,26 +3477,29 @@ pub enum TaskSemanticFact {
         phase: Option<crate::TaskPhaseEvidence>,
     },
     Finalizing {
-        outcome: TaskOutcome,
+        task_result: TaskOutcome,
     },
+    /// A run's terminal: `task_result` says how it ended, and a failed or cancelled run carries
+    /// its failure as `outcome` (ledger revision 3; was `failure_code`).
     TerminalCommitted {
-        outcome: TaskOutcome,
+        task_result: TaskOutcome,
         #[serde(skip_serializing_if = "Option::is_none")]
         final_page: Option<String>,
         /// Run-owner logical steps; null means progress was unavailable.
         #[serde(default)]
         executed_steps: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        failure_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<Outcome>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduling_disposition: Option<SchedulingDisposition>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_timing: Option<Box<crate::TaskTimingObservations>>,
     },
+    /// A second terminal for a run that already had one; `outcome` is why it was refused.
     TerminalRejected {
         committed_outcome: TaskOutcome,
         attempted_outcome: TaskOutcome,
-        reason: String,
+        outcome: Outcome,
     },
 }
 
@@ -4029,15 +3965,17 @@ impl AuthoritativeSchedulingOutcome {
 #[serde(deny_unknown_fields)]
 pub struct SchedulingOutcomeProjection {
     ledger_position: u64,
-    outcome: AuthoritativeSchedulingOutcome,
+    scheduling_result: AuthoritativeSchedulingOutcome,
 }
 
 impl SchedulingOutcomeProjection {
     pub fn new(
         ledger_position: u64,
-        outcome: AuthoritativeSchedulingOutcome,
+        scheduling_result: AuthoritativeSchedulingOutcome,
     ) -> Result<Self, SanitizationError> {
-        if ledger_position == 0 || outcome.identity().terminal_sequence() > ledger_position {
+        if ledger_position == 0
+            || scheduling_result.identity().terminal_sequence() > ledger_position
+        {
             return Err(SanitizationError::new(
                 SanitizationCode::InvalidSchedulingOutcomeProjection,
                 "ledger_position",
@@ -4045,7 +3983,7 @@ impl SchedulingOutcomeProjection {
         }
         Ok(Self {
             ledger_position,
-            outcome,
+            scheduling_result,
         })
     }
 
@@ -4053,8 +3991,9 @@ impl SchedulingOutcomeProjection {
         self.ledger_position
     }
 
-    pub const fn outcome(&self) -> &AuthoritativeSchedulingOutcome {
-        &self.outcome
+    /// The authoritative scheduling outcome (ledger revision 3; was `outcome`).
+    pub const fn scheduling_result(&self) -> &AuthoritativeSchedulingOutcome {
+        &self.scheduling_result
     }
 }
 
@@ -4139,6 +4078,63 @@ fn redact_sensitive_input(action: &mut InputAction) {
 }
 
 impl TaskSemanticFact {
+    /// The outcome the fact carries (ledger revision 3): a failed or cancelled terminal's
+    /// failure, a refused second terminal, a failed entry recovery or fail-closed entry, or a
+    /// select step's failed confirmation.
+    pub fn outcome(&self) -> Option<&Outcome> {
+        match self {
+            Self::EntryRecoveryFailed { outcome, .. } | Self::TerminalRejected { outcome, .. } => {
+                Some(outcome)
+            }
+            Self::EntryTargetDisposition { outcome, .. }
+            | Self::TerminalCommitted { outcome, .. } => outcome.as_ref(),
+            Self::SelectionEvaluated { selection, .. } => match &selection.confirmation {
+                TaskSelectionConfirmation::GuardFailed { outcome }
+                | TaskSelectionConfirmation::CaptureFailed { outcome } => Some(outcome),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The fact as a public projection shows it: each outcome codes only (model section 4.3),
+    /// so no data value and no foreign text leaves through it.
+    fn public_summary(&self) -> Self {
+        let mut fact = self.clone();
+        match &mut fact {
+            Self::EntryRecoveryFailed { outcome, .. } | Self::TerminalRejected { outcome, .. } => {
+                *outcome = outcome.codes_only();
+            }
+            Self::EntryTargetDisposition {
+                outcome: Some(outcome),
+                ..
+            }
+            | Self::TerminalCommitted {
+                outcome: Some(outcome),
+                ..
+            } => *outcome = outcome.codes_only(),
+            Self::SelectionEvaluated { selection, .. } => {
+                if let TaskSelectionConfirmation::GuardFailed { outcome }
+                | TaskSelectionConfirmation::CaptureFailed { outcome } =
+                    &mut selection.confirmation
+                {
+                    *outcome = outcome.codes_only();
+                }
+            }
+            Self::GeometryObserved { observation } => {
+                for failure in observation
+                    .original_failure
+                    .iter_mut()
+                    .chain(observation.unavailable.iter_mut())
+                {
+                    failure.outcome = failure.outcome.codes_only();
+                }
+            }
+            _ => {}
+        }
+        fact
+    }
+
     fn redact_sensitive_input(&mut self) {
         let Self::EffectIntent { action, .. } = self else {
             return;
@@ -4167,15 +4163,15 @@ impl TaskSemanticFact {
             Self::StepFinished { .. } => EventType::TaskStepFinished,
             Self::Finalizing { .. } => EventType::TaskTerminalIntent,
             Self::TerminalCommitted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 ..
             } => EventType::TaskCompleted,
             Self::TerminalCommitted {
-                outcome: TaskOutcome::Failure,
+                task_result: TaskOutcome::Failure,
                 ..
             } => EventType::TaskFailed,
             Self::TerminalCommitted {
-                outcome: TaskOutcome::Cancelled,
+                task_result: TaskOutcome::Cancelled,
                 ..
             } => EventType::TaskCancelled,
             Self::TerminalRejected { .. } => EventType::TaskTerminalRejected,
@@ -4255,21 +4251,15 @@ impl TaskSemanticFact {
                     ));
                 }
             }
-            Self::EntryRecoveryFailed {
-                package_sha256,
-                failure_code,
-            } => {
+            Self::EntryRecoveryFailed { package_sha256, .. } => {
                 validate_task_package_sha256(package_sha256)?;
-                validate_task_semantic_label(failure_code, "failure_code")?;
             }
             Self::EntryTargetDisposition {
                 disposition,
-                failure_code,
-            } => match (disposition, failure_code) {
-                (TaskEntryTargetDisposition::Started, None) => {}
-                (TaskEntryTargetDisposition::FailClosed, Some(code)) => {
-                    validate_task_semantic_label(code, "failure_code")?;
-                }
+                outcome,
+            } => match (disposition, outcome) {
+                (TaskEntryTargetDisposition::Started, None)
+                | (TaskEntryTargetDisposition::FailClosed, Some(_)) => {}
                 _ => {
                     return Err(SanitizationError::new(
                         SanitizationCode::InvalidTaskEntryDisposition,
@@ -4345,10 +4335,10 @@ impl TaskSemanticFact {
             }
             Self::Finalizing { .. } => {}
             Self::TerminalCommitted {
-                outcome,
+                task_result,
                 final_page,
                 executed_steps,
-                failure_code,
+                outcome,
                 scheduling_disposition,
                 task_timing,
             } => {
@@ -4356,7 +4346,7 @@ impl TaskSemanticFact {
                     timing.validate()?;
                 }
                 if executed_steps.is_some_and(|steps| steps > 1_000)
-                    || (*outcome == TaskOutcome::Success && executed_steps.is_none())
+                    || (*task_result == TaskOutcome::Success && executed_steps.is_none())
                 {
                     return Err(SanitizationError::new(
                         SanitizationCode::InvalidTaskTerminal,
@@ -4366,7 +4356,7 @@ impl TaskSemanticFact {
                 if let Some(page) = final_page {
                     validate_task_semantic_label(page, "final_page")?;
                 }
-                match (outcome, failure_code) {
+                match (task_result, outcome) {
                     (TaskOutcome::Success, None) => {
                         if let Some(disposition) = scheduling_disposition {
                             if final_page.is_none() {
@@ -4378,14 +4368,13 @@ impl TaskSemanticFact {
                             disposition.validate()?;
                         }
                     }
-                    (TaskOutcome::Failure | TaskOutcome::Cancelled, Some(code)) => {
+                    (TaskOutcome::Failure | TaskOutcome::Cancelled, Some(_)) => {
                         if scheduling_disposition.is_some() {
                             return Err(SanitizationError::new(
                                 SanitizationCode::InvalidTaskTerminal,
                                 "scheduling_disposition",
                             ));
                         }
-                        validate_task_semantic_label(code, "failure_code")?;
                     }
                     _ => {
                         return Err(SanitizationError::new(
@@ -4395,9 +4384,7 @@ impl TaskSemanticFact {
                     }
                 }
             }
-            Self::TerminalRejected { reason, .. } => {
-                validate_task_semantic_label(reason, "terminal_rejection_reason")?;
-            }
+            Self::TerminalRejected { .. } => {}
         }
         Ok(())
     }
@@ -4405,7 +4392,7 @@ impl TaskSemanticFact {
     fn diagnostic_code(&self) -> Option<DiagnosticCode> {
         match self {
             Self::TerminalCommitted {
-                outcome: TaskOutcome::Failure | TaskOutcome::Cancelled,
+                task_result: TaskOutcome::Failure | TaskOutcome::Cancelled,
                 ..
             }
             | Self::TerminalRejected { .. }
@@ -4422,11 +4409,11 @@ impl TaskSemanticFact {
         match self {
             Self::EffectCompleted { .. }
             | Self::TerminalCommitted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 ..
             } => Some(EffectDisposition::Performed),
             Self::TerminalCommitted {
-                outcome: TaskOutcome::Failure | TaskOutcome::Cancelled,
+                task_result: TaskOutcome::Failure | TaskOutcome::Cancelled,
                 ..
             } => Some(EffectDisposition::Indeterminate),
             Self::TerminalRejected { .. } => Some(EffectDisposition::NotPerformed),
@@ -4599,11 +4586,16 @@ trait PayloadDetail {
         None
     }
 
-    fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
+    fn cleanup_detail(&self) -> Option<&DiagnosticDetailRecord> {
         None
     }
 
     fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
+        None
+    }
+
+    /// The outcome the record carries (ledger revision 3).
+    fn outcome(&self) -> Option<&Outcome> {
         None
     }
 }
@@ -4764,8 +4756,9 @@ impl PerformanceMonitorStatePayload {
         self.health
     }
 
-    pub fn failure_code(&self) -> Option<&str> {
-        self.failure_code.as_deref()
+    /// The failure that degraded the monitor.
+    pub const fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_ref()
     }
 }
 
@@ -4852,8 +4845,9 @@ impl ResourceAuthoringPayload {
         &self.changed_paths
     }
 
-    pub fn failure_code(&self) -> Option<&str> {
-        self.failure_code.as_deref()
+    /// The failure of a failed promotion.
+    pub const fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_ref()
     }
 
     pub fn audit(&self) -> &SanitizedAudit {
@@ -4864,6 +4858,11 @@ impl ResourceAuthoringPayload {
 impl DiagnosticPayload {
     pub const fn diagnostic_code(&self) -> DiagnosticCode {
         self.diagnostic_code
+    }
+
+    /// The refusal this record reports (ledger revision 3).
+    pub const fn outcome(&self) -> &Outcome {
+        &self.outcome
     }
 }
 
@@ -4899,8 +4898,13 @@ impl DiagnosticOutcomePayload {
         self.detail.as_ref()
     }
 
-    pub fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
-        self.cleanup_cause.as_deref()
+    pub const fn cleanup_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.cleanup_detail.as_ref()
+    }
+
+    /// The failure this record reports (ledger revision 3).
+    pub const fn outcome(&self) -> &Outcome {
+        &self.outcome
     }
 }
 
@@ -5146,6 +5150,10 @@ impl PayloadDetail for InputIntentPayload {
 }
 
 impl PayloadDetail for DiagnosticPayload {
+    fn outcome(&self) -> Option<&Outcome> {
+        Some(&self.outcome)
+    }
+
     fn action(&self) -> EventAction {
         self.action
     }
@@ -5220,8 +5228,12 @@ impl PayloadDetail for DiagnosticOutcomePayload {
         self.detail.as_ref()
     }
 
-    fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
-        self.cleanup_cause.as_deref()
+    fn cleanup_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.cleanup_detail.as_ref()
+    }
+
+    fn outcome(&self) -> Option<&Outcome> {
+        Some(&self.outcome)
     }
 }
 
@@ -5369,6 +5381,10 @@ impl PayloadDetail for PolicyPlanningSignalPayload {
 }
 
 impl PayloadDetail for CatalogTransitionPayload {
+    fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_ref()
+    }
+
     fn action(&self) -> EventAction {
         self.action
     }
@@ -5423,6 +5439,10 @@ impl PayloadDetail for ReleaseStagedPayload {
 }
 
 impl PayloadDetail for ReleaseTransitionPayload {
+    fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_ref()
+    }
+
     fn action(&self) -> EventAction {
         self.action
     }
@@ -5513,6 +5533,10 @@ impl PayloadDetail for ArtifactExportPayload {
 }
 
 impl PayloadDetail for ArtifactExportFailurePayload {
+    fn outcome(&self) -> Option<&Outcome> {
+        Some(&self.outcome)
+    }
+
     fn action(&self) -> EventAction {
         self.action
     }
@@ -5610,6 +5634,11 @@ struct DiagnosticDraft {
     audit: AuditInput,
 }
 
+/// The outcome a diagnostic record carries when its producer gives none: its diagnostic code.
+fn diagnostic_code_outcome(code: DiagnosticCode) -> Outcome {
+    Outcome::new(code.code())
+}
+
 struct OutcomeDraft {
     action: EventAction,
     effect_disposition: EffectDisposition,
@@ -5622,10 +5651,11 @@ struct DiagnosticOutcomeDraft {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    outcome: Option<Outcome>,
     detail: Option<DiagnosticDetailDraft>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureDraft>>,
-    artifact_failure: Option<Box<ArtifactFailureRecord>>,
+    artifact_failure: Option<Box<ArtifactFailureDraft>>,
     resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: AuditInput,
@@ -5751,7 +5781,7 @@ struct ResourceAuthoringDraft {
     target_label: String,
     target_fingerprint: String,
     changed_paths: Vec<String>,
-    failure_code: Option<String>,
+    outcome: Option<Outcome>,
     audit: AuditInput,
 }
 
@@ -5896,7 +5926,7 @@ impl ResourceAuthoringDraft {
             &self.target_label,
             &self.target_fingerprint,
             &self.changed_paths,
-            self.failure_code.as_deref(),
+            self.outcome.as_ref(),
         )?;
         Ok(ResourceAuthoringPayload {
             phase: self.phase,
@@ -5904,7 +5934,7 @@ impl ResourceAuthoringDraft {
             target_label: self.target_label,
             target_fingerprint: self.target_fingerprint,
             changed_paths: self.changed_paths,
-            failure_code: self.failure_code,
+            outcome: self.outcome,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6034,7 +6064,7 @@ impl PerformanceMonitorStateDraft {
             action: EventAction::PerformanceObserve,
             observed_at_unix_ms: self.data.observed_at_unix_ms,
             health: self.data.health,
-            failure_code: self.data.failure_code,
+            outcome: self.data.outcome,
             consecutive_failures: self.data.consecutive_failures,
             terminal: self.data.terminal,
             unavailable_metrics: self.data.unavailable_metrics,
@@ -6155,6 +6185,7 @@ impl CatalogTransitionDraft {
         Ok(CatalogTransitionPayload {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
+            outcome: self.diagnostic_code.map(diagnostic_code_outcome),
             effect_disposition: self.effect_disposition,
             catalog_id: self.data.catalog_id,
             catalog_version: self.data.catalog_version,
@@ -6204,6 +6235,7 @@ impl ReleaseTransitionDraft {
         Ok(ReleaseTransitionPayload {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
+            outcome: self.diagnostic_code.map(diagnostic_code_outcome),
             effect_disposition: self.effect_disposition,
             transition: self.transition,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -6256,7 +6288,7 @@ pub(crate) fn validate_resource_authoring_fields(
     target_label: &str,
     target_fingerprint: &str,
     changed_paths: &[String],
-    failure_code: Option<&str>,
+    outcome: Option<&Outcome>,
 ) -> Result<(), SanitizationError> {
     validate_resource_authoring_token(draft_id, 128, "draft_id")?;
     validate_resource_authoring_token(target_label, 128, "target_label")?;
@@ -6291,10 +6323,8 @@ pub(crate) fn validate_resource_authoring_fields(
             ));
         }
     }
-    match (phase, failure_code) {
-        (ResourceAuthoringPhase::PromoteFailed, Some(code)) => {
-            validate_resource_authoring_token(code, 128, "failure_code")?;
-        }
+    match (phase, outcome) {
+        (ResourceAuthoringPhase::PromoteFailed, Some(_)) => {}
         (ResourceAuthoringPhase::PromoteFailed, None) => {
             return Err(SanitizationError::new(
                 SanitizationCode::MissingResourceAuthoringFailureCode,
@@ -6358,7 +6388,6 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     }
     for reason in &data.reasons {
         validate_policy_token(&reason.code, "reason_code")?;
-        validate_policy_text(&reason.detail, "reason_detail")?;
     }
     if data.approval_fact_ids.len() > 64 {
         return Err(SanitizationError::new(
@@ -6654,12 +6683,12 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
         PerformancePayload::MonitorDegraded(value)
             if value.action == EventAction::PerformanceObserve
                 && value.health == PerformanceMonitorHealth::Degraded
-                && value.failure_code.is_some() =>
+                && value.outcome.is_some() =>
         {
             validate_performance_monitor_state(&PerformanceMonitorStateEventData {
                 observed_at_unix_ms: value.observed_at_unix_ms,
                 health: value.health,
-                failure_code: value.failure_code.clone(),
+                outcome: value.outcome.clone(),
                 consecutive_failures: value.consecutive_failures,
                 terminal: value.terminal,
                 unavailable_metrics: value.unavailable_metrics.clone(),
@@ -6671,14 +6700,14 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                     value.health,
                     PerformanceMonitorHealth::Healthy | PerformanceMonitorHealth::Partial
                 )
-                && value.failure_code.is_none()
+                && value.outcome.is_none()
                 && value.consecutive_failures == 0
                 && !value.terminal =>
         {
             validate_performance_monitor_state(&PerformanceMonitorStateEventData {
                 observed_at_unix_ms: value.observed_at_unix_ms,
                 health: value.health,
-                failure_code: None,
+                outcome: None,
                 consecutive_failures: 0,
                 terminal: false,
                 unavailable_metrics: value.unavailable_metrics.clone(),
@@ -6818,7 +6847,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
                 task_id: value.task_id.clone(),
                 instance_id: value.instance_id.clone(),
                 observed_at_unix_ms: value.observed_at_unix_ms,
-                outcome: value.outcome.clone(),
+                outcome: value.policy_result.clone(),
             })?;
             None
         }
@@ -7076,17 +7105,6 @@ fn validate_policy_token(value: &str, field: &'static str) -> Result<(), Sanitiz
     }
 }
 
-fn validate_policy_text(value: &str, field: &'static str) -> Result<(), SanitizationError> {
-    if value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control) {
-        Err(SanitizationError::new(
-            SanitizationCode::InvalidPolicyText,
-            field,
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 fn validate_policy_digest(value: &str, field: &'static str) -> Result<(), SanitizationError> {
     let valid = value.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64
@@ -7203,6 +7221,7 @@ impl DiagnosticDraft {
         Ok(DiagnosticPayload {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
+            outcome: diagnostic_code_outcome(self.diagnostic_code),
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7244,6 +7263,7 @@ impl DiagnosticOutcomeDraft {
             action,
             diagnostic_code,
             effect_disposition,
+            outcome: None,
             detail: None,
             cleanup_cause: None,
             lifecycle_failure: None,
@@ -7258,68 +7278,80 @@ impl DiagnosticOutcomeDraft {
         action: EventAction,
         diagnostic_code: DiagnosticCode,
         effect_disposition: EffectDisposition,
+        outcome: Outcome,
         detail: DiagnosticDetailDraft,
         audit: AuditInput,
     ) -> Self {
-        Self {
-            action,
-            diagnostic_code,
-            effect_disposition,
-            detail: Some(detail),
-            cleanup_cause: None,
-            lifecycle_failure: None,
-            artifact_failure: None,
-            resource_declaration: None,
-            runtime_state: None,
-            audit,
-        }
+        let mut draft = Self::new(action, diagnostic_code, effect_disposition, audit);
+        draft.outcome = Some(outcome);
+        draft.detail = Some(detail);
+        draft
     }
 
     fn new_with_causes(
         action: EventAction,
         diagnostic_code: DiagnosticCode,
         effect_disposition: EffectDisposition,
+        outcome: Outcome,
         detail: Option<DiagnosticDetailDraft>,
         cleanup_cause: Option<CleanupCauseDraft>,
         audit: AuditInput,
     ) -> Self {
-        Self {
-            action,
-            diagnostic_code,
-            effect_disposition,
-            detail,
-            cleanup_cause: cleanup_cause.map(Box::new),
-            lifecycle_failure: None,
-            artifact_failure: None,
-            resource_declaration: None,
-            runtime_state: None,
-            audit,
-        }
+        let mut draft = Self::new(action, diagnostic_code, effect_disposition, audit);
+        draft.outcome = Some(outcome);
+        draft.detail = detail;
+        draft.cleanup_cause = cleanup_cause.map(Box::new);
+        draft
     }
 
+    /// The record's outcome is, in order: the producer's, the lifecycle failure's, the
+    /// artifact failure's, else the diagnostic code itself; a cleanup cause is its `cleanup`
+    /// link (ledger revision 3).
     fn sanitize(
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<DiagnosticOutcomePayload, SanitizationError> {
+        let (lifecycle_failure, lifecycle_outcome) = match self.lifecycle_failure {
+            Some(failure) => {
+                let (record, outcome) = failure.sanitize()?;
+                (Some(Box::new(record)), Some(outcome))
+            }
+            None => (None, None),
+        };
+        let (artifact_failure, artifact_outcome) = match self.artifact_failure {
+            Some(failure) => {
+                let (record, outcome) = failure.sanitize()?;
+                (Some(Box::new(record)), Some(outcome))
+            }
+            None => (None, None),
+        };
+        let mut outcome = self
+            .outcome
+            .or(lifecycle_outcome)
+            .or(artifact_outcome)
+            .unwrap_or_else(|| diagnostic_code_outcome(self.diagnostic_code));
+        let cleanup_detail = match self.cleanup_cause {
+            Some(cause) => {
+                let (link, detail) = cause.sanitize()?;
+                outcome = outcome.link(CauseRelation::Cleanup, link);
+                detail
+            }
+            None => None,
+        };
         Ok(DiagnosticOutcomePayload {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
+            outcome,
             runtime_state: self.runtime_state,
-            artifact_failure: self.artifact_failure,
+            artifact_failure,
             resource_declaration: self.resource_declaration,
             detail: self
                 .detail
                 .map(DiagnosticDetailDraft::sanitize)
                 .transpose()?,
-            cleanup_cause: self
-                .cleanup_cause
-                .map(|cause| cause.sanitize().map(Box::new))
-                .transpose()?,
-            lifecycle_failure: self
-                .lifecycle_failure
-                .map(|failure| failure.sanitize().map(Box::new))
-                .transpose()?,
+            cleanup_detail,
+            lifecycle_failure,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7591,6 +7623,7 @@ impl ArtifactExportFailureDraft {
         Ok(ArtifactExportFailurePayload {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
+            outcome: diagnostic_code_outcome(self.diagnostic_code),
             effect_disposition: self.effect_disposition,
             task_outcome: self.task_outcome,
             evidence_completeness: self.evidence_completeness,
@@ -7801,13 +7834,13 @@ impl RuntimePayloadDraft {
             EventAction::RuntimeAction,
             DiagnosticCode::RuntimeDiagnostic,
             EffectDisposition::NotPerformed,
+            Outcome::new(SharedCode::ResourceDeclarationInvalid)
+                .operation(crate::codes::ContractLocation::RunContainedTask),
             DiagnosticDetailDraft::new(
                 "resource_declaration",
                 "resource.declaration.prepare",
                 "pack_containment",
                 crate::codes::ContractLocation::RunContainedTask.as_str(),
-                SharedCode::ResourceDeclarationInvalid.as_str(),
-                Sensitivity::Internal,
             ),
             AuditInput::new(),
         );
@@ -7850,6 +7883,7 @@ impl RuntimePayloadDraft {
             audit: AuditInput::new(),
         }))
     }
+    /// `runtime.failed` for a lifecycle failure: the lifecycle draft builds the outcome.
     pub fn failed_with_lifecycle(
         diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
@@ -7857,13 +7891,9 @@ impl RuntimePayloadDraft {
         lifecycle: RuntimeLifecycleFailureDraft,
         audit: AuditInput,
     ) -> Self {
-        let mut outcome = DiagnosticOutcomeDraft::new_with_detail(
-            EventAction::RuntimeAction,
-            diagnostic_code,
-            effect,
-            detail,
-            audit,
-        );
+        let mut outcome =
+            DiagnosticOutcomeDraft::new(EventAction::RuntimeAction, diagnostic_code, effect, audit);
+        outcome.detail = Some(detail);
         outcome.lifecycle_failure = Some(Box::new(lifecycle));
         Self(RuntimeDraftKind::Failed(outcome))
     }
@@ -7981,9 +8011,11 @@ impl RuntimePayloadDraft {
         )))
     }
 
+    /// `runtime.failed` with the failure's `outcome` and where it arose.
     pub fn failed(
         diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
+        outcome: Outcome,
         detail: DiagnosticDetailDraft,
         audit: AuditInput,
     ) -> Self {
@@ -7992,6 +8024,7 @@ impl RuntimePayloadDraft {
                 EventAction::RuntimeAction,
                 diagnostic_code,
                 effect,
+                outcome,
                 detail,
                 audit,
             ),
@@ -8490,22 +8523,33 @@ impl InputPayloadDraft {
         )))
     }
 
+    /// `input.failed` with the failure's `outcome` and where it arose.
     pub fn failed_with_detail(
         action: EventAction,
         diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
+        outcome: Outcome,
         detail: DiagnosticDetailDraft,
         audit: AuditInput,
     ) -> Self {
         Self(InputDraftKind::Failed(
-            DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
+            DiagnosticOutcomeDraft::new_with_detail(
+                action,
+                diagnostic_code,
+                effect,
+                outcome,
+                detail,
+                audit,
+            ),
         ))
     }
 
+    /// `input.failed` with the failure's `outcome`, where it arose and its failed cleanup.
     pub fn failed_with_causes(
         action: EventAction,
         diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
+        outcome: Outcome,
         detail: Option<DiagnosticDetailDraft>,
         cleanup_cause: Option<CleanupCauseDraft>,
         audit: AuditInput,
@@ -8515,6 +8559,7 @@ impl InputPayloadDraft {
                 action,
                 diagnostic_code,
                 effect,
+                outcome,
                 detail,
                 cleanup_cause,
                 audit,
@@ -8630,22 +8675,33 @@ impl CapturePayloadDraft {
         )))
     }
 
+    /// `capture.failed` with the failure's `outcome` and where it arose.
     pub fn failed_with_detail(
         action: EventAction,
         diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
+        outcome: Outcome,
         detail: DiagnosticDetailDraft,
         audit: AuditInput,
     ) -> Self {
         Self(CaptureDraftKind::Failed(
-            DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
+            DiagnosticOutcomeDraft::new_with_detail(
+                action,
+                diagnostic_code,
+                effect,
+                outcome,
+                detail,
+                audit,
+            ),
         ))
     }
 
+    /// `capture.failed` with the failure's `outcome`, where it arose and its failed cleanup.
     pub fn failed_with_causes(
         action: EventAction,
         diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
+        outcome: Outcome,
         detail: Option<DiagnosticDetailDraft>,
         cleanup_cause: Option<CleanupCauseDraft>,
         audit: AuditInput,
@@ -8655,6 +8711,7 @@ impl CapturePayloadDraft {
                 action,
                 diagnostic_code,
                 effect,
+                outcome,
                 detail,
                 cleanup_cause,
                 audit,
@@ -8790,7 +8847,7 @@ enum ArtifactDraftKind {
 pub struct ArtifactPayloadDraft(ArtifactDraftKind);
 
 impl ArtifactPayloadDraft {
-    pub fn persistence_failed(record: ArtifactFailureRecord, audit: AuditInput) -> Self {
+    pub fn persistence_failed(record: ArtifactFailureDraft, audit: AuditInput) -> Self {
         let verification = record.stage == ArtifactFailureStage::PublishedVerification;
         let mut detail = DiagnosticOutcomeDraft::new(
             if verification {
@@ -8931,7 +8988,7 @@ impl ResourceAuthoringPayloadDraft {
         target_label: impl Into<String>,
         target_fingerprint: impl Into<String>,
         changed_paths: Vec<String>,
-        failure_code: Option<String>,
+        outcome: Option<Outcome>,
         audit: AuditInput,
     ) -> Self {
         Self(ResourceAuthoringDraft {
@@ -8940,7 +8997,7 @@ impl ResourceAuthoringPayloadDraft {
             target_label: target_label.into(),
             target_fingerprint: target_fingerprint.into(),
             changed_paths,
-            failure_code,
+            outcome,
             audit,
         })
     }
@@ -10528,14 +10585,15 @@ impl EventPayload {
         if let Some(lifecycle) = detail.lifecycle_failure() {
             sensitivity = sensitivity.max(lifecycle.sensitivity());
         }
-        if detail.diagnostic_code().is_some() {
+        if detail.diagnostic_code().is_some()
+            || detail.diagnostic_detail().is_some()
+            || detail.cleanup_detail().is_some()
+        {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
-        if let Some(diagnostic_detail) = detail.diagnostic_detail() {
-            sensitivity = sensitivity.max(diagnostic_detail.declared_sensitivity());
-        }
-        if let Some(cleanup_detail) = detail.cleanup_cause().and_then(CleanupCauseRecord::detail) {
-            sensitivity = sensitivity.max(cleanup_detail.declared_sensitivity());
+        // Foreign text rides on the outcome's links with its declared sensitivity.
+        if let Some(foreign) = self.outcome().and_then(Outcome::raw_text_sensitivity) {
+            sensitivity = sensitivity.max(foreign);
         }
         if matches!(
             self,
@@ -10588,6 +10646,28 @@ impl EventPayload {
 
     pub fn action(&self) -> EventAction {
         self.family_payload().detail().action()
+    }
+
+    /// The outcome this record carries (ledger revision 3): the failure, refusal or result it
+    /// reports. A record without one is a state change; its severity is its event type's
+    /// category.
+    pub fn outcome(&self) -> Option<&Outcome> {
+        match self {
+            Self::Runtime(RuntimePayload::LifecycleObserved(value)) => value.outcome(),
+            Self::Task(TaskPayload::Semantic(value)) => value.fact().outcome(),
+            Self::Performance(
+                PerformancePayload::MonitorDegraded(value)
+                | PerformancePayload::MonitorRecovered(value),
+            ) => value.outcome(),
+            Self::ResourceAuthoring(value) => value.outcome(),
+            Self::Policy(
+                PolicyPayload::DispatchIntent(value)
+                | PolicyPayload::DispatchAdmitted(value)
+                | PolicyPayload::DispatchRejected(value)
+                | PolicyPayload::DispatchCompleted(value),
+            ) => value.rejection().map(|rejection| &rejection.outcome),
+            _ => self.family_payload().detail().outcome(),
+        }
     }
 
     pub fn effect_disposition(&self) -> Option<EffectDisposition> {
@@ -10851,17 +10931,17 @@ impl EventPayload {
         if let Some(diagnostic_detail) = detail.diagnostic_detail() {
             diagnostic_detail.validate()?;
         }
-        if let Some(cleanup_cause) = detail.cleanup_cause() {
+        if let Some(cleanup_detail) = detail.cleanup_detail() {
             if !matches!(
                 self.event_type(),
                 EventType::InputFailed | EventType::CaptureFailed
             ) {
                 return Err(SanitizationError::new(
                     SanitizationCode::InvalidCleanupCauseOwner,
-                    "cleanup_cause",
+                    "cleanup_detail",
                 ));
             }
-            cleanup_cause.validate()?;
+            cleanup_detail.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self
             && value.action != EventAction::RuntimeAction
@@ -10890,7 +10970,7 @@ impl EventPayload {
                 &value.target_label,
                 &value.target_fingerprint,
                 &value.changed_paths,
-                value.failure_code.as_deref(),
+                value.outcome.as_ref(),
             )?;
         }
         if let Self::Policy(value) = self {
@@ -11111,13 +11191,7 @@ impl EventPayload {
             lifecycle_failure: detail
                 .lifecycle_failure()
                 .map(|failure| Box::new(failure.public_summary())),
-            cleanup_cause: detail.cleanup_cause().map(|cause| {
-                Box::new(CleanupCauseRecord {
-                    code: cause.code.clone(),
-                    severity: cause.severity,
-                    detail: None,
-                })
-            }),
+            outcome: self.outcome().map(|outcome| Box::new(outcome.codes_only())),
             segment_index: match self {
                 Self::Ledger(LedgerPayload::Recovered(value)) => value.segment_index,
                 _ => None,
@@ -11150,7 +11224,8 @@ impl EventPayload {
             retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
             capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
             task_outcome: artifact_export(self).map(|value| value.0),
-            task_semantic_fact: task_semantic_fact(self).cloned().map(Box::new),
+            task_semantic_fact: task_semantic_fact(self)
+                .map(|fact| Box::new(fact.public_summary())),
             evidence_completeness: artifact_export(self).map(|value| value.1),
             artifact_count: artifact_export(self).map(|value| value.2),
             monitor_diagnosis: monitor_outcome(self).map(|value| value.observation.diagnosis()),
@@ -11163,7 +11238,6 @@ impl EventPayload {
             target_label: authoring.map(|value| value.target_label.clone()),
             target_fingerprint: authoring.map(|value| value.target_fingerprint.clone()),
             changed_path_count: authoring.map(|value| value.changed_paths.len() as u64),
-            failure_code: authoring.and_then(|value| value.failure_code.clone()),
             decision_id: policy_dispatch.map(|value| value.decision_id.clone().into_boxed_str()),
             reason_chain_id: policy_dispatch
                 .map(|value| value.reason_chain_id.clone().into_boxed_str()),
@@ -11188,7 +11262,8 @@ impl EventPayload {
                     .map(String::into_boxed_str)
             }),
             policy_admission: policy_dispatch.and_then(|value| value.admission.clone()),
-            policy_execution_outcome: policy_execution.map(|value| Box::new(value.outcome.clone())),
+            policy_execution_outcome: policy_execution
+                .map(|value| Box::new(value.policy_result.clone())),
             policy_signal_id: policy_signal.map(|value| value.signal_id.clone().into_boxed_str()),
             policy_signal_kind: policy_signal.map(|value| value.kind),
             policy_signal_fact_code: policy_signal
@@ -11544,8 +11619,9 @@ pub struct PublicPayload {
     device_diagnostics: Option<Box<DeviceDiagnosticBudgetRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     effect_disposition: Option<EffectDisposition>,
+    /// The record's outcome, codes only (ledger revision 3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    cleanup_cause: Option<Box<CleanupCauseRecord>>,
+    outcome: Option<Box<Outcome>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -11606,8 +11682,6 @@ pub struct PublicPayload {
     target_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     changed_path_count: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    failure_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     decision_id: Option<Box<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -11705,8 +11779,9 @@ impl PublicPayload {
     pub fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
         self.lifecycle_failure.as_deref()
     }
-    pub fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
-        self.cleanup_cause.as_deref()
+    /// The record's outcome, codes only (ledger revision 3).
+    pub fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_deref()
     }
 
     pub const fn event_type(&self) -> EventType {
@@ -11837,10 +11912,6 @@ impl PublicPayload {
 
     pub const fn changed_path_count(&self) -> Option<u64> {
         self.changed_path_count
-    }
-
-    pub fn failure_code(&self) -> Option<&str> {
-        self.failure_code.as_deref()
     }
 
     pub fn decision_id(&self) -> Option<&str> {

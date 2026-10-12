@@ -530,13 +530,14 @@ pub struct ProjectRuntimeView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One diagnostic record of the project view. Its severity is its category (ledger revision
+/// 3), so the former `fatal` flag is gone; `code` is the record's outcome code.
 pub struct ProjectDiagnosticView {
     pub sequence: u64,
     pub timestamp_unix_ms: u64,
     pub severity: EventSeverity,
     pub event_type: EventType,
-    pub code: Option<String>,
-    pub fatal: bool,
+    pub code: Option<crate::outcome::CodeStr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1180,14 +1181,16 @@ fn validate_diagnostics(
             || diagnostic.sequence <= previous
             || diagnostic.sequence > ledger_position
             || diagnostic.timestamp_unix_ms == 0
-            || diagnostic.fatal != (diagnostic.severity == EventSeverity::Fatal)
         {
             return Err(ProjectInterfaceError::new(
                 ProjectInterfaceCode::ProjectDiagnosticInvalid,
             ));
         }
         if let Some(code) = &diagnostic.code {
-            validate_text(code, ProjectInterfaceCode::ProjectDiagnosticInvalid)?;
+            validate_text(
+                code.as_str(),
+                ProjectInterfaceCode::ProjectDiagnosticInvalid,
+            )?;
         }
         previous = diagnostic.sequence;
     }
@@ -1359,8 +1362,10 @@ mod tests {
                 timestamp_unix_ms: 40,
                 severity: EventSeverity::Warning,
                 event_type: EventType::CommandRejected,
-                code: Some("neutral_warning".to_owned()),
-                fatal: false,
+                code: Some(
+                    serde_json::from_value(serde_json::json!("neutral_warning"))
+                        .expect("a received code"),
+                ),
             }],
         }
     }

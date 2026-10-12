@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::codes::{SanitizationCode, SharedCode};
-use crate::{EventId, LifecycleNativeDetail, OwnerEpoch, SanitizationError};
+use crate::outcome::Outcome;
+use crate::{EventId, OwnerEpoch, SanitizationError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -53,15 +54,6 @@ pub enum CapacityState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CapacityNativeCause {
-    pub operation: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_os_error: Option<i32>,
-    pub detail: LifecycleNativeDetail,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CapacityVolumeSample {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume_id: Option<String>,
@@ -69,8 +61,10 @@ pub struct CapacityVolumeSample {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_bytes: Option<u64>,
     pub state: CapacityState,
+    /// Why the volume's free space is unknown: the failed OS query, with its `operation`
+    /// (ledger revision 3; was `CapacityNativeCause {operation, raw_os_error, detail}`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cause: Option<CapacityNativeCause>,
+    pub cause: Option<Outcome>,
 }
 
 /// B3 observation time is captured before the OS query, never at queue/append time.
@@ -128,15 +122,7 @@ impl PerformanceCapacitySample {
                         return Err(invalid());
                     }
                 }
-                (None, CapacityState::Unknown, Some(cause)) => {
-                    if cause.operation.is_empty()
-                        || cause.operation.len() > 128
-                        || cause.operation.chars().any(char::is_control)
-                    {
-                        return Err(invalid());
-                    }
-                    cause.detail.validate()?;
-                }
+                (None, CapacityState::Unknown, Some(_)) => {}
                 _ => return Err(invalid()),
             }
         }
@@ -196,7 +182,8 @@ pub struct CapacityDecision {
     pub requested_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_volume: Option<String>,
-    pub outcome: CapacityAdmissionOutcome,
+    /// The admission's result (ledger revision 3; was `outcome`).
+    pub admission_result: CapacityAdmissionOutcome,
     pub reason: CapacityAdmissionReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact: Option<CapacityFactReference>,
@@ -206,7 +193,7 @@ impl CapacityDecision {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.decided_at_unix_ms == 0
             || !matches!(
-                (self.outcome, self.reason),
+                (self.admission_result, self.reason),
                 (
                     CapacityAdmissionOutcome::Allowed | CapacityAdmissionOutcome::SoftPressure,
                     CapacityAdmissionReason::FreshSample
@@ -232,7 +219,7 @@ impl CapacityDecision {
                 .fact
                 .as_ref()
                 .is_some_and(|fact| fact.sequence == 0 || fact.observed_at_unix_ms == 0)
-            || (self.outcome.allows()
+            || (self.admission_result.allows()
                 && self.fact.as_ref().is_none_or(|fact| {
                     fact.owner_epoch != self.owner_epoch
                         || fact.observed_at_unix_ms > self.decided_at_unix_ms

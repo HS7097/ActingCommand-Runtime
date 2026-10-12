@@ -134,7 +134,8 @@ use std::fmt;
 
 // Interface anchor `ledger` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older readers can no longer read this.
-pub const GLOBAL_EVENT_SCHEMA_VERSION: &str = "actingcommand.event.v2";
+// Ledger revision 3 (Workflow #378 A3): records carry `outcome`, severity is the category.
+pub const GLOBAL_EVENT_SCHEMA_VERSION: &str = "actingcommand.event.v3";
 
 /// The complete identity of an existing semantic run fact. This read-only value is neither
 /// persisted nor an event-producer capability.
@@ -177,10 +178,14 @@ impl TaskRunIdentity {
     }
 }
 
+/// A record's severity (ledger revision 3, model section 8.1): the category of its outcome, or
+/// of its event type when it carries none; `debug` only for debug records. It is never set on
+/// its own: [`EventDraft`] derives it when the record is sanitized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventSeverity {
     Debug,
+    Success,
     Info,
     Warning,
     Error,
@@ -191,10 +196,22 @@ impl EventSeverity {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Debug => "debug",
+            Self::Success => "success",
             Self::Info => "info",
             Self::Warning => "warning",
             Self::Error => "error",
             Self::Fatal => "fatal",
+        }
+    }
+
+    /// The severity a record of this category has.
+    pub const fn from_category(category: crate::outcome::Category) -> Self {
+        match category {
+            crate::outcome::Category::Success => Self::Success,
+            crate::outcome::Category::Info => Self::Info,
+            crate::outcome::Category::Warning => Self::Warning,
+            crate::outcome::Category::Error => Self::Error,
+            crate::outcome::Category::Fatal => Self::Fatal,
         }
     }
 }
@@ -485,6 +502,13 @@ pub enum EventType {
 }
 
 impl EventType {
+    /// The category of this event type in the catalog this build embeds (vocabulary
+    /// `event_type`): the severity of a record that carries no outcome. The guard (G7) keeps
+    /// every token's category in the catalog; a build whose catalog lacks one reads `info`.
+    pub fn category(self) -> crate::outcome::Category {
+        event_type_category(self).unwrap_or(crate::outcome::Category::Info)
+    }
+
     pub fn family(self) -> EventFamily {
         match self {
             Self::ProviderStartupObserved => EventFamily::Provider,
@@ -609,6 +633,29 @@ impl EventType {
             | Self::SignatureRetired => EventFamily::Ledger,
         }
     }
+}
+
+/// The category the embedded catalog gives an event type token.
+fn event_type_category(event_type: EventType) -> Option<crate::outcome::Category> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static CATEGORIES: OnceLock<HashMap<String, crate::outcome::Category>> = OnceLock::new();
+    let categories = CATEGORIES.get_or_init(|| {
+        let tokens = crate::outcome::catalog_json()
+            .ok()
+            .and_then(|catalog| catalog.pointer("/vocabularies/event_type/tokens"))
+            .and_then(serde_json::Value::as_object);
+        tokens
+            .into_iter()
+            .flatten()
+            .filter_map(|(token, entry)| {
+                let category = entry.get("category")?.clone();
+                Some((token.clone(), serde_json::from_value(category).ok()?))
+            })
+            .collect()
+    });
+    let token = serde_json::to_value(event_type).ok()?;
+    categories.get(token.as_str()?).copied()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

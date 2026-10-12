@@ -23,6 +23,9 @@ crate::outcome_codes! {
         ForeignHttpError => "foreign_http_error": error,
         ForeignOtherError => "foreign_other_error": error,
         PanicCaught => "panic_caught": warning,
+        // Workflow #378 A3 (ledger revision 3): a relayed spelling the embedded catalog does not
+        // list; the record keeps the spelling as `raw_code` instead of inventing a code.
+        OutcomeRelayUnregistered => "outcome_relay_unregistered": error,
     }
 }
 

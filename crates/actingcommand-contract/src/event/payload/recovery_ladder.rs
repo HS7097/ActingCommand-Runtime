@@ -4,30 +4,32 @@
 // `runtime.lifecycle_observed` phases a ladder records, and the trigger rule the host and
 // the payload validation share.
 
-use super::{RuntimeLifecyclePhase, SanitizationError, validate_diagnostic_detail_token};
+use super::{RuntimeLifecyclePhase, SanitizationError};
 use crate::codes::{DeviceSelfCheckFailure, SanitizationCode, SharedCode};
+use crate::outcome::CodeStr;
 use crate::{RunId, TaskId, TerminalEvent};
 use serde::{Deserialize, Serialize};
 
 /// A contained task terminal starts a ladder when its `failure_code` is
 /// `contained_task_page_unknown`, any `contained_task_recovery_*` code or any
 /// `contained_task_home_recovery_*` (entry recovery / return home) code.
-pub fn is_stuck_recovery_trigger(failure_code: &str) -> bool {
+pub fn is_stuck_recovery_trigger(failure_code: &CodeStr) -> bool {
+    let failure_code = failure_code.as_str();
     failure_code == SharedCode::ContainedTaskPageUnknown.as_str()
         || failure_code.starts_with("contained_task_recovery_")
         || failure_code.starts_with("contained_task_home_recovery_")
 }
 
 /// Ordinary preparation failures eligible only after their resource disposal is confirmed.
-pub fn is_preparation_recovery_trigger(failure_code: &str) -> bool {
+pub fn is_preparation_recovery_trigger(failure_code: &CodeStr) -> bool {
     [
         DeviceSelfCheckFailure::InputBackendOpenFailed,
         DeviceSelfCheckFailure::CaptureBackendOpenFailed,
         DeviceSelfCheckFailure::PairedBackendOpenFailed,
     ]
     .iter()
-    .any(|code| code.as_str() == failure_code)
-        || failure_code == SharedCode::CaptureBackendOperationFailed.as_str()
+    .any(|code| code.as_str() == failure_code.as_str())
+        || *failure_code == SharedCode::CaptureBackendOperationFailed.code()
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,7 +102,8 @@ pub struct RecoveryRungPlan {
     pub reason: Option<RecoveryRungSkipReason>,
 }
 
-/// A task terminal or the safely completed preparation attempt that started the ladder.
+/// A task terminal or the safely completed preparation attempt that started the ladder;
+/// `failure_code` is the code of that terminal's or attempt's outcome, as recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryLadderTrigger {
@@ -112,7 +115,7 @@ pub struct RecoveryLadderTrigger {
     pub task_id: Option<TaskId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preparation: Option<TerminalEvent>,
-    pub failure_code: String,
+    pub failure_code: CodeStr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,7 +156,6 @@ pub(super) fn validate_recovery_ladder_phase(
     };
     match phase {
         RuntimeLifecyclePhase::RecoveryLadderStarted { trigger, rungs } => {
-            validate_diagnostic_detail_token(&trigger.failure_code, "recovery_ladder_trigger")?;
             let valid_trigger = match trigger.stage {
                 RecoveryTriggerStage::Task => {
                     trigger.run_id.is_some()
@@ -181,26 +183,22 @@ pub(super) fn validate_recovery_ladder_phase(
             }
         }
         RuntimeLifecyclePhase::RecoveryRungFinished {
-            outcome,
+            rung_result,
             rung,
             run_id,
             environment,
-            reason,
-            ..
+            outcome,
         } => {
-            if let Some(reason) = reason {
-                validate_diagnostic_detail_token(reason, "recovery_rung_reason")?;
-            }
-            let consistent = match outcome {
-                RecoveryRungOutcome::Recovered => run_id.is_some() && reason.is_none(),
+            let consistent = match rung_result {
+                RecoveryRungOutcome::Recovered => run_id.is_some() && outcome.is_none(),
                 RecoveryRungOutcome::EnvironmentReady => {
                     *rung == RecoveryRung::EmulatorRestart
                         && run_id.is_none()
-                        && reason.is_none()
+                        && outcome.is_none()
                         && environment.is_some()
                 }
-                RecoveryRungOutcome::Failed => reason.is_some(),
-                RecoveryRungOutcome::Skipped => run_id.is_none() && reason.is_some(),
+                RecoveryRungOutcome::Failed => outcome.is_some(),
+                RecoveryRungOutcome::Skipped => run_id.is_none() && outcome.is_some(),
             };
             if !consistent
                 || environment.is_some_and(|event| event.sequence == 0)
@@ -210,23 +208,16 @@ pub(super) fn validate_recovery_ladder_phase(
             }
         }
         RuntimeLifecyclePhase::RecoveryLadderFinished {
-            outcome,
+            ladder_result,
             rungs_tried,
         } if usize::from(*rungs_tried) > RecoveryRung::LADDER.len()
-            || (*outcome != RecoveryLadderOutcome::Exhausted && *rungs_tried == 0) =>
+            || (*ladder_result != RecoveryLadderOutcome::Exhausted && *rungs_tried == 0) =>
         {
             return Err(invalid());
         }
-        RuntimeLifecyclePhase::InstancePreparationFinished {
-            stage,
-            failure_code,
-            ..
-        } => {
+        RuntimeLifecyclePhase::InstancePreparationFinished { stage, .. } => {
             if *stage == RecoveryTriggerStage::Task {
                 return Err(invalid());
-            }
-            if let Some(code) = failure_code {
-                validate_diagnostic_detail_token(code, "preparation_failure_code")?;
             }
         }
         RuntimeLifecyclePhase::RecoveryEnvironmentReady {

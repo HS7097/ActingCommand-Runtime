@@ -468,11 +468,13 @@ impl PerformanceLedgerWindow {
     }
 }
 
+/// A change of the performance monitor's health; a degraded monitor carries the failure that
+/// degraded it as `outcome` (ledger revision 3; was `failure_code`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PerformanceMonitorStateEventData {
     pub observed_at_unix_ms: u64,
     pub health: PerformanceMonitorHealth,
-    pub failure_code: Option<String>,
+    pub outcome: Option<crate::outcome::Outcome>,
     pub consecutive_failures: u16,
     pub terminal: bool,
     pub unavailable_metrics: Vec<PerformanceMetric>,
@@ -638,15 +640,8 @@ pub(crate) fn validate_performance_monitor_state(
             .collect::<BTreeSet<_>>()
             .len()
             != data.unavailable_metrics.len()
-        || data.failure_code.as_deref().is_some_and(|code| {
-            code.is_empty()
-                || code.len() > 128
-                || !code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        })
-        || (data.health == PerformanceMonitorHealth::Healthy && data.failure_code.is_some())
-        || (data.health == PerformanceMonitorHealth::Degraded && data.failure_code.is_none())
+        || (data.health == PerformanceMonitorHealth::Healthy && data.outcome.is_some())
+        || (data.health == PerformanceMonitorHealth::Degraded && data.outcome.is_none())
         || (data.health == PerformanceMonitorHealth::Degraded && data.consecutive_failures == 0)
         || (data.health != PerformanceMonitorHealth::Degraded
             && (data.consecutive_failures != 0 || data.terminal))

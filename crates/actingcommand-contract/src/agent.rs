@@ -504,12 +504,14 @@ impl AgentSessionStatus {
     }
 }
 
+/// An agent sidecar's response. `code` is the sidecar's own code, received as it sent it (a
+/// [`CodeStr`](crate::outcome::CodeStr): the Runtime does not register an agent's codes).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSessionResponse {
     session_id: AgentSessionId,
     disposition: AgentResponseDisposition,
-    code: String,
+    code: crate::outcome::CodeStr,
     observed_at_unix_ms: u64,
 }
 
@@ -517,13 +519,13 @@ impl AgentSessionResponse {
     pub fn new(
         session_id: AgentSessionId,
         disposition: AgentResponseDisposition,
-        code: impl Into<String>,
+        code: crate::outcome::CodeStr,
         observed_at_unix_ms: u64,
     ) -> Result<Self, SanitizationError> {
         let value = Self {
             session_id,
             disposition,
-            code: code.into(),
+            code,
             observed_at_unix_ms,
         };
         value.validate()?;
@@ -531,7 +533,7 @@ impl AgentSessionResponse {
     }
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        if self.observed_at_unix_ms == 0 || !valid_agent_code(&self.code) {
+        if self.observed_at_unix_ms == 0 || !valid_agent_code(self.code.as_str()) {
             return Err(SanitizationError::new(
                 RuntimeContractCode::InvalidAgentResponse,
                 "agent_response",
@@ -548,7 +550,7 @@ impl AgentSessionResponse {
         self.disposition
     }
 
-    pub fn code(&self) -> &str {
+    pub fn code(&self) -> &crate::outcome::CodeStr {
         &self.code
     }
 

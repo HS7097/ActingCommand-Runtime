@@ -2103,15 +2103,23 @@ impl ResourceAuthoringEvent {
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
+        let outcome = self.outcome();
         crate::validate_resource_authoring_fields(
             self.phase,
             &self.draft_id,
             &self.target_label,
             &self.target_fingerprint,
             &self.changed_paths,
-            self.failure_code.as_deref(),
+            outcome.as_ref(),
         )
         .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidResourceAuthoringEvent))
+    }
+
+    /// The failure of a failed promotion as the ledger records it (ledger revision 3).
+    pub fn outcome(&self) -> Option<crate::outcome::Outcome> {
+        self.failure_code
+            .as_deref()
+            .map(crate::outcome::Outcome::relayed)
     }
 
     pub const fn phase(&self) -> ResourceAuthoringPhase {
@@ -4175,18 +4183,18 @@ pub enum ContainedTaskCancellationReason {
 }
 
 impl ContainedTaskCancellationReason {
-    /// The reason of a cancelled terminal from its committed `failure_code` (Workflow #338 R1):
-    /// the three cancellation codes map to their reason, any other value or none to
-    /// `RecoveredAfterRestart`.
-    pub fn from_failure_code(failure_code: Option<&str>) -> Self {
+    /// The reason of a cancelled terminal from the code of its committed outcome (Workflow #338
+    /// R1, ledger revision 3): the three cancellation codes map to their reason, any other code
+    /// or none to `RecoveredAfterRestart`.
+    pub fn from_failure_code(failure_code: Option<&crate::outcome::CodeStr>) -> Self {
         match failure_code {
-            Some(code) if code == RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str() => {
+            Some(code) if *code == RuntimeErrorCode::ContainedTaskDeadlineExceeded.code() => {
                 Self::DeadlineExceeded
             }
-            Some(code) if code == RuntimeErrorCode::ContainedTaskCancelled.as_str() => {
+            Some(code) if *code == RuntimeErrorCode::ContainedTaskCancelled.code() => {
                 Self::ClientRequested
             }
-            Some(code) if code == RuntimeErrorCode::ContainedTaskPaused.as_str() => {
+            Some(code) if *code == RuntimeErrorCode::ContainedTaskPaused.code() => {
                 Self::PausedByOperator
             }
             _ => Self::RecoveredAfterRestart,

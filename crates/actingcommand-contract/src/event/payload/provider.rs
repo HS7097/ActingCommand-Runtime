@@ -30,13 +30,14 @@ pub enum ProviderStartupStage {
     CapabilityAdmission,
 }
 
+/// A provider startup failure (ledger revision 3, model section 8.1): `outcome` is the failure
+/// with its native text as a `foreign_*` link, and `module` names the module that reported
+/// it. The category replaces the former `severity`; no Runtime text is kept.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderNativeFailure {
     pub module: String,
-    pub code: String,
-    pub severity: String,
-    pub message: String,
+    pub outcome: Outcome,
 }
 
 /// One instance reported by `MuMuManager info -v all`, with the alias it was bound to, if any.
@@ -124,14 +125,7 @@ impl ProviderStartupRecord {
                         .into_iter()
                         .all(|value| valid(value))
             }
-            ProviderStartupObservation::Failed { failure, .. } => [
-                &failure.module,
-                &failure.code,
-                &failure.severity,
-                &failure.message,
-            ]
-            .into_iter()
-            .all(|value| valid(value)),
+            ProviderStartupObservation::Failed { failure, .. } => valid(&failure.module),
             ProviderStartupObservation::ModelBinding {
                 model_ref,
                 model_sha256,
@@ -238,6 +232,12 @@ impl PayloadDetail for ProviderPayload {
     }
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
+    }
+    fn outcome(&self) -> Option<&Outcome> {
+        match &self.record.observation {
+            ProviderStartupObservation::Failed { failure, .. } => Some(&failure.outcome),
+            _ => None,
+        }
     }
 }
 

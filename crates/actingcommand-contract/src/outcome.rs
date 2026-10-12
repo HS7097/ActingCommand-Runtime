@@ -559,6 +559,16 @@ impl Code {
     pub const fn category(self) -> Category {
         self.category
     }
+
+    /// The registered code whose spelling another crate still relays as text (the A2-R bridge,
+    /// Workflow #378 A3): the catalog this build embeds gives its category. `None` when the
+    /// spelling is not registered, so a relay can never invent a code.
+    pub fn relayed(spelling: &'static str) -> Option<Self> {
+        check::code_category(spelling).map(|category| Self {
+            name: spelling,
+            category,
+        })
+    }
 }
 
 impl fmt::Debug for Code {
@@ -590,6 +600,12 @@ impl Location {
 
     pub const fn as_str(self) -> &'static str {
         self.name
+    }
+
+    /// The registered location whose spelling another crate still relays as text (the A2-R
+    /// bridge, Workflow #378 A3). `None` when the catalog this build embeds does not list it.
+    pub fn relayed(spelling: &'static str) -> Option<Self> {
+        check::location_registered(spelling).then_some(Self { name: spelling })
     }
 }
 
@@ -1063,6 +1079,96 @@ impl Outcome {
             .iter()
             .map(|link| 1 + link.outcome.link_count())
             .sum()
+    }
+
+    /// The outcome of a code that arrives as its spelling: relayed by a crate whose channel is
+    /// not typed yet (the A2-R bridge), received from a client, or read back from a record. The
+    /// catalog this build embeds gives the category. A spelling it does not list stays visible:
+    /// it becomes `outcome_relay_unregistered`, carrying the spelling as `raw_code` when the
+    /// spelling is a token.
+    pub fn relayed(spelling: &str) -> Self {
+        match check::code_category(spelling) {
+            Some(category) => Self::from_inner(OutcomeInner {
+                code: CodeStr(Cow::Owned(spelling.to_owned())),
+                category,
+                values: Map::new(),
+                causes: Vec::new(),
+                causes_total: None,
+                received: false,
+            }),
+            None => {
+                let outcome = Self::new(ContractCode::OutcomeRelayUnregistered);
+                if text_rule_broken(KeyKind::Token, spelling).is_none() {
+                    outcome.raw_code(spelling)
+                } else {
+                    outcome
+                }
+            }
+        }
+    }
+
+    /// The highest `raw_text_sensitivity` anywhere in the outcome; foreign text without a
+    /// declared sensitivity counts as `sensitive`. `None` when no node carries `raw_text`.
+    pub fn raw_text_sensitivity(&self) -> Option<crate::Sensitivity> {
+        let own = self.inner.values.get(RAW_TEXT_KEY).map(|_| {
+            match self
+                .inner
+                .values
+                .get("raw_text_sensitivity")
+                .and_then(JsonValue::as_str)
+            {
+                Some("public") => crate::Sensitivity::Public,
+                Some("internal") => crate::Sensitivity::Internal,
+                Some("secret") => crate::Sensitivity::Secret,
+                _ => crate::Sensitivity::Sensitive,
+            }
+        });
+        self.inner
+            .causes
+            .iter()
+            .filter_map(|link| link.outcome.raw_text_sensitivity())
+            .chain(own)
+            .max()
+    }
+
+    /// The codes-only projection of this outcome (model section 4.3): every node keeps its
+    /// code, category and relation, and only the values whose type is a registered name. It is
+    /// a projection, not an emission, so it is relayed unchanged like a received outcome.
+    pub fn codes_only(&self) -> Self {
+        fn project(outcome: &Outcome) -> Outcome {
+            Outcome::from_inner(OutcomeInner {
+                code: outcome.inner.code.clone(),
+                category: outcome.inner.category,
+                values: outcome
+                    .inner
+                    .values
+                    .iter()
+                    .filter(|(key, _)| key_kind(key).is_some_and(KeyKind::is_registered_name))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                causes: outcome
+                    .inner
+                    .causes
+                    .iter()
+                    .map(|link| Link {
+                        relation: link.relation.clone(),
+                        outcome: project(&link.outcome),
+                    })
+                    .collect(),
+                causes_total: outcome.inner.causes_total,
+                received: true,
+            })
+        }
+        project(self)
+    }
+
+    /// Every code in the outcome, the top first, then its links depth first.
+    pub fn codes(&self) -> Vec<&CodeStr> {
+        let mut codes = vec![&self.inner.code];
+        for link in &self.inner.causes {
+            codes.extend(link.outcome.codes());
+        }
+        codes
     }
 }
 
